@@ -112,7 +112,7 @@ Tensor run_argmax_nc(
         const auto& logical_shape = row_major_out.logical_shape();
         const int32_t rank = static_cast<int32_t>(logical_shape.rank());
         const int32_t normalized_dim = dim < 0 ? dim + rank : dim;
-        ttnn::SmallVector<uint32_t> new_shape;
+        ttsl::SmallVector<uint32_t> new_shape;
         new_shape.reserve(rank - 1);
         for (int32_t i = 0; i < rank; ++i) {
             if (i == normalized_dim) {

@@ -59,7 +59,7 @@ inline void set_matmul_mode() {
     // guarded: no-op in bf16; only the fp32-dest fallback reconfigs.
     pack_reconfig_data_format(cb_out_strip, qk_cb);
     pack_reconfig_l1_acc(0);  // cb_qk packs overwrite
-    mm_block_init_short(
+    matmul_block_init(
         q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     // relu(q.kT) in the packer when apply_relu; else linear, so the raw dot flows to the gate-mul.
     if constexpr (apply_relu) {
@@ -328,7 +328,7 @@ inline void set_matmul_to_acc_mode() {
     reconfig_data_format(cb_q, k_cb, cb_w, q_cb);  // srcA(q)->k, srcB(w)->q [guarded]
     pack_reconfig_data_format(cb_q, acc_cb);       // pack->acc
     pack_reconfig_l1_acc(0);
-    mm_block_init_short(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass, head_dim_tiles);
+    matmul_block_init(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass, head_dim_tiles);
     pack_relu_config(ReluConfig::none());
 }
 
@@ -395,16 +395,22 @@ inline void block_max_pool_batched(uint32_t unit_strip) {
     acc.pop_front(unit_strip);
 }
 
-/** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place (empty when fully valid). */
+/** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place (empty when fully valid).
+ *  straddle_* shift the diagonal on the mid-slab boundary chip (0 elsewhere); see causal_diag_tile. */
 inline void stamp_masked_suffix(
     const WorkUnitSpan& span,
     uint32_t q_row,
     uint32_t slot_base,
     uint32_t k_tiles_in_unit,
-    uint32_t chunk_start_tiles) {
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles) {
     const uint32_t k_tile0 = span.k_tile_start();
-    const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + q_row;
-    const uint32_t valid = row_valid_prefix(span.q_tile_start() + q_row, k_tile0, k_tiles_in_unit, chunk_start_tiles);
+    const uint32_t q_row_abs = span.q_tile_start() + q_row;
+    const uint32_t diag_tile =
+        iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    const uint32_t valid =
+        row_valid_prefix(q_row_abs, k_tile0, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
     for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
         stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, k_tile0 + k_col, diag_tile);
     }
@@ -425,12 +431,17 @@ void kernel_main() {
     const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
     // Per-device chunk-start offset (tiles); runtime so distinct values reuse one program.
     const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
+    // Mid-slab boundary-chip diagonal straddle (tiles): q-rows >= straddle_q_tile jump by straddle_jump_tiles.
+    // Both 0 on every non-boundary device and in the chunk-aligned case, leaving the diagonal linear.
+    const uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
+    const uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
 
-    mm_block_init(
-        cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_qk);
+    matmul_block_init(
+        cb_q, cb_k, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     CircularBuffer(cb_mask).wait_front(num_mask_tiles);  // never popped
     if constexpr (block_pool) {
         CircularBuffer(cb_scaler).wait_front(1);  // 1.0 reduce-MAX scaler, reused, never popped
@@ -508,7 +519,14 @@ void kernel_main() {
                     // Matmul left srcA in k's format; the mask copies a bf16 -inf tile -> reconfig srcA to bf16.
                     reconfig_data_format_srca(cb_k, cb_mask);
                     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                        stamp_masked_suffix(span, r, r * k_tiles_per_unit, k_tiles_in_unit, chunk_start_tiles);
+                        stamp_masked_suffix(
+                            span,
+                            r,
+                            r * k_tiles_per_unit,
+                            k_tiles_in_unit,
+                            chunk_start_tiles,
+                            straddle_q_tile,
+                            straddle_jump_tiles);
                     }
                     acc.push_back(unit_strip);
                 } else {
@@ -536,7 +554,14 @@ void kernel_main() {
                             accumulate_row_streaming(q_row, slot_base);
                         }
 
-                        stamp_masked_suffix(span, q_row, slot_base, k_tiles_in_unit, chunk_start_tiles);
+                        stamp_masked_suffix(
+                            span,
+                            q_row,
+                            slot_base,
+                            k_tiles_in_unit,
+                            chunk_start_tiles,
+                            straddle_q_tile,
+                            straddle_jump_tiles);
                     }
                     acc.push_back(unit_strip);
                 }

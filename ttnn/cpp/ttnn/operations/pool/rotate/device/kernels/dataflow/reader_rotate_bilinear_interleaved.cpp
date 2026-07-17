@@ -46,14 +46,14 @@ void kernel_main() {
 
     const uint32_t end_stick_id = start_stick_id + num_sticks;
 
-    experimental::CB input_cb(input_cb_id);
-    experimental::CB scalar_cb(scalar_cb_id);
-    experimental::CB fill_cb(fill_cb_id);
+    DataflowBuffer input_dfb(input_cb_id);
+    DataflowBuffer scalar_dfb(scalar_cb_id);
+    DataflowBuffer fill_dfb(fill_cb_id);
     Noc noc;
 
-    uint32_t fill_stick_addr = fill_cb.get_write_ptr();
+    uint32_t fill_stick_addr = fill_dfb.get_write_ptr();
     if constexpr (fill_is_zero) {
-        zero_out_page(noc, fill_cb);
+        zero_out_page(noc, fill_dfb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
         if constexpr (element_size == 2) {
@@ -118,7 +118,7 @@ void kernel_main() {
         const uint16_t weight_sw_bf = fixed_to_bf16(weight_sw_q16);
         const uint16_t weight_se_bf = fixed_to_bf16(weight_se_q16);
 
-        input_cb.reserve_back(1);
+        input_dfb.reserve_back(1);
 
         read_four_corner_inputs_with_fill(
             noc,
@@ -131,16 +131,16 @@ void kernel_main() {
             w0,
             w1,
             input_height,
-            input_cb,
+            input_dfb,
             fill_stick_addr);
 
-        scalar_cb.reserve_back(1);
-        const uint32_t l1_write_scalar_addr = scalar_cb.get_write_ptr();
+        scalar_dfb.reserve_back(1);
+        const uint32_t l1_write_scalar_addr = scalar_dfb.get_write_ptr();
         fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
-        scalar_cb.push_back(1);
+        scalar_dfb.push_back(1);
 
         noc.async_read_barrier();
-        input_cb.push_back(1);
+        input_dfb.push_back(1);
 
         ++spatial_pos_in_batch;
         if (spatial_pos_in_batch == hw_size) {

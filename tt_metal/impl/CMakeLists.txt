@@ -77,15 +77,15 @@ endif()
 # Generate protobuf files for KvChunkAddressTable serialization
 include(protobuf)
 GENERATE_PROTO_FILES(
-    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/protobuf/kv_chunk_address_table.proto
-    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/experimental/disaggregation
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/protobuf/kv_chunk_address_table.proto
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation
 )
 list(APPEND IMPL_SRC ${PROTO_SRCS})
 
 # Serializer free-functions (export_to_protobuf_file / import_from_protobuf_file).
 # protobuf::libprotobuf is already linked below and the generated pb.h include
 # dir is already on this target, so this is the natural home for it.
-list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp)
+list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table_protobuf.cpp)
 
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
@@ -124,7 +124,7 @@ target_include_directories(
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
-target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/experimental/disaggregation)
+target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation)
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)

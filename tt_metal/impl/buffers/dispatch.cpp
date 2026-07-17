@@ -32,7 +32,7 @@
 #include "tt_metal/impl/event/dispatch.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <tt-metalium/graph_tracking.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/overloaded.hpp>
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -52,7 +52,7 @@ struct BufferDispatchConstants {
 // to assemble dispatch commands and compute src + dst offsets
 // required to write buffer data.
 struct BufferWriteDispatchParams {
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
+    ttsl::Span<const uint32_t> expected_num_workers_completed;
     uint32_t address = 0;
     uint32_t page_size_to_write = 0;
     uint32_t data_size_to_copy = 0;
@@ -92,7 +92,7 @@ public:
         uint32_t dst_page_index,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
+        ttsl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
         bool src_pinned,
@@ -167,7 +167,7 @@ public:
         uint32_t total_pages_to_write,  // number of partial pages
         uint32_t num_full_pages,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
+        ttsl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
         bool src_pinned,
@@ -305,8 +305,8 @@ public:
         Buffer* buffer,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
+        ttsl::Span<const uint32_t> expected_num_workers_completed,
+        ttsl::Span<const SubDeviceId> sub_device_ids,
         uint32_t pinned_noc_xy,
         uint64_t pinned_addr,
         bool is_pinned,
@@ -480,9 +480,9 @@ using InterleavedBufferWriteDispatchParamsVariant =
 InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_params(
     const Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     uint32_t pinned_src_noc_xy,
     uint64_t pinned_src_addr,
     bool use_pinned_transfer,
@@ -682,8 +682,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     ShardedBufferWriteDispatchParams& dispatch_params,
     const BufferCorePageMapping& core_page_mapping,
     const CoreCoord& core,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    TTZoneScopedD(DISPATCH);
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
@@ -930,8 +930,9 @@ void issue_buffer_dispatch_command_sequence(
     const void* src,
     Buffer& buffer,
     T& dispatch_params,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreType /*dispatch_core_type*/) {
+    TTZoneScopedD(DISPATCH);
     uint32_t num_worker_counters = sub_device_ids.size();
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
     uint32_t num_pages_to_write =
@@ -1038,8 +1039,9 @@ void write_interleaved_buffer_to_device(
     InterleavedBufferWriteDispatchParams& dispatch_params,
     Buffer& buffer,
     const BufferDispatchConstants& buf_dispatch_constants,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
+    TTZoneScopedD(DISPATCH);
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
 
     // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -1086,9 +1088,10 @@ void write_sharded_buffer_to_core(
     Buffer& buffer,
     ShardedBufferWriteDispatchParams& dispatch_params,
     const BufferDispatchConstants& buf_dispatch_constants,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
+    TTZoneScopedD(DISPATCH);
     // Skip writing the padded pages along the bottom
     // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
     // Alternative write each page row into separate commands, or have a strided linear write
@@ -1135,11 +1138,12 @@ bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory,
     const CoreRangeSet* logical_core_filter) {
+    TTZoneScopedD(DISPATCH);
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
@@ -1361,7 +1365,7 @@ bool write_to_device_buffer(
 
 // Initialize Dispatch Parameters - reused across write txns
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed) {
+    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
     // Note that the src_page_index is the device page idx, not the host page idx
     // Since we read core by core we are reading the device pages sequentially
     ShardedBufferReadDispatchParams dispatch_params;
@@ -1380,7 +1384,7 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 }
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed) {
+    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
     auto root_buffer = buffer.root_buffer();
     const BufferRegion region = buffer.root_buffer_region();
     IDevice* device = root_buffer->device();
@@ -1405,7 +1409,7 @@ template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
     Buffer& buffer,
     T& dispatch_params,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreType /*dispatch_core_type*/) {
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
@@ -1463,8 +1467,14 @@ void issue_read_buffer_dispatch_command_sequence(
     } else {
         calculator.add_dispatch_write_linear_host();
     }
-    // Prefetch relay cmd has fixed header size in calculator regardless of type
-    calculator.add_prefetch_relay_paged();
+    // Size the prefetch relay cmd to match the type emitted below: sharded reads emit
+    // CQ_PREFETCH_CMD_RELAY_LINEAR (CQPrefetchCmdLarge, 32B), interleaved reads emit
+    // CQ_PREFETCH_CMD_RELAY_PAGED (CQPrefetchCmd, 16B).
+    if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+        calculator.add_prefetch_relay_linear();
+    } else {
+        calculator.add_prefetch_relay_paged();
+    }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -1526,7 +1536,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     const BufferCorePageMapping& core_page_mapping,
     Buffer& buffer,
     ShardedBufferReadDispatchParams& dispatch_params,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
     auto address = buffer.address();
@@ -1552,7 +1562,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
 void copy_interleaved_buffer_to_completion_queue(
     BufferReadDispatchParams& dispatch_params,
     Buffer& buffer,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type,
     void* dst,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
@@ -1632,6 +1642,7 @@ void copy_completion_queue_data_into_user_space(
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
     std::atomic<bool>& exit_condition) {
+    TTZoneScopedD(DISPATCH);
     const auto& [page_size, padded_page_size, buffer_page_mapping, core_page_mapping, dst, dst_offset, num_pages_read] =
         read_buffer_descriptor;
     const DeviceAddr padded_num_bytes = ((DeviceAddr)num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
@@ -1827,8 +1838,8 @@ void copy_completion_queue_data_into_user_space(
     }
 }
 
-tt::stl::Span<const SubDeviceId> select_sub_device_ids(
-    IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+ttsl::Span<const SubDeviceId> select_sub_device_ids(
+    IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
     }
@@ -1839,13 +1850,13 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(
 }
 
 template void issue_buffer_dispatch_command_sequence<InterleavedBufferWriteDispatchParams>(
-    const void*, Buffer&, InterleavedBufferWriteDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+    const void*, Buffer&, InterleavedBufferWriteDispatchParams&, ttsl::Span<const SubDeviceId>, CoreType);
 template void issue_buffer_dispatch_command_sequence<ShardedBufferWriteDispatchParams>(
-    const void*, Buffer&, ShardedBufferWriteDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+    const void*, Buffer&, ShardedBufferWriteDispatchParams&, ttsl::Span<const SubDeviceId>, CoreType);
 
 template void issue_read_buffer_dispatch_command_sequence<BufferReadDispatchParams>(
-    Buffer&, BufferReadDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+    Buffer&, BufferReadDispatchParams&, ttsl::Span<const SubDeviceId>, CoreType);
 template void issue_read_buffer_dispatch_command_sequence<ShardedBufferReadDispatchParams>(
-    Buffer&, ShardedBufferReadDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+    Buffer&, ShardedBufferReadDispatchParams&, ttsl::Span<const SubDeviceId>, CoreType);
 
 }  // namespace tt::tt_metal::buffer_dispatch

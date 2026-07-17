@@ -127,7 +127,7 @@ TEST(DeviceCommandTest, AddDispatchSetSubDeviceWorkerCounts) {
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
     command.add_dispatch_set_sub_device_worker_counts(
-        tt::stl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()),
+        ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()),
         DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
@@ -251,7 +251,7 @@ TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
         std::vector<CQDispatchWritePackedLargeSubCmd> sub_cmds(1);
 
         uint8_t data[4] = {};
-        std::vector<tt::stl::Span<const uint8_t>> data_collection{{data, 4}};
+        std::vector<ttsl::Span<const uint8_t>> data_collection{{data, 4}};
         command.add_dispatch_write_packed_large(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, 0, 1, sub_cmds, data_collection, nullptr);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());

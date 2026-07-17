@@ -267,14 +267,14 @@ int main(int argc, char** argv) {
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
+        auto activations_tile_layout = convert_to_tile_layout(ttsl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(identity_tilized));
+        auto weights_tile_layout = convert_to_tile_layout(ttsl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
         // print_vec_of_bfloat16(result_bfp16, 16, "Result bfp16");
         // print_faces(unpack_uint32_vec_into_bfloat16_vec(activations_tile_transposed), "Activations tile transpose");

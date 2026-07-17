@@ -58,6 +58,10 @@ void kernel_main() {
     constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(22);
 
     constexpr uint32_t qsb = get_compile_time_arg_val(23);    // query tile-rows per DST group (<= dst_size)
+    // Causal masking (token-level diagonal-block mask).
+    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(24) != 0;
+    constexpr uint32_t cb_neginf = get_compile_time_arg_val(25);  // persistent all -inf tile (future key-tiles)
+    constexpr uint32_t cb_vmask = get_compile_time_arg_val(26);   // per-token partial-column boundary tile
     constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;  // total query tile-rows (32 heads each)
     constexpr uint32_t q_groups = Sqt / qsb;                  // DST-bound work runs in this many query-row passes
     constexpr uint32_t KT_stride = Skt;                       // cb_qk_im physical row width
@@ -76,6 +80,9 @@ void kernel_main() {
     matmul_init(cb_q_in, cb_k_in);  // one-time matmul init; the no_mop matmuls reinit off this
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
+    if constexpr (CAUSAL_MASK_ENABLED) {
+        CircularBuffer(cb_neginf).wait_front(1);  // persistent -inf mask tile; built once by the writer, never popped
+    }
 
     for (uint32_t tok = 0; tok < tok_count; ++tok) {
         // tilize Q rows -> [Sqt, DHt]
@@ -83,10 +90,22 @@ void kernel_main() {
         // fp8 Q tilize leaves the packer in bfp8 format; restore bf16 before QK writes scores.
         pack_reconfig_data_format(cb_qk_im);
 
-        // Per-token control from the reader: active full-block count.
+        // Per-token control from the reader: active block count, and (causal) the diagonal block's chunk
+        // index + within-block mask boundary.
         ctrl_cb.wait_front(1);
         const uint32_t num_active_chunks = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/0);
+        [[maybe_unused]] uint32_t diag_chunk = 0xFFFFFFFFu;
+        [[maybe_unused]] uint32_t boundary_tile = 0;
+        [[maybe_unused]] uint32_t boundary_col = 0;
+        if constexpr (CAUSAL_MASK_ENABLED) {
+            diag_chunk = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/1);
+            boundary_tile = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/2);
+            boundary_col = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/3);
+        }
         ctrl_cb.pop_front(1);
+        // vmask is pushed by the reader exactly when the boundary key-tile is split (boundary_col > 0).
+        [[maybe_unused]] const bool diag_has_vmask =
+            CAUSAL_MASK_ENABLED && (diag_chunk != 0xFFFFFFFFu) && (boundary_col > 0);
 
         // Flash running state, ping-pong. Reset every token; all buffers start empty.
         CircularBuffer max_prev(cb_max_a), max_cur(cb_max_b);
@@ -99,6 +118,13 @@ void kernel_main() {
 
             const bool is_first = (chunk == 0);
             const bool is_last = (chunk == num_active_chunks - 1);
+
+            // The diagonal block needs a token-level causal mask. Front the per-token boundary tile once.
+            if constexpr (CAUSAL_MASK_ENABLED) {
+                if ((chunk == diag_chunk) && diag_has_vmask) {
+                    CircularBuffer(cb_vmask).wait_front(1);
+                }
+            }
 
             // cb_qk_im / sum_cur / out_cur span all Sqt rows; the qg loop fills them band-by-band (sub_exp & PV
             // pack at absolute row offsets; reduce/corr reserve+push per band).
@@ -138,6 +164,26 @@ void kernel_main() {
                     }
                     // Publish the band to UNPACK while holding wr_ptr for in-place sub_exp.
                     cb_push_back_hold_wr_ptr(cb_qk_im, qsb * KT_stride);
+                }
+
+                // Causal mask on the diagonal block: -inf the future-token columns (a contiguous tail beyond
+                // the query position) BEFORE the row-max reduce, so they never inflate the max and map to ~0
+                // after sub_exp. All score rows are heads sharing one query position -> a pure column mask.
+                if constexpr (CAUSAL_MASK_ENABLED) {
+                    if (chunk == diag_chunk) {
+                        if (boundary_col > 0) {  // boundary key-tile is split: partial-column mask
+                            apply_partial_mask_lightweight(
+                                cb_vmask, 0, cb_qk_im, boundary_tile, KT_stride, qsb, row_base);
+                        }
+                        // Key-tiles entirely after the boundary are fully future -> stamp -inf.
+                        const uint32_t full_neginf =
+                            (boundary_col > 0) ? (Skt - boundary_tile - 1) : (Skt - boundary_tile);
+                        if (full_neginf > 0) {
+                            apply_padded_mask_lightweight_runtime<dst_size>(
+                                cb_neginf, 0, cb_qk_im, full_neginf, KT_stride, qsb, row_base);
+                        }
+                        pack_to_unpack_sync();  // masked writes must be visible to the row-max reduce's UNPACK
+                    }
                 }
 
                 {
@@ -224,6 +270,13 @@ void kernel_main() {
                     out_prev.pop_front(qsb * vDHt);  // this band's prev.out consumed into cur
                 }
             }  // query groups
+
+            // Release the per-token boundary mask tile once the diagonal chunk's bands are done.
+            if constexpr (CAUSAL_MASK_ENABLED) {
+                if ((chunk == diag_chunk) && diag_has_vmask) {
+                    CircularBuffer(cb_vmask).pop_front(1);
+                }
+            }
 
             // prev max/sum consumed into cur (out_prev popped per band above).
             if (!is_first) {

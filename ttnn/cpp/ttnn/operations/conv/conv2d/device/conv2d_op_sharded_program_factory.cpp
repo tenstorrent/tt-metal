@@ -1042,6 +1042,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         // compute_depthwise_conv1d.cpp uses a specialized dest-reuse accumulation path. The last
         // two args select the coalesced kernel-width activation layout when the reader can fetch
         // all kernel-width sticks as one NoC packet.
+
+        // Dest-reuse read-back scratch CB. A single height block accumulates in place (alias OUT);
+        // multiple blocks use the dedicated MATMUL_PARTIALS scratch (out_cb can't double as it).
+        const bool use_partials_scratch = !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
+        const uint32_t dest_reuse_scratch_cb_id =
+            get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
+
         compute_kernel_args = {
             act_block_w_ntiles,                                         // 0: in0_block_w
             act_num_subblocks,                                          // 1: in0_num_subblocks
@@ -1054,6 +1061,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,          // 8: out_cb_id
             filter_w,                                                   // 9: kernel_width
             coalesce_1d_depthwise_kw_reads,                             // 10: coalesced activation block
+            dest_reuse_scratch_cb_id,                                   // 11: dest-reuse read-back scratch
         };
     } else {
         compute_kernel_args = {

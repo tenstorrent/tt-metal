@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -78,9 +79,7 @@ inline bool lookup_devices_or_fail(
 // Generate deterministic TX pattern.
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     std::vector<uint32_t> tx(n_words);
-    for (size_t i = 0; i < n_words; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
-    }
+    std::iota(tx.begin(), tx.end(), 0xA5A50000u);
     return tx;
 }
 
@@ -90,12 +89,11 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
         ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
         return;
     }
-    for (size_t i = 0; i < rx.size(); ++i) {
-        if (rx[i] != tx[i]) {
-            ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << rx[i] << ", exp 0x" << tx[i]
-                          << std::dec << ")";
-            return;
-        }
+    auto it = std::mismatch(rx.begin(), rx.end(), tx.begin());
+    if (it.first != rx.end()) {
+        const size_t i = static_cast<size_t>(it.first - rx.begin());
+        ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << *it.first << ", exp 0x"
+                      << *it.second << std::dec << ")";
     }
     // OK -> no failure emitted
 }

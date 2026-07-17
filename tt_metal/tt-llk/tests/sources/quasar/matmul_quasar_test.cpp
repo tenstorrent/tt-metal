@@ -34,15 +34,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Setup sync for unpack
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-    set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
+    set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
     // src A input configuration
     tdma_descriptor_t tdma_desc_src_a;
     tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
     tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_A_src);
     tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc.f.z_dim        = num_faces_A; // Number of faces = 4, tiny tiles not supported for quasar
+    tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;         // Default face dimension is 16, tiny tiles not supported for quasar
+    tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;         // Default face dimension is 16, tiny tiles not supported for quasar
+    tdma_desc_src_a.buf_desc.f.z_dim        = params.num_faces_A; // Number of faces = 4, tiny tiles not supported for quasar
     tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
     tdma_desc_src_a.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_A_dst);
 
@@ -51,9 +51,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
     tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_B_src);
     tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc.f.z_dim        = num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
+    tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;         // Default face dimension is 16, tiny tiles not supported for quasar
+    tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;         // Default face dimension is 16, tiny tiles not supported for quasar
+    tdma_desc_src_b.buf_desc.f.z_dim        = params.num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
     tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
     tdma_desc_src_b.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_B_dst);
 
@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
     tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;
     tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
-    tdma_desc_dst.buf_desc.f.z_dim        = num_faces;
+    tdma_desc_dst.buf_desc.f.z_dim        = params.num_faces;
     tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
     tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
 

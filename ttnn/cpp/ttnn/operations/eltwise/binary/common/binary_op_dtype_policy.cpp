@@ -28,12 +28,12 @@ std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
         case BinaryOpType::GE:
         case BinaryOpType::EQ:
         case BinaryOpType::NE: return relational;
-        case BinaryOpType::DIV:
         case BinaryOpType::REMAINDER:
+        case BinaryOpType::MAXIMUM:
+        case BinaryOpType::MINIMUM: return float_and_int32_uint32;
+        case BinaryOpType::DIV:
         case BinaryOpType::FMOD:
         case BinaryOpType::ISCLOSE: return float_and_int32;
-        case BinaryOpType::MAXIMUM:
-        case BinaryOpType::MINIMUM: return maximum_minimum;
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_AND:
         case BinaryOpType::BITWISE_OR:

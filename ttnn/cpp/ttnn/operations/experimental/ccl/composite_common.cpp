@@ -138,7 +138,7 @@ ttnn::Tensor composite_reduce_scatter(
     // insert the internal padding (only pad on the dim we're scattering on)
     auto logical_shape = split_tensors[0].logical_shape();
     auto padded_shape = split_tensors[0].padded_shape();
-    ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+    ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
         {0, padded_shape[-2] - logical_shape[-2]}, {0, padded_shape[-1] - logical_shape[-1]}};
     for (uint32_t i = 0; i < num_devices; ++i) {
         split_tensors[i] = ttnn::pad(split_tensors[i], padding, 0, true, split_tensors[i].memory_config());
@@ -177,8 +177,8 @@ ttnn::Tensor composite_reduce_scatter(
         rs_output_tensor =
             ttnn::untilize_with_unpadding(padded_native_rs_output_tensor, ends, native_rs_output_memory_config);
     } else {
-        const ttnn::SmallVector<int32_t> steps(output_shape.rank(), 1);
-        ttnn::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
+        const ttsl::SmallVector<int32_t> steps(output_shape.rank(), 1);
+        ttsl::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
         const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
         rs_output_tensor =
             ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);

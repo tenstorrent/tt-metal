@@ -10,8 +10,11 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include <algorithm>
+#include <variant>
+#include <vector>
 using namespace tt::tt_metal;
 
 namespace {
@@ -380,6 +383,444 @@ std::optional<AllShardVolumes> get_shard_volumes(
     };
 }
 
+namespace {
+
+// Per-core runtime-arg lists for every core in the worker grid (work AND noop cores), in the same
+// order create_descriptor() populates them.  Each arg list is a vector of variants: Buffer* entries
+// are buffer base addresses (bindings), uint32_t entries are plain values.
+struct BinaryNgPerCoreArgs {
+    std::vector<CoreCoord> cores;
+    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> reader;
+    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> writer;
+    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> compute;
+};
+
+// SINGLE SOURCE OF TRUTH for binary_ng per-core runtime args.  Run by BOTH create_descriptor()
+// (cache miss) and BinaryNgDeviceOperation::get_dynamic_runtime_args() (cache hit).
+//
+// binary_ng's compute_program_hash intentionally EXCLUDES the tensor volume, so one cached program
+// is shared across differently-shaped calls.  On a cache hit the descriptor is NOT rebuilt, so every
+// shape/work-split-dependent per-core arg (c_start_id, per-core tile counts, strides, D/N/C/Ht/Wt,
+// compute_tiles, freq/counter, packed scalar, ...) would otherwise stay frozen at the first-miss
+// shape and corrupt results.  get_dynamic_runtime_args() re-runs THIS builder for the current tensors
+// and re-applies each arg every dispatch.  Because the work-core set itself changes with volume (a
+// core can flip between work and noop across hits), the builder emits args for ALL num_cores_total
+// cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
+// get_dynamic_runtime_args re-applies every slot (buffer slots via their current address), so nothing
+// is left frozen regardless of how the partition shifts.
+BinaryNgPerCoreArgs build_per_core_runtime_args(
+    const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& a,
+    const std::optional<Tensor>& b,
+    const Tensor& c) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    BinaryNgPerCoreArgs result;
+
+    const auto& all_device_cores = operation_attributes.worker_grid;
+    const auto op_type = operation_attributes.binary_op_type;
+
+    const auto out_rank = c.logical_shape().rank();
+    auto aND = CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(a, out_rank);
+    auto bND = b.has_value() ? CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(*b, out_rank) : 1;
+    auto cND = CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(c, out_rank);
+    const auto aHt_r = a.padded_shape()[-2];
+    const auto aWt_r = a.padded_shape()[-1];
+    const auto bHt_r = b.has_value() ? b->padded_shape()[-2] : 0;
+    const auto bWt_r = b.has_value() ? b->padded_shape()[-1] : 0;
+    const auto cHt_r = c.padded_shape()[-2];
+    const auto cWt_r = c.padded_shape()[-1];
+
+    const auto [aD, aN, aC, aHt, aWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(a);
+    const auto [bD, bN, bC, bHt, bWt] =
+        b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
+    const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
+
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
+    const bool rt_has_sharding = shard_specs.has_value();
+    auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
+
+    const auto row_major =
+        rt_has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
+
+    bool zero_start_grid = false;
+    CoreCoord compute_with_storage_grid;
+    if (grid.size() == 1) {
+        const auto& cr = *all_device_cores.ranges().begin();
+        if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
+            if (rt_has_sharding) {
+                const auto& shard_start_coord = grid.ranges()[0].start_coord;
+                if (shard_start_coord.x == 0 && shard_start_coord.y == 0) {
+                    zero_start_grid = true;
+                    compute_with_storage_grid = CoreCoord(cr.end_coord.x + 1, cr.end_coord.y + 1);
+                }
+            } else {
+                zero_start_grid = true;
+                compute_with_storage_grid = CoreCoord(cr.end_coord.x + 1, cr.end_coord.y + 1);
+            }
+        }
+    }
+    const uint32_t num_cores_total =
+        zero_start_grid ? compute_with_storage_grid.x * compute_with_storage_grid.y : all_device_cores.num_cores();
+
+    uint32_t num_tiles_per_core_group_1{}, num_tiles_per_core_group_2{};
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+    uint32_t num_cores;
+    std::vector<CoreCoord> cores;
+
+    const bool row_major_inputs =
+        CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
+    const uint32_t a_alignment = a.buffer()->alignment();
+    const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
+    const uint32_t c_alignment = c.buffer()->alignment();
+
+    const uint32_t tile_height = c.tensor_spec().tile().get_height();
+    const uint32_t tile_width = c.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = tile_height * tile_width;
+
+    uint32_t rt_c_num_tiles;
+    uint32_t num_rows_per_tile = 0;
+    uint32_t row_blocks_per_channel = 1;
+    uint32_t tiles_per_row_width = 1;
+    uint32_t common_row_width_elements = 0;
+    uint32_t reader_stride_size_bytes = 0;
+    uint32_t writer_stride_size_bytes = 0;
+
+    if (row_major_inputs) {
+        const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
+        const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
+        const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
+
+        const uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
+        const uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
+        const uint32_t b_row_width_elements_aligned =
+            b.has_value() ? (b_aligned_page_size / b->element_size()) : a_row_width_elements_aligned;
+
+        common_row_width_elements = c_row_width_elements_aligned;
+        if (aWt_r == cWt_r) {
+            common_row_width_elements = std::min(common_row_width_elements, a_row_width_elements_aligned);
+        }
+        if (b.has_value() && bWt_r == cWt_r) {
+            common_row_width_elements = std::min(common_row_width_elements, b_row_width_elements_aligned);
+        }
+        common_row_width_elements = std::max<uint32_t>(1u, common_row_width_elements);
+
+        num_rows_per_tile = std::max<uint32_t>(1u, tile_hw / common_row_width_elements);
+        const bool aligned_for_a =
+            (aWt_r == cWt_r) ? ((common_row_width_elements * a.element_size()) == a_aligned_page_size) : true;
+        const bool aligned_for_b = (b.has_value() && bWt_r == cWt_r)
+                                       ? ((common_row_width_elements * b->element_size()) == b_aligned_page_size)
+                                       : true;
+        const bool aligned_for_c = (common_row_width_elements * c.element_size()) == c_aligned_page_size;
+        if (!aligned_for_a || !aligned_for_b || !aligned_for_c) {
+            num_rows_per_tile = 1;
+        }
+
+        row_blocks_per_channel = tt::div_up(cHt_r, num_rows_per_tile);
+        const uint32_t total_row_blocks = cND * cD * cN * cC * row_blocks_per_channel;
+        tiles_per_row_width = tt::div_up(common_row_width_elements, tile_hw);
+        const uint32_t a_tile_bytes = tile_hw * a.element_size();
+        const uint32_t a_row_width_bytes = common_row_width_elements * a.element_size();
+        reader_stride_size_bytes =
+            (a_row_width_bytes > a_tile_bytes) ? a_tile_bytes : tt::round_up(a_row_width_bytes, a_alignment);
+        const uint32_t c_tile_bytes = tile_hw * c.element_size();
+        const uint32_t c_row_width_bytes = common_row_width_elements * c.element_size();
+        writer_stride_size_bytes =
+            (c_row_width_bytes > c_tile_bytes) ? c_tile_bytes : tt::round_up(c_row_width_bytes, c_alignment);
+        rt_c_num_tiles = total_row_blocks;
+    } else {
+        rt_c_num_tiles = c.physical_volume() / tile_hw;
+    }
+
+    uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
+
+    CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator a_shard_shape_generator;
+    CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator b_shard_shape_generator;
+    CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator c_shard_shape_generator;
+
+    bool all_same_shard_spec = rt_has_sharding && a.memory_config().is_sharded() && b.has_value() &&
+                               b->memory_config().is_sharded() && c.memory_config().is_sharded() &&
+                               shard_specs->a_shard_spec == shard_specs->b_shard_spec &&
+                               shard_specs->a_shard_spec == shard_specs->c_shard_spec;
+
+    if (rt_has_sharding) {
+        core_group_1 = grid;
+        a_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->a_shard_spec, a);
+        if (b.has_value()) {
+            b_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->b_shard_spec, *b);
+        }
+        c_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->c_shard_spec, c);
+        c_shard_height = shard_specs->c_shard_spec.shape[0] / tile_height;
+        c_shard_width = shard_specs->c_shard_spec.shape[1] / tile_width;
+        num_shards_per_width = CMAKE_UNIQUE_NAMESPACE::get_shards_per_width(
+            shard_specs->c_shard_spec, CMAKE_UNIQUE_NAMESPACE::get_memory_layout(a, b, c));
+
+        if (zero_start_grid) {
+            auto bbox = core_group_1.bounding_box();
+            cores = grid_to_cores_with_noop(
+                bbox.end_coord.x,
+                bbox.end_coord.y,
+                compute_with_storage_grid.x,
+                compute_with_storage_grid.y,
+                row_major);
+        } else {
+            cores = grid_to_cores_with_noop(core_group_1, all_device_cores, row_major);
+        }
+    } else if (zero_start_grid) {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid, rt_c_num_tiles, row_major);
+        cores = grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
+    } else {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(all_device_cores, rt_c_num_tiles, row_major);
+        cores = corerange_to_cores(all_device_cores, {}, row_major);
+    }
+
+    result.cores.reserve(num_cores_total);
+    result.reader.reserve(num_cores_total);
+    result.writer.reserve(num_cores_total);
+    result.compute.reserve(num_cores_total);
+
+    uint32_t current_block = 0;
+    for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
+        const auto& core = cores[i];
+
+        std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args;
+        std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
+        std::vector<std::variant<uint32_t, Buffer*>> compute_runtime_args;
+
+        uint32_t a_num_tiles = 0;
+        uint32_t b_num_tiles = 0;
+        uint32_t c_num_tiles_core = 0;
+        if (core_group_1.contains(core)) {
+            c_num_tiles_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            c_num_tiles_core = num_tiles_per_core_group_2;
+        } else {
+            // Noop core: zero-filled runtime args, sized to match the active kernel variant so unused
+            // cores neither inflate the per-kernel max runtime-arg allocation nor change slot count when a
+            // core flips between noop and work across differently-shaped cache hits.
+            const size_t reader_len = row_major_inputs ? 26 : 21;
+            const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
+            const size_t compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
+            reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+            writer_runtime_args.assign(writer_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+            compute_runtime_args.assign(compute_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+            result.cores.push_back(core);
+            result.reader.push_back(std::move(reader_runtime_args));
+            result.writer.push_back(std::move(writer_runtime_args));
+            result.compute.push_back(std::move(compute_runtime_args));
+            continue;
+        }
+
+        uint32_t c_start_id = 0;
+        uint32_t c_current_shard_width = 0;
+        if (rt_has_sharding) {
+            if (all_same_shard_spec) {
+                c_num_tiles_core = c_shard_height * c_shard_width;
+                c_current_shard_width = c_shard_width;
+                a_num_tiles = c_shard_height * c_shard_width;
+            } else {
+                auto c_shard_shape = c_shard_shape_generator(core);
+                c_num_tiles_core = c_shard_shape[0] * c_shard_shape[1];
+                c_current_shard_width = c_shard_shape[1];
+                auto a_shard_shape = a_shard_shape_generator(core);
+                a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
+            }
+            c_start_id =
+                (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
+        } else {
+            c_start_id = start_tile_id;
+        }
+
+        const bool rt_is_quant_op = operation_attributes.is_quant_op;
+        TT_FATAL(
+            rt_is_quant_op ==
+                ((operation_attributes.post_activations.size() == 1) &&
+                 (operation_attributes.post_activations[0].type() == ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+            "Quantization op needs to exactly one zero-point value as a post activation");
+        const uint32_t quantization_zero_point =
+            rt_is_quant_op ? std::bit_cast<uint32_t>(
+                                 operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
+                           : 0u;
+        uint32_t compute_scalar_value = quantization_zero_point;
+
+        uint32_t compute_tiles = row_major_inputs ? (c_num_tiles_core * tiles_per_row_width) : c_num_tiles_core;
+
+        uint32_t packed_scalar_for_reader = 0u;
+        if (b.has_value()) {
+            if (rt_has_sharding) {
+                if (all_same_shard_spec) {
+                    b_num_tiles = c_shard_height * c_shard_width;
+                } else {
+                    auto b_shard_shape = b_shard_shape_generator(core);
+                    b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+                }
+            }
+            if (row_major_inputs) {
+                writer_runtime_args = {
+                    c.buffer(),
+                    common_row_width_elements,
+                    c_num_tiles_core,
+                    cD,
+                    cN,
+                    cC,
+                    cHt_r,
+                    cND,
+                    current_block,
+                    num_rows_per_tile,
+                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    c_alignment,
+                    tiles_per_row_width,
+                    writer_stride_size_bytes};
+            } else {
+                writer_runtime_args = {
+                    c.buffer(), c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
+            }
+
+            auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
+                operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
+            if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
+                operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
+                compute_scalar_value = pack_scalar_runtime_arg(
+                    operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
+            }
+            if (row_major_inputs) {
+                freq = 1;
+                counter = 0;
+            }
+            if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
+                compute_runtime_args = {
+                    compute_tiles,
+                    freq,
+                    counter,
+                    // rtol and atol are float variables
+                    std::bit_cast<uint32_t>(operation_attributes.rtol),
+                    std::bit_cast<uint32_t>(operation_attributes.atol)};
+            } else {
+                compute_runtime_args = {compute_tiles, freq, counter, compute_scalar_value};
+            }
+        } else {
+            const auto scalar = *operation_attributes.scalar;
+            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
+            packed_scalar_for_reader = packed_scalar;
+            if (row_major_inputs) {
+                writer_runtime_args = {
+                    c.buffer(),
+                    common_row_width_elements,
+                    c_num_tiles_core,
+                    cD,
+                    cN,
+                    cC,
+                    cHt_r,
+                    cND,
+                    current_block,
+                    num_rows_per_tile,
+                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    c_alignment,
+                    tiles_per_row_width,
+                    writer_stride_size_bytes};
+            } else {
+                writer_runtime_args = {
+                    packed_scalar,
+                    c.buffer(),
+                    c_start_id,
+                    c_num_tiles_core,
+                    c_current_shard_width,
+                    cD,
+                    cN,
+                    cC,
+                    cHt,
+                    cWt,
+                    cND,
+                    0u};
+            }
+
+            compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
+        }
+
+        if (row_major_inputs) {
+            const std::variant<uint32_t, Buffer*> b_addr =
+                b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u};
+            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
+                                                       : static_cast<uint32_t>(a.buffer()->aligned_page_size());
+            const uint32_t bD_arg = b.has_value() ? bD : 1u;
+            const uint32_t bN_arg = b.has_value() ? bN : 1u;
+            const uint32_t bC_arg = b.has_value() ? bC : 1u;
+            const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
+            reader_runtime_args = {
+                a.buffer(),
+                c_num_tiles_core,
+                aD,
+                aN,
+                aC,
+                aHt_r,
+                aND,
+                b_addr,
+                bD_arg,
+                bN_arg,
+                bC_arg,
+                bHt_r_arg,
+                bND,
+                cHt_r,
+                cC,
+                cND,
+                current_block,
+                num_rows_per_tile,
+                common_row_width_elements,
+                static_cast<uint32_t>(a.buffer()->aligned_page_size()),
+                b_page_size,
+                a_alignment,
+                b_alignment,
+                tiles_per_row_width,
+                reader_stride_size_bytes,
+                packed_scalar_for_reader};
+        } else {
+            reader_runtime_args = {
+                a.buffer(),
+                c_start_id,
+                a_num_tiles,
+                c_num_tiles_core,
+                c_current_shard_width,
+                aHt * aWt * aC * aN * aD * (aND > 1),
+                aHt * aWt * aC * aN * (aD > 1),
+                aHt * aWt * aC * (aN > 1),
+                aHt * aWt * (aC > 1),
+                cD,
+                cN,
+                cC,
+                cHt,
+                cWt,
+                cND,
+                b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u},
+                bHt * bWt * bC * bN * bD * (bND > 1),
+                bHt * bWt * bC * bN * (bD > 1),
+                bHt * bWt * bC * (bN > 1),
+                bHt * bWt * (bC > 1),
+                b_num_tiles,
+            };
+        }
+
+        result.cores.push_back(core);
+        result.reader.push_back(std::move(reader_runtime_args));
+        result.writer.push_back(std::move(writer_runtime_args));
+        result.compute.push_back(std::move(compute_runtime_args));
+
+        start_tile_id += c_num_tiles_core;
+        if (row_major_inputs) {
+            current_block += c_num_tiles_core;
+        }
+    }
+
+    return result;
+}
+
+}  // namespace
+
 // Implements c = a op b
 tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
@@ -464,9 +905,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     {
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);
@@ -885,421 +1326,15 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = reader_common_runtime_args;
 
-    // === Inline per-core runtime arguments (previously set_or_update_runtime_arguments) ===
+    // === Per-core runtime arguments ===
+    // Built via the shared single-source-of-truth builder so create_descriptor() (cache miss, here)
+    // and BinaryNgDeviceOperation::get_dynamic_runtime_args() (cache hit) stay byte-identical.
     {
-        const auto out_rank = c.logical_shape().rank();
-        auto aND = CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(a, out_rank);
-        auto bND = b.has_value() ? CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(*b, out_rank) : 1;
-        auto cND = CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(c, out_rank);
-        const auto aHt_r = a.padded_shape()[-2];
-        const auto aWt_r = a.padded_shape()[-1];
-        const auto bHt_r = b.has_value() ? b->padded_shape()[-2] : 0;
-        const auto bWt_r = b.has_value() ? b->padded_shape()[-1] : 0;
-        const auto cHt_r = c.padded_shape()[-2];
-        const auto cWt_r = c.padded_shape()[-1];
-
-        const auto [aD, aN, aC, aHt, aWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(a);
-        const auto [bD, bN, bC, bHt, bWt] = b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
-        const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
-
-        const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-            a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
-        const bool rt_has_sharding = shard_specs.has_value();
-        auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
-
-        const auto row_major = rt_has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
-
-        bool zero_start_grid = false;
-        CoreCoord compute_with_storage_grid;
-        if (grid.size() == 1) {
-            const auto& cr = *all_device_cores.ranges().begin();
-            if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
-                if (rt_has_sharding) {
-                    const auto& shard_start_coord = grid.ranges()[0].start_coord;
-                    if (shard_start_coord.x == 0 && shard_start_coord.y == 0) {
-                        zero_start_grid = true;
-                        compute_with_storage_grid = CoreCoord(cr.end_coord.x + 1, cr.end_coord.y + 1);
-                    }
-                } else {
-                    zero_start_grid = true;
-                    compute_with_storage_grid = CoreCoord(cr.end_coord.x + 1, cr.end_coord.y + 1);
-                }
-            }
-        }
-        const uint32_t num_cores_total =
-            zero_start_grid ? compute_with_storage_grid.x * compute_with_storage_grid.y : all_device_cores.num_cores();
-
-        uint32_t num_tiles_per_core_group_1{}, num_tiles_per_core_group_2{};
-        CoreRangeSet all_cores, core_group_1, core_group_2;
-        uint32_t num_cores;
-        std::vector<CoreCoord> cores;
-
-        const bool row_major_inputs = CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
-        const uint32_t a_alignment = a.buffer()->alignment();
-        const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
-        const uint32_t c_alignment = c.buffer()->alignment();
-
-        const uint32_t tile_height = c.tensor_spec().tile().get_height();
-        const uint32_t tile_width = c.tensor_spec().tile().get_width();
-        const uint32_t tile_hw = tile_height * tile_width;
-
-        uint32_t rt_c_num_tiles;
-        uint32_t num_rows_per_tile = 0;
-        uint32_t row_blocks_per_channel = 1;
-        uint32_t tiles_per_row_width = 1;
-        uint32_t common_row_width_elements = 0;
-        uint32_t reader_stride_size_bytes = 0;
-        uint32_t writer_stride_size_bytes = 0;
-
-        if (row_major_inputs) {
-            const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
-            const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
-            const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
-
-            const uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
-            const uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
-            const uint32_t b_row_width_elements_aligned =
-                b.has_value() ? (b_aligned_page_size / b->element_size()) : a_row_width_elements_aligned;
-
-            common_row_width_elements = c_row_width_elements_aligned;
-            if (aWt_r == cWt_r) {
-                common_row_width_elements = std::min(common_row_width_elements, a_row_width_elements_aligned);
-            }
-            if (b.has_value() && bWt_r == cWt_r) {
-                common_row_width_elements = std::min(common_row_width_elements, b_row_width_elements_aligned);
-            }
-            common_row_width_elements = std::max<uint32_t>(1u, common_row_width_elements);
-
-            num_rows_per_tile = std::max<uint32_t>(1u, tile_hw / common_row_width_elements);
-            const bool aligned_for_a =
-                (aWt_r == cWt_r) ? ((common_row_width_elements * a.element_size()) == a_aligned_page_size) : true;
-            const bool aligned_for_b = (b.has_value() && bWt_r == cWt_r)
-                                           ? ((common_row_width_elements * b->element_size()) == b_aligned_page_size)
-                                           : true;
-            const bool aligned_for_c = (common_row_width_elements * c.element_size()) == c_aligned_page_size;
-            if (!aligned_for_a || !aligned_for_b || !aligned_for_c) {
-                num_rows_per_tile = 1;
-            }
-
-            row_blocks_per_channel = tt::div_up(cHt_r, num_rows_per_tile);
-            const uint32_t total_row_blocks = cND * cD * cN * cC * row_blocks_per_channel;
-            tiles_per_row_width = tt::div_up(common_row_width_elements, tile_hw);
-            const uint32_t a_tile_bytes = tile_hw * a.element_size();
-            const uint32_t a_row_width_bytes = common_row_width_elements * a.element_size();
-            reader_stride_size_bytes =
-                (a_row_width_bytes > a_tile_bytes) ? a_tile_bytes : tt::round_up(a_row_width_bytes, a_alignment);
-            const uint32_t c_tile_bytes = tile_hw * c.element_size();
-            const uint32_t c_row_width_bytes = common_row_width_elements * c.element_size();
-            writer_stride_size_bytes =
-                (c_row_width_bytes > c_tile_bytes) ? c_tile_bytes : tt::round_up(c_row_width_bytes, c_alignment);
-            rt_c_num_tiles = total_row_blocks;
-        } else {
-            rt_c_num_tiles = c.physical_volume() / tile_hw;
-        }
-
-        uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
-
-        CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator a_shard_shape_generator;
-        CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator b_shard_shape_generator;
-        CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator c_shard_shape_generator;
-
-        bool all_same_shard_spec = rt_has_sharding && a.memory_config().is_sharded() && b.has_value() &&
-                                   b->memory_config().is_sharded() && c.memory_config().is_sharded() &&
-                                   shard_specs->a_shard_spec == shard_specs->b_shard_spec &&
-                                   shard_specs->a_shard_spec == shard_specs->c_shard_spec;
-
-        if (rt_has_sharding) {
-            core_group_1 = grid;
-            a_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->a_shard_spec, a);
-            if (b.has_value()) {
-                b_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->b_shard_spec, *b);
-            }
-            c_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->c_shard_spec, c);
-            c_shard_height = shard_specs->c_shard_spec.shape[0] / tile_height;
-            c_shard_width = shard_specs->c_shard_spec.shape[1] / tile_width;
-            num_shards_per_width = CMAKE_UNIQUE_NAMESPACE::get_shards_per_width(shard_specs->c_shard_spec, CMAKE_UNIQUE_NAMESPACE::get_memory_layout(a, b, c));
-
-            if (zero_start_grid) {
-                auto bbox = core_group_1.bounding_box();
-                cores = grid_to_cores_with_noop(
-                    bbox.end_coord.x,
-                    bbox.end_coord.y,
-                    compute_with_storage_grid.x,
-                    compute_with_storage_grid.y,
-                    row_major);
-            } else {
-                cores = grid_to_cores_with_noop(core_group_1, all_device_cores, row_major);
-            }
-        } else if (zero_start_grid) {
-            std::tie(
-                num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-                tt::tt_metal::split_work_to_cores(compute_with_storage_grid, rt_c_num_tiles, row_major);
-            cores = grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
-        } else {
-            std::tie(
-                num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-                tt::tt_metal::split_work_to_cores(all_device_cores, rt_c_num_tiles, row_major);
-            cores = corerange_to_cores(all_device_cores, {}, row_major);
-        }
-
-        uint32_t current_block = 0;
-        for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
-            const auto& core = cores[i];
-
-            uint32_t a_num_tiles = 0;
-            uint32_t b_num_tiles = 0;
-            uint32_t c_num_tiles_core = 0;
-            if (core_group_1.contains(core)) {
-                c_num_tiles_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.contains(core)) {
-                c_num_tiles_core = num_tiles_per_core_group_2;
-            } else {
-                // Keep dummy runtime-arg sizes aligned with the active kernel variant so unused cores do not
-                // inflate the per-kernel max runtime-arg allocation.
-                if (row_major_inputs) {
-                    std::array<uint32_t, 26> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
-                    std::array<uint32_t, 14> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
-                } else if (b.has_value()) {
-                    std::array<uint32_t, 21> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
-                    std::array<uint32_t, 11> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
-                } else {
-                    std::array<uint32_t, 21> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
-                    std::array<uint32_t, 12> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
-                }
-                if (op_type == BinaryOpType::ISCLOSE) {
-                    std::array<uint32_t, 5> dummy_compute{0};
-                    compute_desc.runtime_args.emplace_back(
-                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
-                } else {
-                    std::array<uint32_t, 4> dummy_compute{0};
-                    compute_desc.runtime_args.emplace_back(
-                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
-                }
-                continue;
-            }
-
-            uint32_t c_start_id = 0;
-            uint32_t c_current_shard_width = 0;
-            if (rt_has_sharding) {
-                if (all_same_shard_spec) {
-                    c_num_tiles_core = c_shard_height * c_shard_width;
-                    c_current_shard_width = c_shard_width;
-                    a_num_tiles = c_shard_height * c_shard_width;
-                } else {
-                    auto c_shard_shape = c_shard_shape_generator(core);
-                    c_num_tiles_core = c_shard_shape[0] * c_shard_shape[1];
-                    c_current_shard_width = c_shard_shape[1];
-                    auto a_shard_shape = a_shard_shape_generator(core);
-                    a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
-                }
-                c_start_id =
-                    (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
-            } else {
-                c_start_id = start_tile_id;
-            }
-
-            const bool rt_is_quant_op = operation_attributes.is_quant_op;
-            TT_FATAL(
-                rt_is_quant_op ==
-                    ((operation_attributes.post_activations.size() == 1) &&
-                     (operation_attributes.post_activations[0].type() == ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
-                "Quantization op needs to exactly one zero-point value as a post activation");
-            const uint32_t quantization_zero_point =
-                rt_is_quant_op ? std::bit_cast<uint32_t>(
-                                  operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
-                            : 0u;
-            uint32_t compute_scalar_value = quantization_zero_point;
-
-            uint32_t compute_tiles = row_major_inputs ? (c_num_tiles_core * tiles_per_row_width) : c_num_tiles_core;
-
-            uint32_t packed_scalar_for_reader = 0u;
-            if (b.has_value()) {
-                if (rt_has_sharding) {
-                    if (all_same_shard_spec) {
-                        b_num_tiles = c_shard_height * c_shard_width;
-                    } else {
-                        auto b_shard_shape = b_shard_shape_generator(core);
-                        b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
-                    }
-                }
-                std::vector<uint32_t> writer_runtime_args;
-                if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        common_row_width_elements,
-                        c_num_tiles_core,
-                        cD,
-                        cN,
-                        cC,
-                        cHt_r,
-                        cND,
-                        current_block,
-                        num_rows_per_tile,
-                        static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                        c_alignment,
-                        tiles_per_row_width,
-                        writer_stride_size_bytes};
-                } else {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
-                }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
-
-                auto [freq, counter] =
-                    CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-                if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
-                    operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
-                    compute_scalar_value = pack_scalar_runtime_arg(
-                        operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
-                }
-                if (row_major_inputs) {
-                    freq = 1;
-                    counter = 0;
-                }
-                if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
-                    const std::array<uint32_t, 5> compute_runtime_args = {
-                        compute_tiles,
-                        freq,
-                        counter,
-                        // rtol and atol are float variables
-                        std::bit_cast<uint32_t>(operation_attributes.rtol),
-                        std::bit_cast<uint32_t>(operation_attributes.atol)};
-                    compute_desc.runtime_args.emplace_back(
-                        core,
-                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
-                } else {
-                    const std::array<uint32_t, 4> compute_runtime_args = {
-                        compute_tiles, freq, counter, compute_scalar_value};
-                    compute_desc.runtime_args.emplace_back(
-                        core,
-                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
-                }
-            } else {
-                const auto scalar = *operation_attributes.scalar;
-                const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
-                packed_scalar_for_reader = packed_scalar;
-                std::vector<uint32_t> writer_runtime_args;
-                if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        common_row_width_elements,
-                        c_num_tiles_core,
-                        cD,
-                        cN,
-                        cC,
-                        cHt_r,
-                        cND,
-                        current_block,
-                        num_rows_per_tile,
-                        static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                        c_alignment,
-                        tiles_per_row_width,
-                        writer_stride_size_bytes};
-                } else {
-                    writer_runtime_args = {
-                        packed_scalar,
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
-                }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
-
-                std::array compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
-            }
-            std::vector<uint32_t> reader_runtime_args;
-
-            if (row_major_inputs) {
-                const uint32_t b_addr = b.has_value() ? b->buffer()->address() : 0u;
-                const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
-                                                           : static_cast<uint32_t>(a.buffer()->aligned_page_size());
-                const uint32_t bD_arg = b.has_value() ? bD : 1u;
-                const uint32_t bN_arg = b.has_value() ? bN : 1u;
-                const uint32_t bC_arg = b.has_value() ? bC : 1u;
-                const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
-                reader_runtime_args = {
-                    a.buffer()->address(),
-                    c_num_tiles_core,
-                    aD,
-                    aN,
-                    aC,
-                    aHt_r,
-                    aND,
-                    b_addr,
-                    bD_arg,
-                    bN_arg,
-                    bC_arg,
-                    bHt_r_arg,
-                    bND,
-                    cHt_r,
-                    cC,
-                    cND,
-                    current_block,
-                    num_rows_per_tile,
-                    common_row_width_elements,
-                    static_cast<uint32_t>(a.buffer()->aligned_page_size()),
-                    b_page_size,
-                    a_alignment,
-                    b_alignment,
-                    tiles_per_row_width,
-                    reader_stride_size_bytes,
-                    packed_scalar_for_reader};
-            } else {
-                reader_runtime_args = {
-                    a.buffer()->address(),
-                    c_start_id,
-                    a_num_tiles,
-                    c_num_tiles_core,
-                    c_current_shard_width,
-                    aHt * aWt * aC * aN * aD * (aND > 1),
-                    aHt * aWt * aC * aN * (aD > 1),
-                    aHt * aWt * aC * (aN > 1),
-                    aHt * aWt * (aC > 1),
-                    cD,
-                    cN,
-                    cC,
-                    cHt,
-                    cWt,
-                    cND,
-                    b.has_value() ? b->buffer()->address() : 0u,
-                    bHt * bWt * bC * bN * bD * (bND > 1),
-                    bHt * bWt * bC * bN * (bD > 1),
-                    bHt * bWt * bC * (bN > 1),
-                    bHt * bWt * (bC > 1),
-                    b_num_tiles,
-                };
-            }
-
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
-
-            start_tile_id += c_num_tiles_core;
-            if (row_major_inputs) {
-                current_block += c_num_tiles_core;
-            }
+        auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
+        for (size_t i = 0; i < per_core.cores.size(); ++i) {
+            reader_desc.emplace_runtime_args(per_core.cores[i], per_core.reader[i]);
+            writer_desc.emplace_runtime_args(per_core.cores[i], per_core.writer[i]);
+            compute_desc.emplace_runtime_args(per_core.cores[i], per_core.compute[i]);
         }
     }
 
@@ -1308,6 +1343,66 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& c,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // binary_ng's compute_program_hash EXCLUDES the tensor volume, so one cached program is reused
+    // across differently-shaped calls.  On a cache hit the descriptor is never rebuilt, so every
+    // shape-/work-split-dependent per-core arg baked at the first miss would stay frozen and corrupt a
+    // later, differently-shaped call.  Re-run the SAME builder create_descriptor() uses and re-apply
+    // every per-core arg for the CURRENT tensors.
+    //
+    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).
+    //
+    // The work-core partition itself shifts with the volume (a core can flip between work and noop), so
+    // we re-apply ALL cores' args, not just the work cores: noop cores get zero-filled lists (harmless,
+    // they do no work), and any core that becomes a work core on this hit gets its full args here.  For
+    // that reason we ALSO re-apply the buffer-address slots (via the current Buffer address) rather than
+    // relying solely on the Buffer* bindings: bindings are resolved once at cache-miss time and only
+    // cover the cores that were work cores THEN, so a core promoted to a work core on a later hit would
+    // otherwise be left with a stale/zero base address.  Indices match create_descriptor() by
+    // construction because both walk the identical builder output.
+    const auto& a = tensor_args.input_tensor_a;
+    const auto& b = tensor_args.input_tensor_b;
+
+    auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
+
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kComputeKernelIdx = 2;
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    // Reserve the exact number of args we're about to emit (reader + writer + compute per core).
+    size_t total_args = 0;
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        total_args += per_core.reader[i].size() + per_core.writer[i].size() + per_core.compute[i].size();
+    }
+    dynamic_args.reserve(total_args);
+
+    auto emit = [&](uint32_t kernel_idx,
+                    const CoreCoord& core,
+                    const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
+        for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+            const auto& slot = args[arg_idx];
+            uint32_t value = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
+                                 ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
+                                 : std::get<uint32_t>(slot);
+            dynamic_args.push_back({kernel_idx, core, arg_idx, value});
+        }
+    };
+
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        const auto& core = per_core.cores[i];
+        emit(kReaderKernelIdx, core, per_core.reader[i]);
+        emit(kWriterKernelIdx, core, per_core.writer[i]);
+        emit(kComputeKernelIdx, core, per_core.compute[i]);
+    }
+
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::binary_ng

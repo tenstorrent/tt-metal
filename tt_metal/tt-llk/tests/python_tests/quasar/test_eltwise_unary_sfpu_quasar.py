@@ -22,6 +22,7 @@ from helpers.param_config import (
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -685,7 +686,7 @@ def generate_sfpu_unary_combinations():
                                     dest_acc,
                                     dest_sync,
                                     implied_math_format,
-                                    input_dimensions,
+                                    runtime(input_dimensions),
                                 )
                             )
 

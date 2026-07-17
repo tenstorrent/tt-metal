@@ -10,6 +10,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <cstddef>
+#include <stdexcept>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -32,8 +33,14 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc);
 [[maybe_unused]] static uint32_t my_x[1] = {0};
 [[maybe_unused]] static uint32_t my_y[1] = {0};
 
+static void host_assert(bool condition, const char* expression) {
+    if (!condition) {
+        throw std::out_of_range(expression);
+    }
+}
+
 #define noc_index 0
-#define ASSERT(condition, ...)
+#define ASSERT(condition, ...) host_assert(condition, #condition)
 #define FORCE_INLINE inline __attribute__((always_inline))
 #define DPRINT std::cout
 #define ENDL() std::endl
@@ -53,6 +60,7 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc);
 
 #undef get_compile_time_arg_val
 #undef noc_index
+#undef ASSERT
 #undef DPRINT
 #undef END
 #undef DPRINT_DATA0
@@ -297,6 +305,33 @@ TYPED_TEST(TensorAccessorTests, PageLookUp) {
         EXPECT_EQ(bank_id, expected_bank_and_offset.bank_id);
         EXPECT_EQ(bank_offset, expected_bank_and_offset.bank_offset);
     }
+}
+
+TEST(TensorAccessorTests, ShardCoordinateNocAddressUsesGridCoordinates) {
+    using TensorShape = ArrayWrapperU32<6, 6>;
+    using ShardShape = ArrayWrapperU32<2, 3>;
+    using BankCoords = ArrayWrapperU16<0, 1>;
+    using dspec_t = tensor_accessor::DistributionSpec<2, 2, TensorShape, ShardShape, BankCoords>;
+
+    constexpr uint32_t bank_base_address = 4096;
+    constexpr uint32_t page_size = 64;
+    constexpr uint32_t offset = 17;
+    auto accessor = TensorAccessor<dspec_t>(bank_base_address, page_size);
+
+    ASSERT_EQ(accessor.dspec().shard_grid(), (std::array<uint32_t, 2>{3, 2}));
+    for (uint32_t row = 0; row < accessor.dspec().shard_grid()[0]; ++row) {
+        for (uint32_t column = 0; column < accessor.dspec().shard_grid()[1]; ++column) {
+            const std::array<uint32_t, 2> shard_coord{row, column};
+            const uint32_t shard_id = row * 2 + column;
+            EXPECT_EQ(accessor.get_shard_noc_addr(shard_coord, offset), accessor.get_shard_noc_addr(shard_id, offset))
+                << "Incorrect address for shard coordinate {" << row << ", " << column << "}";
+        }
+    }
+
+    // The first coordinate is valid in the shard grid even though it equals the corresponding shard-shape extent.
+    EXPECT_NO_THROW(accessor.get_shard_noc_addr(std::array<uint32_t, 2>{2, 1}));
+    // The second coordinate is outside the shard grid even though it is less than the shard-shape extent.
+    EXPECT_THROW(accessor.get_shard_noc_addr(std::array<uint32_t, 2>{0, 2}), std::out_of_range);
 }
 
 namespace crta_params {

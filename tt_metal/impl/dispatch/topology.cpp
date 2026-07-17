@@ -145,8 +145,9 @@ static const std::vector<DispatchKernelNode> single_chip_arch_2cq_dispatch_s = {
 };
 
 static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, x, x, x}, k_quasar_noc},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, k_quasar_noc},
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {

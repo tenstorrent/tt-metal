@@ -19,14 +19,22 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device,
 
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
+    const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     std::optional<uint8_t> cq_id) {
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
-    for (const auto& [tensor, block_count] : tensors) {
-        inputs.push_back({tensor.mesh_tensor(), block_count});
+    for (const auto& item : tensors) {
+        // (tensor, block_count) defaults to batched (empty rotation); (tensor, block_count,
+        // rotation) supplies the per-receiver streaming rotation table for that tensor.
+        if (const auto* pair = std::get_if<std::pair<ttnn::Tensor, uint32_t>>(&item)) {
+            inputs.push_back({pair->first.mesh_tensor(), pair->second, /*rotation=*/{}});
+        } else {
+            const auto& [tensor, block_count, rotation] =
+                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(item);
+            inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
+        }
     }
     tt::tt_metal::experimental::QueueTensorPrefetcherRequest(*mesh_device, global_cb, device_subset, inputs, cq_id);
 }
