@@ -11,6 +11,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
@@ -28,6 +29,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -1240,6 +1242,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             dfb.num_entries > 0,
             "DataflowBufferSpec '{}' has num_entries = 0. num_entries must be set to a non-zero value.",
             dfb.unique_id);
+        dfb::detail::checked_total_size(
+            dfb.entry_size, dfb.num_entries, fmt::format("DataflowBufferSpec '{}'", dfb.unique_id.get()));
     }
 
     // Validate local DFB endpoint placement and multi-binding consistency.
@@ -1533,10 +1537,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             tp_name);
         // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
         // available at spec time, so we can't query the per-bank allocation; the precise per-bank
-        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_args.cpp), where
+        // check runs during borrowed-attachment preparation (program_run_args.cpp), where
         // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
         // here against the full-tensor size and still fail per-bank later. By design.
-        const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
+        const uint32_t dfb_bytes = dfb::detail::checked_total_size(
+            dfb.entry_size, dfb.num_entries, fmt::format("Borrowed-memory DFB '{}'", dfb.unique_id.get()));
         const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
         TT_FATAL(
             dfb_bytes <= tensor_bytes,
@@ -1586,7 +1591,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (dfb_alias_with(dfb).empty()) {
                 continue;
             }
-            const size_t total_size_a = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
+            const uint32_t total_size_a = dfb::detail::checked_total_size(
+                dfb.entry_size, dfb.num_entries, fmt::format("Aliased DFB '{}'", dfb.unique_id.get()));
             const auto group_a = extended_group(dfb);
             const auto& nodes_a = collected.dfb_node_set.at(dfb.unique_id);
 
@@ -1604,8 +1610,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 }
 
                 // Rule 2: same total size.
-                const size_t total_size_b =
-                    static_cast<size_t>(alias_spec->entry_size) * static_cast<size_t>(alias_spec->num_entries);
+                const uint32_t total_size_b = dfb::detail::checked_total_size(
+                    alias_spec->entry_size,
+                    alias_spec->num_entries,
+                    fmt::format("Aliased DFB '{}'", alias_spec->unique_id.get()));
                 TT_FATAL(
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "

@@ -5,10 +5,13 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <variant>
 
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
@@ -67,6 +70,23 @@ struct DataflowBufferConfig {
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
 };
+
+namespace detail {
+
+inline uint32_t checked_total_size(uint32_t entry_size, uint32_t num_entries, std::string_view context) {
+    const uint64_t total_size = static_cast<uint64_t>(entry_size) * num_entries;
+    TT_FATAL(
+        total_size <= std::numeric_limits<uint32_t>::max(),
+        "{}: DFB size overflow: entry_size {} * num_entries {} = {} bytes exceeds UINT32_MAX ({} bytes).",
+        context,
+        entry_size,
+        num_entries,
+        total_size,
+        std::numeric_limits<uint32_t>::max());
+    return static_cast<uint32_t>(total_size);
+}
+
+}  // namespace detail
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with
 // host API redesign. Returns logical DFB id

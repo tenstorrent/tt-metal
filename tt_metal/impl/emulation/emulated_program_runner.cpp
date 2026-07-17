@@ -2545,7 +2545,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     for (auto& dfb_impl : dfb_impls) {
         uint32_t dfb_id = dfb_impl->id;
         auto& cfg = dfb_impl->config;
-        uint32_t total = cfg.entry_size * cfg.num_entries;
+        uint32_t total = dfb_impl->total_size();
         uint64_t dim_key = (static_cast<uint64_t>(cfg.entry_size) << 32) | cfg.num_entries;
         bool compute_is_consumer = (cfg.consumer_risc_mask & TENSIX_MASK) != 0;
         bool compute_is_producer = (cfg.producer_risc_mask & TENSIX_MASK) != 0;
@@ -2663,7 +2663,8 @@ static void setup_core_state(
 static void populate_dfb_interface_slots(
     tt_emule::EmuleDFBInterface& iface, const DFBAllocInfo& alloc, uint8_t proc_id, bool is_tensix) {
     const auto& cfg = *alloc.cfg;
-    const uint32_t total = cfg.entry_size * cfg.num_entries;
+    const uint32_t total = tt::tt_metal::experimental::dfb::detail::checked_total_size(
+        cfg.entry_size, cfg.num_entries, "Emulated DFB interface");
 
     // Compute proc_bit per-alloc: WH/BH ComputeKernel sets bit 2,
     // Quasar uses bits 8+ (detect by presence of high mask bits).

@@ -103,7 +103,9 @@ struct DataflowBufferImpl {
         }
     }
 
-    uint32_t total_size() const { return config.entry_size * config.num_entries; }
+    uint32_t total_size() const {
+        return checked_total_size(config.entry_size, config.num_entries, "DataflowBufferImpl");
+    }
     uint32_t serialized_size() const;
     std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
 

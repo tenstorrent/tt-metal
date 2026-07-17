@@ -1190,6 +1190,16 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOversizedFails) {
             ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
 }
 
+TEST_F(ProgramSpecTestQuasar, DFBTotalSizeOverflowFailsBeforeLowering) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.dataflow_buffers[0].entry_size = 1U << 31;
+    spec.dataflow_buffers[0].num_entries = 2;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB size overflow")));
+}
+
 TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 

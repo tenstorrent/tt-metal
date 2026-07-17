@@ -385,10 +385,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         std::vector<uint8_t> data;
         data.reserve(4 * sizeof(uint32_t));
         const uint32_t words[4] = {
-            alloc_addr,                                     // fifo_addr (base)
-            this->config.entry_size * this->config.num_entries,  // fifo_size
-            this->config.num_entries,                       // fifo_num_pages
-            this->config.entry_size,                        // fifo_page_size
+            alloc_addr,                // fifo_addr (base)
+            this->total_size(),        // fifo_size
+            this->config.num_entries,  // fifo_num_pages
+            this->config.entry_size,   // fifo_page_size
         };
         const auto* bytes = reinterpret_cast<const uint8_t*>(words);
         data.insert(data.end(), bytes, bytes + sizeof(words));
@@ -668,6 +668,7 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
     const uint32_t ne = new_num_entries.value_or(config.num_entries);
     TT_FATAL(es > 0, "DFB {}: entry_size override must be > 0", id);
     TT_FATAL(ne > 0, "DFB {}: num_entries override must be > 0", id);
+    checked_total_size(es, ne, fmt::format("DFB {} size override", id));
 
     // The kernel-config dfb_size region is frozen after the first launch (finalize_offsets runs once).
     // A size override must never change the serialized size.
@@ -756,13 +757,6 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
             *serialized_size_before,
             serialized_size());
     }
-
-    log_debug(
-        tt::LogMetal,
-        "DFB {} size override applied: entry_size={} num_entries={}",
-        id,
-        config.entry_size,
-        config.num_entries);
 }
 
 uint32_t finalize_dfbs(
@@ -825,6 +819,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     TT_FATAL(config.entry_size > 0, "Entry size must be > 0");
     TT_FATAL(config.num_entries > 0, "Num entries must be > 0");
+    checked_total_size(
+        config.entry_size,
+        config.num_entries,
+        fmt::format("ProgramImpl::add_dataflow_buffer DFB {}", this->dataflow_buffers_.size()));
 
     TT_FATAL(config.pap != dfb::AccessPattern::ALL, "ALL producer pattern not supported");
 
@@ -1616,15 +1614,27 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         return;
     }
 
-    // (a) Resolve each override to its new total_size (entry_size * num_entries), filling unset fields
-    //     from the current config. Indexed by dfb_id for the alias-group agreement check below.
-    std::unordered_map<uint32_t, uint64_t> new_total_by_id;
+    // (a) Validate every candidate config on a detached copy. update_size() checks all size-derived
+    //     constraints and may mutate its receiver before a later check fails, so it must never run on
+    //     live program state until the complete batch has passed validation.
+    struct ValidatedSizeOverride {
+        std::shared_ptr<DataflowBufferImpl> live;
+        DataflowBufferImpl candidate;
+    };
+    std::vector<ValidatedSizeOverride> validated;
+    validated.reserve(overrides.size());
+
+    std::unordered_map<uint32_t, uint32_t> new_total_by_id;
     new_total_by_id.reserve(overrides.size());
     for (const auto& o : overrides) {
         auto dfb = get_dataflow_buffer(o.dfb_id);
-        uint32_t es = o.entry_size.value_or(dfb->config.entry_size);
-        uint32_t ne = o.num_entries.value_or(dfb->config.num_entries);
-        new_total_by_id[o.dfb_id] = static_cast<uint64_t>(es) * ne;
+        TT_FATAL(
+            !new_total_by_id.contains(o.dfb_id), "DFB {} has more than one size override in the same batch.", o.dfb_id);
+
+        DataflowBufferImpl candidate = *dfb;
+        candidate.update_size(o.entry_size, o.num_entries);
+        new_total_by_id.emplace(o.dfb_id, candidate.total_size());
+        validated.push_back({std::move(dfb), std::move(candidate)});
     }
 
     // (b) Alias-group coherence gate. Aliased DFBs total-size change is only safe if the whole group
@@ -1648,7 +1658,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         group.push_back(primary_id);
         group.insert(group.end(), primary->alias_secondary_ids.begin(), primary->alias_secondary_ids.end());
 
-        std::optional<uint64_t> agreed_total;
+        std::optional<uint32_t> agreed_total;
         for (uint32_t member_id : group) {
             auto it = new_total_by_id.find(member_id);
             TT_FATAL(
@@ -1674,9 +1684,21 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         }
     }
 
-    // (c) Apply: mutate each DFB's size.
-    for (const auto& o : overrides) {
-        get_dataflow_buffer(o.dfb_id)->update_size(o.entry_size, o.num_entries);
+    // (c) Commit only the fields derived by update_size(). Every candidate above has passed all
+    //     checks, so no validation can fail after live state starts changing.
+    for (const auto& update : validated) {
+        update.live->config.entry_size = update.candidate.config.entry_size;
+        update.live->config.num_entries = update.candidate.config.num_entries;
+        update.live->capacity = update.candidate.capacity;
+        update.live->stride_in_entries = update.candidate.stride_in_entries;
+        update.live->producer_txn_descriptor = update.candidate.producer_txn_descriptor;
+        update.live->consumer_txn_descriptor = update.candidate.consumer_txn_descriptor;
+        log_debug(
+            tt::LogMetal,
+            "DFB {} size override applied: entry_size={} num_entries={}",
+            update.live->id,
+            update.live->config.entry_size,
+            update.live->config.num_entries);
     }
 
     // (d) Force allocate_dataflow_buffers() to recompute the L1 layout for the new total_size() on the next

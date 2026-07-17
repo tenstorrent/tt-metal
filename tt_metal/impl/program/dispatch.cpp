@@ -2564,7 +2564,7 @@ void update_program_dispatch_commands(
                     uint32_t base_index = dfb->id * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
                     uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload) + base_index;
                     words[0] = dfb->uniform_alloc_addr();
-                    words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                    words[1] = dfb->total_size();
                     words[2] = dfb->config.num_entries;
                     words[3] = dfb->config.entry_size;
                 }
@@ -3034,7 +3034,7 @@ TraceNode create_trace_node(
                 size_t byte_offset = base_index * sizeof(uint32_t);
                 uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
                 words[0] = dfb->uniform_alloc_addr();
-                words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                words[1] = dfb->total_size();
                 words[2] = dfb->config.num_entries;
                 words[3] = dfb->config.entry_size;
                 first_unused_byte = std::max(

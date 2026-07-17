@@ -41,6 +41,7 @@
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
 #include "impl/kernels/kernel.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
 #include "test_helpers.hpp"
 
@@ -57,6 +58,16 @@ using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
+
+TEST(DataflowBufferCheckedSizeTest, AcceptsRepresentableBoundaryAndRejectsOverflow) {
+    EXPECT_EQ(dfb::detail::checked_total_size(0, 1, "test"), 0U);
+    EXPECT_EQ(
+        dfb::detail::checked_total_size(std::numeric_limits<uint32_t>::max(), 1, "test"),
+        std::numeric_limits<uint32_t>::max());
+    EXPECT_THAT(
+        [] { dfb::detail::checked_total_size(1U << 31, 2, "test"); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB size overflow")));
+}
 
 // Shorthand for the per-node-override vararg type: a Table keyed by Nodes mapping to a
 // vararg count (matches KernelAdvancedOptions::num_runtime_varargs_per_node).
@@ -91,6 +102,15 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
+
+TEST_F(ProgramRunArgsTestQuasar, DirectDFBCreationRejectsSizeOverflow) {
+    Program program;
+    dfb::DataflowBufferConfig config{.entry_size = 1U << 31, .num_entries = 2};
+
+    EXPECT_THAT(
+        [&] { dfb::CreateDataflowBuffer(program, CoreCoord{0, 0}, config); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB size overflow")));
+}
 
 // ============================================================================
 // Test Utilities
@@ -403,6 +423,23 @@ TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideZeroFails) {
             ::testing::HasSubstr("num_entries must be set to a non-zero value")));
 }
 
+TEST_F(ProgramRunArgsTestQuasar, DFBSizeOverflowFailsWithoutMutation) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto original_config = dfb->config;
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 1U << 31, .num_entries = 2});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB size overflow")));
+    EXPECT_EQ(dfb->config.entry_size, original_config.entry_size);
+    EXPECT_EQ(dfb->config.num_entries, original_config.num_entries);
+}
+
 TEST_F(ProgramRunArgsTestQuasar, DFBSizeOverrideUnknownNameFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
@@ -510,6 +547,52 @@ TEST_F(ProgramRunArgsTestQuasar, AliasGroupDisagreeResizeFails) {
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, AliasGroupOverflowFailsWithoutMutation) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    const auto original_a = a->config;
+    const auto original_b = b->config;
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .entry_size = 1U << 31, .num_entries = 2});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .entry_size = 1U << 31, .num_entries = 2});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB size overflow")));
+    EXPECT_EQ(a->config.entry_size, original_a.entry_size);
+    EXPECT_EQ(a->config.num_entries, original_a.num_entries);
+    EXPECT_EQ(b->config.entry_size, original_b.entry_size);
+    EXPECT_EQ(b->config.num_entries, original_b.num_entries);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, MixedDFBOverrideFailureLeavesCompleteBatchUnchanged) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    spec.dataflow_buffers[0].advanced_options.alias_with.clear();
+    spec.dataflow_buffers[1].advanced_options.alias_with.clear();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    const auto original_a = a->config;
+    const auto original_b = b->config;
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .num_entries = 16});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .entry_size = 1U << 31, .num_entries = 2});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB size overflow")));
+    EXPECT_EQ(a->config.entry_size, original_a.entry_size);
+    EXPECT_EQ(a->config.num_entries, original_a.num_entries);
+    EXPECT_EQ(b->config.entry_size, original_b.entry_size);
+    EXPECT_EQ(b->config.num_entries, original_b.num_entries);
 }
 
 // ============================================================================
@@ -1172,7 +1255,7 @@ TEST_F(ProgramRunArgsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
 //   2. finalize_dataflow_buffer_configs (would normally run inside the dispatch pipeline at
 //                                first enqueue) populates per-DFB `groups[].l1_by_core`
 //                                entries with placeholder addr = 0.
-//   3. SetProgramRunArgs / UpdateTensorArgs → AttachBorrowedDFBBuffers resolves the
+//   3. SetProgramRunArgs / UpdateTensorArgs → borrowed-attachment preparation resolves the
 //                                bound MeshTensor, extracts its reference-buffer address, and
 //                                calls dfb->set_borrowed_memory_base_addr(addr), which
 //                                overwrites every `groups[].l1_by_core` entry (and any
@@ -1209,6 +1292,38 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunArgs(
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.tensor_parameters = {tensor_param};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+    return spec;
+}
+
+// Build two borrowed DFBs. The sharded backing has 4096 bytes in total but only
+// 2048 bytes per bank, so dfb_b passes ProgramSpec's coarse total-size check and
+// fails the precise runtime fit check.
+inline ProgramSpec MakeTwoBorrowedDFBProgramSpecForAtomicityTest() {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "two_borrowed_dfb_atomicity_test";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/16, /*num_entries=*/2);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/1536, /*num_entries=*/2);
+    dfb_a.borrowed_from = TensorParamName{"tensor_a"};
+    dfb_b.borrowed_from = TensorParamName{"tensor_b"};
+
+    producer.dfb_bindings = {ProducerOf(DFBSpecName{"dfb_a"}, "out_a"), ProducerOf(DFBSpecName{"dfb_b"}, "out_b")};
+    consumer.dfb_bindings = {ConsumerOf(DFBSpecName{"dfb_a"}, "in_a"), ConsumerOf(DFBSpecName{"dfb_b"}, "in_b")};
+
+    auto tensor_a = MakeMinimalTensorParameter("tensor_a", tt::tt_metal::BufferType::L1);
+    auto tensor_b =
+        MakeShardedTensorParameter("tensor_b", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
+    BindTensorParameterToKernel(producer, "tensor_a", "borrowed_a");
+    BindTensorParameterToKernel(producer, "tensor_b", "borrowed_b");
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.tensor_parameters = {tensor_a, tensor_b};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
     return spec;
 }
@@ -1299,7 +1414,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
 }
 
 // Guard: resizing a borrowed-memory DFB on the partial-update path without supplying its backing
-// tensor is rejected — otherwise the per-bank fit check in AttachBorrowedDFBBuffers never re-runs
+// tensor is rejected — otherwise borrowed-attachment preparation never re-runs the per-bank fit check
 // against the new size, and a grown DFB could silently overflow its borrowed buffer at execution.
 TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithoutTensorFails) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
@@ -1321,7 +1436,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithout
 }
 
 // Supplying the backing tensor alongside the resize is accepted: the fit check re-runs and the new
-// size (48 B) still fits the 64 B backing.
+// size (64 B) still fits the 64 B backing.
 TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithTensorSucceeds) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -1355,12 +1470,125 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBBeyondB
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
     SetProgramRunArgs(program, setup);
 
+    const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
+    const auto original_config = dfb->config;
+
     ProgramRunArgs upd;
     upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 64});
     upd.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
     EXPECT_THAT(
         [&] { UpdateProgramRunArgs(program, upd); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
+    EXPECT_EQ(dfb->config.entry_size, original_config.entry_size);
+    EXPECT_EQ(dfb->config.num_entries, original_config.num_entries);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, SetProgramRunArgs_InvalidSecondBorrowedDFBLeavesAllDFBStateUnchanged) {
+    ProgramSpec spec = MakeTwoBorrowedDFBProgramSpecForAtomicityTest();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor_a =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor_b =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[1].spec, TensorTopology{});
+
+    auto dfb_a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    auto dfb_b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    const auto original_a = dfb_a->config;
+    const auto original_b = dfb_b->config;
+    ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb_a"), 0U);
+    ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb_b"), 0U);
+
+    ProgramRunArgs params = MakeBorrowedDFBRunArgs();
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .num_entries = 4});
+    params.tensor_args = {
+        {TensorParamName{"tensor_a"}, TensorArgument{tensor_a}},
+        {TensorParamName{"tensor_b"}, TensorArgument{tensor_b}},
+    };
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
+    EXPECT_EQ(dfb_a->config.entry_size, original_a.entry_size);
+    EXPECT_EQ(dfb_a->config.num_entries, original_a.num_entries);
+    EXPECT_EQ(dfb_b->config.entry_size, original_b.entry_size);
+    EXPECT_EQ(dfb_b->config.num_entries, original_b.num_entries);
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb_a"), 0U);
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb_b"), 0U);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BeforeInitialSetFailureLeavesBorrowedDFBStateUnchanged) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
+    const auto original_config = dfb->config;
+    ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), 0U);
+
+    ProgramRunArgs update;
+    update.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
+    update.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, update); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CRTA buffer not allocated")));
+    EXPECT_EQ(dfb->config.entry_size, original_config.entry_size);
+    EXPECT_EQ(dfb->config.num_entries, original_config.num_entries);
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), 0U);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BorrowedDFBOverflowFailsWithoutMutation) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
+    const auto original_config = dfb->config;
+    const uint32_t original_address = PeekBorrowedDFBAddress(program, "dfb");
+
+    ProgramRunArgs update;
+    update.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .entry_size = 1U << 31, .num_entries = 2});
+    update.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, update); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB size overflow")));
+    EXPECT_EQ(dfb->config.entry_size, original_config.entry_size);
+    EXPECT_EQ(dfb->config.num_entries, original_config.num_entries);
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), original_address);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, PostFinalizeResizeFailureLeavesSizeDerivedStateUnchanged) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
+    const auto original_config = dfb->config;
+    const uint16_t original_capacity = dfb->capacity;
+    const uint32_t original_stride = dfb->stride_in_entries;
+
+    ProgramRunArgs update;
+    update.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 3});
+    update.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    EXPECT_THROW(UpdateProgramRunArgs(program, update), std::runtime_error);
+
+    EXPECT_EQ(dfb->config.entry_size, original_config.entry_size);
+    EXPECT_EQ(dfb->config.num_entries, original_config.num_entries);
+    EXPECT_EQ(dfb->capacity, original_capacity);
+    EXPECT_EQ(dfb->stride_in_entries, original_stride);
 }
 
 // Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
