@@ -36,9 +36,8 @@ PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(
     const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args) {
     // cache_start_id / tile_update_offset_B are derived from update_idxs, which is excluded from the
     // program hash (see PagedFusedUpdateCacheDeviceOperation::compute_program_hash) yet baked into runtime
-    // args, so they must be re-patched on every cache hit via get_dynamic_runtime_args. This helper is the
-    // single source of truth for the formulas — both create_descriptor (cache miss) and
-    // get_dynamic_runtime_args (cache hit) call it, so the two paths cannot drift. Returns empty when an
+    // args, so they are re-derived on every cache hit: override_runtime_arguments re-runs create_descriptor,
+    // which calls this helper (the single source of truth for the formulas). Returns empty when an
     // index tensor is used: in that mode the offsets are 0 here and the real positions are read on-device
     // from the (Buffer-bound, re-patched) index tensor.
     if (tensor_args.update_idxs_tensor.has_value()) {
@@ -401,8 +400,8 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
     Buffer* const page_table_buffer_for_rt = is_paged_cache ? page_table.value().buffer() : nullptr;
 
     // cache_start_id / tile_update_offset_B are derived from update_idxs (excluded from the program hash)
-    // — computed via the shared helper so get_dynamic_runtime_args re-patches identical values on cache
-    // hits. Empty in index-tensor mode (offsets read on-device from the re-patched index tensor).
+    // — computed via the shared helper; override_runtime_arguments re-runs create_descriptor to re-apply
+    // them on cache hits. Empty in index-tensor mode (offsets read on-device from the re-patched index tensor).
     const auto offsets = compute_tiled_fused_offsets(operation_attributes, tensor_args);
     for (uint32_t i = 0; i < cores1.size(); ++i) {
         const CoreCoord& core1 = cores1.at(i);
