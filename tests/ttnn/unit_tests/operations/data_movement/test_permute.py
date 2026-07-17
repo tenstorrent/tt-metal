@@ -473,6 +473,30 @@ def test_permute_codegen_rejects_unsupported_input(device, expect_error):
         ttnn.permute(input_tensor, (0, 1, 3, 2), implementation="codegen")
 
 
+def test_permute_codegen_rejects_sharded_output_blocked(device, expect_error):
+    """implementation="codegen" on a W-changing (BlockedGeneric) permute with a sharded output
+    memory_config must raise rather than fail to compile. build_permute_rm_blocked's writer
+    scatters partial pages via the free-function get_noc_addr(page_id, accessor) overload, which
+    only resolves for the interleaved TensorAccessor specialization -- a sharded destination has
+    no matching overload and previously blew up the kernel compile (test_permute_sharded's
+    input_sharding=None cases) instead of raising a clean error.
+    """
+    shape = (2, 3, 64, 96)
+    dims = (2, 0, 3, 1)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    output_shape = [shape[d] for d in dims]
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        output_shape, core_grid=ttnn.CoreGrid(x=8, y=8), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    with expect_error(
+        RuntimeError,
+        'ttnn::permute: implementation="codegen" requested but this input is not supported by the '
+        "codegen implementation",
+    ):
+        ttnn.permute(input_tensor, dims, memory_config=sharded_memory_config, implementation="codegen")
+
+
 def test_permute_codegen_program_cache(device):
     """Finding #4: program-cache regression coverage for implementation="codegen". An identical
     (shape, dims, dtype) config must cache-hit on the second call (no growth), and a differing

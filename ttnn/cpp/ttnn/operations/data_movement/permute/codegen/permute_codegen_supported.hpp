@@ -14,7 +14,8 @@ namespace ttnn::operations::data_movement::permute_codegen {
 // Correctness gate: can the codegen prim produce a bit-exact result for these inputs?
 // Transcribed from an internal reference implementation's invalidate_vector and _fused_wh_ok
 // gate. Consulted by both the free function and validate_on_program_cache_miss.
-bool supported_by_codegen(const Tensor& input_tensor, ttsl::Span<const uint32_t> dims);
+bool supported_by_codegen(
+    const Tensor& input_tensor, ttsl::Span<const uint32_t> dims, const MemoryConfig& output_memory_config);
 
 // Perf gate, auto-routing only: enumerated in-scope cases known not to win on device. Never
 // consulted by validate — a demoted case must still run under forced implementation="codegen".

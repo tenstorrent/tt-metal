@@ -29,7 +29,9 @@ void PermuteCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         permute_codegen::supported_by_codegen(
-            tensor_args.input_tensor, ttsl::Span<const uint32_t>(attributes.dims.data(), attributes.rank)),
+            tensor_args.input_tensor,
+            ttsl::Span<const uint32_t>(attributes.dims.data(), attributes.rank),
+            attributes.output_mem_config),
         "PermuteCodegenDeviceOperation: input is not supported by the codegen implementation");
 }
 

@@ -272,15 +272,16 @@ ttnn::Tensor permute(
         return ttnn::reshape(input_tensor, ttnn::Shape(std::move(output_shape)), memory_config);
     }
 
+    const auto& output_memory_config = memory_config.value_or(input_tensor.memory_config());
     if (selector == permute_codegen::ImplementationSelector::Codegen) {
         TT_FATAL(
-            permute_codegen::supported_by_codegen(input_tensor, normalized_dims),
+            permute_codegen::supported_by_codegen(input_tensor, normalized_dims, output_memory_config),
             "ttnn::permute: implementation=\"codegen\" requested but this input is not supported by the "
             "codegen implementation");
         return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
     }
     if (selector == permute_codegen::ImplementationSelector::Auto &&
-        permute_codegen::supported_by_codegen(input_tensor, normalized_dims) &&
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, output_memory_config) &&
         !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
         return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
     }

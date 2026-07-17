@@ -135,7 +135,8 @@ const std::vector<DemotedEntry>& demoted_entries() {
 
 }  // namespace
 
-bool supported_by_codegen(const Tensor& input_tensor, ttsl::Span<const uint32_t> dims) {
+bool supported_by_codegen(
+    const Tensor& input_tensor, ttsl::Span<const uint32_t> dims, const MemoryConfig& output_memory_config) {
     const uint32_t rank = static_cast<uint32_t>(dims.size());
     if (rank < 2 || rank > ttnn::operations::data_movement::PermuteCodegenDeviceOperation::MAX_DIMS) {
         return false;
@@ -159,8 +160,16 @@ bool supported_by_codegen(const Tensor& input_tensor, ttsl::Span<const uint32_t>
     }
 
     if (dims[rank - 1] == rank - 1) {
-        // Row-invariant: build_permute_rm.
+        // Row-invariant: build_permute_rm. Its writer moves whole pages via
+        // noc_async_write_page(), which resolves for both interleaved and sharded destinations.
         return true;
+    }
+    if (output_memory_config.is_sharded()) {
+        // W-changing: build_permute_rm_blocked's writer scatters partial pages, addressing each
+        // sub-page write via the free-function get_noc_addr(page_id, accessor) overload. That
+        // overload only resolves for the interleaved TensorAccessor specialization; a sharded
+        // destination has no matching overload and fails to compile the kernel.
+        return false;
     }
     if (dims[rank - 1] == rank - 2 && fused_wh_ok(input_tensor, dims)) {
         // Left-out-for-now: delegates to TransposeCodegen's fused WH kernel, not a
