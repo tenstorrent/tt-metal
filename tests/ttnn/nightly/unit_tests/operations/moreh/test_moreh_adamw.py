@@ -340,7 +340,7 @@ def test_moreh_adamw_inplace_cache_hit(shape, lr, betas, eps, weight_decay, amsg
             "max_exp_avg_sq": torch.rand(shape, dtype=torch.bfloat16) if amsgrad else None,
         }
 
-    def run_inplace(state, step):
+    def run_inplace(state, step, lr_step):
         # Alias every _out to its _in (exactly what the tt-train optimizer does).
         p = dev(state["param"])
         g = dev(state["grad"])
@@ -352,7 +352,7 @@ def test_moreh_adamw_inplace_cache_hit(shape, lr, betas, eps, weight_decay, amsg
             g,
             m,
             v,
-            lr,
+            lr_step,
             betas[0],
             betas[1],
             eps,
@@ -371,12 +371,18 @@ def test_moreh_adamw_inplace_cache_hit(shape, lr, betas, eps, weight_decay, amsg
 
     # Prime the program cache; HOLD these tensors so the cache-hit step's fresh
     # allocations get different DRAM addresses (the condition that surfaces the bug).
-    keep_prime = run_inplace(rand_state(), step=1)
+    keep_prime = run_inplace(rand_state(), step=1, lr_step=lr)
+    entries_after_prime = device.num_program_cache_entries()
 
-    # Cache HIT: in-place step on fresh (differently-addressed) tensors.
+    # Cache HIT: in-place step on fresh (differently-addressed) tensors with a DIFFERENT
+    # step AND lr (both hash-excluded) — must re-derive on the hit, must not add a cache entry.
+    hit_lr = lr * 2.0
     state = rand_state()
-    ip_param, ip_exp_avg, ip_exp_avg_sq, ip_max = run_inplace(state, step=2)
-    assert device.num_program_cache_entries() > 0, "expected a cached program to hit"
+    ip_param, ip_exp_avg, ip_exp_avg_sq, ip_max = run_inplace(state, step=2, lr_step=hit_lr)
+    assert entries_after_prime > 0, "expected a cached program to hit"
+    assert (
+        device.num_program_cache_entries() == entries_after_prime
+    ), "cache-hit dispatch with a different lr/step unexpectedly grew the program cache"
 
     # CPU reference (host-side, immune to the device program cache).
     ref_param, ref_exp_avg, ref_exp_avg_sq, ref_max = torch_adamw_step(
@@ -385,7 +391,7 @@ def test_moreh_adamw_inplace_cache_hit(shape, lr, betas, eps, weight_decay, amsg
         state["exp_avg"],
         state["exp_avg_sq"],
         state["max_exp_avg_sq"],
-        lr,
+        hit_lr,
         betas,
         eps,
         weight_decay,
