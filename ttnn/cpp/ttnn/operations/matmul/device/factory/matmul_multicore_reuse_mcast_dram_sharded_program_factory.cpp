@@ -16,6 +16,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
@@ -46,6 +48,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
+    bool dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t /* M */,
     uint32_t N,
@@ -164,6 +168,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         out_subblock_w = preferred_out_subblock_w;
         per_core_N_compute = out_subblock_w * num_subblock_w_per_core_N;
     }
+
+    // Number of in1 columns in the last subblock that are actually backed by reader-pushed tiles.
+    // When the subblock-width optimization above pads per_core_N_compute beyond per_core_N_in1_sender,
+    // the last subblock has out_subblock_w lanes total but only this many lanes correspond to in1
+    // tiles the reader pushed into cb_in1; the rest are padded columns that the output writer drops.
+    // The compute kernel uses this to narrow the matmul_block call for the last subblock so it never
+    // reads cb_in1 tile indices that were not produced for the current block.
+    // When no padding occurs (per_core_N_compute == per_core_N_in1_sender) this equals out_subblock_w.
+    uint32_t last_subblock_w_valid = out_subblock_w - (per_core_N_compute - per_core_N_in1_sender);
 
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -363,28 +376,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
-    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first. Factory
-    // enforces per_core_M = 1 → out_subblock_h = 1, so the pack LLK takes the
-    // pack_tile_block fast path and produces the same layout as the legacy subblock-major
-    // path. The output width may be padded above the in1 shard width (per_core_N_compute
-    // vs per_core_N_in1_sender) after the subblock-growth adjustment at lines ~153-170;
-    // the compute kernel threads out_block_w (padded) to the helper as out_row_width to
-    // keep row-major reserve/push aligned with the actual pack stride.
-    //
-    // Deadlock gate: matmul_block helper deadlocks in the RowMajor + FUSE_BIAS +
-    // !packer_l1_acc + num_blocks > 1 combination. The prior K-block's subblock-major
-    // spill fills interm_cb to capacity; the last K-block's per-row-group reserve_back on
-    // pack_target_buf == interm_buf blocks before the in1_subblock loop's reload pops can
-    // free space. Mirrors the auto-config gate in
-    // matmul_program_config.cpp::row_major_output_kblock_reload_safe — falls back to
-    // subblock-major (per-pair reserve+pack+push at out_num_tiles granularity) which
-    // avoids the upfront row-group reserve hazard.
-    const bool fuse_bias = bias_buffer != nullptr;
-    const bool row_major_output_safe = !(fuse_bias && !packer_l1_acc_en && num_blocks > 1);
-    if (row_major_output_safe) {
-        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
-        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
-    }
+    const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_compute_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_compute_cores, mm_kernel_defines, throttle_level);
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -485,6 +481,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             {"cb_in1_intermediate", tt::CBIndex::c_9},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", per_core_N_compute},
+            {"last_subblock_w_valid", last_subblock_w_valid},
         };
         if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
             using ttnn::operations::matmul::utilities::get_activation_params;
@@ -499,6 +496,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
@@ -552,12 +550,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         desc.cbs.push_back(std::move(cb_desc));
     }
 
-    // CB 4 and CB 5: output and intermediate.
-    // When row_major_output_safe (TILE_PACK_ROW_MAJOR enabled above), force separate regions:
-    // the helper reserves/pushes out_cb per M-row-group, and a shared L1 region would let
-    // out_cb writes overlap with interm0 partials that haven't yet been reloaded.
-    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1)) ||
-        row_major_output_safe) {
+    // CB 4 and CB 5: output and intermediate
+    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // Separate output and intermediate CBs
         {
             CBDescriptor cb_desc;
@@ -1027,6 +1021,8 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
+        dst_full_sync_en,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config),
         B,
         Mt,
         Nt,

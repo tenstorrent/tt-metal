@@ -87,8 +87,6 @@ target_sources(
             bcast/device/bcast_sharded_h_optimised_program_factory.hpp
             bcast/device/bcast_sharded_h_program_factory.hpp
             # chunk/
-            chunk/chunk.hpp
-            chunk/chunk_nanobind.hpp
             # clone/
             clone/clone.hpp
             clone/clone_nanobind.hpp
@@ -213,39 +211,8 @@ target_sources(
             scatter/device/scatter_reduce_bfloat16_program_factory.hpp
             # sharded/
             sharded/sharded_common.hpp
-            sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op_types.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp
-            sharded/reshard/reshard_nanobind.hpp
-            sharded/reshard/device/reshard_device_operation.hpp
-            sharded/reshard/device/reshard_device_operation_types.hpp
-            sharded/reshard/device/reshard_program_factory_generic.hpp
-            sharded/reshard/device/reshard_program_factory_same_height.hpp
-            sharded/reshard/device/reshard_program_factory_same_width.hpp
-            sharded/reshard/device/nd_reshard_program_factory_copy_local.hpp
-            sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp
-            sharded/sharded_to_interleaved/sharded_to_interleaved.hpp
-            sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp
             # sharded_partial/
-            sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.hpp
-            sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_nanobind.hpp
-            sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp
-            sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op_types.hpp
-            sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.hpp
-            sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.hpp
-            sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_nanobind.hpp
-            sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.hpp
-            sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation_types.hpp
-            sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.hpp
             # slice/
-            slice/slice_nanobind.hpp
-            slice/device/slice_device_operation.hpp
-            slice/device/slice_device_operation_types.hpp
-            slice/device/slice_program_factory_rm.hpp
-            slice/device/slice_program_factory_rm_sharded.hpp
-            slice/device/slice_program_factory_rm_stride.hpp
-            slice/device/slice_program_factory_tile.hpp
-            slice/device/slice_program_factory_tile_tensor_args.hpp
             # sort/
             sort/sort.hpp
             sort/sort_nanobind.hpp
@@ -253,11 +220,6 @@ target_sources(
             sort/device/sort_device_operation_types.hpp
             sort/device/sort_program_factory.hpp
             # split/
-            split/split.hpp
-            split/split_nanobind.hpp
-            split/device/split_device_operation.hpp
-            split/device/split_device_operation_types.hpp
-            split/device/split_program_factory.hpp
             # squeeze/
             squeeze/squeeze.hpp
             squeeze/squeeze_nanobind.hpp

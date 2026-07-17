@@ -16,7 +16,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/welford_reduce_device_operation.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
+// TODO(nuked-op permute): permute nuked for agent eval; identity stub used below.
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <algorithm>
@@ -25,6 +25,15 @@
 #include <numeric>
 
 namespace ttnn::operations::experimental::quasar {
+
+namespace {
+// TODO(nuked-op permute): permute op was nuked for agent eval. Identity stub keeps reduce()
+// compiling; reductions over a non-H/W dim will produce wrong results until permute is restored.
+inline Tensor nuked_permute_stub(
+    const Tensor& t, const ttsl::SmallVector<int64_t>&, const std::optional<MemoryConfig>&) {
+    return t;
+}
+}  // namespace
 
 // Does not support ReduceType::Prod (handled separately in prod.cpp).
 template <reduction_common::ReduceType reduce_type>
@@ -381,7 +390,7 @@ static Tensor std_var_impl(
         permute_swap.resize(rank);
         std::iota(permute_swap.begin(), permute_swap.end(), 0);
         std::swap(permute_swap[target_dim], permute_swap[rank - 2]);
-        input_tensor = ttnn::permute(input_tensor, permute_swap, memory_config);
+        input_tensor = nuked_permute_stub(input_tensor, permute_swap, memory_config);
         needs_inverse_permute = true;  // swap is its own inverse
     } else {
         // 2+ dims: unified HW path.  Permute all reduction dims to the end,
@@ -404,7 +413,7 @@ static Tensor std_var_impl(
         }
 
         // ttnn::permute checks for identity internally and skips data movement if not needed.
-        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
+        input_tensor = nuked_permute_stub(input_tensor, perm, memory_config);
 
         // Extra reduction dims beyond the last two contribute to reduce_batch_size.
         for (size_t i = 0; i < dim.size() - 2; ++i) {
@@ -433,7 +442,7 @@ static Tensor std_var_impl(
         reduce_batch_size);
 
     if (needs_inverse_permute) {
-        output_tensor = ttnn::permute(output_tensor, permute_swap, memory_config);
+        output_tensor = nuked_permute_stub(output_tensor, permute_swap, memory_config);
     }
 
     // Compensate for any shape adjustments applied to the input tensor.
@@ -488,7 +497,7 @@ Tensor non_height_width_reduce(
     (void)start;
     (void)end;
     (void)step;
-    output_tensor = /*nuked-op slice*/ output_tensor;
+    // TODO(nuked-op slice): final unpad was ttnn::slice(output_tensor, start, end, step); passthrough for now.
     return output_tensor;
 }
 

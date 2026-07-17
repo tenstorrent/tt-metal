@@ -87,8 +87,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
-        TTNN::Ops::Experimental::PaddedSlice
-        TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
@@ -134,8 +132,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Copy>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO>

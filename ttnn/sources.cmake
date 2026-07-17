@@ -68,9 +68,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
     cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
     cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
-    cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
-    cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
-    cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
@@ -83,8 +80,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
-    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
-    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp

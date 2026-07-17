@@ -150,13 +150,8 @@ std::vector<Tensor> post_sort_transform_tensor(
         const uint32_t original_combined_h =
             static_cast<uint32_t>(original_lshape.volume()) / original_lshape[normalized_dim];
         if (result_combined_h != original_combined_h) {
-            const uint32_t nc = cur_shape[0] * cur_shape[1];
-            const uint32_t h_sliced = original_combined_h / nc;
-            const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
-            const ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            const ttsl::SmallVector<uint32_t> end_index = {cur_shape[0], cur_shape[1], h_sliced, cur_shape[3]};
-            result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
-            result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+            // TODO(nuked-op slice): slice was nuked for agent eval — the ROW_MAJOR H-trim is
+            // skipped, so result stays padded to a TILE_HEIGHT multiple until slice is restored.
         }
     }
 

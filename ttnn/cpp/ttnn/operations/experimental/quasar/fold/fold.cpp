@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/experimental/quasar/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+// TODO(nuked-op permute): permute was nuked for agent eval; consumer stubbed below.
 #include "ttnn/operations/experimental/quasar/slice/slice.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/pad/pad.hpp"
@@ -71,8 +71,8 @@ std::vector<Tensor> fold_with_transpose_(
 
     log_debug(tt::LogOp, "pad_output: {}", pad_output.logical_shape());
 
-    auto transpose_hc_output = ttnn::prim::permute(
-        pad_output, ttsl::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
+    // TODO(nuked-op permute): restore real call — was ttnn::prim::permute(pad_output, {0,3,1,2}, L1_mem_config)
+    auto transpose_hc_output = pad_output;
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", transpose_hc_output.logical_shape());
 

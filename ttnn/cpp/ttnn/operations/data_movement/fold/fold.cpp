@@ -371,7 +371,8 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
         CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
         new_shard_spec.grid = new_core_range;
 
-        auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
+        auto new_mem_config = tt::tt_metal::MemoryConfig(
+            input.memory_config().memory_layout(), input.memory_config().buffer_type(), new_shard_spec);
         // need to reshard (routed through to_memory_config since the reshard op was removed)
         return ttnn::to_memory_config(input, new_mem_config);
     }
