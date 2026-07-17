@@ -134,38 +134,6 @@ def run_dispatch(
     if (fp8_output or fp8_input) and is_wormhole_b0():
         pytest.skip("fp8 (input or output) not supported on Wormhole hardware")
 
-    # The fp8-scaled path (per-token scales in the metadata tail) is validated only for these models;
-    # every other model is skipped on this path.
-    if fp8_scaled_input and model_name not in ("dsv3", "dsv4_pro", "dsv4_flash", "kimi_k26"):
-        msg = "fp8-scaled dispatch supported only for dsv3/dsv4_pro/dsv4_flash/kimi; see https://github.com/tenstorrent/tt-metal/issues/48780"
-        logger.warning(msg)
-        pytest.skip(msg)
-
-    # CI exercises exactly three representative dispatch flavors; every other dtype/layout
-    # combination is covered locally but skipped in CI to bound device time. Each flavor pins a
-    # distinct code path:
-    #   - bf16 TILE input  -> bf16 output : the compute/untilize path with no fp8 conversion.
-    #   - fp8 ROW_MAJOR input + scales -> fp8 output : the byte-copy path with the per-token fp32
-    #     scale tail (the only path that dispatches scales).
-    #   - bf16 TILE input  -> fp8 output : the untilizer packing bf16 -> fp8.
-    ci_dispatch_combos = {
-        (ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, ttnn.fp8_e4m3, True),
-        (ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.fp8_e4m3, False),
-    }
-    if (is_ci_env or is_ci_v2_env) and (
-        input_dtype,
-        input_layout,
-        output_dtype,
-        fp8_scaled_input,
-    ) not in ci_dispatch_combos:
-        pytest.skip("dispatch CI runs only the three whitelisted dtype/layout/scale combos")
-
-    # The fp8-scaled path only needs to prove the per-token scale tail survives one cross-chip
-    # dispatch, so CI pins it to the 2x2 mesh instead of the full mesh matrix.
-    if (is_ci_env or is_ci_v2_env) and fp8_scaled_input and tuple(mesh_device.shape) != (2, 2):
-        pytest.skip("fp8-scaled scale-tail check runs only on the 2x2 mesh in CI")
-
     # FP8_E4M3 is a ROW_MAJOR-only tensor spec (no tiled fp8 layout exists), so an fp8 input
     # tensor can only be ROW_MAJOR. The tile path's input is therefore always bf16.
     if fp8_input and input_layout == ttnn.TILE_LAYOUT:
@@ -175,10 +143,6 @@ def run_dispatch(
     # dtype must equal the output dtype. The tile path has a compute packer and converts freely.
     if input_layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype != output_dtype:
         pytest.skip("row_major dispatch requires input dtype == output dtype")
-
-    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("ROW_MAJOR perf coverage does not run in CI")
 
     # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
     # linear/ring meshes; 2D mesh / fabric2d (both dims > 1) and 2-link variants still run.
@@ -493,13 +457,24 @@ DISPATCH_MODELS = [
     ("gptoss_120b", GptOss120BConfig, True),
 ]
 
+# Models whose dispatch supports the fp8-compression path (fp8 input + per-token scale tail). Their
+# params carry the fp8_disp_compression marker so a workflow -k/-m can select the fp8-scaled dispatch
+# tests without enumerating model names. Must match the fp8-scaled support gate in run_dispatch.
+FP8_DISP_COMPRESSION_MODELS = ("dsv3", "dsv4_pro", "dsv4_flash", "kimi_k26")
+
 
 def dispatch_shape_params():
     """Build the per-model (shape, run_pcc_check) parametrization. Non-baseline models carry the
-    extended_model marker on their params so they stay gated exactly as the separate tests were."""
+    extended_model marker; fp8-compression-capable models additionally carry fp8_disp_compression, so
+    both stay selectable exactly as the separate tests were."""
     params = []
     for name, config, extended in DISPATCH_MODELS:
-        marks = (pytest.mark.extended_model,) if extended else ()
+        marks = []
+        if extended:
+            marks.append(pytest.mark.extended_model)
+        if name in FP8_DISP_COMPRESSION_MODELS:
+            marks.append(pytest.mark.fp8_disp_compression)
+        marks = tuple(marks)
         # (model_name, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok,
         #  dispatch_buffer_capacity_factor, run_pcc_check)
         params.append(
@@ -538,17 +513,17 @@ def dispatch_shape_params():
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
-# input_dtype folds the fp8-scaled flavor into the input axis: bf16, plain fp8, and fp8 + per-token
-# fp32 scales dispatched in the metadata tail. There is no bf16+scaled combo — scales only apply to
-# fp8 input — so it lives here rather than as a separate axis that would need skipping for bf16.
+# input_dtype folds the fp8-scaled flavor into the input axis. fp8 only ever reaches dispatch as
+# compressed input carrying its per-token fp32 scale tail (fp8_scaled_in); a bf16 input that dispatch
+# casts to fp8 internally is covered by bf16_in + fp8 output. Unscaled fp8 input is not a real path,
+# so it is not parametrized. There is no bf16+scaled combo — scales only apply to fp8 input.
 @pytest.mark.parametrize(
     "input_dtype, fp8_scaled_input",
     [
         (ttnn.bfloat16, False),
-        (ttnn.fp8_e4m3, False),
         (ttnn.fp8_e4m3, True),
     ],
-    ids=["bf16_in", "fp8_in", "fp8_scaled_in"],
+    ids=["bf16_in", "fp8_scaled_in"],
 )
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
