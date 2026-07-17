@@ -308,7 +308,8 @@ ttnn::Tensor repeat(
             if (sel == repeat_codegen::ImplementationSelector::Codegen) {
                 TT_FATAL(
                     supported,
-                    "repeat: implementation=\"codegen\" requested but input is not supported by RepeatCodegen");
+                    "repeat: implementation=\"codegen\" requires a supported input and an interleaved output "
+                    "memory configuration");
                 return operations::data_movement::detail::repeat_via_codegen(
                     working_tensor, working_repetition_vector, output_mem_config);
             }
