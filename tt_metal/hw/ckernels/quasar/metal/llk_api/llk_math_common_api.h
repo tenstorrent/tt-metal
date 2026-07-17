@@ -141,6 +141,18 @@ inline void llk_math_pack_sync_init() {
     }
 }
 
+/**
+ * @brief MATH-side init for the DIRECT UNPACK<->PACK batched-tilize DEST handshake: SEMINIT the UNPACK_MATH
+ *        token (one per DEST bank, max=N). MATH issues NO DEST op on the tilize path — it owns only the SEMINIT
+ *        so it is ordered before PACK's first wait (same role/location as llk_math_pack_sync_init for matmul).
+ *        PACK waits on UNPACK_MATH directly (no MATH bridge), so MATH_PACK is intentionally NOT seeded here.
+ */
+template <DstSync DST>
+inline void llk_math_tilize_dest_sync_init() {
+    constexpr std::uint32_t N = (DST == DstSync::SyncFull) ? 1 : 2;
+    _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
+}
+
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
 // can issue MATH((...)) uniformly across arches.

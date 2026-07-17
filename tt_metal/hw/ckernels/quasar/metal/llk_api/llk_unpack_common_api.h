@@ -14,6 +14,7 @@
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_unpack_common.h"
+#include "llk_sync.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
@@ -123,6 +124,38 @@ inline void llk_unpack_setup_dest_dvalid() {
 inline void llk_unpack_teardown_dest_dvalid() {
     auto cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
     cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+}
+
+// =====================================================================================================
+// Direct UNPACK<->PACK batched-tilize DEST double-buffer handshake (replaces the dvalid section scheme,
+// which desynced because the unpack side never flipped its DEST bank id -> lapped the packer).
+// UNPACK is the sole DEST producer; a single semaphore (UNPACK_MATH, reused purely as the unpack->pack
+// token) bounds it to <=1 DEST bank ahead of PACK; each thread flips its OWN DEST section base in lockstep.
+// MATH issues NO DEST op (no MOVA2D -> no 0x19). SEMINIT is on MATH (llk_math_tilize_dest_sync_init).
+// =====================================================================================================
+
+/** @brief UNPACK-side init: point UNPACK's DEST section base at bank 0 (mirror of llk_pack_tile_api init). */
+template <DstSync DST>
+inline void llk_unpack_tilize_dest_sync_init() {
+    if constexpr (DST == DstSync::SyncHalf) {
+        _reset_dest_register_offset_();
+        _set_dest_section_base_<ckernel::unpack::TRISC_ID>(_get_dest_buffer_base_());
+    }
+}
+
+/** @brief Block the unpacker until a DEST bank is free (token < max). Call before filling a bank. */
+inline void llk_unpack_tilize_dest_acquire() {
+    _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_MATH);
+}
+
+/** @brief Publish the just-filled DEST bank to PACK (drain the fill first via STALLWAIT UNPACK0) and flip
+ *         UNPACK to the other bank. @tparam EN_32BIT_DEST must equal the pack side's (== DST_ACCUM_MODE). */
+template <DstSync DST, bool EN_32BIT_DEST>
+inline void llk_unpack_tilize_dest_release() {
+    _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+    if constexpr (DST == DstSync::SyncHalf) {
+        _llk_sync_advance_dest_section_<ckernel::unpack::TRISC_ID, EN_32BIT_DEST, p_stall::UNPACK0>();
+    }
 }
 
 /**

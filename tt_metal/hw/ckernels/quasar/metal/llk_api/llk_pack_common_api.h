@@ -121,6 +121,35 @@ inline void llk_pack_teardown_dest_dvalid() {
     cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
 }
 
+// ===== Direct UNPACK<->PACK batched-tilize DEST double-buffer — PACK (consumer) side =====
+// See llk_unpack_tilize_dest_* in llk_unpack_common_api.h. PACK waits on UNPACK_MATH DIRECTLY (no MATH
+// bridge), so the token holds (u_posted - p_consumed) <= max=N and, since UNPACK waits before filling,
+// the unpacker is provably <=1 DEST bank ahead -> cannot lap. PACR reads DEST via SEC{pack::TRISC_ID}.
+
+/** @brief PACK-side init: point PACK's DEST section base at bank 0. Pair with the MATH SEMINIT + UNPACK init. */
+template <DstSync DST>
+inline void llk_pack_tilize_dest_sync_init() {
+    if constexpr (DST == DstSync::SyncHalf) {
+        _reset_dest_register_offset_();
+        _set_dest_section_base_<ckernel::pack::TRISC_ID>(_get_dest_buffer_base_());
+    }
+}
+
+/** @brief Block the packer until UNPACK has published a full DEST bank (token > 0). Call before packing. */
+inline void llk_pack_tilize_dest_wait() {
+    _llk_sync_wait_<p_stall::STALL_TDMA, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);
+}
+
+/** @brief Free the just-packed DEST bank back to UNPACK (drain the packs first via STALLWAIT PACK0) and flip
+ *         PACK to the other bank. @tparam EN_32BIT_DEST must equal the unpack side's (== DST_ACCUM_MODE). */
+template <DstSync DST, bool EN_32BIT_DEST>
+inline void llk_pack_tilize_dest_release() {
+    _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_MATH);
+    if constexpr (DST == DstSync::SyncHalf) {
+        _llk_sync_advance_dest_section_<ckernel::pack::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();
+    }
+}
+
 /**
  * All the following functions are added to enable Math <-> Pack synchronization
  * on the destination register using semaphores.

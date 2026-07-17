@@ -116,23 +116,19 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
         // Fallback single-tile MOP (block_ct_dim_ct not threaded by the caller).
         UNPACK((llk_unpack_tilize_init<true /*unpack_to_dest*/>(icb, block /*full_ct_dim*/)));
     }
-    // Arm the UNPACK_TO_DEST -> PACK per-bank DEST-dvalid handshake. UNPACR_TILIZE is issued with SET_DVALID=0
-    // and delegates ALL cross-thread ordering to the *_DEST_DVALID_CTRL wait masks, which are ONLY programmed by
-    // set_up_dest_dvalid_per_thread(). The tt-metal path never called it (the math init below does NOT set it up
-    // for unpack_to_dest — llk_math_unary_datacopy_api.h skips it), so the masks were unarmed: no per-bank
-    // back-pressure -> the unpacker laps the packer -> fused tilize corrupts DEST data (PCC~0) and tilize-only
-    // intermittently deadlocks. Arm it here in init (per thread) before any section_done. Producer=UNPACK,
-    // consumer=PACK; MATH is a bypassed no-MOP forwarder on this path (NOT in the dvalid chain).
-    // Ref: tt-llk/tests/sources/quasar/unpack_tilize_quasar_test.cpp:29-30,162-163.
-    UNPACK((llk_unpack_setup_dest_dvalid()));
-    PACK((llk_pack_setup_dest_dvalid()));
-    // Math init keeps ONLY the ALU data-format state for the (bypassed) A2D forwarder. It does NOT set up the
-    // dvalid scheme (the prior comment claiming so was wrong — the setup is the two calls above).
-    MATH((llk_math_eltwise_unary_datacopy_init<
-          DataCopyType::A2D,
-          DST_ACCUM_MODE,
-          BroadcastType::NONE,
-          true /*unpack_to_dest*/>(icb)));
+    // Direct UNPACK<->PACK DEST double-buffer handshake (replaces the racy dvalid section scheme). UNPACK is the
+    // sole DEST producer (UNPACR_TILIZE, SET_DVALID=0), PACK the sole consumer (PACR). A single semaphore
+    // (UNPACK_MATH, reused purely as the unpack->pack token) with max=N (2 SyncHalf / 1 SyncFull) bounds the
+    // unpacker to <=1 DEST bank ahead of the packer; each thread flips its OWN DEST section base in lockstep (in
+    // tilize_block). Deterministic: the unpacker provably cannot lap the packer. MATH issues NO DEST ops on this
+    // path (no MOVA2D/datacopy MOP -> the FPU dest-dvalid ring is never advanced -> ERROR_TRISC1 0x19 cannot
+    // recur). SEMINIT runs on the otherwise-idle MATH thread (matches the matmul's proven llk_math_pack_sync_init
+    // location) so it is ordered before PACK's first wait by the compute prologue. The dvalid section scheme was
+    // insufficient: its masks came from the single-section reference test and the unpack side never flipped its
+    // DEST bank id, so it desynced from pack and lapped (hangs/corruption).
+    MATH((llk_math_tilize_dest_sync_init<DST_SYNC_MODE>()));
+    UNPACK((llk_unpack_tilize_dest_sync_init<DST_SYNC_MODE>()));
+    PACK((llk_pack_tilize_dest_sync_init<DST_SYNC_MODE>()));
 #else
     UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
@@ -331,15 +327,19 @@ ALWI void tilize_block(
         constexpr uint32_t num_chunks = block_ct_dim_ct / chunk;  // exact by construction of chunk
         static_assert(chunk * num_chunks == block_ct_dim_ct, "column chunks must tile the row exactly");
         for (uint32_t c = 0; c < num_chunks; c++) {
-            // Tilize `chunk` column-tiles (cols c*chunk .. c*chunk+chunk-1) into DEST slots 0..chunk-1.
+            // UNPACK: block until a DEST bank is free (<=1 bank ahead of PACK), tilize `chunk` column-tiles into
+            // slots 0..chunk-1 of that bank, then publish it to PACK and flip UNPACK to the other bank.
+            UNPACK((llk_unpack_tilize_dest_acquire()));
             UNPACK((llk_unpack_tilize_block_to_dest(icb, input_tile_index, c * chunk, 0 /*dest slot*/)));
-            UNPACK((llk_unpack_dest_dvalid_section_done<DST_SYNC_MODE>()));  // whole chunk valid for PACK
+            UNPACK((llk_unpack_tilize_dest_release<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+            // PACK: wait for UNPACK's published bank, pack all `chunk` slots (dslot j -> out tile j, confirmed
+            // via dprint_utd2), then free the bank back to UNPACK and flip PACK to the other bank.
+            PACK((llk_pack_tilize_dest_wait()));
             for (uint32_t j = 0; j < chunk; j++) {
-                // TZPK dslot->oidx mapping (j->j) CONFIRMED correct via dprint_utd2; probe removed (it fired mid
-                // DEST-dvalid handshake and hung the pipeline). Re-add outside the section if needed.
                 PACK((llk_pack<true /*out_of_order*/>(j /*DEST slot*/, ocb, output_tile_index + c * chunk + j)));
             }
-            PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));  // clear dvalid, free DEST
+            PACK((llk_pack_tilize_dest_release<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+            // MATH: intentionally absent — no DEST MOP is issued, so no MOVA2D and no 0x19.
         }
         return;
     }
@@ -430,13 +430,10 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
-    // Restore the DEST-dvalid CTRL registers to the no-wait default that tilize_init armed for the unpack-to-dest
-    // handshake. Without this, a FOLLOWING op in the same kernel (the fused conv's matmul: DEST producer = FPU,
-    // synced by the MATH<->PACK semaphore, NOT dvalid) inherits PACK_DEST_DVALID_CTRL still waiting on the
-    // tilize's UNPACK dvalid bit -> the first matmul PACR hangs (tilize->matmul transition deadlock, dprint_utd4).
-    // Harmless in the tilize-only path (nothing follows). Paired with llk_{unpack,pack}_setup_dest_dvalid().
-    UNPACK((llk_unpack_teardown_dest_dvalid()));
-    PACK((llk_pack_teardown_dest_dvalid()));
+    // No DEST-dvalid teardown needed: the direct UNPACK<->PACK semaphore (UNPACK_MATH) drains to 0 at loop exit,
+    // and a following op (the fused conv's matmul) re-SEMINITs its own MATH_PACK semaphore and resets its own DEST
+    // section bases via its own init (llk_math_pack_sync_init / llk_pack_init), so the tilize->matmul transition is
+    // clean. (The old dvalid scheme needed a CTRL-register teardown here; that scheme is gone.)
 #endif
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<PackMode::Default>(ocb)));
