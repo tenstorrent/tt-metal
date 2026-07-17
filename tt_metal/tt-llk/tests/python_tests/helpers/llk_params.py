@@ -80,11 +80,19 @@ class MathOperation(Enum):
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
+    # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
+    # scale of 0.5 so the op computes exp(0.5*x).
+    ExpWithBase = OpSpec("exp_with_base", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
+    # LUT approximation of gelu (the APPROXIMATION_MODE branch of calculate_gelu).
+    GeluAppx = OpSpec("gelu_appx", MathOpType.SFPU_UNARY)
     GeluTanh = OpSpec("gelu_tanh", MathOpType.SFPU_UNARY)
+    GeluDerivative = OpSpec("gelu_derivative", MathOpType.SFPU_UNARY)
     Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
+    # log_base(x); dispatched with base_scale = fp16a(1/ln 2) -> log2(x).
+    LogWithBase = OpSpec("log_with_base", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
@@ -111,6 +119,16 @@ class MathOperation(Enum):
     Ceil = OpSpec("ceil", MathOpType.SFPU_UNARY)
     Trunc = OpSpec("trunc", MathOpType.SFPU_UNARY)
     Frac = OpSpec("frac", MathOpType.SFPU_UNARY)
+    # Trigonometric / inverse / hyperbolic unary SFPU ops (shared harness).
+    # cpp_enum_value must match the SfpuType enumerator name exactly.
+    Tan = OpSpec("tan", MathOpType.SFPU_UNARY)
+    Atan = OpSpec("atan", MathOpType.SFPU_UNARY)
+    Asin = OpSpec("asin", MathOpType.SFPU_UNARY)
+    Acos = OpSpec("acos", MathOpType.SFPU_UNARY)
+    Sinh = OpSpec("sinh", MathOpType.SFPU_UNARY)
+    Cosh = OpSpec("cosh", MathOpType.SFPU_UNARY)
+    # round-half-to-even to integer (decimals = 0).
+    Round = OpSpec("round", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
@@ -165,6 +183,9 @@ class MathOperation(Enum):
     UnaryLt = OpSpec("unary_lt", MathOpType.SFPU_UNARY)
     UnaryGe = OpSpec("unary_ge", MathOpType.SFPU_UNARY)
     UnaryLe = OpSpec("unary_le", MathOpType.SFPU_UNARY)
+    # Equality/inequality against threshold 0.5 (see dedicated crafted-stimuli test).
+    UnaryNe = OpSpec("unary_ne", MathOpType.SFPU_UNARY)
+    UnaryEq = OpSpec("unary_eq", MathOpType.SFPU_UNARY)
     UnaryMax = OpSpec("unary_max", MathOpType.SFPU_UNARY)
     UnaryMin = OpSpec("unary_min", MathOpType.SFPU_UNARY)
     Polygamma = OpSpec("polygamma", MathOpType.SFPU_UNARY)
@@ -185,6 +206,15 @@ class MathOperation(Enum):
     AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     AbsInt32 = OpSpec("abs_int32", MathOpType.SFPU_UNARY)
+    # Integer unary ops (int32/uint32/uint16). cpp_enum_value must match the
+    # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    # Exercised through the dedicated integer harness (test_eltwise_unary_sfpu_int).
+    LeftShift = OpSpec("left_shift", MathOpType.SFPU_UNARY)
+    RightShift = OpSpec("right_shift", MathOpType.SFPU_UNARY)
+    UnaryMaxInt32 = OpSpec("unary_max_int32", MathOpType.SFPU_UNARY)
+    UnaryMinInt32 = OpSpec("unary_min_int32", MathOpType.SFPU_UNARY)
+    UnaryMaxUint32 = OpSpec("unary_max_uint32", MathOpType.SFPU_UNARY)
+    UnaryMinUint32 = OpSpec("unary_min_uint32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
     # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
     # path. cpp_enum_value must match the SfpuType enumerator name.
@@ -239,6 +269,18 @@ class MathOperation(Enum):
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
+    # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
+    # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
+    # guard resolve.
+    SfpuEqInt = OpSpec("EQ_INT", MathOpType.SFPU_BINARY)
+    SfpuNeInt = OpSpec("NE_INT", MathOpType.SFPU_BINARY)
+    SfpuMaxInt32 = OpSpec("MAX_INT32", MathOpType.SFPU_BINARY)
+    SfpuMinInt32 = OpSpec("MIN_INT32", MathOpType.SFPU_BINARY)
+    SfpuMaxUint32 = OpSpec("MAX_UINT32", MathOpType.SFPU_BINARY)
+    SfpuMinUint32 = OpSpec("MIN_UINT32", MathOpType.SFPU_BINARY)
+    SfpuRemainderInt32 = OpSpec("REMAINDER_INT32", MathOpType.SFPU_BINARY)
+    SfpuRemainderUint32 = OpSpec("REMAINDER_UINT32", MathOpType.SFPU_BINARY)
+    SfpuFmodInt32 = OpSpec("FMOD_INT32", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS

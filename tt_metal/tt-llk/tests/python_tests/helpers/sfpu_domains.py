@@ -163,6 +163,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
     MathOperation.Exp2: _exp2_spec,
+    # exp_with_base computes exp(0.5*x); the 0.5 scale only makes the argument
+    # tamer than plain exp, so the exp overflow-safe domain is a safe superset.
+    MathOperation.ExpWithBase: _exp_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
@@ -177,10 +180,32 @@ _OP_DOMAIN_REGISTRY: Dict[
             high=5.0,
         )
     ),
+    # gelu_appx: LUT approximation of gelu — same Gaussian spread as gelu so both
+    # the near-0 transition and the saturating tails exercise the piecewise LUT.
+    MathOperation.GeluAppx: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
+    ),
     # gelu_tanh: tanh approximation of gelu — same Gaussian spread exercises both
     # tails (saturation) and values near 0 (the +-0 sign path).
     MathOperation.GeluTanh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
+    ),
+    # gelu_derivative: d/dx gelu; Gaussian spread hits both saturating tails
+    # (->0 and ->1) and the transition region around 0.
+    MathOperation.GeluDerivative: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
     ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
     MathOperation.Hardsigmoid: OperandSpecs(
@@ -188,6 +213,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     ),
     # log: domain x > 0; log-uniform spans several decades
     MathOperation.Log: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
+        )
+    ),
+    # log_with_base (log2): same positive domain as natural log.
+    MathOperation.LogWithBase: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
         )
@@ -431,6 +462,32 @@ _OP_DOMAIN_REGISTRY: Dict[
         spec_A=StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-math.pi, high=math.pi
         )
+    ),
+    # tan: stay inside the poles at +-pi/2 (~1.5708); tan grows rapidly near them.
+    MathOperation.Tan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.3, high=1.3)
+    ),
+    # atan: defined for all reals; span both signs and the saturating tails.
+    MathOperation.Atan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # asin/acos: domain [-1, 1]; stay just inside to avoid the NaN region for |x|>1.
+    MathOperation.Asin: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    MathOperation.Acos: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    # sinh/cosh: keep the range moderate so exp(|x|) stays well within fp range.
+    MathOperation.Sinh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.Cosh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # round: round-half-to-even to integer; span both signs across integer knees.
+    MathOperation.Round: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # sqrt: domain x >= 0
     MathOperation.Sqrt: OperandSpecs(

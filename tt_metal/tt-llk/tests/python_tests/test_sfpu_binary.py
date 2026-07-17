@@ -570,6 +570,90 @@ def test_sfpu_binary_mul_int32(formats, dest_acc, mathop):
     )
 
 
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuEqInt, MathOperation.SfpuNeInt],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_eq_ne_int(formats, dest_acc, mathop):
+    # int32 eq/ne via calculate_binary_eq_int (exact 0/1 over the raw INT32 dest bits).
+    # Reuse the paired eq/ne stimuli so ~50% of positions compare equal — the equal branch
+    # a plain random int sweep would essentially never hit.
+    sfpu_binary(formats, dest_acc, mathop, spec_A=_eq_ne_stimuli_spec())
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuMaxInt32, MathOperation.SfpuMinInt32],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_max_min_int32(formats, dest_acc, mathop):
+    # int32 elementwise max/min via SFPSWAP (no float conversion). The sign-magnitude dest
+    # only round-trips non-negative results, so keep both operands non-negative.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=0.0, high=1_000_000.0
+        ),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.UInt32]),
+    mathop=[MathOperation.SfpuMaxUint32, MathOperation.SfpuMinUint32],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_max_min_uint32(formats, dest_acc, mathop):
+    # uint32 max/min (unsigned SFPSWAP). Stimuli are non-negative, so the signed and
+    # unsigned interpretations coincide and every value round-trips the packer.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=0.0, high=1_000_000.0
+        ),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuRemainderInt32, MathOperation.SfpuFmodInt32],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_remainder_fmod_int32(formats, dest_acc, mathop):
+    # int32 remainder / fmod. Both operands non-negative with divisor >= 1, so the result
+    # is non-negative and convention-agnostic (trunc/floor/unsigned all agree == a % b);
+    # kept < 2**24 for the exact int->fp32 reciprocal the quotient uses.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=1.0, high=10_000.0
+        ),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.UInt32]),
+    mathop=[MathOperation.SfpuRemainderUint32],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_remainder_uint32(formats, dest_acc, mathop):
+    # uint32 remainder; non-negative operands with divisor >= 1 (see int32 variant).
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=1.0, high=10_000.0
+        ),
+    )
+
+
 def _isclose_stimuli_spec():
     # isclose is a predicate on paired operands (a = tile0, b = tile1). Fill the two tiles
     # from different data so even p -> identical (isclose 1), odd p -> differ by 2.0
