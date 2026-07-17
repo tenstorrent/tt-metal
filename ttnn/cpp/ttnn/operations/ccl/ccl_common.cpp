@@ -78,24 +78,26 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     if (topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Mesh) {
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     }
-    // ring is possible if device coordinates along our cluster axis are the same as the last coordinate in the mesh
-    // shape first_index = 0 last index = mesh_shape[cluster_axis] - 1
+    // For the cluster_axis API the collective spans the entire mesh axis by definition, so the
+    // ring geometry is determined by the GLOBAL mesh shape, not the local shard coordinates.
+    // In multi-host distributed setups device_storage().get_coords() only contains the coordinates
+    // of the shards owned by this host (e.g. columns 8-15 for the second host of a 4x32 mesh).
+    // Deciding WRAP/NONE from those local coordinates would incorrectly return NONE for every
+    // host whose shard does not begin at global index 0. A ring wraps iff the global axis extent
+    // is > 2; the local slice is always a contiguous sub-ring of the full global ring.
     if (cluster_axis.has_value()) {
         if (mesh_shape[cluster_axis.value()] == 2) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
-        bool first_index_is_0 = device_coords[0][cluster_axis.value()] == 0;
-        bool last_index_is_mesh_shape_minus_1 =
-            device_coords[device_coords.size() - 1][cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
-        if (first_index_is_0 && last_index_is_mesh_shape_minus_1) {
-            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
-        }
-        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
     }
+    // Without a cluster_axis the ring is formed over the tensor's own device list via linear
+    // index arithmetic (see get_physical_neighbor_from_physical_coord). Keep the boundary decision
+    // consistent with that list: only wrap when the tensor's devices span the full mesh from
+    // (0,..,0) to (max,..,max).
     if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     }
-    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     for (int i = 0; i < device_coords.front().dims(); i++) {
         if (device_coords.front()[i] != 0) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
@@ -152,32 +154,30 @@ tt::tt_fabric::Topology get_usable_topology(
 }
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {
-    const auto device_coords = tensor.device_storage().get_coords();
-    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    // For cluster_axis ops, ring_size is the global extent of the mesh along that axis.
+    // Using local device_coords (which only covers this host's shard) would undercount the ring
+    // in multi-host setups — e.g. max(local col)+1 = 16 instead of the true global 32.
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
-        TT_FATAL(!device_coords.empty(), "device_coords is empty");
+        const auto mesh_shape = tensor.device()->shape();
         TT_FATAL(
-            device_coords[0].dims() > cluster_axis.value(),
-            "cluster axis {} is out of range for device coords rank {} ",
+            mesh_shape.dims() > cluster_axis.value(),
+            "cluster axis {} is out of range for mesh shape rank {}",
             cluster_axis.value(),
-            device_coords[0].dims());
-        uint32_t ring_size = 0;
-        for (const auto& device_coord : device_coords) {
-            ring_size = std::max(ring_size, device_coord[cluster_axis.value()] + 1);
-        }
+            mesh_shape.dims());
+        const uint32_t ring_size = mesh_shape[cluster_axis.value()];
         TT_FATAL(ring_size > 0, "ring_size is 0");
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
     }
+    const auto device_coords = tensor.device_storage().get_coords();
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
     return device_coords.size();
 }
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor, const MeshCoordinate& physical_coord, const std::optional<uint32_t>& cluster_axis) {
-    const auto device_coords = tensor.device_storage().get_coords();
-    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
         TT_FATAL(
@@ -185,24 +185,16 @@ uint32_t get_linearized_index_from_physical_coord(
             "cluster axis {} is out of range for physical coord rank {} ",
             cluster_axis.value(),
             physical_coord.dims());
-        // find minimum value along the cluster axis
-        uint32_t min_value = std::numeric_limits<uint32_t>::max();
-        for (const auto& device_coord : device_coords) {
-            min_value = std::min(min_value, device_coord[cluster_axis.value()]);
-        }
-        TT_FATAL(
-            physical_coord[cluster_axis.value()] >= min_value,
-            "physical_coord[{}] {} is less than min_value {}",
-            cluster_axis.value(),
-            physical_coord[cluster_axis.value()],
-            min_value);
-        log_debug(
-            tt::LogOp,
-            "Physical linearized index for physical_coord: {} is {}",
-            physical_coord,
-            physical_coord[cluster_axis.value()] - min_value);
-        return physical_coord[cluster_axis.value()] - min_value;
+        // The global ring index is the coordinate value itself — the global origin along any
+        // mesh axis is always 0. Subtracting a local min_value (derived from this host's shard)
+        // would produce indices that are only locally-relative (e.g. 0-7 instead of 8-15),
+        // which breaks ring ordering and CCL program indexing in multi-host setups.
+        const uint32_t ring_index = physical_coord[cluster_axis.value()];
+        log_debug(tt::LogOp, "Physical linearized index for physical_coord: {} is {}", physical_coord, ring_index);
+        return ring_index;
     }
+    const auto device_coords = tensor.device_storage().get_coords();
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
     auto it = std::find(device_coords.begin(), device_coords.end(), physical_coord);
     TT_FATAL(it != device_coords.end(), "physical_coord not found in device_coords");
     log_debug(
@@ -224,33 +216,42 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
     auto boundary_mode = get_boundary_mode(tensor, topology, cluster_axis);
     if (cluster_axis.has_value()) {
         TT_FATAL(
-            device_coords[0][cluster_axis.value()] == 0,
-            "Currently, we only support CCLs with physical coordinates starting from 0 along the cluster axis {}, we "
-            "got {}",
-            cluster_axis.value(),
-            device_coords[0][cluster_axis.value()]);
-        TT_FATAL(
             physical_coord.dims() > cluster_axis.value(),
             "cluster axis {} is out of range for physical coord rank {} ",
             cluster_axis.value(),
             physical_coord.dims());
         log_debug(tt::LogOp, "Boundary mode: {}", boundary_mode);
+        // Compute neighbor in the global coordinate space. get_neighbor() operates on the global
+        // mesh shape and returns nullopt only when boundary_mode==NONE and we are at the edge of
+        // the full ring — i.e. a genuine topology boundary, not merely the edge of this host's
+        // local shard.
         auto potential_neighbor =
             physical_coord.get_neighbor(tensor.device()->shape(), offset, cluster_axis.value(), boundary_mode);
-        auto it = std::find(device_coords.begin(), device_coords.end(), potential_neighbor);
-        if (it != device_coords.end()) {
+        if (!potential_neighbor.has_value()) {
             log_debug(
                 tt::LogOp,
-                "Physical coord {} Potential neighbor {} is found in device_coords",
+                "Physical coord {} has no neighbor at offset {} along axis {} (topology boundary)",
                 physical_coord,
-                potential_neighbor);
+                offset,
+                cluster_axis.value());
+            return std::nullopt;
+        }
+        // Validate against the global mesh view rather than the local device_coords list.
+        // In multi-host setups device_coords only contains this host's shard; a neighbor on
+        // another host is still a valid ring participant and reachable via the fabric.
+        if (tensor.device()->get_view().contains(*potential_neighbor)) {
+            log_debug(
+                tt::LogOp,
+                "Physical coord {} Potential neighbor {} is valid in global mesh",
+                physical_coord,
+                *potential_neighbor);
             return potential_neighbor;
         }
         log_debug(
             tt::LogOp,
-            "Physical coord {} Potential neighbor {} is not found in device_coords",
+            "Physical coord {} Potential neighbor {} is not in global mesh",
             physical_coord,
-            potential_neighbor);
+            *potential_neighbor);
         return std::nullopt;
     }
     uint32_t physical_linearized_index = get_linearized_index_from_physical_coord(tensor, physical_coord, cluster_axis);

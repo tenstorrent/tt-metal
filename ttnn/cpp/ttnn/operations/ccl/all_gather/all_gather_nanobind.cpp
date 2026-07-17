@@ -58,22 +58,19 @@ void bind_all_gather(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices in the mesh.
 
-        Example:
-            >>> router_config = ttnn.FabricRouterConfig()
-            >>> router_config.max_packet_payload_size_bytes = 4096
-            >>> ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router_config)
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> ttnn_tensor = ttnn.from_torch(
-                            full_tensor,
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0)
-            >>> print(output.shape)
-            [8, 1, 32, 256]
+        Supported dtypes and layouts:
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - Any
+                  - TILE, ROW_MAJOR
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (DRAM and L1)
+            - Input and output memory configs are independent; any supported combination may be used.
         )doc";
 
     ttnn::bind_function<"all_gather">(
