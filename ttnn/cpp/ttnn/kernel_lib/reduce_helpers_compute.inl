@@ -529,8 +529,8 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
-    ReduceAlgorithm algorithm,
     ReduceFp32Mode fp32_mode,
+    ReduceAlgorithm algorithm,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
