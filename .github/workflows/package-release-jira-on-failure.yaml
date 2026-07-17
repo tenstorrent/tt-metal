@@ -1,7 +1,8 @@
-# Files a Jira record when the docs release workflow fails.
+# Files a Jira record when the Package and release workflow fails.
 #
-# Watches the docs release workflow; on a failed run it collects the failed jobs
-# and opens (or de-duplicates onto) a Jira issue via create_jira_issue.py.
+# Watches the "Package and release" workflow; on a failed run it collects the
+# failed jobs and opens (or de-duplicates onto) a Jira issue via
+# create_jira_issue.py.
 #
 # TODO (specifics to be provided):
 #   - JIRA_ISSUE_TYPE        : issue type (default below: Bug)
@@ -12,18 +13,18 @@
 # so other Jira projects can carry their own):
 #   - secrets JIRA_RELEASE_USER_EMAIL / JIRA_RELEASE_API_TOKEN : Jira account creds
 # The Jira project key ("RELEASE") is not secret and is inlined below.
-name: "[internal] File Jira issue on docs release failure"
+name: "[internal] File Jira issue on package-and-release failure"
 
 on:
   workflow_run:
     workflows:
-      - "[post-commit] Docs build and deploy (release and main branches) to GitHub pages on main"
+      - "Package and release"
     types:
       - completed
   workflow_dispatch:
     inputs:
       run-id:
-        description: "Docs workflow run id to file a Jira issue for (manual testing)"
+        description: "Package and release workflow run id to file a Jira issue for (manual testing)"
         required: true
         type: string
 
@@ -46,7 +47,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
 
-      - name: Collect failed jobs from the docs run
+      - name: Collect failed jobs from the package-and-release run
         id: collect
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,9 +76,9 @@ jobs:
           fi
           echo "file=true" >> "$GITHUB_OUTPUT"
           {
-            echo "summary=Docs release failed on ${HEAD_BRANCH:-unknown} (${#failed[@]} job(s))"
+            echo "summary=Package and release failed on ${HEAD_BRANCH:-unknown} (${#failed[@]} job(s))"
             echo "description<<EOF"
-            echo "The docs release workflow failed."
+            echo "The Package and release workflow failed."
             echo "Branch: ${HEAD_BRANCH:-unknown}"
             echo "Commit: ${HEAD_SHA:-unknown}"
             echo "Run: ${RUN_URL:-manual dispatch}"
@@ -96,9 +97,9 @@ jobs:
           JIRA_ISSUE_TYPE: ${{ env.JIRA_ISSUE_TYPE }}
           JIRA_SUMMARY: ${{ steps.collect.outputs.summary }}
           JIRA_DESCRIPTION: ${{ steps.collect.outputs.description }}
-          JIRA_LABELS: "ci-failure,docs-release"
+          JIRA_LABELS: "ci-failure,package-and-release"
           # While one issue is open for this pipeline, later failures comment on it.
-          JIRA_DEDUP_LABEL: "docs-release-failure"
+          JIRA_DEDUP_LABEL: "package-release-failure"
         run: |
           if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
             echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
