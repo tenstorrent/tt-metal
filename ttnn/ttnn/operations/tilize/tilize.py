@@ -90,11 +90,26 @@ SUPPORTED = {
 
 
 # ---------------------------------------------------------------------------
-# 3. EXCLUSIONS  — cells inside cartesian(SUPPORTED) refused for now
+# 3. EXCLUSIONS  — cells inside cartesian(SUPPORTED) the op refuses
 # ---------------------------------------------------------------------------
-EXCLUSIONS = [
-    # int<->float casts are pruned by INVALID (feature_spec.py); float->float
-    # and float->bf8b casts are all handled by the pack-stage reconfigure.
+# int<->float "casts" are value REINTERPRETATIONS, not the value-preserving
+# layout+precision cast tilize implements — a different op entirely. They are
+# declared INVALID in feature_spec.py (skipped test-side), but because `dtype`
+# (input) and `output_dtype` (kwarg) are independent cartesian axes, every
+# int<->float cross falls INSIDE cartesian(SUPPORTED) once both an integer and
+# a float dtype are in the SUPPORTED lists. EXCLUSIONS is the registry's
+# hole-punch for that: it removes those cells from the SUPPORTED rectangle so
+# (a) validate() refuses them at runtime (ExcludedCell) instead of running the
+# kernel on a garbage reinterpret, and (b) the completion gate's is_supported()
+# does not count them as "responsible" cells that can never pass (they are
+# INVALID-skipped, not passing). float->float and float->bf8b casts stay
+# supported — the pack-stage reconfigure handles those value-preservingly.
+_INT_DTYPES = (ttnn.uint32, ttnn.uint16, ttnn.int32)
+_FLOAT_IN_DTYPES = (ttnn.bfloat16, ttnn.float32)  # bf8b is not an RM input
+_FLOAT_OUT_DTYPES = (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b)
+
+EXCLUSIONS = [{"dtype": i, "output_dtype": f} for i in _INT_DTYPES for f in _FLOAT_OUT_DTYPES] + [
+    {"dtype": f, "output_dtype": i} for f in _FLOAT_IN_DTYPES for i in _INT_DTYPES
 ]
 
 

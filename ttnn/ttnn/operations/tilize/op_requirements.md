@@ -68,6 +68,19 @@ first — it is interleaved-only and the smaller change.
 6 pure `uint32→uint32` interleaved golden cells pass (`comp_equal` exact); no regression
 in the bf16/fp32/bf8b cells.
 
+
+
+### [ ] Refinement 1b — uint32 integer passthrough (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: golden responsible cells 42/72 below majority threshold.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 ### [ ] Refinement 2 — Sharded I/O (legacy_2d HEIGHT/WIDTH/BLOCK + nd)
 
 **Goal**: add `"legacy_2d"` and `"nd"` to `SUPPORTED["shard_api"]`, and
