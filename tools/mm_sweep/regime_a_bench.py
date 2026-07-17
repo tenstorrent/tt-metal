@@ -140,6 +140,62 @@ def parse_runs():
     return [max(v[i] for v in dur.values()) for i in range(nruns)], len(cores)
 
 
+def parse_runs_detail():
+    """Like parse_runs but ALSO per-RISC critical span + per-core span spread (warmup run 0 dropped here
+    when >1 run, so callers must NOT slice again). RISC = col3 (TRISC_0/1/2 collapsed to TRISC by max).
+    Returns (runs, ncores, per_risc_us, core_spread_pct):
+      runs           = per-run total kernel cycles (max over all (core,RISC)), warmup dropped
+      ncores         = distinct (core_x,core_y) with a KERNEL zone
+      per_risc_us    = {risc: median-over-runs of (max-over-cores span) in us} -- which RISC is critical
+      core_spread_pct= median-over-runs of (max_core-min_core)/min_core*100 (core = max over its RISCs)"""
+    try:
+        rows = list(csv.reader(open(BIN_CSV)))
+    except Exception:
+        return [], 0, {}, None
+    ev = defaultdict(list)  # (x,y,risc) -> [(START/END, cycle)]
+    for row in rows[2:]:
+        if len(row) < 12 or not row[10].strip().endswith("-KERNEL"):
+            continue
+        ev[(row[1], row[2], row[3])].append((row[11].strip(), int(row[5])))
+    span = {}  # (x,y,risc) -> [span per run]
+    for k, l in ev.items():
+        ds, st = [], None
+        for t, c in l:
+            if t == "ZONE_START":
+                st = c
+            elif t == "ZONE_END" and st is not None:
+                ds.append(c - st)
+                st = None
+        span[k] = ds
+    if not span:
+        return [], 0, {}, None
+    nruns = min(len(v) for v in span.values())
+    drop = 1 if nruns > 1 else 0  # warmup/compile run 0
+    idx = range(drop, nruns)
+    runs = [max(v[i] for v in span.values()) for i in idx]
+    ncores = len({(x, y) for (x, y, _r) in span})
+
+    def fam(r):
+        return "TRISC" if r.startswith("TRISC") else r
+
+    risc_run = defaultdict(lambda: {i: 0 for i in idx})
+    core_run = defaultdict(lambda: {i: 0 for i in idx})
+    for (x, y, r), ds in span.items():
+        f = fam(r)
+        for i in idx:
+            risc_run[f][i] = max(risc_run[f][i], ds[i])
+            core_run[(x, y)][i] = max(core_run[(x, y)][i], ds[i])
+    per_risc_us = {f: statistics.median(list(v.values())) / FREQ * 1e6 for f, v in risc_run.items()}
+    spreads = []
+    for i in idx:
+        vals = [core_run[c][i] for c in core_run]
+        mn, mx = min(vals), max(vals)
+        if mn > 0:
+            spreads.append((mx - mn) / mn * 100)
+    core_spread_pct = statistics.median(spreads) if spreads else None
+    return runs, ncores, per_risc_us, core_spread_pct
+
+
 def worker(M, K, N, Ns, Pk, Sm, kb, nsb):
     import torch
     import ttnn
@@ -175,9 +231,21 @@ def worker(M, K, N, Ns, Pk, Sm, kb, nsb):
         ttnn.ReadDeviceProfiler(dev)
     finally:
         ttnn.close_device(dev)  # flushes the device-profiler CSV
-    runs, cores = parse_runs()  # AFTER close: CSV is fully written
-    runs = runs[1:] if len(runs) > 1 else runs  # drop warmup/compile (run 0)
-    print("RESULT " + json.dumps({"runs": runs, "pcc": float(pcc), "ok": bool(ok), "finite": finite, "cores": cores}))
+    runs, cores, per_risc_us, core_spread_pct = parse_runs_detail()  # AFTER close; warmup already dropped
+    print(
+        "RESULT "
+        + json.dumps(
+            {
+                "runs": runs,
+                "pcc": float(pcc),
+                "ok": bool(ok),
+                "finite": finite,
+                "cores": cores,
+                "per_risc_us": per_risc_us,
+                "core_spread_pct": core_spread_pct,
+            }
+        )
+    )
 
 
 # ---------------------------------------------------------------- driver
@@ -203,6 +271,8 @@ def _metrics(M, K, N, cfg, d):
         "pct512_min": logical_bytes(M, K, N) / (cmin / FREQ) / PEAK512 * 100,
         "pcc": d["pcc"],
         "niters": len(runs),
+        "per_risc_us": d.get("per_risc_us"),
+        "core_spread_pct": d.get("core_spread_pct"),
     }
 
 
