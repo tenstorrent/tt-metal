@@ -267,17 +267,6 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
 
 namespace {
 
-// Address-derived reader/writer runtime-arg slot indices for the Sharded factory.  These slots hold
-// input-buffer addresses (a raw base and per-core `base + head_offset` start addresses) that a plain
-// Buffer* binding cannot express, so they are re-applied on every cache hit via get_dynamic_runtime_args().
-// Kept next to the builder below so the baked layout and the re-applied layout cannot drift.
-constexpr uint32_t kReaderKernelIdx = 0;  // reader is pushed first in create_descriptor()
-constexpr uint32_t kWriterKernelIdx = 1;  // writer is pushed second
-constexpr uint32_t kQBaseAddrIdx = 6;     // q_base_addr
-constexpr uint32_t kQStartAddrIdx = 7;    // q_start_addr = q_base_addr + remote_q_head_start_idx * head_size
-constexpr uint32_t kKVBaseAddrIdx = 15;   // k_base_addr (reader) / v_base_addr or k_base_addr (writer)
-constexpr uint32_t kKVStartAddrIdx = 16;  // k_start_addr (reader) / v_start_addr or k_start_addr (writer)
-
 struct ShardedCoreArgs {
     CoreCoord core;
     std::vector<uint32_t> reader_args;
@@ -286,9 +275,8 @@ struct ShardedCoreArgs {
 
 // Single source of truth for the Sharded per-core reader/writer runtime args, INCLUDING the
 // address-derived slots (q/k/v base + per-core start addresses).  create_descriptor() emplaces these
-// on a cache miss; get_dynamic_runtime_args() re-derives them and re-applies only the address slots on
-// every cache hit.  Both paths share this one builder so the baked and re-applied addresses cannot
-// drift (an off-by-one in a re-applied index would silently corrupt an address).
+// on a cache miss and is re-run by override_runtime_arguments() on every hit, so the baked addresses
+// are always re-derived from the current tensors.
 std::vector<ShardedCoreArgs> build_sharded_core_args(
     const NlpCreateHeadsBoltzDeviceOperation::operation_attributes_t& operation_attributes,
     const NlpCreateHeadsBoltzDeviceOperation::tensor_args_t& tensor_args,
@@ -515,13 +503,9 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Build the per-core reader/writer runtime args (including the address-derived slots) via the
-    // shared builder.  The reader/writer kernels bake raw q/k/v base addresses AND per-core
-    // `base + head_offset` start addresses as uint32 runtime args; a plain Buffer* binding can only
-    // express the bare base, so those address-derived slots cannot be registered as BufferBindings.
-    // Instead they are refreshed on every cache hit by get_dynamic_runtime_args() (which re-runs this
-    // same builder), tripping the descriptor fast-path while the output CBs are patched via their
-    // `.buffer` bindings.
+    // Build the per-core reader/writer runtime args (including the address-derived q/k/v base and
+    // per-core `base + head_offset` start slots) via the shared builder. These address slots are
+    // re-derived on every cache hit by override_runtime_arguments() (which re-runs create_descriptor).
     auto per_core_args = build_sharded_core_args(operation_attributes, tensor_args, tensor_return_value);
     for (auto& e : per_core_args) {
         reader_desc.runtime_args.emplace_back(e.core, std::move(e.reader_args));
@@ -534,37 +518,19 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> NlpCreateHeadsBoltzDeviceOperation::get_dynamic_runtime_args(
+void NlpCreateHeadsBoltzDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the Sharded factory smuggles computed addresses; the Interleaved factory binds its
-    // input/output buffers via emplace_runtime_args(Buffer*) and needs no dynamic re-application.
+    // Re-derive the descriptor from the SAME factory the miss path picks (single source of truth), then
+    // re-apply its per-core args + tensor-backed CB addresses to the cached program. No rebuild (still a hit).
     const auto factory = select_program_factory(operation_attributes, tensor_args);
-    if (!std::holds_alternative<Sharded>(factory)) {
-        return {};
-    }
-
-    // Re-run the shared per-core builder so the addresses re-applied here are, by construction,
-    // identical to those baked in create_descriptor().  For every active core re-apply the four
-    // address-derived slots on both the reader (kernel 0) and writer (kernel 1).  The active core
-    // set is fixed by the (hashed) output shard specs, so it never grows across hits and every core
-    // that received args on the cache miss also gets them here.
-    auto per_core_args = build_sharded_core_args(operation_attributes, tensor_args, tensor_return_value);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(per_core_args.size() * 8);
-    for (const auto& e : per_core_args) {
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kQBaseAddrIdx, e.reader_args[kQBaseAddrIdx]});
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kQStartAddrIdx, e.reader_args[kQStartAddrIdx]});
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kKVBaseAddrIdx, e.reader_args[kKVBaseAddrIdx]});
-        dynamic_args.push_back({kReaderKernelIdx, e.core, kKVStartAddrIdx, e.reader_args[kKVStartAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kQBaseAddrIdx, e.writer_args[kQBaseAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kQStartAddrIdx, e.writer_args[kQStartAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kKVBaseAddrIdx, e.writer_args[kKVBaseAddrIdx]});
-        dynamic_args.push_back({kWriterKernelIdx, e.core, kKVStartAddrIdx, e.writer_args[kKVStartAddrIdx]});
-    }
-    return dynamic_args;
+    auto desc = std::holds_alternative<Sharded>(factory)
+                    ? Sharded::create_descriptor(operation_attributes, tensor_args, tensor_return_value)
+                    : Interleaved::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::experimental::transformer
