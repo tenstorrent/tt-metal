@@ -63,6 +63,10 @@ void kernel_main() {
     constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
     constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
     constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
+    // Padded-output mode: write the compact [H_out,W_out] result into the interior of a spatially padded
+    // [H_out+2*output_pad_h, W_out+2*output_pad_w] buffer. 0 == compact (page index unchanged).
+    constexpr uint32_t output_pad_h = get_compile_time_arg_val(26);
+    constexpr uint32_t output_pad_w = get_compile_time_arg_val(27);
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -119,7 +123,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<28>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr);
@@ -129,7 +133,9 @@ void kernel_main() {
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t C_out_t = C_out_num_blocks * matmul_N_t;
-    constexpr uint32_t T_out_H_out_W_out = T_out * H_out * W_out;
+    constexpr uint32_t H_out_p = H_out + 2 * output_pad_h;
+    constexpr uint32_t W_out_p = W_out + 2 * output_pad_w;
+    constexpr uint32_t T_out_H_out_W_out = T_out * H_out_p * W_out_p;
 
     // Mcast passive participant: this core sits inside the mcast bbox but has no work. It exists
     // only to satisfy the multicast handshake (sender's wait depends on every core in the bbox
@@ -347,8 +353,9 @@ void kernel_main() {
                                                     cb_out.wait_front(rows_waited * row_tiles);
                                                 }
                                             }
-                                            uint32_t out_page_idx =
-                                                batch_idx * T_out_H_out_W_out + t * H_out * W_out + h * W_out + w;
+                                            uint32_t out_page_idx = batch_idx * T_out_H_out_W_out +
+                                                                    t * H_out_p * W_out_p +
+                                                                    (h + output_pad_h) * W_out_p + (w + output_pad_w);
                                             noc.async_write(
                                                 cb_out,
                                                 out_writer,

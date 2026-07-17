@@ -50,6 +50,11 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t logical_h_mask = 0,
+    uint32_t logical_w_mask = 0,
+    const std::optional<Tensor>& pad_offset_tensor = std::nullopt,
+    uint32_t output_pad_h = 0,
+    uint32_t output_pad_w = 0);
 
 }  // namespace ttnn::prim

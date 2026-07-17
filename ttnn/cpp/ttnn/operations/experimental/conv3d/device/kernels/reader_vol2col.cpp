@@ -8,6 +8,16 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
+// Logical-pad masking (opt-in): the gather zeros reads whose GLOBAL spatial index is a padding position
+// (global >= logical). Set once in main() from the CT logical dims + this device's per-device
+// [h_start, w_start] offset; 0 == disabled (every other conv3d caller), so the runtime guard short-circuits.
+namespace {
+uint32_t g_mask_logical_h = 0;
+uint32_t g_mask_logical_w = 0;
+uint32_t g_mask_h_start = 0;
+uint32_t g_mask_w_start = 0;
+}  // namespace
+
 // Pre-zero CB pages so tile-alignment padding is zero.
 template <uint32_t padded_page_bytes, typename Dst>
 FORCE_INLINE void pre_zero_pages(Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
@@ -393,16 +403,45 @@ void gather_rows_to_shard(
                     }
                 }
                 if constexpr (check_padding) {
-                    const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
-                    const bool in_padding = t_outside || h_outside || w_outside;
-                    if (in_padding) {
-                        if constexpr (is_padding_zeros) {
-                            zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
+                    // Logical-pad mask: a position whose GLOBAL coord is beyond the logical extent reads
+                    // zero (catches propagated pad rows/cols, incl. across the neighbor boundary). Globals
+                    // are 0 for every non-masking caller, so this short-circuits.
+                    bool logical_masked = false;
+                    if (g_mask_logical_h != 0 &&
+                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
+                        logical_masked = true;
+                    } else if (
+                        g_mask_logical_w != 0 &&
+                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_w_start) + w_in) >= g_mask_logical_w) {
+                        logical_masked = true;
+                    }
+                    if (logical_masked) {
+                        zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
+                    } else {
+                        const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
+                        const bool in_padding = t_outside || h_outside || w_outside;
+                        if (in_padding) {
+                            if constexpr (is_padding_zeros) {
+                                zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
+                            } else {
+                                const int32_t w_clamped = clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
+                                const uint32_t page_idx =
+                                    batch_page_base + static_cast<uint32_t>(t_clamped) * H_in_W_in +
+                                    static_cast<uint32_t>(h_clamped) * W_in + static_cast<uint32_t>(w_clamped);
+                                read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
+                                    noc,
+                                    in_reader,
+                                    page_idx,
+                                    c_in_offset_bytes,
+                                    in_row_size_bytes,
+                                    shard_cb,
+                                    shard_offset,
+                                    C_in_block_bytes,
+                                    dram_read_scratch_cb);
+                            }
                         } else {
-                            const int32_t w_clamped = clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
-                            const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_clamped) * H_in_W_in +
-                                                      static_cast<uint32_t>(h_clamped) * W_in +
-                                                      static_cast<uint32_t>(w_clamped);
+                            const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
+                                                      static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
                             read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
                                 noc,
                                 in_reader,
@@ -414,6 +453,22 @@ void gather_rows_to_shard(
                                 C_in_block_bytes,
                                 dram_read_scratch_cb);
                         }
+                    }  // end logical_masked else
+                } else {
+                    // Fast path: no conv-padding checks. Still honor the logical-pad mask when enabled
+                    // (persistent-padded plain conv reads a padded input); the g_mask_logical==0 guard
+                    // short-circuits for every non-masking caller.
+                    bool logical_masked = false;
+                    if (g_mask_logical_h != 0 &&
+                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
+                        logical_masked = true;
+                    } else if (
+                        g_mask_logical_w != 0 &&
+                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_w_start) + w_in) >= g_mask_logical_w) {
+                        logical_masked = true;
+                    }
+                    if (logical_masked) {
+                        zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                     } else {
                         const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
                                                   static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
@@ -428,20 +483,6 @@ void gather_rows_to_shard(
                             C_in_block_bytes,
                             dram_read_scratch_cb);
                     }
-                } else {
-                    // Fast path: no padding checks
-                    const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
-                                              static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
-                    read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
-                        noc,
-                        in_reader,
-                        page_idx,
-                        c_in_offset_bytes,
-                        in_row_size_bytes,
-                        shard_cb,
-                        shard_offset,
-                        C_in_block_bytes,
-                        dram_read_scratch_cb);
                 }
                 if constexpr (N_TRIDS != 0) {
                     if (use_ring) {
@@ -731,6 +772,12 @@ void kernel_main() {
     constexpr uint32_t cb_dram_read_scratch = get_compile_time_arg_val(39);
     constexpr bool enable_dram_read_staging = get_compile_time_arg_val(40) == 1;
     constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(41);
+    // Logical-pad masking (opt-in). mask_mode==0 => the mask CT/RT args and offset read are elided and the
+    // layout is unchanged for every other conv3d caller.
+    constexpr bool mask_mode = get_compile_time_arg_val(42) == 1;
+    constexpr uint32_t logical_h_mask = get_compile_time_arg_val(43);
+    constexpr uint32_t logical_w_mask = get_compile_time_arg_val(44);
+    constexpr uint32_t cb_pad_offset = get_compile_time_arg_val(45);
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
     // Load input/output addresses and range parameters
@@ -746,10 +793,35 @@ void kernel_main() {
     const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
+    // Trailing per-device [h_start, w_start] offset addr (mask mode only).
+    const uint32_t pad_offset_addr = mask_mode ? get_arg_val<uint32_t>(argidx++) : 0u;
 
-    // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<42>();
+    // Tensor accessor for input tensor (CT args 42..45 are the mask flags; input accessor starts at 46).
+    constexpr auto in_args = TensorAccessorArgs<46>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
+    // Reset mask globals every invocation (a non-mask conv3d can reuse this core's L1 after a mask kernel).
+    g_mask_logical_h = 0;
+    g_mask_logical_w = 0;
+    g_mask_h_start = 0;
+    g_mask_w_start = 0;
+    // Per-device [h_start, w_start] offset accessor follows the input accessor; read page 0 into the mask
+    // globals used by the gather. Only when masking is enabled.
+    if constexpr (mask_mode) {
+        constexpr auto offset_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+        const auto offset_reader = TensorAccessor(offset_args, pad_offset_addr);
+        Noc off_noc;
+        experimental::CB pad_off_cb(cb_pad_offset);
+        pad_off_cb.reserve_back(1);
+        const uint32_t off_l1 = pad_off_cb.get_write_ptr();
+        off_noc.async_read(
+            offset_reader, pad_off_cb, 2u * sizeof(uint32_t), {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
+        off_noc.async_read_barrier();
+        volatile tt_l1_ptr uint32_t* off_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_l1);
+        g_mask_h_start = off_p[0];
+        g_mask_w_start = off_p[1];
+        g_mask_logical_h = logical_h_mask;
+        g_mask_logical_w = logical_w_mask;
+    }
 
     Noc noc;
 
@@ -815,9 +887,23 @@ void kernel_main() {
                                 const int32_t w_shard_start =
                                     static_cast<int32_t>(w_block * stride_w) - static_cast<int32_t>(padding_w);
                                 const uint32_t W_shard_cur = (w_block_end - 1 - w_block) * stride_w + kW;
+                                // Pad-block gate: a block whose largest GLOBAL input index exceeds the logical
+                                // extent holds propagated pad rows/cols. Force it off the coalesced path so the
+                                // guarded per-stick gather masks those positions. Off (false) for non-masking.
+                                bool block_has_pad = false;
+                                if constexpr (mask_mode) {
+                                    const int32_t h_max_g = static_cast<int32_t>(g_mask_h_start) + h_shard_start +
+                                                            static_cast<int32_t>(H_shard_cur) - 1;
+                                    const int32_t w_max_g = static_cast<int32_t>(g_mask_w_start) + w_shard_start +
+                                                            static_cast<int32_t>(W_shard_cur) - 1;
+                                    block_has_pad =
+                                        (logical_h_mask != 0 && h_max_g >= static_cast<int32_t>(logical_h_mask)) ||
+                                        (logical_w_mask != 0 && w_max_g >= static_cast<int32_t>(logical_w_mask));
+                                }
                                 const bool shard_all_in_bounds = th_in_bounds && w_shard_start >= 0 &&
                                                                  (w_shard_start + static_cast<int32_t>(W_shard_cur) -
-                                                                  1) < static_cast<int32_t>(W_in);
+                                                                  1) < static_cast<int32_t>(W_in) &&
+                                                                 !block_has_pad;
                                 const bool coalesce_this_block =
                                     enable_coalesced_shard_reads && shard_all_in_bounds && W_shard_cur > NUM_DRAM_BANKS;
                                 constexpr uint32_t coalesced_scratch_offset =

@@ -55,7 +55,12 @@ ttnn::Tensor conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask,
+    const std::optional<ttnn::Tensor>& pad_offset_tensor,
+    uint32_t output_pad_h,
+    uint32_t output_pad_w) {
     // Default blocking: minimal spatial blocks, smallest valid C_in_block. The same
     // default is used by prepare_conv3d_weights, so the prepared weight's K-row
     // blocking always matches the conv compute -- no near-zero-PCC mismatch (#47316) --
@@ -100,7 +105,12 @@ ttnn::Tensor conv3d(
         padding_mode_,
         groups_,
         memory_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        logical_h_mask,
+        logical_w_mask,
+        pad_offset_tensor,
+        output_pad_h,
+        output_pad_w);
 }
 
 }  // namespace ttnn::experimental

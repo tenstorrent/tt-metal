@@ -330,6 +330,28 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
+    // Logical-pad masking: opt-in. Needs the per-device offset tensor and a nonzero logical dim; otherwise
+    // fully off (byte-identical for every other conv3d caller). The plain conv reads a padded input and
+    // masks its logical-pad positions in-kernel, avoiding a separate full-tensor pre-mask mul.
+    const bool mask_mode = tensor_args.pad_offset_tensor.has_value() &&
+                           (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
+    // Tiny landing CB for the per-device [h_start, w_start] offset page (mask mode only).
+    uint32_t cb_pad_offset_id = 32;  // Invalid; set below if masking is enabled
+    if (mask_mode) {
+        const uint32_t pad_offset_page_bytes =
+            tt::round_up(2u * static_cast<uint32_t>(sizeof(uint32_t)), dram_read_alignment);
+        cb_pad_offset_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = pad_offset_page_bytes,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_pad_offset_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = pad_offset_page_bytes,
+            }}},
+        });
+    }
+
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
     // Budget: remaining L1 after other CBs and kernel code/stack, capped at 500 KB.
@@ -732,8 +754,15 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         coalesced_scratch_rows,
         cb_dram_read_scratch_id,
         static_cast<uint32_t>(enable_dram_read_staging),
-        dram_read_alignment};
+        dram_read_alignment,
+        static_cast<uint32_t>(mask_mode),
+        operation_attributes.logical_h_mask,
+        operation_attributes.logical_w_mask,
+        cb_pad_offset_id};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    // Per-device offset accessor follows the input accessor (nullptr when not masking).
+    tt::tt_metal::TensorAccessorArgs(mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp";
@@ -835,7 +864,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         static_cast<uint32_t>(weight_share_mode),
         weights_mcast_sender_sem_id,
         weights_mcast_receiver_sem_id,
-        static_cast<uint32_t>(enable_streaming_output)};
+        static_cast<uint32_t>(enable_streaming_output),
+        operation_attributes.output_pad_h,
+        operation_attributes.output_pad_w};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
@@ -849,6 +880,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
+    tt::tt_metal::Buffer* pad_offset_buffer_ptr = mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
@@ -1179,19 +1211,22 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         const uint32_t num_workers = cw.has_work ? (uint32_t)worker_core_ids[group_id].size() : 0u;
 
         // Reader pos[0] is the input buffer address (patched on cache hit via emplace_runtime_args).
-        reader_desc.emplace_runtime_args(
-            core,
-            {input_buffer,
-             cw.c_in_block_start,
-             cw.c_in_block_end,
-             cw.c_out_block_start,
-             cw.c_out_block_end,
-             cw.t_out_start,
-             cw.t_out_end,
-             cw.h_out_start,
-             cw.h_out_end,
-             cw.w_out_start,
-             cw.w_out_end});
+        std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> reader_args = {
+            input_buffer,
+            cw.c_in_block_start,
+            cw.c_in_block_end,
+            cw.c_out_block_start,
+            cw.c_out_block_end,
+            cw.t_out_start,
+            cw.t_out_end,
+            cw.h_out_start,
+            cw.h_out_end,
+            cw.w_out_start,
+            cw.w_out_end};
+        if (mask_mode) {
+            reader_args.push_back(pad_offset_buffer_ptr);
+        }
+        reader_desc.emplace_runtime_args(core, reader_args);
 
         compute_desc.runtime_args.emplace_back(
             core,
