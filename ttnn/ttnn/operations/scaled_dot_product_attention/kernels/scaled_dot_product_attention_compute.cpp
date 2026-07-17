@@ -249,7 +249,17 @@ void kernel_main() {
     //       lever class (R5/R5a) against the SFPU-softmax residual.
     // Gated by env SDPA_ABLATE_PV in the descriptor; 0 for every shipped build.
     constexpr uint32_t ablate_pv = get_compile_time_arg_val(14);
-
+    // Perf 2 (MEASUREMENT-ONLY ablation): stub the SOFTMAX payloads — the per-chunk
+    // row-max reduce (phase 4) and the fused exp dual-pack (phase 6) — while keeping
+    // every CB reserve/wait/pop/push intact. Combined with ablate_pv=3 (matmuls+accum
+    // stubbed) this isolates the PURE per-phase overhead floor (init/reconfig/fill-drain/
+    // CB-sync of every phase + the tiny scalar phases 5/7 + q-scale + normalize) from the
+    // softmax PAYLOAD (the SFPU exp + the row-max reduce math). Answers the question the
+    // prior refinements estimated but never freshly ablated: is the compute-bound residual
+    // overhead-bound (only coarsening helps -> L1/divisor-blocked) or payload-bound
+    // (attacking exp/reduce could help)? Gated by env SDPA_ABLATE_SOFTMAX; 0 for every
+    // shipped build (compile-time-elided at the default).
+    constexpr uint32_t ablate_softmax = get_compile_time_arg_val(15);
     const uint32_t num_wu = get_arg_val<uint32_t>(0);
     const uint32_t start_wu = get_arg_val<uint32_t>(1);
 
@@ -403,13 +413,22 @@ void kernel_main() {
             }
 
             // Phase 4: chunk row-max -> cb_corr (cb_scores held for the exp below).
-            ckl::reduce<
-                ckernel::PoolType::MAX,
-                ckernel::ReduceDim::REDUCE_ROW,
-                cb_scores,
-                cb_scaler,
-                cb_corr,
-                ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
+            if constexpr (ablate_softmax != 0) {
+                // Ablation: row-max reduce payload stubbed — wait cb_scores (no pop, as
+                // WaitUpfrontNoPop) and reserve/push a garbage cb_corr (sq_valid). Keeps
+                // CB balance byte-identical; downstream runs on garbage (perf-only).
+                cb_wait_front(cb_scores, sq_skv);
+                cb_reserve_back(cb_corr, sq_valid);
+                cb_push_back(cb_corr, sq_valid);
+            } else {
+                ckl::reduce<
+                    ckernel::PoolType::MAX,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_scores,
+                    cb_scaler,
+                    cb_corr,
+                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
+            }
 
             // Phase 5: update running max m, form correction alpha.
             if (first) {
@@ -457,7 +476,21 @@ void kernel_main() {
             // fp32_dest_acc_en=False throughput regime (host-gated); the max-precision
             // regime stays Exact (byte-identical, no regression). The alpha-correction
             // exp (phase 5) stays exact always to protect the running (m, l, O).
-            if constexpr (fuse_rowsum) {
+            if constexpr (ablate_softmax != 0) {
+                // Ablation: exp payload stubbed — replicate fused_exp_dual_pack's CB ops
+                // exactly (wait cb_scores + cb_row_max[no-pop], reserve+push cb_exp +
+                // cb_sum_chunk, pop cb_scores) with no sub/exp/pack math. Isolates the
+                // exp SFPU + dual-pack payload from its phase overhead (perf-only path;
+                // requires fuse_rowsum, which holds in the throughput regime this gate
+                // targets).
+                cb_wait_front(cb_scores, sq_skv);
+                cb_wait_front(cb_row_max, sq_valid);
+                cb_reserve_back(cb_exp, sq_skv);
+                cb_reserve_back(cb_sum_chunk, sq_valid);
+                cb_push_back(cb_exp, sq_skv);
+                cb_push_back(cb_sum_chunk, sq_valid);
+                cb_pop_front(cb_scores, sq_skv);
+            } else if constexpr (fuse_rowsum) {
                 // R3e: raw-LLK dual-pack — cb_exp AND the partial row-sum (cb_sum_chunk)
                 // from ONE exp DEST window (fast exp; scores popped, m held). Replaces
                 // the phase-7 per-chunk reduce<SUM> below.

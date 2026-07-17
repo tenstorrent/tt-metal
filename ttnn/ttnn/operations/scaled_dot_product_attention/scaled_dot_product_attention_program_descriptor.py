@@ -395,6 +395,10 @@ def create_program_descriptor(
     _abl = os.environ.get("SDPA_ABLATE_PV")
     if _abl in ("1", "2", "3"):
         ablate_pv = int(_abl)
+    # Perf 2 (MEASUREMENT-ONLY): stub the softmax payloads (row-max reduce + exp dual-pack)
+    # keeping CB sync intact. Combined with SDPA_ABLATE_PV=3 this measures the pure per-phase
+    # overhead floor vs the softmax payload. Unset/other => 0 (shipped path, byte-identical).
+    ablate_softmax = 1 if os.environ.get("SDPA_ABLATE_SOFTMAX") == "1" else 0
     compute_ct = [
         Dt,
         Sq_chunk_t,
@@ -411,6 +415,7 @@ def create_program_descriptor(
         1 if causal else 0,
         grow_subblock_h,
         ablate_pv,
+        ablate_softmax,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),

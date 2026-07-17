@@ -856,3 +856,95 @@
   ablations were transient env-gated instruments, reverted (methodology recorded here for repro:
   reader stub = skip `noc_async_read_tile`+barrier in `read_tiles`, keep CB reserve/push; chunk
   sweep = override `_chunk_size` target; KV_DEPTH sweep = override the `_fit_l1` depth).
+
+## Perf 2 — Generic perf pass on the flagged shape: overhead-floor ablation + phase-fusion levers (null result, runtime unchanged)
+- Date: 2026-07-17
+- Scope: generic trailing perf pass (NOT from op_requirements.md; adds nothing to SUPPORTED).
+  Mandatory focus = the `attention`-flagged `LOOSE_CASES` shape **1×10×9472×128**, bf16, MHA
+  self-attn, non-causal, tile-aligned, `fp32_dest_acc_en=False`, HiFi2, auto scale.
+- Outcome: **both phase-fusion levers measured net-negative and reverted byte-for-byte — the
+  shipped runtime is byte-identical to Perf 1 / R5b** (the only kept change is a compile-time-elided
+  measurement instrument, `SDPA_ABLATE_SOFTMAX`, inert at its default — like R5a's retained
+  `SDPA_ABLATE_PV`). Legitimate "op runtime unchanged" null pass, but with **decisive new evidence**
+  that corrects the residual's characterization.
+- Perf measured (Blackhole p150b, 110 cores, 1.35 GHz; device FW kernel-duration ns via `--profile`,
+  warm median of 5, fresh kernel cache; same-session A/B via env toggles to defeat the ~1.8× AICLK
+  drift between fresh invocations):
+
+  **1. Bottleneck re-classification (independent) — reproduces the prior verdict.** Same-session
+  `SDPA_ABLATE_PV` ablation on the flagged shape: baseline **5.445 ms**; stub PV matmul 5.129 ms;
+  stub PV+rescale+accum 5.056 ms; **stub both matmuls+accum 5.050 ms**. ⇒ matmul+O-accumulate =
+  **7.26% (395 µs)**, residual **92.74% (5.05 ms)** — exactly reproduces R5a/R5b/Perf1 (std 8–15 µs
+  ≪ the 316 µs PV signal). Compute-bound, matmul-lever class dead (confirmed 4th time).
+
+  **2. NEW — the overhead-floor ablation (the decisive contribution).** Prior refinements framed the
+  92.7% residual as "serialized SFPU softmax" (implying the *exp math* is the cost) but never freshly
+  ablated it. Added a measurement-only gate `SDPA_ABLATE_SOFTMAX=1` that stubs the row-max reduce
+  (phase 4) + the fused exp dual-pack (phase 6) payloads while keeping every CB reserve/wait/pop/push
+  intact. Combined with `SDPA_ABLATE_PV=3`, same-session on the flagged shape:
+    * baseline **5.446 ms**
+    * stub matmuls+accum: 5.069 ms → matmul+accum payload = **6.92%**
+    * ALSO stub softmax payloads: **5.045 ms → PURE-OVERHEAD FLOOR = 92.63%**
+    * ⇒ **softmax payload (row-max reduce + exp MATH) = only 0.45%**; total math (all payload) = **7.37%**.
+  So with the current fast-exp the exp+reduce *math* is negligible (0.45%); the fast-exp win (R3c
+  1.55×) was going from the *exact* to the *fast* exp — the fast exp is genuinely cheap now. **The
+  compute-bound residual is ~92.6% PURE per-phase OVERHEAD** (fill/drain + LLK init + data-format
+  reconfig + CB-sync across the ~11 sequential helper phases per KV chunk, paid crit_wu·n_kv_chunks =
+  4·37 ≈ 148 chunk-iterations × ~11 phases ≈ 1600 phase-instances on the critical-path core), **not
+  SFPU payload.** This corrects the prior "SFPU softmax" framing and pinpoints the only lever with
+  headroom: **reduce the phase-instance count.**
+
+  **3. Lever — phase fusion (reduce phase count via one FMA chain).** Phase-instance count =
+  crit_wu · n_kv_chunks · phases_per_chunk. The first two factors are coarsen levers, already
+  L1+divisor-blocked (`Sq_chunk_t`=16 overflows L1 — ≥1.77 MB even at minimal KV_DEPTH/OUT_DEPTH vs
+  ~1.5 MB physical — AND `_chunk_size` prefers the divisor 8 since 296=8·37; `Skv_chunk_t`
+  DEST+divisor-capped at 8). The **third factor (phases_per_chunk) is NOT L1-blocked** — fusing two
+  eltwise phases into one FMA chain (`DestReuseBinary`) removes a whole phase's overhead. Two candidates
+  measured same-session (both numerically identical, gated to the throughput regime, PCC≥0.997 held on
+  both variants):
+    * **fuse_o** — fold the online-O rescale (phase 8, `O·alpha`) + accumulate (phase 10, `+PV`) into one
+      FMA (`O = O·alpha + PV`, `DestReuseBinary` after the PV matmul), over the 32-tile O block:
+      **5.444 → 5.577 ms = −2.58% (REGRESSION)** (reproduced −2.53% on a second run).
+    * **fuse_l** — the same FMA fold on the small online row-sum update (phase 7, `l = alpha·l +
+      chunk_sum`), over ~8 tiles: **5.437 → 5.451 ms = −0.27% (flat / marginally negative, ~2σ).**
+  The fusion **loses at every scale**, and the penalty tracks tile count exactly (32t −2.58% → 8t
+  −0.27%): the FPU **dest-reuse penalty** (the add's `DEST→srcA` costs more than the pack/unpack it
+  replaces — master.md `compute_fusion`: FPU dest-reuse is 0.82–1.02×) cancels or exceeds the one saved
+  phase's overhead. So the 92.6% per-phase overhead is real but **not reducible by helper eltwise
+  fusion** — fusion just trades pack/unpack (pipelines well) for DEST→SRC (doesn't) at parity. Both
+  levers **reverted byte-for-byte**.
+  **Levers NOT spent (aimed at the wrong bound / out of scope):** coarsen `Sq_chunk_t`/`Skv_chunk_t`
+  (L1+divisor-blocked, quadruply-confirmed); the copy-elimination in phase 5 (`m = m_new`) needs
+  runtime CB-index selection (ping-pong), which the helpers forbid (CB is a compile-time NTTP) →
+  raw-LLK; matmul subblock/K-batch (7.4% measured dead-end, R5/R5a); FA-3 FPU∥SFPU overlap (R5b, out
+  of scope). The residual ~11× gap to `expected_math_util=0.35` (0.14 measured) is now precisely
+  attributed — the per-phase overhead of the ~11 serialized helper phases — reachable only by fewer
+  phases (coarsen, L1-blocked) or fewer phase-instances via a raw-LLK software-pipelined KV loop that
+  overlaps phases (R5b's dedicated-raw-LLK class).
+- Accuracy achieved: unchanged — runtime byte-identical to Perf 1/R5b (the fusion levers reverted; the
+  retained `SDPA_ABLATE_SOFTMAX` instrument is compile-time-elided at its default). Flagged-shape soft
+  PCC≥0.997 held (on the shipped default AND both fusion A/B variants); golden `TOLERANCES` met.
+- Golden test progress: **`test_golden.py` 1685 passed / 584 xfailed / 0 failed** (196 s) — identical
+  to R4/R5/Perf1; no SUPPORTED change. Flagged loose case `Q1x10x9472x128` passed. R3 guard set
+  **9/9** (flagged-shape PCC + mask none/custom × small/medium × DRAM/L1). The 54 pre-existing
+  `test_regression.py`+`test_translated.py` failures were verified IDENTICAL at Perf-1 HEAD (git-stash
+  A/B: 54 failed / 401 passed / 79 skipped in both states) — pre-existing, outside the golden gate, NOT
+  introduced here (the shipped kernel is byte-identical at its default, proven by the compile args
+  `...,ablate_softmax=0` and the exact `test_golden.py` match).
+- Issues encountered: none — no hang, no corruption. Both fusion levers were compile-gated (env-toggled)
+  and reverted after measurement; the only residual change is the compile-time-elided
+  `SDPA_ABLATE_SOFTMAX` measurement gate (inert at default).
+- Net: the flagged shape is at its **measured structural ceiling**, now attributed with first-hand
+  evidence — the compute residual is **92.6% per-phase overhead (softmax MATH only 0.45%)**, correcting
+  the prior "SFPU-softmax-payload" framing. Every accessible lever is blocked: coarsen (L1/divisor),
+  fusion (FPU dest-reuse penalty ≥ phase saving, measured at two scales), matmul (dead-end), FA-3
+  overlap (out of scope). This pass's contribution is the **overhead-floor ablation** (the reproducible
+  `SDPA_ABLATE_PV=3 + SDPA_ABLATE_SOFTMAX=1` instrument) that reframes the residual and rules out the
+  phase-fusion lever family with measurement.
+- Tests added:
+  `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_perf2_ab.py`
+  (the overhead-floor ablation harness — baseline / stub-matmuls+accum / stub-everything, via
+  `SDPA_ABLATE_PV`+`SDPA_ABLATE_SOFTMAX`; documents the 92.6%-overhead / 0.45%-payload split). The
+  fusion A/B harness was transient (its `SDPA_FUSE_O`/`SDPA_FUSE_L` knobs were reverted with the levers)
+  and removed; the fusion numbers are recorded above for repro (fold rescale+accum / rowsum-update into
+  a `DestReuseBinary` FMA and toggle vs the two-phase path same-session).
