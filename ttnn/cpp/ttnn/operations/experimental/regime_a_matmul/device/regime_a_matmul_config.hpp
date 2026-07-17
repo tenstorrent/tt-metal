@@ -120,6 +120,17 @@ enum RegimeADiag : uint32_t {
                                       // lifetime); it is merely off the slave-release critical path.
     DIAG_NO_COALESCE = 1u << 25,      // A/B baseline: OLD K_block per-row in1 reads (default now issues one
                                       // coalesced read per physically-contiguous block; falls back per-row).
+
+    // in0-ring CHUNK-STREAMING experiment: the baseline ring reads/forwards/publishes a whole shard (W
+    // compute K-blocks) per step (C=W). These modes stream finer bundles C=4/2/1 (C=1 is K-block-granular)
+    // to test whether smaller bundles expose more compute overlap or whether the larger payloads are needed
+    // for NoC efficiency. Preserves ring order / placement / PARETO / CB0 layout / K traversal / in0-in1
+    // pairing exactly; only the read/forward/publish GRANULARITY changes. Cumulative per-chunk fwd credits.
+    // Applies to the baseline ring only (mask 0 + one bit); mutually exclusive. Cache-hashed; not python-
+    // exposed. Default (no bit) = C=W, byte-identical.
+    DIAG_IN0_CHUNK4 = 1u << 26,
+    DIAG_IN0_CHUNK2 = 1u << 27,
+    DIAG_IN0_CHUNK1 = 1u << 28,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
