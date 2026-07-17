@@ -660,6 +660,12 @@ template <
     DataFormat TYPECAST_OUT = DataFormat::Invalid>
 void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
 {
+    // Fixed dispatch constants shared with the golden (golden_generators.py:
+    // _int_maxmin_scalar / _int_shift_amount). The two sides must move together, so
+    // keep them named on both to avoid a silent golden desync.
+    constexpr std::uint32_t MAXMIN_SCALAR = 1000u;
+    constexpr std::uint32_t SHIFT_AMOUNT  = 3u;
+
     if constexpr (OPERATION == SfpuType::abs)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_abs_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, ITERATIONS);
@@ -1296,51 +1302,62 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // uint32 vs int32 SFPSWAP handling. The golden compares against the same 1000.
     else if constexpr (OPERATION == SfpuType::unary_max_int32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (true, false, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (true /* IS_MAX_OP */, false /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
     }
     else if constexpr (OPERATION == SfpuType::unary_min_int32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (false, false, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (false /* IS_MAX_OP */, false /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
     }
     else if constexpr (OPERATION == SfpuType::unary_max_uint32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (true, true, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (true /* IS_MAX_OP */, true /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
     }
     else if constexpr (OPERATION == SfpuType::unary_min_uint32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (false, true, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_max_min_int32,
+            (false /* IS_MAX_OP */, true /* IS_UNSIGNED */, APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            MAXMIN_SCALAR);
     }
-    // Unary shift by a fixed immediate (3 bits). Integer-only kernels; the DATA_FORMAT
-    // template is chosen from the runtime math_format. The golden shifts by the same 3.
+    // Unary shift by a fixed immediate (SHIFT_AMOUNT bits). Integer-only kernels run
+    // exclusively on the Int32 path here: the only wiring (test_eltwise_unary_sfpu_int)
+    // drives shifts as Int32, and the golden (_left_shift/_right_shift) does unbounded
+    // Python integer shifts with no 16-bit masking. UInt16/UInt32 shift branches were
+    // dropped as dead+untested; re-add them together with a masked golden if needed.
     else if constexpr (OPERATION == SfpuType::left_shift)
     {
-        if (math_format == ckernel::to_underlying(DataFormat::UInt16))
-        {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::UInt16, ITERATIONS), dst_index, vector_mode, 3u);
-        }
-        else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
-        {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::UInt32, ITERATIONS), dst_index, vector_mode, 3u);
-        }
-        else
-        {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, 3u);
-        }
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, SHIFT_AMOUNT);
     }
     else if constexpr (OPERATION == SfpuType::right_shift)
     {
-        if (math_format == ckernel::to_underlying(DataFormat::UInt16))
-        {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::UInt16, ITERATIONS), dst_index, vector_mode, 3u);
-        }
-        else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
-        {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::UInt32, ITERATIONS), dst_index, vector_mode, 3u);
-        }
-        else
-        {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, 3u);
-        }
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, SHIFT_AMOUNT);
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
