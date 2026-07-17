@@ -70,6 +70,7 @@ SHAPE_NAMES = {
     (1, 1, 2): "TENSOR_SHAPE_FR1_NF1x2",
     (2, 1, 1): "TENSOR_SHAPE_FR2_NF1x1",
     (2, 1, 2): "TENSOR_SHAPE_FR2_NF1x2",
+    (4, 1, 1): "TENSOR_SHAPE_FR4_NF1x1",
     (4, 1, 2): "TENSOR_SHAPE_FR4_NF1x2",
     (8, 1, 1): "TENSOR_SHAPE_FR8_NF1x1",
     (8, 1, 2): "TENSOR_SHAPE_FR8_NF1x2",
