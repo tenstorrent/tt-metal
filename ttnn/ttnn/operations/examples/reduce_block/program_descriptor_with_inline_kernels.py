@@ -288,15 +288,15 @@ void kernel_main() {
         cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
         if constexpr (dim == 0) {
             reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out,
-                   POLICY, RECFG, ALG>(
+                   POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                 SHAPE, ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{}, PS);
         } else if constexpr (dim == 1) {
             reduce<PoolType::AVG, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_out,
-                   POLICY, RECFG, ALG>(
+                   POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                 SHAPE, ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{}, PS);
         } else {
             reduce<PoolType::AVG, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out,
-                   POLICY, RECFG, ALG>(
+                   POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                 SHAPE, ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{}, PS);
         }
         if (iter + 1 < kernel_iters) {
@@ -353,26 +353,26 @@ void kernel_main() {
             const bool is_last = (c + 1u == num_chunks);
             if constexpr (dim == 0) {
                 if (is_last) {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                         SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at_last(cb_acc, c), NoOp{});
                 } else {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ALG>(
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                         SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at(cb_acc, c), NoOp{});
                 }
             } else if constexpr (dim == 1) {
                 if (is_last) {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_out, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                         SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at_last(cb_acc, c), NoOp{});
                 } else {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ALG>(
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                         SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at(cb_acc, c), NoOp{});
                 }
             } else {
                 if (is_last) {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                         SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at_last(cb_acc, c), NoOp{});
                 } else {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ALG>(
+                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                         SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at(cb_acc, c), NoOp{});
                 }
             }
