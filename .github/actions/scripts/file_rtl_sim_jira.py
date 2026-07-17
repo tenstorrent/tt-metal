@@ -27,7 +27,7 @@ import json
 import os
 import re
 
-from create_jira_issue import _env, file_issue
+from create_jira_issue import _env, _truthy, file_issue
 
 # - `[1x3] unit_tests_api --gtest_filter=RtlSimCheckOutput.DoesNotExist_ForcedFailure`
 LINE_RE = re.compile(r"\[([^\]]+)\]\s+(\S+)\s+--gtest_filter=(\S+)")
@@ -50,9 +50,7 @@ def parse_failed(detail):
 
 def is_relevant(config, group, filt, mapping):
     for e in mapping.get("relevant_tests", []):
-        if (e.get("config", config) == config
-                and e.get("group", group) == group
-                and e.get("filter", filt) == filt):
+        if e.get("config", config) == config and e.get("group", group) == group and e.get("filter", filt) == filt:
             return True
     return False
 
@@ -63,7 +61,7 @@ def main():
     token = _env("JIRA_API_TOKEN", required=True)
     project = _env("JIRA_PROJECT_KEY", required=True)
     issue_type = _env("JIRA_ISSUE_TYPE", "Bug")
-    dry = bool(_env("JIRA_DRY_RUN"))
+    dry = _truthy(_env("JIRA_DRY_RUN"))
 
     detail = _env("RTL_SIM_DETAIL", "")
     sha = _env("RTL_SIM_SHA", "unknown")
@@ -85,7 +83,10 @@ def main():
             print(f"skip (not in relevance map): {test}")
             continue
         result = file_issue(
-            base=base, email=email, token=token, project=project,
+            base=base,
+            email=email,
+            token=token,
+            project=project,
             summary=f"RTL sim test failed during release: {test}",
             issue_type=issue_type,
             description=(
@@ -108,20 +109,25 @@ def main():
     # aggregate ticket so the failure is never silently dropped.
     if not failed:
         print("no per-test lines in check detail; filing one aggregate ticket")
-        print(file_issue(
-            base=base, email=email, token=token, project=project,
-            summary=f"RTL sim regression failed during release (commit {sha}, no per-test detail)",
-            issue_type=issue_type,
-            description=(
-                "The 'RTL Sim CI test' check failed but reported no per-test detail.\n\n"
-                f"Commit:      {sha}\n"
-                f"Sim results: {url}\n"
-                f"Release run: {run_url}\n"
-            ),
-            labels=["rtl-sim", "ci-failure", "release"],
-            dedup_label="rtl-sim-release-failure",
-            dry_run=dry,
-        ))
+        print(
+            file_issue(
+                base=base,
+                email=email,
+                token=token,
+                project=project,
+                summary=f"RTL sim regression failed during release (commit {sha}, no per-test detail)",
+                issue_type=issue_type,
+                description=(
+                    "The 'RTL Sim CI test' check failed but reported no per-test detail.\n\n"
+                    f"Commit:      {sha}\n"
+                    f"Sim results: {url}\n"
+                    f"Release run: {run_url}\n"
+                ),
+                labels=["rtl-sim", "ci-failure", "release"],
+                dedup_label="rtl-sim-release-failure",
+                dry_run=dry,
+            )
+        )
         filed += 1
 
     print(f"filed/updated {filed} issue(s)")

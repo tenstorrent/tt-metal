@@ -37,6 +37,11 @@ def _env(name, default=None, required=False):
     return val
 
 
+def _truthy(val):
+    """Interpret an env-style string as a boolean (so "false"/"0"/"no" are false)."""
+    return str(val or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _api(base, email, token, method, path, body=None):
     url = f"{base.rstrip('/')}{path}"
     auth = base64.b64encode(f"{email}:{token}".encode()).decode()
@@ -76,8 +81,9 @@ def _find_open_dupe(base, email, token, project, dedup_label):
     return issues[0]["key"] if issues else None
 
 
-def file_issue(base, email, token, project, summary, issue_type="Bug",
-               description="", labels=None, dedup_label="", dry_run=False):
+def file_issue(
+    base, email, token, project, summary, issue_type="Bug", description="", labels=None, dedup_label="", dry_run=False
+):
     """Create (or comment onto a de-duped) Jira issue.
 
     Returns a human-readable result string. When dedup_label is set and an open
@@ -97,8 +103,7 @@ def file_issue(base, email, token, project, summary, issue_type="Bug",
         fields["labels"] = labels
 
     if dry_run:
-        return ("DRY RUN -- would POST /rest/api/3/issue with fields:\n"
-                + json.dumps({"fields": fields}, indent=2))
+        return "DRY RUN -- would POST /rest/api/3/issue with fields:\n" + json.dumps({"fields": fields}, indent=2)
 
     if dedup_label:
         existing = _find_open_dupe(base, email, token, project, dedup_label)
@@ -120,18 +125,20 @@ def file_issue(base, email, token, project, summary, issue_type="Bug",
 
 def main():
     labels = [l.strip() for l in (_env("JIRA_LABELS", "") or "").split(",") if l.strip()]
-    print(file_issue(
-        base=_env("JIRA_BASE_URL", required=True),
-        email=_env("JIRA_USER_EMAIL", required=True),
-        token=_env("JIRA_API_TOKEN", required=True),
-        project=_env("JIRA_PROJECT_KEY", required=True),
-        summary=_env("JIRA_SUMMARY", required=True),
-        issue_type=_env("JIRA_ISSUE_TYPE", "Bug"),
-        description=_env("JIRA_DESCRIPTION", ""),
-        labels=labels,
-        dedup_label=_env("JIRA_DEDUP_LABEL", ""),
-        dry_run=bool(_env("JIRA_DRY_RUN")),
-    ))
+    print(
+        file_issue(
+            base=_env("JIRA_BASE_URL", required=True),
+            email=_env("JIRA_USER_EMAIL", required=True),
+            token=_env("JIRA_API_TOKEN", required=True),
+            project=_env("JIRA_PROJECT_KEY", required=True),
+            summary=_env("JIRA_SUMMARY", required=True),
+            issue_type=_env("JIRA_ISSUE_TYPE", "Bug"),
+            description=_env("JIRA_DESCRIPTION", ""),
+            labels=labels,
+            dedup_label=_env("JIRA_DEDUP_LABEL", ""),
+            dry_run=_truthy(_env("JIRA_DRY_RUN")),
+        )
+    )
 
 
 if __name__ == "__main__":

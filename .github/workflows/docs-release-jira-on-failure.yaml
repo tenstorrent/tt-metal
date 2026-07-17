@@ -99,4 +99,9 @@ jobs:
           JIRA_LABELS: "ci-failure,docs-release"
           # While one issue is open for this pipeline, later failures comment on it.
           JIRA_DEDUP_LABEL: "docs-release-failure"
-        run: python3 .github/actions/scripts/create_jira_issue.py
+        run: |
+          if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
+            echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
+            exit 0
+          fi
+          python3 .github/actions/scripts/create_jira_issue.py
