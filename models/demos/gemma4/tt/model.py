@@ -305,6 +305,12 @@ class Gemma4Model:
             self.rope_caches = {}
             self.rope_caches_2d = {}
 
+        # Device tensors for traced multi-chunk RoPE slicing (chunk_start_idx tensor
+        # → [start, start+chunk) without leaving the captured graph). Lazy-init
+        # the per-head-dim ends buffers; zeros are shared.
+        self._tt_slice_start_zeros_4 = None
+        self._tt_seq_len_buffer_by_hd = {}
+
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
         replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
@@ -637,6 +643,63 @@ class Gemma4Model:
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
+    def _ensure_rope_slice_bufs(self, head_dim: int):
+        """Allocate shared start-zeros / ends buffers for device RoPE slicing."""
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        if self._tt_slice_start_zeros_4 is None:
+            self._tt_slice_start_zeros_4 = ttnn.from_torch(
+                torch.tensor([0, 0, 0, 0], dtype=torch.int32),
+                device=self.mesh_device,
+                mesh_mapper=mesh_mapper,
+            )
+        if head_dim not in self._tt_seq_len_buffer_by_hd:
+            self._tt_seq_len_buffer_by_hd[head_dim] = ttnn.from_torch(
+                torch.tensor([1, 1, self.max_seq_len, head_dim], dtype=torch.int32),
+                device=self.mesh_device,
+                mesh_mapper=mesh_mapper,
+            )
+
+    def _slice_prefill_rot_mats(self, rot_mats, chunk_start_idx, seq_len):
+        """Device-slice full RoPE mats to ``[chunk_start_idx, chunk_start_idx+seq_len)``.
+
+        Uses the tensor-args ``ttnn.slice`` path (``slice_dim`` + ``num_devices``)
+        so the start offset can be refreshed out-of-trace while the graph stays
+        fixed. ``num_devices`` is overloaded as ``max_seq_len // seq_len`` so the
+        fixed output length equals the prefill chunk (same pattern as Galaxy /
+        tt_transformers traced APC RoPE).
+        """
+        if rot_mats is None or chunk_start_idx is None or not isinstance(chunk_start_idx, ttnn.Tensor):
+            return rot_mats
+        full_rot_cos, full_rot_sin = rot_mats
+        if full_rot_cos.shape[2] == seq_len:
+            return rot_mats
+        if self.max_seq_len % seq_len != 0:
+            raise ValueError(
+                f"Traced multi-chunk RoPE requires max_seq_len ({self.max_seq_len}) "
+                f"divisible by chunk seq_len ({seq_len})"
+            )
+        num_parts = self.max_seq_len // seq_len
+        head_dim = int(full_rot_cos.shape[3])
+        self._ensure_rope_slice_bufs(head_dim)
+        z = self._tt_slice_start_zeros_4
+        tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
+        ends = self._tt_seq_len_buffer_by_hd[head_dim]
+        rot_cos_slice = ttnn.slice(
+            input_tensor=full_rot_cos,
+            starts=tt_slice_starts,
+            ends=ends,
+            slice_dim=2,
+            num_devices=num_parts,
+        )
+        rot_sin_slice = ttnn.slice(
+            input_tensor=full_rot_sin,
+            starts=tt_slice_starts,
+            ends=ends,
+            slice_dim=2,
+            num_devices=num_parts,
+        )
+        return (rot_cos_slice, rot_sin_slice)
+
     def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False, start_pos=0):
         """Get (cos, sin) for a given layer.
 
@@ -647,12 +710,16 @@ class Gemma4Model:
                 Non-zero only for generator-level multi-chunk prefill (chunk N starts
                 at ``N*chunk_size``); the RoPE slice must cover
                 ``[start_pos, start_pos+seq_len)`` so chunk tokens get their true
-                positions instead of restarting at 0.
+                positions instead of restarting at 0. When ``start_pos`` is a device
+                tensor, returns the *full* cache so ``_slice_prefill_rot_mats`` can
+                cut it inside the traced graph.
         """
         layer_type = self.hf_config.layer_types[layer_idx]
         if for_decode:
             return self.rope_caches_2d[layer_type]
         cos, sin = self.rope_caches[layer_type]
+        if isinstance(start_pos, ttnn.Tensor):
+            return (cos, sin)
         if seq_len is not None:
             cos = cos[:, :, start_pos : start_pos + seq_len, :]
             sin = sin[:, :, start_pos : start_pos + seq_len, :]
@@ -802,8 +869,16 @@ class Gemma4Model:
                 # Generator-level multi-chunk prefill: chunk N's tokens occupy
                 # absolute positions [chunk_start_idx, chunk_start_idx+seq_len);
                 # offset the RoPE slice so they aren't re-encoded from 0.
-                rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
-                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
+                # Device-tensor offsets stay inside the traced graph.
+                if isinstance(chunk_start_idx, ttnn.Tensor):
+                    layer_rope = self._slice_prefill_rot_mats(
+                        self._get_rope_mats(i, start_pos=chunk_start_idx),
+                        chunk_start_idx,
+                        rope_seq_len,
+                    )
+                else:
+                    rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
+                    layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -1362,15 +1437,15 @@ class Gemma4Model:
         ``trace_enabled`` (so the trace owns the embed step) and tile-laid
         embeddings otherwise. The two ``None`` slots are placeholders for
         ``rot_mats_global``/``rot_mats_local`` — Gemma4 computes RoPE
-        internally from layer state. ``tt_chunk_start_idx`` is always
-        ``None`` because Gemma4 doesn't chunk-prefill (added to the
-        return so the generator's 6-element unpack at
-        ``tt_transformers/tt/generator.py:1151`` lines up).
+        internally from layer state. ``tt_chunk_start_idx`` is a device
+        scalar when tracing multi-chunk / APC (so RoPE + chunked SDPA can
+        refresh the absolute start via ``copy_host_to_device``); otherwise
+        ``None`` and the generator passes a Python int into
+        ``ttnn_prefill_forward``.
         """
         import torch.nn.functional as F
 
         del start_pos, last_token_idx, global_user_id, user_id, batched_prefill, kwargs
-        del chunk_start_idx  # Accepted for signature compat; Gemma4 doesn't chunk-prefill.
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
@@ -1414,6 +1489,25 @@ class Gemma4Model:
                 mesh_mapper=mesh_mapper,
             )
 
+        # Device scalar for traced multi-chunk / APC: refresh absolute start via
+        # copy_host_to_device (RoPE + chunked SDPA flexible offset). Skip for
+        # cold single-chunk (start=0, no chunk_page_table) so existing 4k traces
+        # stay unchanged.
+        tt_chunk_start_idx = None
+        if trace_enabled and chunk_start_idx is not None:
+            start_i = int(chunk_start_idx) if not isinstance(chunk_start_idx, ttnn.Tensor) else None
+            need_tensor = chunk_page_table is not None or (start_i is not None and start_i > 0)
+            if isinstance(chunk_start_idx, ttnn.Tensor):
+                tt_chunk_start_idx = chunk_start_idx
+            elif need_tensor:
+                tt_chunk_start_idx = ttnn.from_torch(
+                    torch.tensor([int(chunk_start_idx)], dtype=torch.int32),
+                    device=device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                )
+
         self._prefill_input_ids_torch = tokens_torch
         self._prefill_batch_size = batch_size
         self._prefill_seq_len_per_user = per_user_seq_len
@@ -1423,7 +1517,7 @@ class Gemma4Model:
             self._prefill_embeds_torch = None
 
         if trace_enabled:
-            return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, None
+            return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
         tt_embeds = self.embed_tokens(tt_tokens)
         if batch_size > 1:
@@ -1457,7 +1551,6 @@ class Gemma4Model:
         ``tt_chunk_start_idx`` is threaded through unchanged so the return
         tuple lines up with ``Generator``'s traced-prefill unpack
         (``transformed_inputs[3]`` → ``ttnn_prefill_forward(chunk_start_idx=...)``).
-        Gemma4 doesn't chunk-prefill, so it's always ``None`` in practice.
         """
         if len(tokens.shape) == 4 and tokens.shape[1] == 1 and tokens.shape[2] == 1:
             seq_len = tokens.shape[3]
@@ -1489,13 +1582,14 @@ class Gemma4Model:
     ):
         """Prefill forward — Generator-compatible signature.
 
-        Generator-irrelevant kwargs (``rot_mats_*``, ``chunk_*``) are
-        accepted and discarded — the model computes RoPE internally and
-        does not chunk prefill. ``input_ids_torch``/``embeds_torch`` may
-        be passed directly by callers that compute them inline (text
-        demos, unit tests); the Generator path stashes them on ``self``
-        during ``prepare_inputs_prefill`` and they're picked up here when
-        the explicit kwargs are None.
+        Generator-irrelevant kwargs (``rot_mats_*``) are accepted and discarded —
+        the model computes RoPE internally. ``chunk_start_idx`` /
+        ``chunk_page_table`` drive generator-level multi-chunk prefill (eager
+        Python int or traced device tensor). ``input_ids_torch``/``embeds_torch``
+        may be passed directly by callers that compute them inline (text demos,
+        unit tests); the Generator path stashes them on ``self`` during
+        ``prepare_inputs_prefill`` and they're picked up here when the explicit
+        kwargs are None.
 
         ``page_tables_per_layer`` likewise comes via a stash
         (``_active_page_tables_per_layer``) when running under the vLLM

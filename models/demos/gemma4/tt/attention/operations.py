@@ -27,7 +27,10 @@ from .weights import AttentionWeights
 # exceeds 32768 (2^15) — generation degrades to garbage. Above this length we
 # fall back to chunked SDPA (chunk Q, attend the full K prefix from the paged
 # cache). Overridable via env for validation (e.g. force chunking at small seq).
-PREFILL_SDPA_MAX_SEQ = int(os.environ.get("GEMMA4_PREFILL_SDPA_MAX_SEQ", "32768"))
+# The hardware cliff itself is fixed at 2^15; env only changes when we *switch*
+# to the chunked path (may be lower for testing).
+PREFILL_SDPA_HARD_MAX = 32768
+PREFILL_SDPA_MAX_SEQ = int(os.environ.get("GEMMA4_PREFILL_SDPA_MAX_SEQ", str(PREFILL_SDPA_HARD_MAX)))
 # Q chunk size for chunked prefill. Must be <= 32768 and a multiple of the SDPA
 # q/k_chunk_size (128) and the page block size. 8192 keeps L1 bounded for the
 # global layers' head_dim=512.
@@ -36,9 +39,26 @@ PREFILL_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_CHUNK_SIZE", "8192"))
 # sliding window), and the non-chunked op requires Q.s == K.s, so sliding layers
 # are chunked with an OVERLAPPING window: each chunk runs SDPA over a slice of
 # (stride + sliding_window) positions and keeps only the last ``stride`` rows.
-# slice length = stride + sliding_window must stay <= 32768, so 30720 + 1024 =
-# 31744 < 32768. Must be a multiple of TILE (32).
-PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SIZE", "30720"))
+# slice length = stride + sliding_window must stay < PREFILL_SDPA_HARD_MAX.
+# Default 16384 (power-of-two): measured faster than near-cliff 30720 on 31B
+# 128k prefill (~62s vs ~73s TTFT) while staying well under the 32768 SDPA cliff.
+# Must be a multiple of TILE (32). Override via GEMMA4_PREFILL_SLIDING_CHUNK_SIZE.
+PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SIZE", "16384"))
+
+
+def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
+    """Memory config for short-lived prefill attention activations (Qwen36 #48861).
+
+    Keep q/k/v head-split, q/k RMSNorm, and concat_heads temps in L1 when enabled.
+    Long-lived / CCL inputs (o_proj → allreduce) stay DRAM — callers must
+    ``to_memory_config(..., DRAM)`` before o_proj.
+
+    ``GEMMA4_PREFILL_L1_ACT=0|1`` (default 0). Measured OOM on 31B / P150x8 /
+    chunk4k 128k with L1=1 (``ccl_prefill_ab.tsv``); leave off for long ISL.
+    """
+    if os.environ.get("GEMMA4_PREFILL_L1_ACT", "0").lower() in ("1", "true", "yes"):
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
@@ -251,7 +271,8 @@ def chunked_prefill_sdpa(
             paged cache. Added to each internal Q-chunk offset so the op's causal
             mask covers ``[0, base_offset + local_end)``. Must be a multiple of the
             program's ``q_chunk_size`` (128); generator chunk sizes are >=128 powers
-            of two so this holds.
+            of two so this holds. Pass a device ``ttnn.Tensor`` [1] int32 for
+            traced multi-chunk replay (flexible ``chunk_start_idx_tensor`` path).
         num_kv_heads: this layer's local KV-head count. Only needed when the paged
             cache is HMA-shared with a different-shaped layer (vLLM hybrid kv-cache
             groups): the cache's declared (num_kv_heads, block_size, head_dim) then
@@ -278,16 +299,24 @@ def chunked_prefill_sdpa(
                 block_size=eff_bs,
                 num_kv_heads=num_kv_heads,
             )
-    # head_dim=512 needs more L1/core, so use a smaller grid + 128 chunks (the
-    # validated config); sliding-size head_dim uses the full grid.
+    # head_dim=512 needs more L1/core, so use a smaller grid + smaller chunks;
+    # sliding-size head_dim uses the full grid. Chunk sizes match the non-chunked
+    # path defaults and are overridable via GEMMA4_PREFILL_SDPA_QCHUNK / _KCHUNK.
     if head_dim >= 512:
         grid = ttnn.CoreCoord(8, 4)
+        dq, dk = 128, 128
     else:
         grid = ttnn.CoreCoord(8, 8)
+        dq, dk = 256, 128
+    q_chunk_size = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
+    k_chunk_size = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
+    q_chunk_size = max(32, min(q_chunk_size, PREFILL_CHUNK_SIZE))
+    k_chunk_size = max(32, min(k_chunk_size, PREFILL_CHUNK_SIZE))
+    # Pad alignment below uses 128; keep q_chunk_size a divisor-friendly multiple of 32.
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid,
-        q_chunk_size=128,
-        k_chunk_size=128,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
     )
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
@@ -315,24 +344,53 @@ def chunked_prefill_sdpa(
     while start < seq_len:
         clen = min(PREFILL_CHUNK_SIZE, seq_len - start)
         q_chunk = ttnn.slice(tt_q, [0, 0, start, 0], [1, nh, start + clen, head_dim])
-        # chunked SDPA q_chunk_size=128 needs the Q chunk length to be a multiple
-        # of 128; pad the (tile-aligned) tail chunk up and slice the result back.
-        pad = (-clen) % 128
+        # chunked SDPA needs the Q chunk length to be a multiple of q_chunk_size;
+        # pad the (tile-aligned) tail chunk up and slice the result back.
+        pad = (-clen) % q_chunk_size
         if pad:
             q_unpadded = q_chunk
             q_chunk = ttnn.pad(q_unpadded, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
             q_unpadded.deallocate(True)
-        out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
-            q_chunk,
-            k_cache,
-            v_cache,
-            user_pt,
-            chunk_start_idx=base_offset + start,
-            scale=scale,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-            paged_cache_geometry=paged_cache_geometry,
-        )
+        if isinstance(base_offset, ttnn.Tensor):
+            # Traced multi-chunk: runtime offset from device tensor. Generator
+            # chunks are <= PREFILL_CHUNK_SIZE so ``start`` is 0 here.
+            if start:
+                start_t = ttnn.full(
+                    shape=base_offset.shape,
+                    fill_value=start,
+                    dtype=base_offset.dtype,
+                    layout=base_offset.layout,
+                    device=base_offset.device(),
+                )
+                chunk_start_t = ttnn.add(base_offset, start_t)
+                start_t.deallocate(True)
+            else:
+                chunk_start_t = base_offset
+            out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_pt,
+                chunk_start_idx_tensor=chunk_start_t,
+                scale=scale,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                paged_cache_geometry=paged_cache_geometry,
+            )
+            if start:
+                chunk_start_t.deallocate(True)
+        else:
+            out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_pt,
+                chunk_start_idx=base_offset + start,
+                scale=scale,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                paged_cache_geometry=paged_cache_geometry,
+            )
         q_chunk.deallocate(True)
         if pad:
             out_padded = out_chunk
@@ -395,9 +453,16 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
         out_len = min(stride, seq_len - start)
         slice_start = max(0, start - hist)
         slice_end = start + out_len
+        slice_len = slice_end - slice_start
+        assert (
+            slice_len < PREFILL_SDPA_HARD_MAX
+        ), f"sliding SDPA slice_len={slice_len} must stay < {PREFILL_SDPA_HARD_MAX}"
         q_slice = ttnn.slice(tt_q, [0, 0, slice_start, 0], [1, nh, slice_end, head_dim])
         k_slice = ttnn.slice(tt_k, [0, 0, slice_start, 0], [1, nkv, slice_end, head_dim])
         v_slice = ttnn.slice(tt_v, [0, 0, slice_start, 0], [1, nkv, slice_end, head_dim])
+        # Leave program_config to the op default here: ``prefill_sdpa_program_config``
+        # assumes power-of-two seq buckets; overlapping sliding slices (e.g. 31744)
+        # are not always safe with those explicit q/k chunks.
         o = ttnn.transformer.scaled_dot_product_attention(
             q_slice,
             k_slice,
@@ -427,7 +492,14 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     return out
 
 
-def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: int = None, mesh_device=None):
+def concat_heads(
+    tensor,
+    is_decode_mode: bool,
+    num_heads: int = None,
+    head_dim: int = None,
+    mesh_device=None,
+    memory_config=None,
+):
     """Concatenate attention heads back to hidden dimension.
 
     Decode uses ``nlp_concat_heads_decode`` (multi-core, width-sharded output)
@@ -438,6 +510,9 @@ def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: 
     single core (~30 us/layer) and needed a separate transpose; the decode op
     drops the transpose and spreads work across cores. Output is converted back
     to DRAM interleaved so the downstream o_proj matmul is unchanged.
+
+    Prefill: ``memory_config`` defaults to DRAM; pass L1 for short-lived concat
+    temps (caller must DRAM-ify before o_proj / allreduce).
     """
     if is_decode_mode:
         if num_heads is None or head_dim is None:
@@ -479,7 +554,8 @@ def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: 
             out = out_padded[:, :, :batch, :]
             out_padded.deallocate(True)
         return out
-    return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
 
 
 def apply_output_projection(tensor, weights: AttentionWeights):
