@@ -6,6 +6,7 @@
 #include "groupnorm_program_utils.hpp"
 
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <optional>
@@ -45,6 +46,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     bool inplace = program_config.inplace;
     bool use_welford = operation_attributes.use_welford;
+    const bool sfpu_two_pass = use_welford && std::getenv("TTNN_GROUPNORM_SFPU_TWO_PASS") != nullptr;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // Begin sharded implementation
@@ -828,9 +830,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},
     };
     if (use_welford) {
+        const auto local_count = block_ht * num_datum_row_per_group;
         compute_named_compile_time_args.push_back({"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)});
         compute_named_compile_time_args.push_back({"cb_in0_welford", cb_in0_welford_arg});
         compute_named_compile_time_args.push_back({"cb_in_welford", cb_in_welford_arg});
+        compute_named_compile_time_args.push_back({"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)});
+        compute_named_compile_time_args.push_back(
+            {"sfpu_two_pass_reciprocal", std::bit_cast<uint32_t>(1.0f / static_cast<float>(local_count))});
     }
 
     KernelDescriptor compute_sender_desc;

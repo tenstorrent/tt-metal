@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <cstdint>
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
@@ -26,7 +27,7 @@ namespace ckernel {
  *     the SFPU replay buffer mid-pass after another op (e.g. `transpose_tile` on the
  *     unpack-to-DEST fp32 path) has clobbered the welford recurrence slots.
  */
-enum class WelfordInitMode : uint8_t {
+enum class WelfordInitMode : std::uint8_t {
     ClearStats,
     PreserveStats,
 };
@@ -55,7 +56,7 @@ ALWI void welford_init() {
  */
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+ALWI void welford_reinit(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         /*transpose=*/0, /*transpose_within_16x16_face=*/false, cbid)));
@@ -69,6 +70,20 @@ ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
  * This function should be called before calling `welford_update` for a new set of values.
  */
 ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2())); }
+
+template <bool accumulate_m2>
+ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
+    ASSERT(start_row + num_rows <= TILE_WIDTH);
+    MATH((llk_math_two_pass_sfpu_update_rows<accumulate_m2>(input_dst_idx, start_row, num_rows)));
+}
+
+ALWI void two_pass_stats_finish_mean(std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_finish_mean(reciprocal_bits)));
+}
+
+ALWI void two_pass_stats_finish_variance(std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_finish_variance(reciprocal_bits)));
+}
 
 /**
  * @brief Performs a Welford's online algorithm update for mean and m2 on a tile in the DST register
@@ -92,9 +107,11 @@ ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and
  * @return None. The mean and m2 values are held in the registers.
  */
 
-template <uint32_t reciprocal_size>
+template <std::uint32_t reciprocal_size>
 ALWI void welford_update(
-    uint32_t input_dst_idx, uint32_t start_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t input_dst_idx,
+    std::uint32_t start_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (start_idx < reciprocal_size));
 
@@ -110,13 +127,13 @@ ALWI void welford_update(
  *                  0 <= start_row + num_rows <= 32.
  * -------------------------------------------------------------------------------------------------
  */
-template <uint32_t reciprocal_size>
+template <std::uint32_t reciprocal_size>
 ALWI void welford_update_rows(
-    uint32_t input_dst_idx,
-    uint32_t start_idx,
-    uint32_t start_row,
-    uint32_t num_rows,
-    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t input_dst_idx,
+    std::uint32_t start_idx,
+    std::uint32_t start_row,
+    std::uint32_t num_rows,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (start_idx < reciprocal_size));
 
@@ -138,7 +155,7 @@ ALWI void welford_update_rows(
  * values are stored in the consecutive tile after the mean.
  * @return None. The mean and m2 values are stored in the tile in the dst reg.
  */
-ALWI void welford_save_state(uint32_t mean_dst_idx) {
+ALWI void welford_save_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx)));
 }
 
@@ -151,7 +168,7 @@ ALWI void welford_save_state(uint32_t mean_dst_idx) {
  * values are loaded from the consecutive tile after the mean.
  * @return None. The mean and m2 values are loaded into the SFPU.
  */
-ALWI void welford_restore_state(uint32_t mean_dst_idx) {
+ALWI void welford_restore_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx)));
 }
 /**
@@ -179,7 +196,9 @@ ALWI void welford_restore_state(uint32_t mean_dst_idx) {
  */
 template <std::size_t reciprocal_size>
 ALWI void welford_finalize_to_row(
-    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 
@@ -210,7 +229,9 @@ ALWI void welford_finalize_to_row(
  */
 template <std::size_t reciprocal_size>
 ALWI void welford_finalize_to_face(
-    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 
@@ -223,20 +244,20 @@ ALWI void welford_finalize_to_face(
  * @param group_id The group id to store the data for.
  * -------------------------------------------------------------------------------------------------
  */
-ALWI void welford_save_state(uint32_t mean_dst_idx, uint32_t group_id) {
+ALWI void welford_save_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
     MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx, group_id)));
 }
 
-ALWI void welford_restore_state(uint32_t mean_dst_idx, uint32_t group_id) {
+ALWI void welford_restore_state(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
 }
 
 template <std::size_t reciprocal_size>
 ALWI void welford_finalize_to_face(
-    uint32_t mean_dst_idx,
-    uint32_t group_id,
-    uint32_t scale_idx,
-    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t group_id,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 

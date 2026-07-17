@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_sfpu_types.h"
 #include "llk_math_welfords_sfpu.h"
@@ -15,6 +16,21 @@ inline void llk_math_welfords_sfpu_init() { _llk_math_welfords_sfpu_init_(); }
 
 inline void llk_math_welfords_sfpu_clear_previous_mean_and_m2() { ckernel::sfpu::_clear_previous_mean_and_m2_(); }
 
+template <bool accumulate_m2>
+inline void llk_math_two_pass_sfpu_update_rows(
+    std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
+    _llk_math_welfords_sfpu_params_(
+        ckernel::sfpu::_two_pass_update_rows_<accumulate_m2>, input_dst_idx, start_row, num_rows);
+}
+
+inline void llk_math_two_pass_sfpu_finish_mean(std::uint32_t reciprocal_bits) {
+    ckernel::sfpu::_two_pass_finish_mean_(reciprocal_bits);
+}
+
+inline void llk_math_two_pass_sfpu_finish_variance(std::uint32_t reciprocal_bits) {
+    ckernel::sfpu::_two_pass_finish_variance_(reciprocal_bits);
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_welfords_sfpu_reinit(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -23,20 +39,22 @@ inline void llk_math_welfords_sfpu_reinit(const std::uint32_t operand) {
     _llk_math_welfords_sfpu_reinit_<is_fp32_dest_acc_en>(num_faces, dst_format);
 }
 
-template <uint32_t reciprocal_size>
+template <std::uint32_t reciprocal_size>
 inline void llk_math_welfords_sfpu_calculate_welfords_tile_(
-    uint32_t input_dst_idx, uint32_t start_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t input_dst_idx,
+    std::uint32_t start_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_calculate_welfords_tile_<reciprocal_size>, input_dst_idx, start_idx, reciprocal_lut);
 }
 
-template <uint32_t reciprocal_size>
+template <std::uint32_t reciprocal_size>
 inline void llk_math_welfords_sfpu_calculate_welfords_partial_tile_(
-    uint32_t input_dst_idx,
-    uint32_t start_idx,
-    uint32_t start_row,
-    uint32_t num_rows,
-    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t input_dst_idx,
+    std::uint32_t start_idx,
+    std::uint32_t start_row,
+    std::uint32_t num_rows,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_calculate_welfords_partial_tile_<reciprocal_size>,
         input_dst_idx,
@@ -46,24 +64,28 @@ inline void llk_math_welfords_sfpu_calculate_welfords_partial_tile_(
         reciprocal_lut);
 }
 
-inline void llk_math_welfords_sfpu_store_mean_m2_to_dst(uint32_t mean_dst_idx) {
+inline void llk_math_welfords_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_idx) {
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_store_mean_m2_to_dst_, mean_dst_idx);
 }
 
-inline void llk_math_welfords_sfpu_load_mean_m2_from_dst(uint32_t mean_dst_idx) {
+inline void llk_math_welfords_sfpu_load_mean_m2_from_dst(std::uint32_t mean_dst_idx) {
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_load_mean_m2_from_dst_, mean_dst_idx);
 }
 
 template <std::size_t reciprocal_size>
 inline void llk_math_welfords_sfpu_store_mean_var_to_dst_row(
-    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_store_mean_var_to_dst_row_<reciprocal_size>, mean_dst_idx, scale_idx, reciprocal_lut);
 }
 
 template <std::size_t reciprocal_size>
 inline void llk_math_welfords_sfpu_store_mean_var_to_dst_raw(
-    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_store_mean_var_to_dst_raw_<reciprocal_size>, mean_dst_idx, scale_idx, reciprocal_lut);
 }
@@ -71,20 +93,20 @@ inline void llk_math_welfords_sfpu_store_mean_var_to_dst_raw(
 // ----------------------------------------------------------------------------
 // The below functions are flavors of above 3 to use with group_id argument
 // ----------------------------------------------------------------------------
-inline void llk_math_welfords_sfpu_store_mean_m2_to_dst(uint32_t mean_dst_idx, uint32_t group_id) {
+inline void llk_math_welfords_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_store_mean_m2_to_dst_group_, mean_dst_idx, group_id);
 }
 
-inline void llk_math_welfords_sfpu_load_mean_m2_from_dst(uint32_t mean_dst_idx, uint32_t group_id) {
+inline void llk_math_welfords_sfpu_load_mean_m2_from_dst(std::uint32_t mean_dst_idx, std::uint32_t group_id) {
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_load_mean_m2_from_dst_group_, mean_dst_idx, group_id);
 }
 
 template <std::size_t reciprocal_size>
 inline void llk_math_welfords_sfpu_store_mean_var_to_dst_raw(
-    uint32_t mean_dst_idx,
-    uint32_t group_id,
-    uint32_t scale_idx,
-    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    std::uint32_t mean_dst_idx,
+    std::uint32_t group_id,
+    std::uint32_t scale_idx,
+    const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_store_mean_var_to_dst_raw_group_<reciprocal_size>,
         mean_dst_idx,

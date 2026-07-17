@@ -59,6 +59,8 @@ void kernel_main() {
     // True when a reconfig-relevant operand is fp32: the per-tile reconfig_data_format calls below
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
+    constexpr bool sfpu_two_pass = get_named_compile_time_arg_val("sfpu_two_pass") != 0;
+    constexpr uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
 
     // dst regs
     constexpr std::uint32_t dst0 = 0;
@@ -232,7 +234,7 @@ void kernel_main() {
                 // When the unpack-to-DEST fp32 path is inactive, transpose_tile routes
                 // through SrcA without touching the math-thread replay buffer, so re-init is
                 // not needed.
-                if constexpr (welford_fp32_alias) {
+                if constexpr (welford_fp32_alias && !sfpu_two_pass) {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
 
@@ -243,7 +245,12 @@ void kernel_main() {
                     std::uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                     welford_restore_state(mean_dst, g);
-                    welford_update_rows<0>(input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
+                    if constexpr (sfpu_two_pass) {
+                        two_pass_stats_update_rows<false>(input_dst, group_offset, cols_consumed);
+                    } else {
+                        welford_update_rows<0>(
+                            input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
+                    }
                     welford_save_state(mean_dst, g);
 
                     channels_left -= cols_consumed;
@@ -273,6 +280,52 @@ void kernel_main() {
                 ++tile_id;
             }
             block_xy_coord += num_channels_per_group;
+        }
+
+        if constexpr (sfpu_two_pass) {
+            // Convert each local sum to a mean and clear its M2 accumulator.
+            for (std::uint32_t g = 0; g < num_groups; ++g) {
+                welford_restore_state(mean_dst, g);
+                two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+                welford_save_state(mean_dst, g);
+            }
+
+            // Second pass: accumulate centered squared residuals in FP32 SFPU.
+            tile_id = b * block_hw;
+            block_xy_coord = 0;
+            for (std::uint32_t i = 0; i < block_h; ++i) {
+                std::uint32_t min_group = 0;
+                std::uint32_t channels_left = num_channels_per_group;
+                for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
+#ifdef TILIZE_IN
+                    transpose_init(dfb_in_welford_id);
+                    transpose_tile(dfb_in_welford_id, tile_id, input_dst);
+#else
+                    transpose_init(dfb_in0_welford_id);
+                    transpose_tile(dfb_in0_welford_id, tile_id, input_dst);
+#endif
+                    std::uint32_t group_offset = 0;
+                    for (std::uint32_t g = min_group; g < num_groups; ++g) {
+                        const std::uint32_t cols_available = tile_width - group_offset;
+                        const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
+                        welford_restore_state(mean_dst, g);
+                        two_pass_stats_update_rows<true>(input_dst, group_offset, cols_consumed);
+                        welford_save_state(mean_dst, g);
+                        channels_left -= cols_consumed;
+                        group_offset += cols_consumed;
+                        if (channels_left > 0) {
+                            break;
+                        }
+                        ++min_group;
+                        channels_left = num_channels_per_group;
+                        if (group_offset == tile_width) {
+                            break;
+                        }
+                    }
+                    ++tile_id;
+                }
+                block_xy_coord += num_channels_per_group;
+            }
         }
 
         for (std::uint32_t g = 0; g < num_groups; ++g) {
