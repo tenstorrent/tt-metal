@@ -1695,10 +1695,10 @@ FORCE_INLINE
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
-        // [debug] Sender trace: one packet transmitted this pass (see record_sender_flow_state).
+        // [debug] Sender trace: one packet transmitted this pass (running total; diffed once per pass).
         if constexpr (sender_log_channel_enabled(sender_channel_index)) {
             if (detailed_log_window_active) {
-                sender_log()->sent[sender_channel_index]++;
+                sender_log()->channels[sender_channel_index].sent++;
             }
         }
     }
@@ -1712,7 +1712,7 @@ FORCE_INLINE
         // [debug] Sender trace: completions returned from the remote receiver (batched, can be > 1).
         if constexpr (sender_log_channel_enabled(sender_channel_index)) {
             if (detailed_log_window_active) {
-                sender_log()->cmpl[sender_channel_index] += completions_since_last_check;
+                sender_log()->channels[sender_channel_index].cmpl += completions_since_last_check;
             }
         }
 
@@ -1737,7 +1737,7 @@ FORCE_INLINE
             // [debug] Sender trace: first-level acks returned from the remote receiver (batched, can be > 1).
             if constexpr (sender_log_channel_enabled(sender_channel_index)) {
                 if (detailed_log_window_active) {
-                    sender_log()->acked[sender_channel_index] += acks_since_last_check;
+                    sender_log()->channels[sender_channel_index].acked += acks_since_last_check;
                 }
             }
         }
@@ -1754,9 +1754,9 @@ FORCE_INLINE
         }
     }
 
-    // [debug] Sender trace: stash this pass's end-of-pass levels + block-reason annotation for the combined
-    // per-pass record emitted after both channels are serviced. free_slots is re-read (send may have bumped
-    // it); num_free_slots reflects any completions processed above. reason is the send-decision this pass.
+    // [debug] Sender trace: stash this pass's end-of-pass levels + block-reason annotation for this channel's
+    // per-pass diff word, emitted after all serviced channels are visited. free_slots is re-read (send may have
+    // bumped it); num_free_slots reflects any completions processed above. reason is the send-decision this pass.
     if constexpr (sender_log_channel_enabled(sender_channel_index)) {
         if (detailed_log_window_active) {
             uint32_t free_slots_now = get_ptr_val(sender_channel_free_slots_stream_id);
@@ -2627,32 +2627,69 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif  // FABRIC_2D_VC2_SERVICED
                 }
 
-                // [debug] Receiver flow-control trace: sample VC0 receiver channel state once per loop pass.
-                // record_receiver_flow_state appends only when the state differs from the last recorded row,
-                // so identical polling passes collapse. Gated on the logging window so it costs nothing (and
-                // captures nothing) outside the monitored region. `ready` is the doorbell stream register.
-                // The `if constexpr` restricts all log activity to the RISC that actually services the VC0
-                // receiver channel (the receiver eRisc). The log buffer address is shared across both eRiscs
-                // on the core, so without this gate the sender eRisc would interleave its own (idle) records
-                // and race on the shared append index -- see the reset/dump gates below for the same reason.
-                if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
+                // [debug] Receiver flow-control trace: sample EVERY serviced receiver channel (one per VC) once
+                // per loop pass. make_diff_against appends a channel word only when that channel's state differs
+                // from its last recorded row (identical polling passes collapse); a single common word then frames
+                // the pass's changed channels. Gated on the logging window so it costs nothing (and captures
+                // nothing) outside the monitored region. `ready` is the per-channel doorbell stream register.
+                // The `if constexpr` restricts all log activity to the RISC that services the receiver channels;
+                // the log buffer is shared across both eRiscs on the core, so this gate keeps the sender eRisc off
+                // it (and avoids racing the shared append cursor) -- see the reset/finalize gates below.
+                if constexpr (receiver_log_enabled()) {
                     if (detailed_log_window_active) {
-                        record_receiver_flow_state(
-                            detailed_log_loop_iter,
+                        ReceiverLog* rlog = receiver_log();
+                        receiver_pending_words.count = 0;
+                        make_diff_against(
+                            rlog->channels[VC0_RECEIVER_CHANNEL],
+                            receiver_pending_words,
                             static_cast<uint32_t>(
                                 get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
                             receiver_channel_pointers_ch0.ack_counter.counter,
                             receiver_channel_pointers_ch0.wr_sent_counter.counter,
                             receiver_channel_pointers_ch0.wr_flush_counter.counter,
                             receiver_channel_pointers_ch0.completion_counter.counter);
+#if defined(FABRIC_2D_VC1_SERVICED)
+                        make_diff_against(
+                            rlog->channels[VC1_RECEIVER_CHANNEL],
+                            receiver_pending_words,
+                            static_cast<uint32_t>(
+                                get_ptr_val<to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL]>()),
+                            receiver_channel_pointers_ch1.ack_counter.counter,
+                            receiver_channel_pointers_ch1.wr_sent_counter.counter,
+                            receiver_channel_pointers_ch1.wr_flush_counter.counter,
+                            receiver_channel_pointers_ch1.completion_counter.counter);
+#endif
+#if defined(FABRIC_2D_VC2_SERVICED)
+                        make_diff_against(
+                            rlog->channels[VC2_RECEIVER_CHANNEL],
+                            receiver_pending_words,
+                            static_cast<uint32_t>(
+                                get_ptr_val<to_receiver_packets_sent_streams[VC2_RECEIVER_CHANNEL]>()),
+                            receiver_channel_pointers_ch2.ack_counter.counter,
+                            receiver_channel_pointers_ch2.wr_sent_counter.counter,
+                            receiver_channel_pointers_ch2.wr_flush_counter.counter,
+                            receiver_channel_pointers_ch2.completion_counter.counter);
+#endif
+                        if (receiver_pending_words.count > 0) {
+                            uint64_t common_word =
+                                build_common_log_word(rlog, detailed_log_loop_iter, receiver_pending_words.count);
+                            dump_receiver_log_words(rlog, common_word, receiver_pending_words);
+                        }
                     }
                 }
-                // [debug] Sender flow-control trace: one combined record per pass covering both VC0 sender
-                // channels (compiled in only on the sender eRisc). Placed after the sender steps ran this pass,
-                // so the per-channel stash/accumulators are fresh.
+                // [debug] Sender flow-control trace: one common word + one channel word per changed serviced
+                // sender channel (all VCs), compiled in only on the sender eRisc. Placed after the sender steps
+                // ran this pass, so each channel's stash/running totals are fresh.
                 if constexpr (sender_log_enabled()) {
                     if (detailed_log_window_active) {
-                        record_sender_flow_state(detailed_log_loop_iter);
+                        SenderLog* slog = sender_log();
+                        sender_pending_words.count = 0;
+                        diff_serviced_sender_channels<0>(slog, sender_pending_words);
+                        if (sender_pending_words.count > 0) {
+                            uint64_t common_word =
+                                build_common_log_word(slog, detailed_log_loop_iter, sender_pending_words.count);
+                            dump_sender_log_words(slog, common_word, sender_pending_words);
+                        }
                     }
                 }
                 // Advance unconditionally (cheap, and keeps the counter referenced on the sender eRisc where
@@ -2691,21 +2728,63 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     if (detailed_log_marker != 0) {
                         // START event: reset the per-eRisc flow-control traces, stamping the marker value as
                         // the window's correlation id (window_id). Each trace uses its OWN wall clock
-                        // (get_timestamp_32b) as the ts baseline, decoupled from the other eRisc.
-                        if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
-                            reset_receiver_log(
-                                detailed_log_marker,
-                                get_timestamp_32b(),
-                                detailed_log_loop_iter,
-                                static_cast<uint32_t>(
-                                    get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
-                                receiver_channel_pointers_ch0.ack_counter.counter,
-                                receiver_channel_pointers_ch0.wr_sent_counter.counter,
-                                receiver_channel_pointers_ch0.wr_flush_counter.counter,
-                                receiver_channel_pointers_ch0.completion_counter.counter);
+                        // (get_timestamp_32b) as the ts baseline, decoupled from the other eRisc. Per channel we
+                        // seed the diff baseline (#6, init_*_channel_state) and capture the initial in-flight
+                        // backlog into the header (#7, capture_*_base_gaps). channel_id = (vc<<4)|local.
+                        if constexpr (receiver_log_enabled()) {
+                            ReceiverLog* rlog = receiver_log();
+                            reset_receiver_header(rlog->header, detailed_log_marker);
+                            rlog->last_ts = get_timestamp_32b();
+                            rlog->last_iter = detailed_log_loop_iter;
+                            rlog->word_count = 0;
+                            {
+                                constexpr uint8_t cid = make_channel_id(0, 0);
+                                uint32_t ready = static_cast<uint32_t>(
+                                    get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>());
+                                uint32_t ack = receiver_channel_pointers_ch0.ack_counter.counter;
+                                uint32_t wr_sent = receiver_channel_pointers_ch0.wr_sent_counter.counter;
+                                uint32_t wr_flush = receiver_channel_pointers_ch0.wr_flush_counter.counter;
+                                uint32_t cmpl = receiver_channel_pointers_ch0.completion_counter.counter;
+                                init_receiver_channel_state(
+                                    rlog->channels[VC0_RECEIVER_CHANNEL], cid, ready, ack, wr_sent, wr_flush, cmpl);
+                                capture_receiver_base_gaps(rlog->header, cid, ack, wr_sent, wr_flush, cmpl);
+                            }
+#if defined(FABRIC_2D_VC1_SERVICED)
+                            {
+                                constexpr uint8_t cid = make_channel_id(1, 0);
+                                uint32_t ready = static_cast<uint32_t>(
+                                    get_ptr_val<to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL]>());
+                                uint32_t ack = receiver_channel_pointers_ch1.ack_counter.counter;
+                                uint32_t wr_sent = receiver_channel_pointers_ch1.wr_sent_counter.counter;
+                                uint32_t wr_flush = receiver_channel_pointers_ch1.wr_flush_counter.counter;
+                                uint32_t cmpl = receiver_channel_pointers_ch1.completion_counter.counter;
+                                init_receiver_channel_state(
+                                    rlog->channels[VC1_RECEIVER_CHANNEL], cid, ready, ack, wr_sent, wr_flush, cmpl);
+                                capture_receiver_base_gaps(rlog->header, cid, ack, wr_sent, wr_flush, cmpl);
+                            }
+#endif
+#if defined(FABRIC_2D_VC2_SERVICED)
+                            {
+                                constexpr uint8_t cid = make_channel_id(2, 0);
+                                uint32_t ready = static_cast<uint32_t>(
+                                    get_ptr_val<to_receiver_packets_sent_streams[VC2_RECEIVER_CHANNEL]>());
+                                uint32_t ack = receiver_channel_pointers_ch2.ack_counter.counter;
+                                uint32_t wr_sent = receiver_channel_pointers_ch2.wr_sent_counter.counter;
+                                uint32_t wr_flush = receiver_channel_pointers_ch2.wr_flush_counter.counter;
+                                uint32_t cmpl = receiver_channel_pointers_ch2.completion_counter.counter;
+                                init_receiver_channel_state(
+                                    rlog->channels[VC2_RECEIVER_CHANNEL], cid, ready, ack, wr_sent, wr_flush, cmpl);
+                                capture_receiver_base_gaps(rlog->header, cid, ack, wr_sent, wr_flush, cmpl);
+                            }
+#endif
                         }
                         if constexpr (sender_log_enabled()) {
-                            reset_sender_log(detailed_log_marker, get_timestamp_32b(), detailed_log_loop_iter);
+                            SenderLog* slog = sender_log();
+                            reset_sender_header(slog->header, detailed_log_marker);
+                            slog->last_ts = get_timestamp_32b();
+                            slog->last_iter = detailed_log_loop_iter;
+                            slog->word_count = 0;
+                            init_serviced_sender_channels<0>(slog);
                         }
                         detailed_log_window_active = true;
                     } else {

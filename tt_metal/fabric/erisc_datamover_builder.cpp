@@ -392,23 +392,32 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         buffer_address += field_size;
     }
 
-    // [debug] Carve an L1 scratch region for the receiver flow-control trace (ReceiverLog in the kernel):
-    // a ring-buffer-free append log of delta-encoded {ts, iter, ready, ack, wr_sent, wr_flush, completion}
-    // records, one appended per change of the receiver channel's flow-control state during a logging window.
-    // Sized for a 64 B header + 252 * 16 B records = 4096 B (kept in sync with RECEIVER_LOG_CAPACITY in the
-    // kernel). This advances buffer_address, shrinking available_channel_buffering_space below by the same
-    // amount; safe as long as the total debug carve stays well under the unused channel-buffer headroom in
-    // the target config (the allocator's TT_FATAL catches overflow at build time otherwise).
+    // [debug] Carve an L1 scratch region for the receiver flow-control trace (ReceiverLog in the kernel): the
+    // DRAM header + per-channel diff state + a buffer of 8-byte log words (one common word per changed pass, one
+    // channel word per changed receiver channel). Sized to RECEIVER_LOG_BUFFER_SIZE = 4096 B, which the kernel's
+    // ReceiverLog static_asserts it fits (see detailed_fabric_log_producer.hpp). This advances buffer_address,
+    // shrinking available_channel_buffering_space below by the same amount; safe as long as the total debug carve
+    // stays well under the unused channel-buffer headroom (the allocator's TT_FATAL catches overflow otherwise).
     this->receiver_log_buffer_address = buffer_address;
     buffer_address += RECEIVER_LOG_BUFFER_SIZE;
 
-    // [debug] Carve a second L1 scratch region for the sender flow-control trace (SenderLog in the kernel):
-    // one combined delta-encoded record per main-loop pass capturing both VC0 sender channels' state during a
-    // logging window. Distinct from the receiver region so the two traces never alias. Sized for a 112 B header
-    // + 128 * 20 B records = 2672 B (kept in sync with SENDER_LOG_CAPACITY in the kernel); like the receiver
-    // carve it must stay well under the unused channel-buffer headroom (the allocator's TT_FATAL catches it).
+    // [debug] Carve a second L1 scratch region for the sender flow-control trace (SenderLog in the kernel): the
+    // same 8-byte-word stream, one channel word per changed serviced sender channel (across all VCs) per pass.
+    // Distinct from the receiver region so the two traces never alias. Sized to SENDER_LOG_BUFFER_SIZE = 4096 B
+    // (the kernel's SenderLog static_asserts it fits); like the receiver carve it must stay well under the unused
+    // channel-buffer headroom (the allocator's TT_FATAL catches it).
     this->sender_log_buffer_address = buffer_address;
     buffer_address += SENDER_LOG_BUFFER_SIZE;
+
+    // The kernel bulk-flushes the 8-byte log word array (at a 16 B-aligned offset inside each ReceiverLog/SenderLog
+    // via alignas(16)) as a NOC write whose SOURCE start must be 16 B-aligned; that holds only if the carve base
+    // is 16 B-aligned too. field_size == 16 keeps buffer_address 16 B-aligned here, but guard it explicitly since
+    // the alignas(16) offset alone is not sufficient without an aligned base.
+    TT_FATAL(
+        this->receiver_log_buffer_address % 16 == 0 && this->sender_log_buffer_address % 16 == 0,
+        "detailed fabric log buffers must be 16 B-aligned (rx={}, tx={})",
+        this->receiver_log_buffer_address,
+        this->sender_log_buffer_address);
 
     // Channel Allocations
     this->max_l1_loading_size =
