@@ -29,6 +29,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.scaled_dot_product_attention import scaled_dot_product_attention
 
 
+@pytest.fixture(autouse=True)
+def _enable_mcast(monkeypatch):
+    """The mcast path is OPT-IN (measured a +44% regression, so not the default).
+    These tests exercise it explicitly."""
+    monkeypatch.setenv("SDPA_MCAST", "1")
+
+
 def _fa_rand(*shape):
     n1 = torch.randn(shape)
     n2 = torch.randn(shape) * 10

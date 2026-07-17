@@ -183,8 +183,10 @@ def _cb(index, page_size, num_pages, data_format, core_grid):
 # Blackhole = 110). Cuts DRAM K/V read volume ~cores_per_row-fold. Guarded to the
 # shape class it is valid for; every other shape uses the shipped Q-outer path.
 #
-# Env knobs (measurement):
-#   SDPA_MCAST=0            force the shipped Q-outer path even when eligible.
+# MEASURED a +44% REGRESSION (perf_findings.md § NoC-multicast) — so OPT-IN only,
+# never the default. Env knobs (measurement):
+#   SDPA_MCAST=1            ENABLE the mcast path for eligible shapes (default: OFF,
+#                           i.e. the fast Q-outer path handles every shape).
 #   SDPA_MCAST_NO_BCAST=1   KV-outer WITHOUT broadcast (every core re-reads its own
 #                           K/V from DRAM) — isolates the broadcast's effect (A/B).
 #   SDPA_MCAST_ABLATE_READER=1 / SDPA_MCAST_ABLATE_WRITER=1
@@ -263,8 +265,17 @@ def _mcast_pick_skv_chunk(skv_t, sq_chunk_t, dt, in_bytes, out_bytes, interm_byt
 
 
 def _mcast_eligible(query, key, value, attn_mask, is_causal, compute_kernel_config):
-    """Return (params dict) if the mcast KV-outer path applies, else None."""
-    if os.environ.get("SDPA_MCAST") == "0":
+    """Return (params dict) if the mcast KV-outer path applies, else None.
+
+    OPT-IN: the mcast variant was BUILT and MEASURED a +44% regression vs the
+    shipped Q-outer path (perf_findings.md § NoC-multicast) — the KV-outer
+    restructure raises the compute floor far more than hiding the (already-hidden)
+    reads can recover. So it is NOT the default: the fast Q-outer path stays default
+    for every shape, and the mcast path activates ONLY when SDPA_MCAST=1 AND the
+    shape is in its valid class. This keeps the measured reference reproducible
+    without regressing any shipped shape.
+    """
+    if os.environ.get("SDPA_MCAST") != "1":
         return None
     q = list(query.shape)
     k = list(key.shape)
