@@ -126,3 +126,33 @@ kernel (production path); (2) **kernel A/B** on the same picker-selected config 
 
 Net: the picker v3 changes deliver the large per-shape wins (up to −24% on low-AI Mt≥4), and the in1 kernel
 change adds a further +1–6% on the Sm>1 shapes, all regression-free and PCC-exact.
+
+## Split-K reduction tree experiment (measured, REJECTED — reverted, evidence only)
+
+Tested whether a recursive-doubling reduce-to-root tree (dependency depth ceil(log2 Pk) vs the linear
+chain's Pk-1) helps the Pk=4 low-AI winners, where `no_reduce` showed 8-13% headroom.
+
+**Diagnostic ceiling (cheap, before building):** per-RISC spans show the reduction writer (NCRISC) is the
+SHORTEST RISC and co-terminal with the in1-read (BRISC, the wall-critical RISC) — but NCRISC root-vs-leaf
+skew is 40-71%, so the chain tail is real. `DIAG_NO_REDUCE` shortens the in1-read BRISC by 7-18% (reduction
+is coupled to the critical path via back-pressure), and TRISC barely moves — so the reduction cost is
+**comm/depth-dominated, not add-compute**. That's the fraction a tree can attack; realistic ceiling ~2-6%.
+
+**Built + measured** (Pk=4 recursive-doubling reduce-to-root: multi-sender root, per-sender recv sems,
+variable-add compute via a scratch, streamed, source-lifetime-safe; correct — constant-input output==K
+exact, 20/20 unaffected). Tree vs chain, 3 interleaved relaunches:
+
+| shape (Pk4) | tree vs chain |
+|---|---|
+| 256×2048×512 (Sm3) | −1.6% |
+| 128×2048×512 (Sm2) | **+0.5% (regression)** |
+| 256×2048×1536 (Sm3) | −0.9% |
+| 256×2048×1024 (Sm2) | −1.6% |
+| Pk=12 / Pk=1 controls | −0.4% / −0.0% (no-op; Pk==4 guard) |
+
+**Decision: REJECTED** — sub-multi-percent (max −1.6%) and not stable (one +0.5% regression). Does not clear
+the adoption bar. Confirms the chain-depth tail is **not the binding wall constraint**: the in1-read + compute
+floor is co-critical, so collapsing depth 3→2 only shaves ~1.6%. The tree implementation was reverted
+(kept as measured evidence). **The remaining Mt=8 gap is the compute/synchronization floor + residual
+in0-forwarding — the dedicated tiny-shape path is the higher-value next step**, not more reduction/delivery
+tuning.
