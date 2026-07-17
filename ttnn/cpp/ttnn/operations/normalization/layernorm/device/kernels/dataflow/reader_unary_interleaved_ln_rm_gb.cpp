@@ -28,7 +28,8 @@ void kernel_main() {
                        cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
     // Welford-fp32 alias of cb_in (non-fused) or cb_x (fused). Shares SRAM with the
     // primary CB but has its own read/write pointers, so we must push_back on it whenever we
-    // push to the primary CB. When welford_fp32_alias is 0, cb_x_welford == cb_in.
+    // push to the primary CB. When welford_fp32_alias is 0, cb_x_welford falls back to the
+    // primary CB itself: cb_in (non-fused) or cb_x (fused).
     constexpr uint32_t cb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");

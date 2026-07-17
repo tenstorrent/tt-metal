@@ -400,7 +400,8 @@ def test_layernorm_interleaved_all_config(device, dtype, use_welford, input_layo
 
     xt = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     # ROW_MAJOR gamma/beta must be shaped [1, 1, K/TILE_WIDTH, TILE_WIDTH]; TILE takes [1, 1, 1, K]
-    gb_shape = (1, 1, K // 32, 32) if gamma_layout == ttnn.ROW_MAJOR_LAYOUT else (1, 1, 1, K)
+    tw = ttnn.TILE_SIZE
+    gb_shape = (1, 1, K // tw, tw) if gamma_layout == ttnn.ROW_MAJOR_LAYOUT else (1, 1, 1, K)
     wt = ttnn.from_torch(w.reshape(gb_shape), dtype=gamma_dtype, layout=gamma_layout, device=device)
     bt = ttnn.from_torch(b.reshape(gb_shape), dtype=gamma_dtype, layout=gamma_layout, device=device)
 
