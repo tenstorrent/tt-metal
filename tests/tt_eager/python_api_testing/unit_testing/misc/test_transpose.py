@@ -680,6 +680,46 @@ def test_transpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size):
     assert device.num_program_cache_entries() == 3
 
 
+# Migration guard for get_dynamic_runtime_args -> override_runtime_arguments (#48928): re-run each
+# factory on a program-cache HIT with the input re-allocated at a DIFFERENT address, and assert the
+# cache does not grow (proves it hit) while PCC stays correct (proves the override re-derived every
+# per-core arg + tensor-backed CB/buffer address from create_descriptor, not from stale state).
+@pytest.mark.parametrize(
+    "run_fn, args",
+    [
+        # HC sharded RM factory (the factory the old get_dynamic_runtime_args guarded), generic + special cases
+        (run_transpose_hc_sharded, (2, 8, 4, 32, ttnn.CoreGrid(y=8, x=4))),
+        (run_transpose_hc_sharded, (16, 128, 128, 16, ttnn.CoreGrid(y=8, x=8))),
+        # WH sharded RM factory (also opted into the fast-path by the old get_dynamic_runtime_args)
+        (run_transpose_hw_sharded_rm_with_program_cache, (16, 128, 128, 16)),
+        # a couple interleaved factories via std::visit coverage
+        (run_transpose_hc_rm_with_program_cache, (20, 128, 256, 16)),
+    ],
+)
+def test_transpose_override_runtime_args_addr_change(device, run_fn, args):
+    if len(args) == 5 and args[4].y > device.core_grid.y:
+        pytest.skip("grid size not for N300")
+    persistent_dummies = []
+    entries_after_miss = None
+    for i in range(2):
+        run_fn(device, *args)
+        if i == 0:
+            entries_after_miss = device.num_program_cache_entries()
+        else:
+            # 2nd dispatch must be a cache HIT (no new entries) despite the changed input address.
+            assert device.num_program_cache_entries() == entries_after_miss
+        # keep a live dummy so the next input lands at a different address, forcing addr re-derivation.
+        persistent_dummies.append(
+            ttnn.from_torch(
+                torch.randn([1, 1, 32, 32]),
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "shape, swap_dims",
     [
