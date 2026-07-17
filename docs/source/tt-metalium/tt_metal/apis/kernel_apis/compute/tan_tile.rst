@@ -2,4 +2,4 @@ tan_tile
 =========
 
 .. doxygenfunction:: tan_tile_init()
-.. doxygenfunction:: tan_tile(std::uint32_t idst)
+.. doxygenfunction:: tan_tile(uint32_t idst)

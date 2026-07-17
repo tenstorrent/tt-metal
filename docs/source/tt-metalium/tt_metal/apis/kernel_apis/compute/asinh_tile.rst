@@ -2,4 +2,4 @@ asinh_tile
 ==========
 
 .. doxygenfunction:: asinh_tile_init()
-.. doxygenfunction:: asinh_tile(std::uint32_t idst)
+.. doxygenfunction:: asinh_tile(uint32_t idst)

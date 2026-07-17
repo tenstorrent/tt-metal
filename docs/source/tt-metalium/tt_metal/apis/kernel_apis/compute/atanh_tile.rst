@@ -2,4 +2,4 @@ atanh_tile
 ==========
 
 .. doxygenfunction:: atanh_tile_init()
-.. doxygenfunction:: atanh_tile(std::uint32_t idst)
+.. doxygenfunction:: atanh_tile(uint32_t idst)
