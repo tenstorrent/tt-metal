@@ -56,6 +56,33 @@ from models.tt_transformers.tt.model_config import determine_device_name
 
 _CONTEXT_CACHE_DIR = Path("models/tt_transformers/demo/context_cache")
 
+_MESH_DEVICE_SHAPES = {
+    # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
+    "P300X2": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
+
+
+def _mesh_device_param():
+    """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
+
+    Always returns a 2D shape tuple — never ``len(get_device_ids())``. An int
+    param opens ``MeshShape(1, N)`` in conftest, which is wrong for DP layouts
+    like ``2x4`` (same chip count as ``1x8``). Unset / unknown → ``(1, 4)``
+    (QB2), matching qwen36 / gemma3 defaults.
+    """
+    return _MESH_DEVICE_SHAPES.get(os.environ.get("MESH_DEVICE"), (1, 4))
+
 
 def _model_path():
     return os.getenv("HF_MODEL") or os.getenv(
@@ -306,19 +333,9 @@ def _device_params():
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        # Default: all visible devices (int N → MeshShape(1, N)). A hardcoded
-        # (1, 4) on 1x8 Blackhole opens a subset and fabric eth handshakes hang.
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+        # Hardcoded MESH_DEVICE → (rows, cols). Do not fall back to device count:
+        # 8 chips may be 1x8 (TP) or 2x4 (DP).
+        _mesh_device_param()
     ],
     indirect=True,
 )
@@ -474,16 +491,19 @@ def test_demo_text(
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────
-    # Prefill tracing buys ~nothing (prefill runs only a handful of times) and its
-    # trace buffers scale with chunk_size×batch, overflowing the trace region at
-    # long context (≥4K) with no perf gain. Gate prefill tracing off above a
-    # threshold (decode stays traced); GEMMA4_PREFILL_TRACE_MAX_SEQ overrides.
+    # Prefill tracing buys ~nothing for single full-ISL runs (trace buffers
+    # scale with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ
+    # unless traced multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then
+    # we still capture the 4k sp0/sp1 buckets used by long-ISL chunk replay.
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_trace and not prefill_enable_trace:
         logger.info(
             f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
-            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ to override."
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
     logger.info("Warming up prefill...")
     generator.warmup_model_prefill(
@@ -699,9 +719,12 @@ def _run_spec_decode(
     page_table = create_tt_page_table(batch_size, paged_attention_config)
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (decode/spec traces stay on).
+    # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
+    # traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -892,9 +915,12 @@ def _run_spec_decode_batched(
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (the batched decode trace stays on).
+    # (≥4K); gate it off above a threshold (the batched decode trace stays on),
+    # unless traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -1002,19 +1028,7 @@ def _run_spec_decode_batched(
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-    ],
+    [_mesh_device_param()],
     indirect=True,
 )
 def test_demo_spec_decode(mesh_device, reset_seeds):

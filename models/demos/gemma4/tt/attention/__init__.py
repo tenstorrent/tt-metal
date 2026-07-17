@@ -211,8 +211,12 @@ class Gemma4Attention:
             # Sliding-window layers under generator-level chunked prefill carry a
             # rolling K/V window tail across chunks (stored on this per-layer
             # instance). Reset it at the start of a prefill (single-chunk, or the
-            # first generator chunk with chunk_start_idx==0).
-            if chunk_start_idx is None or int(chunk_start_idx) == 0:
+            # first generator chunk with chunk_start_idx==0). Traced multi-chunk
+            # passes a device tensor offset — the generator resets tails before
+            # the first chunk; do not int()-cast the tensor here.
+            if isinstance(chunk_start_idx, ttnn.Tensor):
+                pass
+            elif chunk_start_idx is None or int(chunk_start_idx) == 0:
                 self._release_sliding_prefill_tail()
             tt_out, kept_kv, sliding_tail_out = prefill_forward(
                 hidden_states=hidden_states,
@@ -241,11 +245,21 @@ class Gemma4Attention:
             return tt_out
 
     def _release_sliding_prefill_tail(self):
+        """Drop the cross-chunk sliding tail for the next prefill's first chunk.
+
+        Traced multi-chunk binds persistent K/V ring buffers into the captured
+        graph — never deallocate those. Only free eager (non-persistent) tails.
+        """
         tail = getattr(self, "_sliding_prefill_tail", None)
+        persistent = getattr(self.config, "sliding_prefill_tail_persistent", None)
         if tail is not None:
-            for t in tail:
-                try:
-                    t.deallocate(True)
-                except Exception:
-                    pass
+            is_persistent = (
+                persistent is not None and len(tail) == 2 and len(persistent) == 2 and tail[0] is persistent[0]
+            )
+            if not is_persistent:
+                for t in tail:
+                    try:
+                        t.deallocate(True)
+                    except Exception:
+                        pass
         self._sliding_prefill_tail = None

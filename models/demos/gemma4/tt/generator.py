@@ -11,6 +11,7 @@ from transformers import AutoTokenizer
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
+    chunked_prefill_trace_enabled,
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
     resolve_gemma4_prefill_chunk_size,
@@ -18,8 +19,18 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_chunked_bounded,
     warmup_gemma4_model_prefill,
 )
-from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len, num_blocks_in_seq
-from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, SUPPORTED_PREFILL_BATCH_SIZES, Generator
+from models.tt_transformers.tt.common import (
+    get_block_size,
+    get_max_prefill_chunk_size,
+    get_padded_prefill_len,
+    num_blocks_in_seq,
+)
+from models.tt_transformers.tt.generator import (
+    MAX_BATCHED_PREFILL_SEQ_LEN,
+    SUPPORTED_PREFILL_BATCH_SIZES,
+    Generator,
+    _pad_or_create_page_table,
+)
 from models.tt_transformers.tt.model_config import determine_device_name
 
 # Same 128k batched-prefill token ceiling as the shared Generator
@@ -94,10 +105,12 @@ def _patch_model_args(
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
-    # Prefill chunking — DEMO defaults to a SINGLE power-of-2 chunk (correctness
-    # path). Multi-chunk auto-enables only when the per-(model, device) policy
-    # says so (GEMMA4_LONG_CONTEXT_POLICY): on QB2/31B that is bounded + ISL >=
-    # 256k. Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1.
+    # Prefill chunking — default to policy multi-chunk (4096). Measured on
+    # P150x8 / 31B / 128k unbounded (isl_sweep_logs/p150x8_bg_lb/prefill_chunk_ab.tsv):
+    #   chunk=4096 → TTFT ~31s; 8192 ~47s; 16384 ~52s; single full-ISL ~60s.
+    # Unbounded+4k also keeps long-context generation coherent (no trailing "la la").
+    # Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1 (legacy
+    # full-ISL single chunk for A/B / correctness).
     _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
     _force_single = os.environ.get("GEMMA4_DEMO_SINGLE_CHUNK", "0") != "0"
     _needs_chunk_for_dram = (not _force_single) and should_auto_enable_chunked_bounded(
@@ -108,17 +121,28 @@ def _patch_model_args(
     )
     if _chunk_override > 0:
         model_args.max_prefill_chunk_size = _chunk_override
-    elif _needs_chunk_for_dram:
-        model_args.max_prefill_chunk_size = resolve_gemma4_prefill_chunk_size(
-            max_seq_len, mesh_device=mesh_device, non_qb2_default=4096, model_name_or_path=model_path
-        )
-        logger.warning(
-            f"Bounded long-context (model={Path(model_path).name}, max_seq_len={max_seq_len}): "
-            f"multi-chunk prefill (chunk={model_args.max_prefill_chunk_size}) per policy to "
-            f"avoid single-chunk DRAM OOM. Output quality is not fully validated."
-        )
-    else:
+    elif _force_single:
         model_args.max_prefill_chunk_size = 1 << max(int(max_seq_len - 1).bit_length(), 11)
+    else:
+        from models.demos.gemma4.tt.generator_trace import GEMMA4_DEFAULT_PREFILL_CHUNK
+
+        model_args.max_prefill_chunk_size = resolve_gemma4_prefill_chunk_size(
+            max_seq_len,
+            mesh_device=mesh_device,
+            non_qb2_default=GEMMA4_DEFAULT_PREFILL_CHUNK,
+            model_name_or_path=model_path,
+        )
+        if _needs_chunk_for_dram:
+            logger.warning(
+                f"Bounded long-context (model={Path(model_path).name}, max_seq_len={max_seq_len}): "
+                f"multi-chunk prefill (chunk={model_args.max_prefill_chunk_size}) per policy to "
+                f"avoid single-chunk DRAM OOM."
+            )
+        else:
+            logger.info(
+                f"Prefill multi-chunk default (chunk={model_args.max_prefill_chunk_size}, "
+                f"max_seq_len={max_seq_len}). Set GEMMA4_DEMO_SINGLE_CHUNK=1 for full-ISL single chunk."
+            )
     model_args.mesh_device = mesh_device
     model_args.device_name = determine_device_name(mesh_device)
     model_args.model_name = model_path
@@ -234,6 +258,95 @@ class ChunkedPrefillPageTableGuardMixin:
         if valid_len > 0:
             update(valid_len)
 
+    def _capture_trace_prefill(
+        self,
+        prefill_ids,
+        page_table=None,
+        chunk_page_table=None,
+        kv_cache=None,
+        model_id=-1,
+        global_user_id=None,
+        batch_size=1,
+        user_id=0,
+        start_pos=0,
+    ):
+        """Capture prefill trace; reset sliding tails between compile and capture.
+
+        The compile forward (outside begin_trace) leaves per-layer sliding K/V
+        tails on the attention modules. Without a reset, the capture forward
+        takes the middle-chunk branch and loads new programs mid-capture
+        (TT_FATAL). sp0 must compile+capture with ``sliding_tail_in is None``;
+        sp1 must have the same persistent tails present for both passes — seed
+        them with an eager first-chunk if needed before calling capture.
+        """
+        import ttnn
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        if batch_size > 1:
+            return super()._capture_trace_prefill(
+                prefill_ids,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                kv_cache=kv_cache,
+                model_id=model_id,
+                global_user_id=global_user_id,
+                batch_size=batch_size,
+                user_id=user_id,
+                start_pos=start_pos,
+            )
+
+        prefill_kwargs = {
+            "page_table": page_table,
+            "chunk_page_table": chunk_page_table,
+            "chunk_start_idx": start_pos,
+            "user_id": user_id,
+        }
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+        tt_rot_mats_prefill_global = host_inputs[1]
+        tt_rot_mats_prefill_local = host_inputs[2]
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
+
+        # Match Python graph for both compile and capture (sp0: no tails).
+        if int(start_pos) == 0:
+            self._release_all_sliding_prefill_tails(model_id)
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
+            chunk_start_idx=transformed_inputs[3],
+            kv_cache=kv_cache,
+        )
+        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+        logger.info("Done Compiling Model")
+
+        # Restore the same starting tail state as compile before capture.
+        if int(start_pos) == 0:
+            self._release_all_sliding_prefill_tails(model_id)
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
+            chunk_start_idx=transformed_inputs[3],
+            kv_cache=kv_cache,
+        )
+        ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+        logger.info("Done Capturing Prefill Trace")
+        return trace_id, tt_out_trace, *device_inputs
+
     def _easy_trace_prefill(self, *args, **kwargs):
         # Refresh before capture *and* replay so the writer kernel sees the
         # current request's real length (trace binds the buffer address; this
@@ -252,7 +365,10 @@ class ChunkedPrefillPageTableGuardMixin:
         # ``full_page_table`` so the already-padded ``page_table`` is used.
         # APC (num_cached_tokens > 0) still needs the full mapping for chunk
         # slicing — leave it alone there.
-        if not kwargs.get("num_cached_tokens") and kwargs.get("full_page_table") is not None:
+        # Traced multi-chunk always needs the full mapping so every chunk
+        # (including sp0) builds a ``chunk_page_table`` for absolute fill.
+        force_chunk_pt = bool(kwargs.pop("force_chunk_page_table", False))
+        if not kwargs.get("num_cached_tokens") and kwargs.get("full_page_table") is not None and not force_chunk_pt:
             kwargs["full_page_table"] = None
         # Defer lm_head outside the trace: capture returns post-norm hidden
         # states; ``process_logits_after_prefill_trace`` runs lm_head on the
@@ -263,10 +379,104 @@ class ChunkedPrefillPageTableGuardMixin:
         for m in self.model:
             m._prefill_trace_mode = True
         try:
+            if force_chunk_pt:
+                return self._easy_trace_prefill_with_chunk_page_table(*args, **kwargs)
             return super()._easy_trace_prefill(*args, **kwargs)
         finally:
             for m in self.model:
                 m._prefill_trace_mode = False
+
+    def _easy_trace_prefill_with_chunk_page_table(
+        self,
+        prefill_ids,
+        page_table=None,
+        full_page_table=None,
+        user_id=0,
+        last_token_idx=None,
+        kv_cache=None,
+        model_id=-1,
+        prefill_seq_len=None,
+        batch_size=1,
+        num_cached_tokens=0,
+        **kwargs,
+    ):
+        """Like ``Generator._easy_trace_prefill``, but always builds ``chunk_page_table``.
+
+        Needed so the first 4k chunk of a multi-chunk prefill still takes the
+        sliding-window tail path (``is_chunked=True``) and so absolute-block fill
+        matches the eager multi-chunk loop. Trace keys use ``sp0_mc`` / ``sp1_mc``
+        so they do not collide with cold single-chunk ``sp0``/`sp1`` captures.
+        """
+        del last_token_idx  # refresh already done by caller
+        global_user_id = kwargs.get("global_user_id", None)
+        use_start_pos = "sp1_mc" if num_cached_tokens > 0 else "sp0_mc"
+        trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
+
+        chunk_start_idx = num_cached_tokens
+        block_size = get_block_size(kv_cache)
+
+        if page_table is not None and batch_size == 1:
+            page_table = page_table[user_id : user_id + 1, :]
+        if full_page_table is not None and batch_size == 1:
+            full_page_table = full_page_table[user_id : user_id + 1, :]
+
+        from models.tt_transformers.tt.generator import _get_max_blocks_prefill
+
+        max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
+        source_page_table = full_page_table if full_page_table is not None else page_table
+        if source_page_table is None:
+            raise ValueError("Traced multi-chunk prefill requires a page_table")
+        # Bounded sliding: layer-0's paged cache is only ``sliding_window`` blocks,
+        # so ``_get_max_blocks_prefill`` under-sizes the captured page-table buffer.
+        # Long-ISL replay then hands a full-attention-wide host table (e.g. 4096
+        # cols at 256k) into a short device buffer → shape TT_FATAL. Size to the
+        # model's max_seq_len so capture (8k warmup) and replay share one width.
+        max_seq_blocks = num_blocks_in_seq(int(self.model_args[model_id].max_seq_len), block_size)
+        target_blocks = max(max_blocks_prefill, max_seq_blocks, int(source_page_table.shape[1]))
+        page_table = _pad_or_create_page_table(source_page_table, target_blocks)
+        chunk_page_table = None
+        if batch_size == 1:
+            chunk_start_block = num_cached_tokens // block_size
+            chunk_end_block = num_blocks_in_seq(num_cached_tokens + prefill_seq_len, block_size)
+            chunk_page_table = source_page_table[:, chunk_start_block:chunk_end_block]
+            chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+            chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
+
+        if self.trace_id_prefill[trace_key] is None:
+            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
+                prefill_ids,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                kv_cache=kv_cache,
+                model_id=model_id,
+                global_user_id=global_user_id,
+                batch_size=batch_size,
+                user_id=user_id,
+                start_pos=chunk_start_idx,
+            )
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out_trace
+
+        return self._prefill_forward_trace(
+            self.trace_id_prefill[trace_key],
+            self.trace_inputs_prefill[trace_key],
+            self.trace_output_prefill[trace_key],
+            prefill_ids,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            model_id=model_id,
+            global_user_id=global_user_id,
+            batch_size=batch_size,
+            user_id=user_id,
+            start_pos=chunk_start_idx,
+        )
+
+    def _release_all_sliding_prefill_tails(self, model_id=-1):
+        for layer in getattr(self.model[model_id], "layers", []):
+            attn = getattr(layer, "self_attn", None)
+            if attn is not None and hasattr(attn, "_release_sliding_prefill_tail"):
+                attn._release_sliding_prefill_tail()
 
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
@@ -303,13 +513,90 @@ class ChunkedPrefillPageTableGuardMixin:
             last_token_idx=kwargs.get("last_token_idx"),
             num_cached_tokens=num_cached_tokens,
         )
-        return super().prefill_forward_single_user_text(
-            tokens,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            num_cached_tokens=num_cached_tokens,
-            **kwargs,
+
+        model_id = kwargs.get("model_id", -1)
+        seq_len = tokens.shape[-1]
+        max_chunk = self.model_args[model_id].max_prefill_chunk_size
+        use_traced_chunks = (
+            chunked_prefill_trace_enabled()
+            and page_table is not None
+            and kv_cache is not None
+            and seq_len > max_chunk
+            and max_chunk in (128, 512, 1024, 2048, 4096)
+            and not bool(getattr(self.model[model_id], "hidden_size_per_layer_input", 0))
         )
+        if not use_traced_chunks:
+            return super().prefill_forward_single_user_text(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                num_cached_tokens=num_cached_tokens,
+                **kwargs,
+            )
+
+        # ── Traced multi-chunk: replay 4k sp0/sp1 traces per generator chunk ──
+        user_id = kwargs.get("user_id", 0)
+        last_token_idx = kwargs["last_token_idx"]
+        batch_size = kwargs.get("batch_size", 1)
+        assert batch_size == 1, "Traced multi-chunk prefill supports batch_size=1 only"
+        chunk_size = get_max_prefill_chunk_size(seq_len, max_chunk)
+        last_token_idx_in_seq = last_token_idx - num_cached_tokens
+        last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
+        last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
+
+        chunk_source_page_table, block_size = self._chunk_prefill_page_table(
+            page_table, user_id=user_id, model_id=model_id, kv_cache=kv_cache
+        )
+        page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
+        needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
+        if page_table_user.shape[1] > needed_blocks:
+            page_table_user = page_table_user[:, :needed_blocks]
+        num_padding_blocks = needed_blocks - page_table_user.shape[1]
+        page_table_user_padded = torch.cat(
+            [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
+        )
+        CHUNK_USER_ID = 0
+
+        logger.info(
+            "Gemma4 traced multi-chunk prefill: seq_len={} chunk_size={} cached={}",
+            seq_len,
+            chunk_size,
+            num_cached_tokens,
+        )
+        self._release_all_sliding_prefill_tails(model_id)
+
+        for chunk_start in range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size):
+            chunk_end = chunk_start + chunk_size
+            chunk_start_relative = chunk_start - num_cached_tokens
+            chunk_end_relative = chunk_end - num_cached_tokens
+            chunk_tokens = tokens[:, chunk_start_relative:chunk_end_relative]
+            is_last_chunk = chunk_start_relative == last_chunk_start
+
+            # Absolute last-token index for valid_seq_len refresh: full chunk for
+            # intermediate chunks; real prompt end for the last chunk.
+            if is_last_chunk:
+                chunk_last_token_idx = last_token_idx
+            else:
+                chunk_last_token_idx = chunk_start + chunk_size - 1
+
+            tt_out = self._easy_trace_prefill(
+                chunk_tokens,
+                page_table=page_table_user_padded,
+                full_page_table=page_table_user_padded,
+                user_id=CHUNK_USER_ID,
+                last_token_idx=chunk_last_token_idx,
+                kv_cache=kv_cache,
+                model_id=model_id,
+                prefill_seq_len=chunk_size,
+                batch_size=1,
+                num_cached_tokens=chunk_start,
+                force_chunk_page_table=True,
+            )
+            if is_last_chunk:
+                last_token_idx_for_trace = last_token_idx_in_chunk
+                return self.model[model_id].process_logits_after_prefill_trace(tt_out, last_token_idx_for_trace)
+            del tt_out
+        raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
 
 
 class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):

@@ -40,10 +40,18 @@
   "gemma-4-12B-it": {
     "1x1": {
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
+      "_comment_batched_decode": "Same #47311 reduce-precision gap as decode_paged; batched node name previously fell through to default 0.99.",
+      "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
       "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.98,
       "_comment_full_model": "Real-weight (gemma4_unified) full-model PCC ~0.94 at 1x1 (single chip measures lower than 1x4's ~0.96); known 12B unified-arch backbone-accumulation gap. Threshold set below measured.",
       "test_full_model[blackhole-1x1]": 0.92
+    },
+    "1x8": {
+      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as E2B (pcc_thresholds ~0.986); measured ~0.985 on 12B/P150x8 full-attention via_harness. Tier-1 unit test — gate below measured.",
+      "test_attention_paged_decode_via_harness[blackhole-full-1x8]": 0.984,
+      "test_attention_paged_decode_via_harness[blackhole-sliding-1x8]": 0.98,
+      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,
@@ -110,12 +118,14 @@
   "gemma-4-31B-it": {
     "1x1": {
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
       "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
       "test_full_model[blackhole-1x4]": 0.99,
+      "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x4]": 0.96,
       "test_attention_decode_paged_batched[blackhole-cache1500-batch1-global-1x4]": 0.96,
       "test_attention_decode_paged_batched[blackhole-cache1500-batch16-global-1x4]": 0.96,
       "test_attention_decode_paged_batched[blackhole-cache1500-batch32-global-1x4]": 0.96,
@@ -137,6 +147,9 @@
       "test_attention_prefill[wormhole_b0-seq4096-sliding-1x8]": 0.98,
       "test_attention_prefill[blackhole-seq1024-global-1x8]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x8]": 0.97,
+      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap; Tier-1 via_harness full-attention on P150x8.",
+      "test_attention_paged_decode_via_harness[blackhole-full-1x8]": 0.984,
+      "test_attention_paged_decode_via_harness[blackhole-sliding-1x8]": 0.98,
       "test_full_model[wormhole_b0-1x8]": 0.98,
       "test_full_model[blackhole-1x8]": 0.97,
       "test_lm_head[wormhole_b0-1x8]": 0.999,

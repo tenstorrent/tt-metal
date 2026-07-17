@@ -45,6 +45,17 @@ GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
 
+
+def chunked_prefill_trace_enabled() -> bool:
+    """True when long-ISL multi-chunk should replay captured 4k prefill traces.
+
+    Set ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` to measure / enable. Each generator
+    chunk (default 4096) replays the matching ``sp0``/``sp1`` prefill trace
+    instead of an eager ``ttnn_prefill_forward``.
+    """
+    return os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
+
+
 # Default generator-level prefill chunk when GEMMA4_GEN_PREFILL_CHUNK is unset,
 # applied on QB2 ONLY (P150x4 or P300x2 = 1x4 Blackhole / 2x P300, the board
 # this was validated on).
@@ -102,12 +113,18 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        # P150x8 (isl_sweep_logs/p150x8_bg_lb): unbounded allocates through 128k
+        # (256k DRAM OOM); bounded single-chunk 256k PASS. Prefer **unbounded +
+        # multi-chunk prefill (4096)** at 128k: TTFT ~31s vs ~60s single-chunk,
+        # and coherent generation (unbounded single-chunk had trailing "la la").
+        # Auto-bounded only at 256k for DRAM. Force GEMMA4_BOUNDED_SLIDING=1 or
+        # GEMMA4_DEMO_SINGLE_CHUNK=1 to override.
         "P150x8": {
-            "unbounded_isl_max": 65536,
-            "bounded_isl_min": 65536,
-            "chunked_bounded_isl_min": 262144,
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,
+            "chunked_bounded_isl_min": 262144,  # multi-chunk default anyway; at 256k needed for DRAM
             "prefill_chunk": _CHUNK,
-            "source": "placeholder",
+            "source": "measured",
         },
         "T3K": {
             "unbounded_isl_max": 65536,
@@ -118,6 +135,7 @@ GEMMA4_LONG_CONTEXT_POLICY = {
         },
     },
     # Dense 12B — HF max_pos=256k. QB2: unbounded 64k+128k PASSED; unbounded 256k OOM.
+    # P150x8: unbounded 64k+128k+256k PASSED (isl_sweep_logs/p150x8_bg_lb).
     "12B": {
         _QB2: {
             "unbounded_isl_max": 131072,
@@ -126,11 +144,20 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        "P150x8": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,  # beyond measured 256k
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
     },
     # MoE 26B-A4B — HF max_pos=256k. QB2: unbounded 64k PASSED (after instruct-clip
     # trim fix); 128k allocated/ran (no OOM, prior 1800s timeout); unbounded 256k OOM.
     # Bounded+chunked 256k PASSED (~72m prefill / TTFT~4345s at chunk=4096; needs
     # TIMEOUT_256K>=7200 — 3600s timed out mid-prefill).
+    # P150x8: unbounded 64k+128k PASSED (~53m at 128k); unbounded 256k bus-error;
+    # bounded single-chunk 256k PASSED (~131m TTFT).
     "26B-A4B": {
         _QB2: {
             "unbounded_isl_max": 131072,
@@ -139,9 +166,19 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        # P150x8: unbounded allocates through 128k; 256k bus-error/OOM; bounded
+        # single-chunk 256k PASS. Same as 31B: prefer unbounded + multi-chunk
+        # prefill (4096) for TTFT; auto-bounded at 256k for DRAM.
+        "P150x8": {
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,
+            "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
     },
     # MatFormer E4B — HF max_pos=128k native; demo can force higher. QB2: unbounded
-    # 64k+128k+256k PASSED.
+    # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
     "E4B": {
         _QB2: {
             "unbounded_isl_max": 262144,
@@ -150,13 +187,27 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        "P150x8": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
     },
     # MatFormer E2B — HF max_pos=128k native; demo can force higher. QB2: unbounded
-    # 64k+128k+256k PASSED.
+    # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
     "E2B": {
         _QB2: {
             "unbounded_isl_max": 262144,
             "bounded_isl_min": 524288,  # beyond measured 256k
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150x8": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
             "chunked_bounded_isl_min": 524288,
             "prefill_chunk": _CHUNK,
             "source": "measured",
@@ -257,23 +308,23 @@ def _is_qb2(mesh_device) -> bool:
 def resolve_gemma4_prefill_chunk_size(
     max_seq_len: int, mesh_device=None, non_qb2_default=None, model_name_or_path=None
 ) -> int:
-    """Generator-level prefill chunk size for the vLLM serving generator.
-
-    (The demo generator forces a single chunk instead — Gemma4's multi-chunk
-    prefill is not validated for output correctness at long context, see
-    models/demos/gemma4/tt/generator.py. vLLM must chunk anyway to dodge the
-    #49083 serving-path wedge.)
+    """Generator-level prefill chunk size for demo + vLLM serving.
 
     ``GEMMA4_GEN_PREFILL_CHUNK`` (a 2048-multiple) overrides on any board.
-    Otherwise the per-(model, device) ``prefill_chunk`` applies on QB2. On every
-    other board the caller's ``non_qb2_default`` (prior vLLM default, often
-    ``max_seq_len``) is used so unvalidated boards keep existing behavior.
+    Otherwise the per-(model, device) ``prefill_chunk`` applies when the policy
+    is measured (incl. P150x8) or the board is QB2. Other boards keep
+    ``non_qb2_default`` (often ``max_seq_len``) so unvalidated configs stay
+    single-chunk unless the caller passes 4096.
+
+    P150x8 / 31B / 128k unbounded (prefill_chunk_ab.tsv): chunk=4096 ~31s TTFT
+    vs full-ISL single ~60s; quality OK.
     """
     override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
     if override > 0:
         return override
     policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
-    if _is_qb2(mesh_device):
+    source = str(policy.get("source", ""))
+    if _is_qb2(mesh_device) or source.startswith("measured"):
         return min(int(policy["prefill_chunk"]), max_seq_len)
     return non_qb2_default if non_qb2_default is not None else max_seq_len
 
@@ -290,8 +341,15 @@ def can_gemma4_enable_prefill_trace(
     num_cached_tokens: int = 0,
     uses_pli: bool = False,
 ) -> bool:
-    """Return True when Gemma4 prefill device trace may be captured or replayed."""
-    if uses_pli or num_cached_tokens != 0:
+    """Return True when Gemma4 prefill device trace may be captured or replayed.
+
+    ``num_cached_tokens > 0`` (sp1 / APC / multi-chunk middle) is allowed only
+    when ``GEMMA4_CHUNKED_PREFILL_TRACE`` is on — cold single-chunk traces stay
+    sp0-only.
+    """
+    if uses_pli:
+        return False
+    if num_cached_tokens != 0 and not chunked_prefill_trace_enabled():
         return False
     if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
         return False
@@ -599,6 +657,10 @@ def warmup_gemma4_model_prefill(
     ``prefill_forward_fn`` (vLLM hybrid bridge only) routes the trace capture
     through the per-layer page-table path; see
     :func:`warmup_gemma4_batched_prefill_traces`.
+
+    When ``GEMMA4_CHUNKED_PREFILL_TRACE`` is on, also warms an 2×chunk multi-chunk
+    prefill so the ``sp1`` (middle-chunk) 4k trace is captured before the first
+    long-ISL request.
     """
     enable_trace = maybe_disable_pli_prefill_trace(enable_trace, generator.model[0])
     if enable_trace:
@@ -610,6 +672,29 @@ def warmup_gemma4_model_prefill(
             greedy_only=greedy_only,
             prefill_forward_fn=prefill_forward_fn,
         )
+        if chunked_prefill_trace_enabled():
+            chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+            chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
+            if chunk > 0:
+                # Two chunks → captures/replays sp0 then captures sp1 at ``chunk``.
+                multi_len = chunk * 2
+                logger.info(
+                    "Warming up traced multi-chunk prefill (sp1): {} tokens in {}-token chunks",
+                    multi_len,
+                    chunk,
+                )
+                prefill_forward = (
+                    prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+                )
+                warmup_args = generator._mock_tokens(1, multi_len, kv_cache, 0)
+                prefill_forward(
+                    **warmup_args,
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    model_id_warmup=0,
+                    sampling_params=None,
+                    warmup_prefill=False,
+                )
         return
     from models.tt_transformers.tt.generator import Generator
 
