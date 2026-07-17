@@ -221,3 +221,7 @@ real-weight full-stack trace/release coverage because the repair changes only
 core routing and head-concat subcore selection, not numerical operations. The
 verdict and residual-risk analysis are recorded in
 `stage_review_resume_2.md`.
+
+The correction evidence and post-correction review were committed locally on
+branch `odjuricic/agentic-research/graph-rewrite-skill` as `6445dba2bcc`.
+Nothing was pushed.
