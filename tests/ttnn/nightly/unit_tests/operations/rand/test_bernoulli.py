@@ -141,6 +141,7 @@ def test_bernoulli_seed_distinguishes_cache_entries(device):
     out_c = ttnn.to_torch(ttnn.bernoulli(npu_input, 5678, dtype=ttnn.float32)).float()
     entries_c = device.num_program_cache_entries()
 
+    assert entries_a == 1, "a single bernoulli config must produce exactly one cache entry"
     assert entries_b == entries_a, "same seed must reuse the cached program"
     assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
     assert not torch.equal(out_a, out_c), "a different seed must change the output (seed re-patched on the fast path)"
