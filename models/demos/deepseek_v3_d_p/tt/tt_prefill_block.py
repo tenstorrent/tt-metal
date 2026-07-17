@@ -279,6 +279,7 @@ class TtPrefillBlock(LightweightModule):
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
+        self.layer_idx = layer_idx
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
         emb_dim = config.hidden_size
@@ -746,6 +747,13 @@ class TtPrefillBlock(LightweightModule):
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
+
+        # --- Optional MoE-input capture (env-gated; no-op unless TT_DS_CAPTURE_MOE_DIR set) ---
+        # Dumps this (chunk, layer) activation so the MoE layer can be replayed in isolation.
+        from models.demos.deepseek_v3_d_p.utils import moe_input_capture
+
+        if moe_input_capture.is_enabled():
+            moe_input_capture.record(self.mesh_device, self.layer_idx, moe_input, actual_isl)
 
         moe_out, _ = self.ffn(
             moe_input,
