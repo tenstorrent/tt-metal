@@ -540,9 +540,7 @@ def recurrent_gated_delta_rule_decode_ttnn(
     beta_t = ttnn.reshape(beta, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
     g_t = ttnn.reshape(g, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Compute decay
-    decay_t = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+    # Decay is exp(g); fused into the decay multiply below (no standalone ttnn.exp).
     # Ensure state is ready
     h = initial_state
     if h is None:
@@ -575,8 +573,10 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # Canonical gated-delta-rule order: DECAY the state BEFORE reading from it. The FLA
     # reference and the chunked prefill path both decay-then-read; reading the un-decayed
     # state makes the delta correction (v - k·h) use the wrong state.
-    decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-    h = ttnn.multiply(h, decay_bhkv)
+    # decay = exp(g), fused as a pre-activation on the multiply's second operand — one fewer op
+    # than a standalone ttnn.exp + multiply.
+    g_bhkv = ttnn.reshape(g_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    h = ttnn.multiply(h, g_bhkv, input_tensor_b_activations=[ttnn.UnaryOpType.EXP])
 
     # Read from the DECAYED state: v_read = k @ h  (k_row already [B,H,1,K] TILE_LAYOUT)
     v_read = ttnn.matmul(
@@ -587,8 +587,10 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # Delta and state update — write the outer product WITHOUT re-decaying (h already decayed).
     delta = ttnn.subtract(v_t, v_read, memory_config=None)
     k_t = ttnn.reshape(k_row, [B, H, K], memory_config=None)
+    # decay_t is unused downstream (apply_decay=False -> h already decayed above); pass g_bhkv to
+    # satisfy the signature without recomputing a decay tensor.
     h = fused_decay_and_write_ttnn(
-        h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device, apply_decay=False
+        h=h, k_t=k_t, delta=delta, decay_t=g_bhkv, beta_t=beta_t, device=device, apply_decay=False
     )
 
     # Query state: o = q @ h  (q_row already [B,H,1,K] TILE_LAYOUT)
