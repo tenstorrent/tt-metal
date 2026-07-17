@@ -45,29 +45,10 @@ from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 
-# Topology from GRPO_BOOLQ_TOPOLOGY (set by runner.sh). Defaults to 2x2;
-# 4x4 currently hangs in the cross-rank handshake/transport on this host.
-_TOPOLOGIES = {
-    "2x2": {
-        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml",
-        "ttt_parent_mesh_shape": (1, 2),
-    },
-    "4x4": {
-        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml",
-        "ttt_parent_mesh_shape": (1, 4),
-    },
-}
-
-TOPOLOGY = os.environ.get("GRPO_BOOLQ_TOPOLOGY", "2x2")
-if TOPOLOGY not in _TOPOLOGIES:
-    raise RuntimeError(
-        f"Unknown GRPO_BOOLQ_TOPOLOGY={TOPOLOGY!r}; expected one of {sorted(_TOPOLOGIES)}. "
-        "Select it via boolq/runner.sh --topology."
-    )
-_TOPO = _TOPOLOGIES[TOPOLOGY]
-
-TTML_DEVICE_CONFIG_REL = _TOPO["ttml_device_config_rel"]
-TTT_PARENT_MESH_SHAPE = _TOPO["ttt_parent_mesh_shape"]
+# 2-rank BH Quietbox layout: each rank owns 2 P150 boards as a [1, 2] mesh,
+# matching configurations/local4/{mgd.textproto, rank_bindings.yaml}.
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml"
+TTT_PARENT_MESH_SHAPE = (1, 2)
 
 TTT_MAX_BATCH_SIZE = 32
 TTT_MAX_SEQ_LEN = 2048
@@ -162,6 +143,70 @@ class GRPOMonitor:
 
     def on_train_end(self, trainer: Any) -> None:
         print("Training complete.")
+
+
+class SampleGenerationCSVLogger:
+    """Appends ``num_samples`` (prompt, completion, reward) triples per step to a CSV.
+
+    Consumes the ``prompts`` / ``completions`` / ``rewards`` per-completion lists
+    that ``GRPOTrainer`` adds to ``on_step_end`` kwargs. Samples are picked with
+    stride ``max(1, B // num_samples)`` so successive prompts (not just repeat
+    completions of prompt 0) are logged when ``num_samples > 1``.
+
+    Output: ``<output_dir>/sample_generations.csv`` with columns
+    ``step, sample_idx, reward, prompt, completion``. Multi-line prompts /
+    completions are preserved via the csv module's quoting; open the file with a
+    csv reader (e.g. Excel, pandas.read_csv) rather than eyeballing raw lines.
+    """
+
+    _COLUMNS = ["step", "sample_idx", "reward", "prompt", "completion"]
+
+    def __init__(self, output_dir: str, num_samples: int = 1, filename: str = "sample_generations.csv") -> None:
+        if num_samples < 1:
+            raise ValueError(f"SampleGenerationCSVLogger: 'num_samples' must be >= 1 (got {num_samples})")
+        self.num_samples = num_samples
+        self.file_path = os.path.join(output_dir, filename)
+        os.makedirs(output_dir, exist_ok=True)
+        with open(self.file_path, mode="w", newline="") as f:
+            csv.writer(f).writerow(self._COLUMNS)
+
+    def on_train_begin(self, trainer: Any) -> None:
+        pass
+
+    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
+        prompts = kwargs.get("prompts") or []
+        completions = kwargs.get("completions") or []
+        rewards = kwargs.get("rewards") or []
+        if not completions:
+            return
+
+        n_show = min(self.num_samples, len(completions))
+        stride = max(1, len(completions) // n_show)
+        indices = [i * stride for i in range(n_show)]
+
+        # Open once per step (line_buffered close), so a crash mid-run still leaves the
+        # already-flushed rows on disk. Newline='' is required for the csv module.
+        with open(self.file_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            for i in indices:
+                writer.writerow(
+                    [
+                        step,
+                        i,
+                        rewards[i] if i < len(rewards) else float("nan"),
+                        prompts[i] if i < len(prompts) else "",
+                        completions[i] if i < len(completions) else "",
+                    ]
+                )
+
+    def on_before_optimizer_step(self, trainer: Any) -> None:
+        pass
+
+    def on_save(self, trainer: Any, step: int, path: str) -> None:
+        pass
+
+    def on_train_end(self, trainer: Any) -> None:
+        pass
 
 
 def _load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
@@ -261,6 +306,7 @@ def _ttml_main() -> None:
             callbacks=[
                 WeightSyncCallback(completer, every=WEIGHT_SYNC_EVERY),
                 GRPOMonitor(output_dir),
+                SampleGenerationCSVLogger(output_dir, num_samples=1),
             ],
             model_source=MODEL_ID,
         )

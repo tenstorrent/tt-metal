@@ -1,5 +1,8 @@
-# Mesh Graph Descriptor for the 2->2 GRPO BoolQ example: two [1, 2] meshes
-# (one per MPI rank), each covering one N300 board; the FABRIC graph wires them
+# Mesh Graph Descriptor for the 2->2 GRPO BoolQ example on a BH Quietbox
+# (4 P150 boards, one Blackhole ASIC per board): two [1, 2] meshes (one per
+# MPI rank), each pairing one chip from {PCIe 0, 1} with one from {PCIe 2, 3}
+# so the pair has a direct eth link (see rank_bindings.yaml for the specific
+# split and eth-topology notes). The FABRIC graph wires the two meshes
 # together for the cross-rank transport.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
@@ -9,7 +12,7 @@
 
 mesh_descriptors {
   name: "M0"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 2 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {

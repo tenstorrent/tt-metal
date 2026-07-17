@@ -1,20 +1,30 @@
 # Maps MPI ranks (0 = TTML, 1 = TTT) to mgd.textproto mesh ids, pinning each to
-# a disjoint N300 board via TT_VISIBLE_DEVICES.
+# a disjoint pair of P150 boards on a BH Quietbox via TT_VISIBLE_DEVICES.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# TT_VISIBLE_DEVICES indexes PCIe devices (0..3 here), not UMD chip ids; each
-# N300 board is one PCIe device exposing two chips. Adjust to your machine.
+# TT_VISIBLE_DEVICES indexes PCIe devices (0..3 on a 4-board Quietbox); each
+# P150 is one PCIe device exposing a single Blackhole ASIC. Adjust to your
+# machine.
+#
+# BH Quietbox eth topology (see tt_metal/third_party/umd/tests/
+# cluster_descriptor_examples/blackhole_4xP150.yaml) is bipartite:
+#     0 <-> 2, 0 <-> 3, 1 <-> 2, 1 <-> 3       (4 channels each)
+#     0 <-> 1 and 2 <-> 3 have NO direct eth
+# So each rank must own one chip from {0, 1} and one from {2, 3} to form a
+# valid [1, 2] intra-mesh (e.g. 0+2 for rank 0, 1+3 for rank 1). "0,1" / "2,3"
+# would fail the fabric topology mapper with `Intra-mesh mapping failure ...
+# target node(s) are not mapped to any global node`.
 
 rank_bindings:
   - rank: 0
     mesh_id: 0
     mesh_host_rank: 0
     env_overrides:
-      TT_VISIBLE_DEVICES: "0"
+      TT_VISIBLE_DEVICES: "0,2"
   - rank: 1
     mesh_id: 1
     mesh_host_rank: 0
     env_overrides:
-      TT_VISIBLE_DEVICES: "1"
+      TT_VISIBLE_DEVICES: "1,3"
 
 mesh_graph_desc_path: "configurations/local4/mgd.textproto"

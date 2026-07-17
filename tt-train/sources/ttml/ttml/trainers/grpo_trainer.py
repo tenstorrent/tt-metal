@@ -720,6 +720,9 @@ class GRPOTrainer:
                             "step_time_s": step_time_s,
                             "step_time_and_previous_callbacks_s": time.perf_counter() - step_t0,
                             "generation_time_s": generation_time_s_for_step,
+                            "prompts": prompts_strs,
+                            "completions": completions_strs,
+                            "rewards": rewards_np.tolist(),
                         }
                         cb.on_step_end(self, num_steps, **step_metrics)
 
