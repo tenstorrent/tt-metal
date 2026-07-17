@@ -11,6 +11,7 @@ profiler. Adding a fourth collective is a single ``CollectivePath`` literal — 
 
 import math
 import os
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -24,7 +25,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import CHUNK_TOKENS, GALAXY_SP, SCENARIOS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import RT_PROFILER_RECORD_SETTLE_SECONDS, profile_realtime_program
 
 # Mesh axes. In production the layout is SP (sequence) on axis 0, TP (tensor) on axis 1.
 SP_AXIS = 0
@@ -33,6 +34,7 @@ TP_AXIS = 1
 # Fabric link count per direction. Galaxy 8x4 uses 2 links (see conftest FABRIC_2D_..._8x4 params); the
 # LoudBox proxies mirror it. A hardware fact — see external Blackhole fabric docs.
 NUM_LINKS = 2
+L1_SMALL_SIZE = 16 * 1024
 
 # Per-direction fabric link bandwidth, Gbps. Blackhole-only; sourced from external hardware docs (not
 # in-repo). Override with MLA_CCL_LINK_GBPS_PER_DIRECTION for what-if analysis.
@@ -264,6 +266,8 @@ def ccl_mesh_param(collective_axis: int):
     canonical_fabric = {  # matches the deepseek conftest FABRIC_2D params (fabric router + reliability mode)
         "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        # New all_gather allocates its internal global semaphores in L1_SMALL whenever it is available.
+        "l1_small_size": L1_SMALL_SIZE,
     }
     fabric_2d = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D, **canonical_fabric}
     if num_devices == 32:
@@ -276,7 +280,11 @@ def ccl_mesh_param(collective_axis: int):
             # transport Galaxy does not use today. FABRIC_1D isolates the single axis, so it omits the 2D
             # fabric-router config.
             mesh_shape, mesh_topology = (8, 1), "line"
-            device_params = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
+            device_params = {
+                "trace_region_size": 100000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "l1_small_size": L1_SMALL_SIZE,
+            }
         else:
             mesh_shape, mesh_topology, device_params = (2, 4), "mesh-2x4", fabric_2d
     else:
@@ -312,6 +320,9 @@ def _profile_programs(mesh_device, run_fn):
 
     # Drain setup programs before registering the callback so only run_fn contributes records.
     ttnn.synchronize_device(mesh_device)
+    # The realtime receiver publishes records asynchronously. Let construction records that were already
+    # synchronized reach the receiver before registering the measured-region callback.
+    time.sleep(RT_PROFILER_RECORD_SETTLE_SECONDS)
     result, records = profile_realtime_program(mesh_device, run_fn, collect_all=True)
     program_durations_ns = {}
     for record in records:
@@ -329,13 +340,44 @@ def _tensor_description(tensor):
     return f"{list(local_tensor.shape)} ({local_tensor.dtype}, {local_tensor.layout}, {local_tensor.memory_config()})"
 
 
-def _all_gather(tt_input, path):
+def _gathered_output_placements(input_placements, gather_dim, cluster_axis):
+    """Output topology produced by gathering `gather_dim` across its sharded mesh axis."""
+    return tuple(
+        (
+            ttnn.PlacementReplicate()
+            if index == cluster_axis and isinstance(placement, ttnn.PlacementShard) and placement.dim == gather_dim
+            else placement
+        )
+        for index, placement in enumerate(input_placements)
+    )
+
+
+def _persistent_gather_output(mesh_device, global_shape, layout, input_placements, gather_dim, cluster_axis):
+    """Allocate a DRAM output before dispatch so all_gather uses its persistent-output path."""
+    mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            list(_gathered_output_placements(input_placements, gather_dim, cluster_axis)), mesh_device.shape
+        ),
+    )
+    return ttnn.from_torch(
+        torch.empty(global_shape, dtype=torch.bfloat16),
+        device=mesh_device,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+
+
+def _all_gather(tt_input, path, output_tensor=None):
     """Production all-gather; fabric topology and tuning come from the mesh device configuration."""
     return ttnn.all_gather(
         tt_input,
         dim=path.gather_dim,
         cluster_axis=path.collective_axis,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tensor=output_tensor,
     )
 
 
@@ -361,9 +403,12 @@ def _run_all_gather(mesh_device, path, workload) -> Measurement:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper,
     )
+    persistent_output = _persistent_gather_output(
+        mesh_device, global_shape, path.layout, path.input_placements, path.gather_dim, path.collective_axis
+    )
     tt_output, records, program_durations_ns = _profile_programs(
         mesh_device,
-        lambda: _all_gather(tt_input, path),
+        lambda: _all_gather(tt_input, path, persistent_output),
     )
     assert list(tt_output.shape) == global_shape
     assert tt_output.tensor_topology().placements() == list(path.output_placements)
@@ -375,14 +420,14 @@ def _run_all_gather(mesh_device, path, workload) -> Measurement:
     return measurement
 
 
-def _reshard(tt_input, path):
+def _reshard(tt_input, path, persistent_gather_output):
     """Mainline MLA's all-gather followed by mesh_partition, as one logical reshard.
 
     Both ops dispatch device programs, so the measurement covers gather + partition. The roofline models
     only the all-gather: mesh_partition is a local slice (no fabric traffic) and light by comparison, so it
     is measured but intentionally excluded from the theoretical model.
     """
-    gathered = _all_gather(tt_input, path)
+    gathered = _all_gather(tt_input, path, persistent_gather_output)
     output = ttnn.mesh_partition(
         gathered,
         dim=path.partition_dim,
@@ -425,11 +470,20 @@ def _build_reshard_input(mesh_device, path, torch_input):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=source_mapper,
     )
+    persistent_gather_output = _persistent_gather_output(
+        mesh_device,
+        list(torch_input.shape),
+        path.layout,
+        path.output_placements,
+        path.output_placements[cax].dim,
+        cax,
+    )
     gathered = ttnn.all_gather(
         source,
         dim=path.output_placements[cax].dim,
         cluster_axis=cax,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tensor=persistent_gather_output,
     )
     tt_input = ttnn.mesh_partition(
         gathered,
@@ -463,9 +517,17 @@ def _run_reshard(mesh_device, path, workload) -> Measurement:
     # Input shape is shared with the traffic roofline; output shape remains an explicit reshard assertion.
     assert list(ttnn.get_device_tensors(tt_input)[0].shape) == path.local_input_shape(workload, mesh_shape)
 
+    persistent_gather_output = _persistent_gather_output(
+        mesh_device,
+        path.logical_shape(workload, mesh_shape),
+        path.layout,
+        path.input_placements,
+        path.gather_dim,
+        path.collective_axis,
+    )
     tt_output, records, program_durations_ns = _profile_programs(
         mesh_device,
-        lambda: _reshard(tt_input, path),
+        lambda: _reshard(tt_input, path, persistent_gather_output),
     )
     assert list(ttnn.get_device_tensors(tt_output)[0].shape) == path.expected_output_shape(workload, mesh_shape)
     if path.verify_reshard:
