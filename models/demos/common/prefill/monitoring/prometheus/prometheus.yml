@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prefill_runner
+    metrics_path: /metrics
+    static_configs:
+      # One target per pipeline rank. rank 0 is co-located with this docker host
+      # (host.docker.internal via extra_hosts); the rest are scraped by hostname.
+      # Each series also carries a rank label emitted by the runner itself.
+      # Match PREFILL_METRICS_PORT that the runners are started with.
+      - targets: ["host.docker.internal:9110"]
+        labels:
+          host: d05u14
+      - targets: ["bh-glx-110-d06u14:9110"]
+        labels:
+          host: d06u14
+      - targets: ["bh-glx-110-d07u14:9110"]
+        labels:
+          host: d07u14
+      - targets: ["bh-glx-110-d08u14:9110"]
+        labels:
+          host: d08u14
