@@ -43,7 +43,7 @@ here.**
 | 0 | Text tokenizer / normalization | `CLAUDE_XTTS_TOKENIZER.md` | net-new (CPU) | not started | — |
 | 1 | Conditioning encoder + Perceiver resampler | `CLAUDE_XTTS_CONDITIONING.md` | net-new TTNN | not started | — |
 | 2 | ResNet speaker encoder (d-vector) | `CLAUDE_XTTS_SPEAKER_ENCODER.md` | net-new (CPU first) | not started | — |
-| 3 | GPT (decoder-only, VQ codes) | `CLAUDE_XTTS_GPT.md` | HF GPT2 core (hand-written TTNN) | **core PCC passing (0.99996), prefill-only** | acicovic |
+| 3 | GPT (decoder-only, VQ codes) | `CLAUDE_XTTS_GPT.md` | HF GPT2 core (hand-written TTNN) | **prefill + KV-cache decode PCC passing (0.9997 bf16 / 0.99996 fp32)** | acicovic |
 | 4 | HiFi-GAN vocoder | `CLAUDE_XTTS_HIFIGAN.md` | `speecht5_tts` pattern (CPU first) | not started | — |
 | — | Integration / top-level model + demo | this file + `tt/ttnn_xtts_model.py` | — | not started | — |
 

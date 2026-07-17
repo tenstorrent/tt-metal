@@ -8,9 +8,12 @@ Parent: `CLAUDE_XTTS_TTNN.md` (read it first for shared decisions + integration 
     intend to run on TT.
   - Opt-in `HIGH_ACCURACY=1` = fp32 + manual attention: **PCC 0.99996** (gated at 0.9999).
 - Owner: acicovic
-- Scope done: prefill forward of the full 30-layer GPT2 transformer core + both final norms,
-  single unpadded sequence (batch=1, S=64). Not yet done: KV-cache decode loop,
-  embeddings/heads (kept on CPU / out of this block for now).
+- Scope done:
+  - **Prefill** forward of the full 30-layer GPT2 core + both final norms (batch=1, S=64).
+  - **KV-cached decode loop** (single-token autoregressive step) — **PCC 0.99972** vs the
+    prefill golden over 64 steps (bf16, gated 0.999). Validates that decode == prefill.
+- Not yet done: embeddings/heads + sampling (kept on CPU / out of this block for now),
+  end-to-end generate (prefill prompt → decode until stop token).
 
 ## Role in pipeline
 The autoregressive core. Takes conditioning latents (Block 1) as a prefix + text tokens
@@ -68,8 +71,10 @@ Other (not in this block): `gpt.text_embedding` (6681,1024), `gpt.mel_embedding`
 - `models/experimental/xtts_v2/reference/xtts_gpt_ref.py` — checkpoint loader (`load_gpt_core_state`),
   reference builder, golden generator. Also `make_golden_input` (realistic seeded input
   built from the real embedding tables).
-- `models/experimental/xtts_v2/tt/ttnn_xtts_gpt.py` — `TTNNGPTCore` + `preprocess_gpt_parameters`.
-- `models/experimental/xtts_v2/tests/test_gpt_pcc.py` — PCC gate (target 0.9999).
+- `models/experimental/xtts_v2/tt/ttnn_xtts_gpt.py` — `TTNNGPTCore` (prefill) + `preprocess_gpt_parameters`.
+- `models/experimental/xtts_v2/tt/ttnn_xtts_gpt_decode.py` — `TTNNGPTDecoder` (KV-cached decode).
+- `models/experimental/xtts_v2/tests/test_gpt_pcc.py` — prefill PCC gate.
+- `models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py` — decode PCC gate (vs prefill golden).
 
 ## How to run
 ```bash
@@ -81,6 +86,8 @@ python models/experimental/xtts_v2/reference/xtts_gpt_ref.py
 python -m pytest models/experimental/xtts_v2/tests/test_gpt_pcc.py -q
 # high-accuracy path (fp32 + manual attention, gate 0.9999):
 HIGH_ACCURACY=1 python -m pytest models/experimental/xtts_v2/tests/test_gpt_pcc.py -q
+# KV-cached decode loop (bf16, gate 0.999):
+python -m pytest models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py -q
 ```
 
 ## PCC results (S=64, HiFi4, fp32_dest_acc)
@@ -91,6 +98,7 @@ HIGH_ACCURACY=1 python -m pytest models/experimental/xtts_v2/tests/test_gpt_pcc.
 | fp32 | SDPA (q/k/v cast to bf16) | 0.99977 | no |
 | bf16 | manual matmul+softmax | 0.99975 | no |
 | **fp32** | **manual matmul+softmax** | **0.99996** | **YES** |
+| bf16 (decode) | flash-decode SDPA, KV cache | 0.99972 | n/a (gate 0.999) |
 
 ## Findings log (dated)
 - 2026-07-17: Core matches reference. Key precision findings:
@@ -104,10 +112,20 @@ HIGH_ACCURACY=1 python -m pytest models/experimental/xtts_v2/tests/test_gpt_pcc.
   - On Wormhole, HiFi4 + fp32_dest_acc triggers a warned HW bug; empirically HiFi4 still
     beat HiFi3 here (0.99972 vs 0.99968), so we keep HiFi4.
   - Causal mask uses additive `-1e9` on the strict upper triangle; batch=1 has no padding.
+- 2026-07-17: **KV-cached decode loop** (`TTNNGPTDecoder`). Per-layer preallocated cache
+  `[1, n_head, max_seq, head_dim]`; write new token K/V with `ttnn.update_cache(cache,
+  kv[1,nh,1,dh], pos)`; attend with `ttnn.transformer.scaled_dot_product_attention_decode(
+  q[1,1,nh,dh], k_cache, v_cache, cur_pos=[pos])`. Verified layouts on device first (no
+  batch-padding needed for B=1). Decode is **bf16-only** (flash-decode requirement).
+  Decode PCC (0.99972) matches prefill bf16 PCC (0.99972) → the KV path is numerically
+  equivalent to the parallel forward, as expected for causal attention.
 
 ## Open questions / TODO
-- [ ] **KV-cached decode loop** (autoregressive single-step) — this bringup is prefill-only.
-      Revisit whether to build on `models/tt_transformers/` decode or extend `TTNNGPTCore`.
+- [x] **KV-cached decode loop** (2026-07-17): `TTNNGPTDecoder` extends `TTNNGPTCore`;
+      update_cache + flash-decode SDPA; PCC 0.99972 vs prefill golden.
+- [ ] **End-to-end generate**: prefill the prompt (cond+text+START) into the cache, then
+      decode until stop token — currently the decode test replays the golden input columns.
+- [ ] Trace-capture the decode step for throughput (single stable graph per step).
 - [x] **Precision decision (2026-07-17):** default to native **bf16 + SDPA (~0.9997)** for
       speed; keep fp32 + manual attention behind `HIGH_ACCURACY=1` for accuracy-gated runs.
 - [ ] (optional) push bf16 to >0.9999 later if fidelity ever proves insufficient downstream.
