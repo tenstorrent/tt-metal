@@ -1523,6 +1523,47 @@ void call_binary_sfpu_operation_init()
         // and the 2**23 fp32-to-int bias constants into vConst registers.
         SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATION_MODE));
     }
+    // Integer relational eq/ne: no extra init function, just the eq_int/ne_int addrmod.
+    else if constexpr (BINOP == BinaryOp::EQ_INT)
+    {
+        SFPU_BINARY_INIT(eq_int);
+    }
+    else if constexpr (BINOP == BinaryOp::NE_INT)
+    {
+        SFPU_BINARY_INIT(ne_int);
+    }
+    // Integer max/min: binary_max_min_int32_init programs the SFPLOADMACRO templates
+    // and is keyed on the matching {max,min}_{int32,uint32} SfpuType addrmod allow-list.
+    else if constexpr (BINOP == BinaryOp::MAX_INT32)
+    {
+        SFPU_BINARY_INIT_FN(max_int32, binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */));
+    }
+    else if constexpr (BINOP == BinaryOp::MIN_INT32)
+    {
+        SFPU_BINARY_INIT_FN(min_int32, binary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UNSIGNED */));
+    }
+    else if constexpr (BINOP == BinaryOp::MAX_UINT32)
+    {
+        SFPU_BINARY_INIT_FN(max_uint32, binary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UNSIGNED */));
+    }
+    else if constexpr (BINOP == BinaryOp::MIN_UINT32)
+    {
+        SFPU_BINARY_INIT_FN(min_uint32, binary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UNSIGNED */));
+    }
+    // Integer remainder / fmod: init loads the reciprocal-polynomial constants used by
+    // the internal 32-bit remainder kernel (shared uint path).
+    else if constexpr (BINOP == BinaryOp::REMAINDER_INT32)
+    {
+        SFPU_BINARY_INIT_FN(remainder_int32, remainder_int32_init, (APPROXIMATION_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER_UINT32)
+    {
+        SFPU_BINARY_INIT_FN(remainder_uint32, remainder_uint32_init, (APPROXIMATION_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::FMOD_INT32)
+    {
+        SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -1903,6 +1944,74 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_logsigmoid,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
+    else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)
+    {
+        constexpr SfpuType comp_type = (BINOP == BinaryOp::EQ_INT) ? SfpuType::eq : SfpuType::ne;
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_eq_int,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, comp_type, DataFormat::Int32),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    // Integer max/min via SFPSWAP. IS_UNSIGNED selects int32 vs uint32 handling; the
+    // sign-magnitude dest only round-trips non-negative results, so the tests keep
+    // operands non-negative.
+    else if constexpr (BINOP == BinaryOp::MAX_INT32 || BINOP == BinaryOp::MIN_INT32 || BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32)
+    {
+        constexpr bool IS_MAX      = (BINOP == BinaryOp::MAX_INT32 || BINOP == BinaryOp::MAX_UINT32);
+        constexpr bool IS_UNSIGNED = (BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32);
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_max_min_int32,
+            (IS_MAX, IS_UNSIGNED, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER_INT32)
+    {
+        // int32 remainder r = a - b * trunc(a/b) with sign following the dividend a.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_remainder_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER_UINT32)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_remainder_uint32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::FMOD_INT32)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_fmod_int32,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,

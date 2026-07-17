@@ -269,6 +269,18 @@ class MathOperation(Enum):
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
+    # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
+    # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
+    # guard resolve.
+    SfpuEqInt = OpSpec("EQ_INT", MathOpType.SFPU_BINARY)
+    SfpuNeInt = OpSpec("NE_INT", MathOpType.SFPU_BINARY)
+    SfpuMaxInt32 = OpSpec("MAX_INT32", MathOpType.SFPU_BINARY)
+    SfpuMinInt32 = OpSpec("MIN_INT32", MathOpType.SFPU_BINARY)
+    SfpuMaxUint32 = OpSpec("MAX_UINT32", MathOpType.SFPU_BINARY)
+    SfpuMinUint32 = OpSpec("MIN_UINT32", MathOpType.SFPU_BINARY)
+    SfpuRemainderInt32 = OpSpec("REMAINDER_INT32", MathOpType.SFPU_BINARY)
+    SfpuRemainderUint32 = OpSpec("REMAINDER_UINT32", MathOpType.SFPU_BINARY)
+    SfpuFmodInt32 = OpSpec("FMOD_INT32", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
