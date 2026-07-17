@@ -250,8 +250,14 @@
 - name: "Blaze - Kimi Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
+    # Use the dot-free symlink (…/Kimi-K2_6-dequantized -> …/moonshotai/Kimi-K2.6-dequantized):
+    # the dotted top-level path does not exist, so conftest would fall through to a slow HF download,
+    # and trust_remote_code cannot import a config dir whose name contains a ".".
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2.6-Cache/CI
+    # Fail fast on a missing local file instead of silently downloading from HuggingFace.
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
 
     mpirun --pernode --tag-output bash -lc '
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
@@ -349,7 +355,7 @@
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
     mpirun --pernode --tag-output bash -lc '
