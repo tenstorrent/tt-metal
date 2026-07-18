@@ -1,0 +1,13 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+40.19,MatmulDeviceOperation (in0:dram_interleaved),509.28,15,Compute,37.36,49.62,44.97,4.98,46.47
+23.51,LayerNormDeviceOperation (in0:dram_interleaved),297.97,6,Compute,,,,,
+11.15,ReduceScatterMinimalAsyncDeviceOperation (in0:dram_interleaved),141.29,6,Other,,,,,
+6.63,AllGatherAsyncDeviceOperation (in0:dram_interleaved),84.00,6,Other,,,,,
+4.72,NlpCreateHeadsDeviceOperation (in0:dram_interleaved),59.82,3,TM,,,,,
+3.66,RotaryEmbeddingDeviceOperation (in0:dram_interleaved),46.44,6,Other,,,,,
+3.16,NLPConcatHeadsDeviceOperation (in0:dram_interleaved),40.02,3,TM,,,,,
+2.72,BinaryNgDeviceOperation (in0:dram_interleaved),34.46,9,Compute,,,,,
+1.69,SDPAOperation (in0:dram_interleaved),21.42,3,Compute,,,,,
+1.12,SliceDeviceOperation (in0:dram_interleaved),14.15,12,TM,,,,,
+0.95,UpdateKVCacheOperation (in0:dram_interleaved),12.05,6,Other,,,,,
+0.50,TypecastDeviceOperation (in0:dram_interleaved),6.38,6,TM,,,,,

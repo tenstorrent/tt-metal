@@ -1,0 +1,10 @@
+Command:
+TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 RUN_MULTICHIP_DECODER_WATCHER=1 timeout 300 pytest -q -s --tb=short models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py -k multichip_watcher_stress
+
+Result: PASS (1 passed, 9 deselected; 4.93 s)
+Target: 1x4 Blackhole P300c ring, batch 32, logical prefill 7, adversarial two-column page table, BFP8 local two-head K/V caches.
+Stress: eager paged prefill/decode plus 10 warmed decode trace replays.
+Correctness: every replay PCC=1.0 against eager and all replay outputs bitwise equal.
+Watcher: attached/checking/detached devices 0,1,2,3; no watcher errors or asserts; process exited zero.
+Controlled disable: ETH instrumentation only. Archived same-host TP2 evidence established a Blackhole firmware teardown false positive with active-ETH watcher instrumentation after otherwise successful fabric execution. Compute/dataflow/NoC watcher coverage remained enabled here.
+Full log: logs/watcher_final.log

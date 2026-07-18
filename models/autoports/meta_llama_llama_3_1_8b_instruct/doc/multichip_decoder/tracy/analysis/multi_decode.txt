@@ -1,0 +1,16 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_MULTI_DECODE'.
+Using operations until 'PERF_MULTI_DECODE_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/multichip_decoder/tracy/analysis/multi_decode.csv
+Overall DRAM roofline (modeled ops): 15.5% (119 GB/s)
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReduceScatterMinimalAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/multichip_decoder/tracy/analysis/multi_decode_summary.csv
+Plotting PNG stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/multichip_decoder/tracy/analysis/multi_decode_summary.png

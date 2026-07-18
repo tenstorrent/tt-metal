@@ -1,0 +1,188 @@
+2026-07-18 08:37:00.030 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items / 7 deselected / 2 selected
+
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_chip_warmed_perf_reference[blackhole-blackhole-single-chip-reference] 2026-07-18 08:37:01.653 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-18 08:37:01.653 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-18 08:37:01.653 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-18 08:37:01.653 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-18 08:37:01.655 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-18 08:37:01.655 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-18 08:37:01.659 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-18 08:37:01.880 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-18 08:37:01.880 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-18 08:37:01.880 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-18 08:37:01.880 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-18 08:37:01.882 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-18 08:37:02.127 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.c8640000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-18 08:37:02.252 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 08:37:02.253 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 08:37:02.253 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-18 08:37:02.253 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:02.253 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-18 08:37:02.253 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-18 08:37:02.253 | warning  |       Inspector | Failed to create logging directory: /home/mvasiljevic/tt-metal/generated/inspector. Error: filesystem error: cannot remove all: Permission denied [/home/mvasiljevic/tt-metal/generated/inspector] [/home/mvasiljevic/tt-metal/generated/inspector/programs_log.yaml]
+
+You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality. (logger.cpp:37)
+2026-07-18 08:37:02.258 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:02.258 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:02.258 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:02.258 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:02.286 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-18 08:37:02.325 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-18 08:37:02.903 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349975 GHz, device_time_at_sync=328900915388 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-18 08:37:02.919 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-18 08:37:04.666 | INFO     | tracy:signpost:49 - PERF_SINGLE_PREFILL
+2026-07-18 08:37:04.678 | INFO     | tracy:signpost:49 - PERF_SINGLE_PREFILL_END
+2026-07-18 08:37:04.678 | INFO     | tracy:signpost:49 - PERF_SINGLE_DECODE
+2026-07-18 08:37:04.827 | INFO     | tracy:signpost:49 - PERF_SINGLE_DECODE_END
+SINGLE_CHIP_PERF_REFERENCE variant=default batch=1 seq=18 single_prefill_ms=1.250144 single_decode_ms=0.582760 prefill_repeats=10 trace_replays=200
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_and_multichip_warmed_perf[blackhole-p300-1x4-ring] 2026-07-18 08:37:05.388 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 08:37:05.388 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 08:37:05.388 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-07-18 08:37:05.388 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-18 08:37:05.388 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-18 08:37:05.388 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-18 08:37:05.388 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-18 08:37:05.398 | warning  |       Inspector | Failed to create logging directory: /home/mvasiljevic/tt-metal/generated/inspector. Error: filesystem error: cannot remove all: Permission denied [/home/mvasiljevic/tt-metal/generated/inspector] [/home/mvasiljevic/tt-metal/generated/inspector/programs_log.yaml]
+
+You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality. (logger.cpp:37)
+2026-07-18 08:37:05.400 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:05.400 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:05.401 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:05.402 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-18 08:37:05.435 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-18 08:37:05.460 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-18 08:37:05.460 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-18 08:37:05.461 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-18 08:37:05.462 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-18 08:37:05.462 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-18 08:37:05.462 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-18 08:37:06.080 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349990 GHz, device_time_at_sync=362583682167 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-18 08:37:06.080 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=332739170566 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-18 08:37:06.080 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349991 GHz, device_time_at_sync=332957091726 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-18 08:37:06.107 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9578353479263010302/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9578353479263010302/brisc/brisck.16552683245256108818.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9578353479263010302/brisc/brisck.16552683245256108818.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/9578353479263010302/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DIN1_DRAM_WIDTH_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,48,384,6,6,8,48,16,1,1,2,3,0,0,6144,1,1,0,0,1,48,3,48,6,48,3,1,3,48,0,0,0,3,576,2,8,128,48,128,6,16777216,50332160,83887104,117442048,0,0,2,2048,48,3456 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:201:16: warning: variable 's1' set but not used [-Wunused-but-set-variable]
+  201 |     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+      |                ^~
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/12010879462532548433/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/12010879462532548433/brisc/brisck.16552683245256108818.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/12010879462532548433/brisc/brisck.16552683245256108818.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/12010879462532548433/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DIN1_DRAM_WIDTH_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,128,1024,16,16,8,128,4,1,1,2,3,0,0,4096,1,1,0,0,1,128,4,128,16,128,4,1,4,128,0,0,0,3,576,2,8,32,128,32,16,16777216,50332160,83887104,117442048,0,0,2,2048,128,9216 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:201:16: warning: variable 's1' set but not used [-Wunused-but-set-variable]
+  201 |     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+      |                ^~
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9740918991256619689/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9740918991256619689/brisc/brisck.16552683245256108818.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9740918991256619689/brisc/brisck.16552683245256108818.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/9740918991256619689/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DIN1_DRAM_WIDTH_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,112,896,14,14,8,112,16,1,1,2,3,0,0,14336,1,1,0,0,1,112,2,112,14,112,2,1,2,112,0,0,0,3,576,2,8,128,112,128,14,16777216,50332160,83887104,117442048,0,0,2,2048,112,8064 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:201:16: warning: variable 's1' set but not used [-Wunused-but-set-variable]
+  201 |     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+      |                ^~
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/3152630943321287406/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/3152630943321287406/brisc/brisck.16552683245256108818.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/3152630943321287406/brisc/brisck.16552683245256108818.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/3152630943321287406/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DIN1_DRAM_WIDTH_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,128,1024,16,16,8,128,14,1,1,2,3,0,0,14336,1,1,0,0,1,128,4,128,16,128,4,1,4,128,0,0,0,3,576,2,8,112,128,112,16,16777216,50332160,83887104,117442048,0,0,2,2048,128,9216 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:201:16: warning: variable 's1' set but not used [-Wunused-but-set-variable]
+  201 |     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+      |                ^~
+2026-07-18 08:37:11.779 | INFO     | tracy:signpost:49 - PERF_MULTI_PREFILL
+2026-07-18 08:37:11.787 | INFO     | tracy:signpost:49 - PERF_MULTI_PREFILL_END
+2026-07-18 08:37:11.787 | INFO     | tracy:signpost:49 - PERF_MULTI_DECODE
+2026-07-18 08:37:13.115 | INFO     | tracy:signpost:49 - PERF_MULTI_DECODE_END
+perf default output: 0.9999998075780363
+MULTICHIP_PERF_RESULT variant=default batch=1 seq=18 single_prefill_ms=1.250144 multi_prefill_ms=0.786084 prefill_speedup=1.590344 prefill_efficiency=0.397586 single_decode_ms=0.582760 multi_decode_ms=0.321638 decode_speedup=1.811853 decode_efficiency=0.452963 prefill_repeats=10 trace_replays=200
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+7.23s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_and_multichip_warmed_perf[blackhole-p300-1x4-ring]
+2.14s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_chip_warmed_perf_reference[blackhole-blackhole-single-chip-reference]
+1.47s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_chip_warmed_perf_reference[blackhole-blackhole-single-chip-reference]
+0.92s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_and_multichip_warmed_perf[blackhole-p300-1x4-ring]
+0.12s teardown models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_and_multichip_warmed_perf[blackhole-p300-1x4-ring]
+0.12s teardown models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_chip_warmed_perf_reference[blackhole-blackhole-single-chip-reference]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_chip_warmed_perf_reference[blackhole-blackhole-single-chip-reference]
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_single_and_multichip_warmed_perf[blackhole-p300-1x4-ring]
+======================= 2 passed, 7 deselected in 12.78s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x73d1e7776148 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73d1e7000108 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 22 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "memory_config"
+ - leaked function "__repr__"
+ - leaked function "__repr__"
+ - leaked function "compute_program_hash"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__hash__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-18 08:37:15.245 | info     |    BuildKernels | JIT cache stats: 290/339 hits (85.5%) [290 cached, 115 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-18 08:37:15.245 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-18 08:37:15.259 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-18 08:37:15.259 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-18 08:37:15.844 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-18 08:37:15.844 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-18 08:37:15.844 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

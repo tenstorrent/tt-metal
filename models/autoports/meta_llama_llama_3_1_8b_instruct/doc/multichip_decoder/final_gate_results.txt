@@ -1,0 +1,18 @@
+hardware: 4x Blackhole P300c, physical/logical ring degree histogram {2:4}, MeshShape(1,4)
+selected policy: TP4, BFP4/LoFi projections, BF16 residual/CCL, two links, 16-way projection storage/N partitions, 16-core residual/norm
+correctness: PASS; prefill PCC 0.9999993671; decode PCC 0.9999886729
+stack boundary: PASS; direct second-layer prefill PCC 0.9999982966; decode PCC 0.9999547372
+paged/nonaligned: PASS; logical lengths 7 and 31; decode positions 63,64,65; adversarial physical pages; unwritten suffix zero
+trace: PASS; five second-page replays PCC 1.0 and bitwise equal; final perf uses 1000 warmed trace replays
+fallback: PASS with TTNN_CONFIG_OVERRIDES={"throw_exception_on_fallback":true}; logs/fallback_audit_final.log
+default suite: PASS; 5 passed, 5 expected opt-in skips; logs/pytest_final.log
+watcher: PASS; four devices; ten deterministic replays; ETH-only controlled disable
+single prefill/decode ms: 1.243475 / 0.581578
+TP4 prefill/decode ms: 0.733909 / 0.320058
+speedup: 1.694317x / 1.817101x
+efficiency: 42.3579% / 45.4275%
+fused MM+RS: rejected; exact O/down BFP4/LoFi candidates 26.6342%/14.5637% slower, min rank PCC 0.999999940395
+profiler: current-source 09:34 capture; TP4 decode matmul 36.20%, RS 20.76%, AG 12.67%, explicit DM+TM about 14.46%, modeled DRAM 15.5% (119 GB/s); SLOW/subblock warning source-audited; 8-way DRAM and interleaved 1-D candidates slower
+context: 131072 retained; BF16 full-stack per-device plan 13,866,369,024 B < 34,178,731,008 B
+review: clean-pass; no required work; stage_review.md
+commit: scoped implementation/evidence SHA recorded by follow-up docs commit

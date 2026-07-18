@@ -1,0 +1,7 @@
+candidate,current_ms,candidate_ms,candidate_over_current,current_bytes_per_layer,candidate_bytes_per_layer,min_rank_pcc,status,evidence
+replicated_allreduce_vs_fractured_separate,0.084869,0.085773,1.010658,786432,798720,0.9999708059164096,replicated_selected,"RS + local add + distributed RMSNorm + standalone AG + BFP4 QKV is 1.066% slower"
+fractured_fused_agmm,,,,786432,798720,,blocked_platform_contract,"generic fused AGMM hardcodes TP8 transfer ledger; see AUTOTRIAGE.md and AUTOFIX.md"
+fully_fractured_stack,,,,786432,798720,,rejected,"requires the blocked fused consumer to amortize distributed-norm overhead; standalone family already loses"
+generic_fused_o_reduce_scatter,0.052418,0.066379,1.266342,786432,786432,0.999999940395,rejected_slower,"exact TP4 local 32x1024x4096 BFP4/LoFi O; fused generic 2-D multicast is 26.6342% slower than separate interleaved MM+RS"
+generic_fused_down_reduce_scatter,0.098161,0.112457,1.145637,786432,786432,0.999999940395,rejected_slower,"exact TP4 local 32x3584x4096 BFP4/LoFi down; fused generic 2-D multicast is 14.5637% slower than separate interleaved MM+RS"
+minimal_strided_fused_reduce_scatter,,,,786432,786432,,blocked_blackhole_race,"repository issue #46181 source gate records nondeterministic Blackhole MM-output/RS-read race; unsafe candidate not launched"

@@ -14,7 +14,7 @@ import pytest
 import torch
 from tracy import signpost
 
-import models.autoports.meta_llama_llama_3_1_8b_instruct.tt.tp2_multichip_decoder as tp2_multichip_decoder_module
+import models.autoports.meta_llama_llama_3_1_8b_instruct.tt.multichip_decoder as multichip_decoder_module
 import models.common.modules.tt_ccl as tt_ccl_module
 import ttnn
 from models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_functional_decoder import (
@@ -22,14 +22,14 @@ from models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_functional_dec
     _assert_pcc,
     _config,
 )
-from models.autoports.meta_llama_llama_3_1_8b_instruct.tt.optimized_decoder import OptimizationConfig, OptimizedDecoder
-from models.autoports.meta_llama_llama_3_1_8b_instruct.tt.tp2_multichip_decoder import (
+from models.autoports.meta_llama_llama_3_1_8b_instruct.tt.multichip_decoder import (
     PAGED_BLOCK_SIZE,
     TARGET_MESH_SHAPE,
     TARGET_TP_DEGREE,
     MultiChipConfig,
     MultiChipDecoder,
 )
+from models.autoports.meta_llama_llama_3_1_8b_instruct.tt.optimized_decoder import OptimizationConfig, OptimizedDecoder
 from models.common.modules.tt_ccl import get_tt_ccl
 
 MAX_CACHE_LEN = 128
@@ -45,7 +45,7 @@ def _mesh_test(func):
         "mesh_device, device_params",
         [(TARGET_TP_DEGREE, MULTICHIP_DEVICE_PARAMS)],
         indirect=True,
-        ids=["p300-1x2-ring"],
+        ids=["p300-1x4-ring"],
     )(func)
     # First-use full-shape BFP packing and JIT compilation can exceed the
     # repository-wide 300 s alarm.  Interrupting a live TTNN frame makes
@@ -198,7 +198,11 @@ def _selected_policy(multichip_config: MultiChipConfig | None = None):
             gate_up_weight_dtype=ttnn.bfloat4_b,
             down_weight_dtype=ttnn.bfloat4_b,
             decode_matmul_strategy="dram_sharded",
-            output_cores=8,
+            qkv_cores=16,
+            output_cores=16,
+            gate_up_cores=16,
+            down_cores=16,
+            residual_cores=16,
         )
     )
 
@@ -245,7 +249,7 @@ def _build_multichip(mesh_device, *, batch: int, multichip_config: MultiChipConf
 def test_runtime_path_is_real_multichip_and_host_fallback_free():
     assert issubclass(MultiChipDecoder, OptimizedDecoder)
     assert MultiChipDecoder.single_chip_baseline is OptimizedDecoder
-    assert TARGET_MESH_SHAPE == (1, 2)
+    assert TARGET_MESH_SHAPE == (1, 4)
     for method in (
         MultiChipDecoder.prefill_forward,
         MultiChipDecoder.decode_forward,
@@ -262,23 +266,21 @@ def test_runtime_path_is_real_multichip_and_host_fallback_free():
 
 
 def test_multichip_context_capacity_contract():
-    contract_path = (
-        Path(__file__).resolve().parents[1] / "doc" / "tp2_multichip_decoder" / "context_contract_snapshot.json"
-    )
+    contract_path = Path(__file__).resolve().parents[1] / "doc" / "context_contract.json"
     contract = json.loads(contract_path.read_text())
     evidence = contract["capacity_evidence"]
     assert contract["current_supported_context"] == contract["hf_advertised_context"] == 131072
     assert contract["limiting_reason"] is None
-    assert evidence["target_mesh"] == "1x2 Blackhole P300c, TP=2"
+    assert evidence["target_mesh"] == "1x4 Blackhole P300c ring, TP=4"
     assert evidence["page_pool_blocks"] * evidence["page_block_size"] == 131072
-    assert evidence["per_device_kv_heads"] == 4
-    kv_elements = 32 * 4 * 131072 * 128 * 2
+    assert evidence["per_device_kv_heads"] == 2
+    kv_elements = 32 * 2 * 131072 * 128 * 2
     assert evidence["per_device_bf16_kv_cache_bytes"] == kv_elements * 2
     assert evidence["per_device_bfp8_kv_cache_bytes"] == kv_elements * 1088 // 1024
     assert evidence["bf16_plan_total_bytes"] < evidence["device_allocator_dram_bytes"]
 
 
-def test_tp2_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
+def test_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
     """A 32-layer stack must share one persistent semaphore owner per mesh."""
 
     class Grid:
@@ -328,6 +330,7 @@ def test_tp2_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
 
         def fake_optimized_init(instance, *, optimization_config, **kwargs):
             instance.optimization_config = optimization_config
+            instance.use_advisor_1d = optimization_config.decode_matmul_strategy == "advisor_1d"
             instance.mesh_device = kwargs["mesh_device"]
             instance.hidden_size = kwargs["hidden_size"]
             instance.num_heads = kwargs["num_heads"]
@@ -342,9 +345,9 @@ def test_tp2_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
             return tt_ccl_module.get_tt_ccl(candidate_mesh)
 
         monkeypatch.setattr(OptimizedDecoder, "__init__", fake_optimized_init)
-        monkeypatch.setattr(tp2_multichip_decoder_module, "_width_sharded_l1", lambda **kwargs: object())
-        monkeypatch.setattr(tp2_multichip_decoder_module, "_dram_matmul_program_config", lambda **kwargs: object())
-        monkeypatch.setattr(tp2_multichip_decoder_module, "get_tt_ccl", resolve_tt_ccl)
+        monkeypatch.setattr(multichip_decoder_module, "_width_sharded_l1", lambda **kwargs: object())
+        monkeypatch.setattr(multichip_decoder_module, "_dram_matmul_program_config", lambda **kwargs: object())
+        monkeypatch.setattr(multichip_decoder_module, "get_tt_ccl", resolve_tt_ccl)
 
         constructor_kwargs = dict(
             multichip_config=_selected_policy(),
@@ -353,9 +356,9 @@ def test_tp2_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
             global_intermediate_size=14336,
             mesh_device=mesh,
             hidden_size=4096,
-            num_heads=16,
-            num_kv_heads=4,
-            intermediate_size=7168,
+            num_heads=8,
+            num_kv_heads=2,
+            intermediate_size=3584,
             batch=32,
         )
         layers = [MultiChipDecoder(**constructor_kwargs) for _ in range(32)]
@@ -398,9 +401,26 @@ def test_multichip_correctness_single_chip_reference(mesh_device):
     baseline_decode = baseline.decode_forward(decode_input, single_key, single_value, current_pos=seq_len)
     ttnn.synchronize_device(mesh_device)
     baseline_decode_host = _single_host(baseline_decode)
+    stack_key, stack_value = _single_caches(config, mesh_device, batch=batch)
+    baseline_stacked_prefill = baseline.prefill_forward(baseline_prefill, stack_key, stack_value)
+    baseline_stacked_decode = baseline.decode_forward(baseline_decode, stack_key, stack_value, current_pos=seq_len)
+    ttnn.synchronize_device(mesh_device)
+    baseline_stacked_prefill_host = _single_host(baseline_stacked_prefill)
+    baseline_stacked_decode_host = _single_host(baseline_stacked_decode)
     single_key_host = _single_host(single_key)[:, :, : seq_len + 1, :]
     single_value_host = _single_host(single_value)[:, :, : seq_len + 1, :]
-    for tensor in (prefill_input, decode_input, baseline_prefill, baseline_decode, single_key, single_value):
+    for tensor in (
+        prefill_input,
+        decode_input,
+        baseline_prefill,
+        baseline_decode,
+        baseline_stacked_prefill,
+        baseline_stacked_decode,
+        single_key,
+        single_value,
+        stack_key,
+        stack_value,
+    ):
         ttnn.deallocate(tensor)
     gc.collect()
 
@@ -457,6 +477,8 @@ def test_multichip_correctness_single_chip_reference(mesh_device):
     _CORRECTNESS_REFERENCE = {
         "contiguous_prefill": baseline_prefill_host,
         "contiguous_decode": baseline_decode_host,
+        "stacked_prefill": baseline_stacked_prefill_host,
+        "stacked_decode": baseline_stacked_decode_host,
         "contiguous_key": single_key_host,
         "contiguous_value": single_value_host,
         "paged_decode": paged_decode_host,
@@ -499,25 +521,71 @@ def test_multichip_correctness_cache_determinism_and_trace_contract(mesh_device)
     actual_prefill = multichip.prefill_forward(prefill_input, mesh_key, mesh_value)
     actual_decode = multichip.decode_forward(decode_input, mesh_key, mesh_value, current_pos=seq_len)
     ttnn.synchronize_device(mesh_device)
-    _assert_pcc(reference["contiguous_prefill"], _replicated_host(actual_prefill), 0.99, "TP2 prefill vs optimized")
-    _assert_pcc(reference["contiguous_decode"], _replicated_host(actual_decode), 0.99, "TP2 decode vs optimized")
+    _assert_pcc(reference["contiguous_prefill"], _replicated_host(actual_prefill), 0.99, "TP4 prefill vs optimized")
+    _assert_pcc(reference["contiguous_decode"], _replicated_host(actual_decode), 0.99, "TP4 decode vs optimized")
     cache_slice = slice(0, seq_len + 1)
     _assert_pcc(
         reference["contiguous_key"],
         _compose_cache_heads(mesh_key)[:, :, cache_slice, :],
         0.99,
-        "TP2 local key-cache heads",
+        "TP4 local key-cache heads",
     )
     _assert_pcc(
         reference["contiguous_value"],
         _compose_cache_heads(mesh_value)[:, :, cache_slice, :],
         0.99,
-        "TP2 local value-cache heads",
+        "TP4 local value-cache heads",
     )
     assert tuple(actual_prefill.shape) == (1, batch, seq_len, config.hidden_size)
     assert tuple(actual_decode.shape) == (1, batch, 1, config.hidden_size)
-    assert tuple(mesh_key.shape) == (batch, config.num_key_value_heads // 2, MAX_CACHE_LEN, 128)
-    for tensor in (prefill_input, decode_input, actual_prefill, actual_decode, mesh_key, mesh_value):
+    assert tuple(mesh_key.shape) == (
+        batch,
+        config.num_key_value_heads // TARGET_TP_DEGREE,
+        MAX_CACHE_LEN,
+        128,
+    )
+
+    # Exercise the exact layer-to-layer boundary while keeping the live set
+    # representative of a decoder stack.  A stack does not retain a decode
+    # output while running a prefill pass; doing so consumes an unrelated L1
+    # residual buffer and can make the norm program's static-CB validation
+    # fail even though the boundary tensor itself is in DRAM for prefill.
+    ttnn.deallocate(actual_decode)
+    stack_key, stack_value = _mesh_contiguous_caches(config, mesh_device, batch=batch)
+    actual_stacked_prefill = multichip.prefill_forward(actual_prefill, stack_key, stack_value)
+    ttnn.synchronize_device(mesh_device)
+    _assert_pcc(
+        reference["stacked_prefill"],
+        _replicated_host(actual_stacked_prefill),
+        0.99,
+        "TP4 stacked prefill boundary",
+    )
+    assert tuple(actual_stacked_prefill.shape) == (1, batch, seq_len, config.hidden_size)
+    ttnn.deallocate(actual_stacked_prefill)
+    ttnn.deallocate(actual_prefill)
+
+    # Regenerate the first layer's decode result after freeing prefill state,
+    # then feed its width-sharded L1 result directly into the next layer.
+    actual_decode = multichip.decode_forward(decode_input, mesh_key, mesh_value, current_pos=seq_len)
+    actual_stacked_decode = multichip.decode_forward(actual_decode, stack_key, stack_value, current_pos=seq_len)
+    ttnn.synchronize_device(mesh_device)
+    _assert_pcc(
+        reference["stacked_decode"],
+        _replicated_host(actual_stacked_decode),
+        0.99,
+        "TP4 stacked decode boundary",
+    )
+    assert tuple(actual_stacked_decode.shape) == (1, batch, 1, config.hidden_size)
+    for tensor in (
+        prefill_input,
+        decode_input,
+        actual_decode,
+        actual_stacked_decode,
+        mesh_key,
+        mesh_value,
+        stack_key,
+        stack_value,
+    ):
         ttnn.deallocate(tensor)
     gc.collect()
 
@@ -545,7 +613,7 @@ def test_multichip_correctness_cache_determinism_and_trace_contract(mesh_device)
         )
         actual_prefill_host = _replicated_host(actual_prefill)
         actual_decode_host = _replicated_host(actual_decode)
-        _assert_pcc(reference["paged_decode"], actual_decode_host, 0.99, f"paged TP2 decode run={run}")
+        _assert_pcc(reference["paged_decode"], actual_decode_host, 0.99, f"paged TP4 decode run={run}")
         outputs.append((actual_prefill_host, actual_decode_host))
         ttnn.deallocate(actual_prefill)
         ttnn.deallocate(actual_decode)
@@ -590,7 +658,7 @@ def test_multichip_correctness_cache_determinism_and_trace_contract(mesh_device)
         reference["cross_page_prefill"],
         _replicated_host(cross_prefill),
         0.99,
-        "boundary-walk seed TP2 prefill",
+        "boundary-walk seed TP4 prefill",
     )
     ttnn.deallocate(cross_prefill)
     eager_hosts = []
@@ -609,14 +677,15 @@ def test_multichip_correctness_cache_determinism_and_trace_contract(mesh_device)
     for current_pos, (expected, actual) in enumerate(
         zip(reference["cross_page_decodes"], eager_hosts), start=PAGED_BLOCK_SIZE - 1
     ):
-        _assert_pcc(expected, actual, 0.99, f"page-boundary TP2 decode position={current_pos}")
+        _assert_pcc(expected, actual, 0.99, f"page-boundary TP4 decode position={current_pos}")
 
     for cache_name, cache, expected in (
         ("key", key_cache, reference["cross_page_key"]),
         ("value", value_cache, reference["cross_page_value"]),
     ):
+        local_kv_heads = config.num_key_value_heads // TARGET_TP_DEGREE
         for rank, local_cache in enumerate(_mesh_hosts(cache)):
-            head_slice = slice(4 * rank, 4 * (rank + 1))
+            head_slice = slice(local_kv_heads * rank, local_kv_heads * (rank + 1))
             actual_page0 = torch.stack([local_cache[int(page0[user]), :, :, :] for user in range(batch)])
             actual_page1 = torch.stack([local_cache[int(page1[user]), :, :2, :] for user in range(batch)])
             _assert_pcc(
@@ -696,7 +765,12 @@ def test_multichip_watcher_stress(mesh_device):
     ttnn.synchronize_device(mesh_device)
     eager_host = _replicated_host(eager)
     assert tuple(eager.shape) == (1, batch, 1, config.hidden_size)
-    assert tuple(key_cache.shape) == (2 * batch, config.num_key_value_heads // 2, PAGED_BLOCK_SIZE, 128)
+    assert tuple(key_cache.shape) == (
+        2 * batch,
+        config.num_key_value_heads // TARGET_TP_DEGREE,
+        PAGED_BLOCK_SIZE,
+        128,
+    )
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     traced = multichip.decode_forward(hidden, key_cache, value_cache, current_pos=seq_len, page_table=table)
@@ -734,10 +808,12 @@ def test_multichip_fractured_residual_topology_probe(mesh_device):
     config, state, multichip = _build_multichip(mesh_device, batch=batch)
     device_grid = mesh_device.compute_with_storage_grid_size()
 
-    def width_l1(width: int):
+    def width_l1(width: int, *, cores: int = 32):
+        if cores not in (8, 16, 32):
+            raise ValueError(f"unsupported probe core count {cores}")
         return ttnn.create_sharded_memory_config(
-            (batch, width // 32),
-            ttnn.CoreGrid(x=8, y=4),
+            (batch, width // cores),
+            ttnn.CoreGrid(x=8, y=cores // 8),
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -748,15 +824,17 @@ def test_multichip_fractured_residual_topology_probe(mesh_device):
     local_residual_mem = width_l1(config.hidden_size // TARGET_TP_DEGREE)
     ag_output_mem = ttnn.create_sharded_memory_config(
         (batch, config.hidden_size // TARGET_TP_DEGREE),
-        ttnn.CoreGrid(x=2, y=1),
+        ttnn.CoreGrid(x=TARGET_TP_DEGREE, y=1),
         ttnn.ShardStrategy.WIDTH,
         ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    qkv_width = (config.num_attention_heads // 2 + config.num_key_value_heads) * 128
-    qkv_output_mem = width_l1(qkv_width)
+    qkv_width = (
+        config.num_attention_heads // TARGET_TP_DEGREE + 2 * config.num_key_value_heads // TARGET_TP_DEGREE
+    ) * 128
+    qkv_output_mem = width_l1(qkv_width, cores=16)
     stats_mem = ttnn.create_sharded_memory_config(
-        (batch, 2 * ttnn.TILE_SIZE),
+        (batch, TARGET_TP_DEGREE * ttnn.TILE_SIZE),
         ttnn.CoreGrid(x=1, y=1),
         ttnn.ShardStrategy.WIDTH,
         ttnn.ShardOrientation.ROW_MAJOR,
@@ -764,14 +842,14 @@ def test_multichip_fractured_residual_topology_probe(mesh_device):
     )
     distributed_norm_program = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(8, 4),
-        subblock_w=2,
+        subblock_w=1,
         block_h=1,
-        block_w=2,
+        block_w=1,
         inplace=False,
     )
     qkv_agmm_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=4,
+        compute_with_storage_grid_size=(8, 2),
+        in0_block_w=8,
         out_subblock_h=1,
         out_subblock_w=3,
         per_core_M=1,
@@ -846,7 +924,7 @@ def test_multichip_fractured_residual_topology_probe(mesh_device):
             dim=3,
             multi_device_global_semaphore=multichip.tt_ccl.get_and_cycle_rs_semaphore_handles(),
             barrier_semaphore=multichip.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=2,
+            num_links=multichip.multichip_config.num_links,
             memory_config=local_residual_mem,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Ring,
@@ -872,7 +950,7 @@ def test_multichip_fractured_residual_topology_probe(mesh_device):
             dim=3,
             multi_device_global_semaphore=multichip.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             barrier_semaphore=multichip.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=2,
+            num_links=multichip.multichip_config.num_links,
             memory_config=stats_mem,
             topology=ttnn.Topology.Ring,
             chunks_per_sync=10,
@@ -895,7 +973,7 @@ def test_multichip_fractured_residual_topology_probe(mesh_device):
             dim=3,
             multi_device_global_semaphore=multichip.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             barrier_semaphore=multichip.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=2,
+            num_links=multichip.multichip_config.num_links,
             memory_config=ag_output_mem,
             topology=ttnn.Topology.Ring,
             chunks_per_sync=10,
@@ -920,23 +998,171 @@ def test_multichip_fractured_residual_topology_probe(mesh_device):
         f"current_allreduce_add_norm_matmul_ms={current_ms:.6f} "
         f"fractured_rs_add_distributed_norm_ag_matmul_ms={fractured_ms:.6f} "
         f"candidate_over_current={fractured_ms / current_ms:.6f} "
-        "current_bytes=262144 candidate_bytes=262144 weight_dtype=bfloat4_b "
-        "fused_agmm=unsupported_linear_p300_topology"
+        "current_bytes=786432 candidate_bytes=798720 weight_dtype=bfloat4_b "
+        "fused_agmm=blocked_generic_op_tp8_transfer_ledger"
     )
 
     del multichip, state
     gc.collect()
 
 
+@_mesh_test
+def test_multichip_fused_matmul_reduce_scatter_probe(mesh_device):
+    """Adapt the generic fused MM+RS API to the exact TP4 O/down projections."""
+
+    if os.environ.get("RUN_MULTICHIP_DECODER_FUSED_MM_RS_PROBE") != "1":
+        pytest.skip("Set RUN_MULTICHIP_DECODER_FUSED_MM_RS_PROBE=1 for the fused O/down+RS probe")
+
+    batch = 32
+    config, state, multichip = _build_multichip(mesh_device, batch=batch)
+    worker_grid = mesh_device.compute_with_storage_grid_size()
+    full_worker_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(worker_grid.x - 1, worker_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([full_worker_cores])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(manager)
+    mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+
+    def semaphores():
+        return [ttnn.create_global_semaphore(mesh_device, full_worker_cores, 0) for _ in range(3)]
+
+    def persistent_buffers():
+        intermediate = _mesh_input(torch.zeros((1, 1, batch, config.hidden_size), dtype=torch.bfloat16), mesh_device)
+        output = _mesh_input(
+            torch.zeros((1, 1, batch, config.hidden_size // TARGET_TP_DEGREE), dtype=torch.bfloat16),
+            mesh_device,
+        )
+        return intermediate, output
+
+    generator = torch.Generator().manual_seed(1957)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    def probe_projection(label, global_k, local_k, in0_block_w, weight):
+        host_input = torch.randn((1, 1, batch, global_k), generator=generator, dtype=torch.bfloat16)
+        mesh_input = ttnn.from_torch(
+            host_input,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        )
+        interleaved_weight = ttnn.to_memory_config(weight, ttnn.DRAM_MEMORY_CONFIG)
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 6),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=16,
+            out_block_w=8,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))}),
+        )
+        separate_intermediate, separate_output = persistent_buffers()
+        fused_intermediate, fused_output = persistent_buffers()
+        separate_semaphores = semaphores()
+        fused_semaphores = semaphores()
+
+        def separate_projection_rs():
+            partial = ttnn.linear(
+                mesh_input,
+                interleaved_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=program_config,
+                compute_kernel_config=compute_config,
+            )
+            return ttnn.experimental.reduce_scatter_minimal_async(
+                partial,
+                persistent_output_buffers=[separate_intermediate, separate_output],
+                dim=3,
+                multi_device_global_semaphore=separate_semaphores,
+                num_links=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+                subdevice_id=worker_sub_device_id,
+            )
+
+        def fused_projection_rs():
+            _, reduced = ttnn.experimental.matmul_reduce_scatter_async(
+                mesh_input,
+                interleaved_weight,
+                persistent_intermediate_buffer=fused_intermediate,
+                persistent_output_buffer=fused_output,
+                dim=3,
+                multi_device_global_semaphore=fused_semaphores,
+                reduce_scatter_core_grid_offset=(0, 6),
+                num_links=2,
+                memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+                intermediate_memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+                subdevice_id=worker_sub_device_id,
+                memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                program_config=program_config,
+                compute_kernel_config=compute_config,
+            )
+            return reduced
+
+        separate_ms, separate_result = _trace_latency(mesh_device, separate_projection_rs, 1000)
+        fused_ms, fused_result = _trace_latency(mesh_device, fused_projection_rs, 1000)
+        rank_pccs = []
+        for rank, (expected, actual) in enumerate(zip(_mesh_hosts(separate_result), _mesh_hosts(fused_result))):
+            _assert_pcc(expected, actual, 0.99, f"fused {label}+RS rank={rank}")
+            rank_pccs.append(torch.corrcoef(torch.stack((expected.float().flatten(), actual.float().flatten())))[0, 1])
+        print(
+            "MULTICHIP_FUSED_MM_RS_PROBE "
+            f"projection={label} separate_interleaved_ms={separate_ms:.6f} fused_interleaved_ms={fused_ms:.6f} "
+            f"fused_over_separate={fused_ms / separate_ms:.6f} min_rank_pcc={min(rank_pccs).item():.12f} "
+            f"shape=32x{local_k}x{config.hidden_size} weight_dtype=bfloat4_b math=LoFi program=2d_mcast_8x6"
+        )
+
+    try:
+        probe_projection("O", config.hidden_size, config.hidden_size // TARGET_TP_DEGREE, 4, multichip.output_weight)
+        probe_projection(
+            "down",
+            config.intermediate_size,
+            config.intermediate_size // TARGET_TP_DEGREE,
+            7,
+            multichip.down_weight,
+        )
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+        del multichip, state
+        gc.collect()
+
+
 def _variant_config() -> MultiChipConfig:
     variant = os.environ.get("MULTICHIP_DECODER_VARIANT", "default")
-    optimized = OptimizationConfig(decode_matmul_strategy="dram_sharded", output_cores=8)
+    optimized = OptimizationConfig(
+        decode_matmul_strategy="dram_sharded",
+        qkv_cores=16,
+        output_cores=16,
+        gate_up_cores=16,
+        down_cores=16,
+        residual_cores=16,
+    )
     collective_dtype = ttnn.bfloat16
     num_links = 2
     if variant == "geometry16":
         optimized = optimized.with_changes(
             qkv_cores=16, output_cores=16, gate_up_cores=16, down_cores=16, residual_cores=16
         )
+    elif variant == "geometry8":
+        optimized = optimized.with_changes(qkv_cores=8, output_cores=8, gate_up_cores=8, down_cores=8, residual_cores=8)
     elif variant == "output16":
         optimized = optimized.with_changes(output_cores=16)
     elif variant == "output32":
@@ -955,6 +1181,27 @@ def _variant_config() -> MultiChipConfig:
     elif variant == "output8_ccl_bfp8":
         optimized = optimized.with_changes(output_cores=8)
         collective_dtype = ttnn.bfloat8_b
+    elif variant == "geometry16_ccl_bfp8":
+        optimized = optimized.with_changes(
+            qkv_cores=16, output_cores=16, gate_up_cores=16, down_cores=16, residual_cores=16
+        )
+        collective_dtype = ttnn.bfloat8_b
+    elif variant == "geometry16_link1":
+        optimized = optimized.with_changes(
+            qkv_cores=16, output_cores=16, gate_up_cores=16, down_cores=16, residual_cores=16
+        )
+        num_links = 1
+    elif variant == "geometry16_packed_gate_up":
+        optimized = optimized.with_changes(
+            qkv_cores=16,
+            output_cores=16,
+            gate_up_cores=16,
+            down_cores=16,
+            residual_cores=16,
+            packed_gate_up=True,
+        )
+    elif variant == "interleaved_1d":
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
     elif variant != "default":
         raise ValueError(f"Unknown MULTICHIP_DECODER_VARIANT={variant!r}")
     return MultiChipConfig(optimized=optimized, collective_dtype=collective_dtype, num_links=num_links)
@@ -1081,9 +1328,9 @@ def test_single_and_multichip_warmed_perf(mesh_device):
         "MULTICHIP_PERF_RESULT "
         f"variant={variant} batch={batch} seq={seq_len} "
         f"single_prefill_ms={single_prefill_ms:.6f} multi_prefill_ms={multi_prefill_ms:.6f} "
-        f"prefill_speedup={prefill_speedup:.6f} prefill_efficiency={prefill_speedup / 2:.6f} "
+        f"prefill_speedup={prefill_speedup:.6f} prefill_efficiency={prefill_speedup / TARGET_TP_DEGREE:.6f} "
         f"single_decode_ms={single_decode_ms:.6f} multi_decode_ms={multi_decode_ms:.6f} "
-        f"decode_speedup={decode_speedup:.6f} decode_efficiency={decode_speedup / 2:.6f} "
+        f"decode_speedup={decode_speedup:.6f} decode_efficiency={decode_speedup / TARGET_TP_DEGREE:.6f} "
         f"prefill_repeats={prefill_repeats} trace_replays={trace_replays}"
     )
 

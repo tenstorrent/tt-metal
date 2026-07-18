@@ -4,25 +4,25 @@
   "current_supported_context": 131072,
   "limiting_reason": null,
   "capacity_evidence": {
-    "target_mesh": "1x4 Blackhole P300c ring, TP=4",
+    "target_mesh": "1x2 Blackhole P300c, TP=2",
     "device_allocator_dram_bytes": 34178731008,
-    "device_allocator_probe": "Full visible MeshShape(1,4); ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM): 8 banks * 4272341376 bytes per bank on each device",
+    "device_allocator_probe": "TT_VISIBLE_DEVICES=2,3; ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM): 8 banks * 4272341376 bytes per bank",
     "page_block_size": 64,
     "page_pool_blocks": 2048,
     "aggregate_cache_tokens": 131072,
-    "per_device_kv_heads": 2,
+    "per_device_kv_heads": 4,
     "decoder_layers": 32,
-    "per_device_bf16_kv_cache_bytes": 4294967296,
-    "per_device_bfp8_kv_cache_bytes": 2281701376,
-    "per_device_bfp4_projection_weight_bytes": 981467136,
+    "per_device_bf16_kv_cache_bytes": 8589934592,
+    "per_device_bfp8_kv_cache_bytes": 4563402752,
+    "per_device_bfp4_projection_weight_bytes": 1962934272,
     "conservative_non_decoder_weight_allowance_bytes": 4294967296,
-    "reserved_trace_activation_ccl_headroom_bytes": 4294967296,
-    "bf16_plan_total_bytes": 13866369024,
-    "formula": "KV/device: 32 layers * 2 local KV heads * 131072 aggregate positions * 128 head_dim * 2 (K,V) * dtype bytes. BFP8 uses 1088 bytes per 1024-element tile. Projection weights/device: 32 * 54525952 local elements * 576 BFP4 bytes per 1024-element tile.",
+    "conservative_runtime_headroom_bytes": 4294967296,
+    "bf16_plan_total_bytes": 19142803456,
+    "formula": "KV/device: 32 layers * 4 local KV heads * 131072 aggregate positions * 128 head_dim * 2 (K,V) * dtype bytes. BFP8 uses 1088 bytes per 1024-element tile. Projection weights/device: 32 * 109051904 local elements * 576 BFP4 bytes per 1024-element tile.",
     "allocator_policy": "A 2048-block pool can be assigned entirely to one 131072-token request or shared across a batch. Inputs are chunked/logical tensors and are not required to materialize batch*max_context as one persistent allocation.",
-    "stage_scope": "The full-mesh multichip decoder preserves the advertised logical context and its paged-cache layout. Hardware correctness covers non-aligned prefill/decode plus adversarial physical page placement across positions 63, 64, and 65; full-model long-context execution remains a downstream full-model responsibility."
+    "stage_scope": "The multichip decoder preserves the advertised logical context and its paged-cache layout. Hardware correctness covers non-aligned prefill/decode plus adversarial physical page placement across positions 63, 64, and 65; full-model long-context execution remains a downstream full-model responsibility."
   },
-  "notes": "TP=4 quarters KV-head ownership and projection-weight storage per device relative to a dense single-device layer. Logical sequence lengths remain unaligned at the API boundary; tile and final-page padding are internal. The model has no MoE experts.",
+  "notes": "TP=2 halves KV-head ownership and projection-weight storage per device relative to a dense single-device layer. Logical sequence lengths remain unaligned at the API boundary; tile and final-page padding are internal. The model has no MoE experts.",
   "paths": {
     "prefill": {
       "status": "translated_and_multichip",
@@ -41,7 +41,7 @@
         "captured_batch": 32,
         "emitted_sequence": 1,
         "multichip_contract": "current_pos in [0, max_cache_len)",
-        "cache_layout": "contiguous or 64-token paged, two local KV heads per device"
+        "cache_layout": "contiguous or 64-token paged, four local KV heads per device"
       }
     }
   },
@@ -50,14 +50,14 @@
     "representative_layer": 16,
     "captured_mesh": "1x4",
     "captured_tensor_parallel_degree": 4,
-    "runtime_mesh": "1x4",
-    "runtime_tensor_parallel_degree": 4,
-    "translation": "The optimized single-chip dense graph is the numeric baseline. The full-mesh path restores the compiler-selected TP ownership as Q8/KV2 per rank, column-sharded QKV/gate/up, row-sharded O/down, and two BF16 asynchronous sums per layer."
+    "runtime_mesh": "1x2",
+    "runtime_tensor_parallel_degree": 2,
+    "translation": "The optimized single-chip dense graph is the numeric baseline. The multichip path restores TP ownership as Q16/KV4 per rank, column-sharded QKV/gate/up, row-sharded O/down, and two BF16 asynchronous sums per layer."
   },
   "dtype_policy": {
     "functional_baseline": "BF16 weights and activations; TILE layout; DRAM memory by default",
     "optimized_decoder": "BFP4 projection weights with LoFi projection math; BF16 activations and norms; BF16 and BFP8 caller-owned KV caches",
-    "multichip_decoder": "Same optimized projection policy per rank; BF16 replicated residual and selected CCL payload; KV cache is sharded by head with two local heads per device",
+    "multichip_decoder": "Same optimized projection policy per rank; BF16 replicated residual and selected CCL payload; KV cache is sharded by head with four local heads per device",
     "deferred": "Full-model top-k datatype-frontier selection remains downstream work."
   }
 }

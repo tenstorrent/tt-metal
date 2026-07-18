@@ -1,0 +1,69 @@
+2026-07-18 09:40:45.424 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 19 items / 13 deselected / 6 selected
+
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_runtime_path_is_real_multichip_and_host_fallback_free PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_multichip_context_capacity_contract PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_multichip_decoder_stack_shares_one_ccl_owner PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_runtime_path_is_real_multichip_and_host_fallback_free PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_multichip_context_capacity_contract PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_tp2_multichip_decoder_stack_shares_one_ccl_owner PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+0.21s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_tp2_multichip_decoder_stack_shares_one_ccl_owner
+0.20s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_runtime_path_is_real_multichip_and_host_fallback_free
+0.19s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_multichip_context_capacity_contract
+0.18s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_multichip_decoder_stack_shares_one_ccl_owner
+0.18s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_multichip_context_capacity_contract
+0.18s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_runtime_path_is_real_multichip_and_host_fallback_free
+
+(12 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_runtime_path_is_real_multichip_and_host_fallback_free
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_multichip_context_capacity_contract
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py::test_multichip_decoder_stack_shares_one_ccl_owner
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_runtime_path_is_real_multichip_and_host_fallback_free
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_multichip_context_capacity_contract
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_tp2_multichip_decoder.py::test_tp2_multichip_decoder_stack_shares_one_ccl_owner
+======================= 6 passed, 13 deselected in 1.92s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x718297ae9ea8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x718297354108 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 22 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "create_matmul_attributes"
+ - leaked function ""
+ - leaked function "merge"
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "compute_program_hash"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
