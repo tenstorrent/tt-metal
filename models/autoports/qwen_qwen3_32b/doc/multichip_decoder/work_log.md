@@ -261,3 +261,6 @@ Its verification scope and corroborated evidence are recorded in
 The stage-only implementation/evidence commit SHA is appended after the first
 local commit. The final documentation commit cannot contain its own SHA, so
 that SHA is reported in the handoff. No push is performed.
+
+Implementation, tests, contract, review, and evidence commit:
+`9a49fbb0bf1` (`Add Qwen3-32B multichip decoder`).
