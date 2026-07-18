@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Standalone de-risk for the ResNet-50 GLOBAL AVERAGE POOL on Quasar.
+
+Right before the FC classifier, resnet50 does a global avg-pool over the full layer4 feature map
+(spatial 7x7, 2048 channels) -> [N, 2048, 1, 1]. The model issues it as (see
+ttnn_functional_resnet50.py ~line 1131):
+
+  x = ttnn.experimental.quasar.avg_pool2d(
+        input_tensor=x,                       # WIDTH_SHARDED, TILE layout, [1,1,N*H*W, C]
+        kernel_size=[H, W], stride=[1,1], padding=[0,0,0,0],
+        output_layout=ttnn.TILE_LAYOUT,       # -> the OUTPUT_TILED compute path
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=LoFi)
+
+This exercises a DIFFERENT Quasar pool path than the stem max-pool: output_layout=TILE_LAYOUT takes
+the OUTPUT_TILED branch of compute_pool_2d.cpp, which packs straight into the real out_cb via
+tilize_block (fast_tilize is unported on Quasar) and NEVER touches the scratch-roundtrip scaffold
+that the max-pool uses -- so it is an independent de-risk. Known Quasar concerns on this path:
+  - fast_tilize unported -> QSR uses tilize_init/tilize_block with an explicit llk_pack_init(out_cb)
+    retarget (else PCC 0.0 / all-zero output);
+  - AVG reduce uses fp32 accumulation (is_avg_pool) which caps tiles/reduction to 4;
+  - width-sharded channel tiling across cores.
+
+Gates:
+  - PCC vs torch F.avg_pool2d (global) golden;
+  - no value inflation / deflation blow-up: the per-channel avg must lie within [min, max] of that
+    channel's input (an average can never exceed the input range) -- catches a bad reduce/scale or a
+    stale-L1 leak (the "got.max=2.0" class of bug noted in the pool reader).
+
+The width-sharded memory config mirrors the model (fit_width_sharded_cores + create_sharded_memory_config_),
+so it adapts to the 1-2 core emulator as well as WH.
+
+Run (emulator / WH, slow dispatch + forced JIT):
+  TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
+  pytest -s models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool.py
+"""
+
+import pytest
+import torch
+
+import ttnn
+from models.common.utility_functions import nearest_32
+from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50 import fit_width_sharded_cores
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+PCC = 0.99
+
+# ResNet-50 final feature map is 7x7. Channels swept from small -> the real 2048.
+_H = 7
+_W = 7
+# (channels, id)
+_CASES = [
+    (64, "C64"),
+    (256, "C256"),
+    (512, "C512"),
+    (2048, "C2048"),  # the true resnet50 layer4 channel count
+]
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("channels,cid", _CASES, ids=[c[1] for c in _CASES])
+def test_quasar_global_avgpool(mesh_device, channels, cid):
+    device = mesh_device
+    torch.manual_seed(0)
+
+    batch_size = 1
+    input_h, input_w = _H, _W
+
+    # torch golden in NCHW: global avg over the full HxW window -> [N, C, 1, 1].
+    x_nchw = torch.rand((batch_size, channels, input_h, input_w), dtype=torch.float32)
+    golden = torch.nn.functional.avg_pool2d(x_nchw, kernel_size=(input_h, input_w))  # [N, C, 1, 1]
+
+    # ttnn avg_pool2d expects [1, 1, N*H*W, C] (flattened NHW, C).
+    x_nhwc = x_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * input_h * input_w, channels)
+
+    # WIDTH_SHARDED input, tile layout -- exactly as the model builds it for the global avg-pool.
+    num_cores, core_grid = fit_width_sharded_cores(channels, 8 * 8, device)
+    width_mem_config = ttnn.create_sharded_memory_config_(
+        [nearest_32(batch_size * input_h * input_w), channels // num_cores],
+        core_grid,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        tile_layout=True,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    x = ttnn.from_torch(x_nhwc.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    x = x.to(device, width_mem_config)
+
+    out = ttnn.experimental.quasar.avg_pool2d(
+        input_tensor=x,
+        batch_size=batch_size,
+        input_h=input_h,
+        input_w=input_w,
+        channels=channels,
+        kernel_size=[input_h, input_w],
+        stride=[1, 1],
+        padding=[0, 0, 0, 0],
+        output_layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+        ),
+    )
+    ttnn.synchronize_device(device)
+
+    tt_out = ttnn.to_torch(ttnn.from_device(out)).float()
+    # [.., N*1*1, C] -> [N, C, 1, 1] to line up with the torch golden.
+    tt_out = tt_out.reshape(batch_size, 1, 1, channels).permute(0, 3, 1, 2)
+
+    in_lo, in_hi = float(x_nchw.min()), float(x_nchw.max())
+    dev_lo, dev_hi = float(tt_out.min()), float(tt_out.max())
+    print(
+        f"[global_avgpool {cid}] num_cores={num_cores} out={tuple(tt_out.shape)} golden={tuple(golden.shape)} "
+        f"in=[{in_lo:.4f},{in_hi:.4f}] dev=[{dev_lo:.4f},{dev_hi:.4f}] golden=[{float(golden.min()):.4f},{float(golden.max()):.4f}]"
+    )
+
+    # an average can never leave the input range (catches bad scale / stale-L1 leak).
+    assert dev_lo >= in_lo - 1e-2 and dev_hi <= in_hi + 1e-2, (
+        f"avg out range [{dev_lo:.4f},{dev_hi:.4f}] escaped input range [{in_lo:.4f},{in_hi:.4f}] "
+        f"(bad reduce scale / stale-L1 leak)"
+    )
+    assert_with_pcc(golden, tt_out, pcc=PCC)
