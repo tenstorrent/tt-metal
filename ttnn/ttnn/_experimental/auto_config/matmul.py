@@ -1757,6 +1757,13 @@ def _build_candidates(
                 signature=signature,
             )
         )
+        # A single-output-tile matmul has nothing to distribute across the core
+        # grid and completes in noise-level time, so benchmarking tuned candidates
+        # only risks selecting a marginally-less-accurate config by timing noise.
+        # Use the default alone for deterministic, reference-accurate results.
+        m_tiles, _, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+        if m_tiles <= 1 and n_tiles <= 1:
+            return candidates
         candidates.extend(_build_program_config_candidates(signature, prepared, kwargs, base_operation=base_operation))
         candidates.extend(_build_local_minimal_candidates(signature, prepared, kwargs))
 
