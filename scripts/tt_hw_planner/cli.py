@@ -565,10 +565,12 @@ def _summarize_bringup_status(model_id: str) -> Tuple[Dict[str, int], List[Tuple
 def _list_component_pcc_tests(demo_dir: Path, *, only: Optional[List[str]] = None) -> List[str]:
     """Return the canonical per-component PCC test files for this demo,
     scoped to the components listed in `bringup_status.json` (status
-    NEW or ADAPT — both need per-component PCC validation).
+    NEW, ADAPT, or REUSE — every category is validated on device).
 
-    NEW = LLM writes from scratch; ADAPT = canonical wrapper, may refine.
-    REUSE components are trusted as-is (no per-component test).
+    NEW = LLM writes from scratch; ADAPT = editable copy, refine; REUSE = import
+    canonical-wrapper, tried as-is at iter-0. REUSE is NOT trusted blind: it
+    enters the gate like the others so its stub is PCC + torch-wrapper gated —
+    passes as-is => graduates REUSE; fails => demoted to ADAPT and worked.
 
     This ignores stale/leftover `test_*.py` from earlier template-based
     scaffolds (e.g. `test_sam2_hiera_tiny_for_image_classification.py` that
@@ -584,7 +586,7 @@ def _list_component_pcc_tests(demo_dir: Path, *, only: Optional[List[str]] = Non
         return []
     components: List[str] = []
     for comp in data.get("components", []):
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         name = str(comp.get("name", "")).strip()
         if name and (only is None or name in only):
@@ -618,9 +620,10 @@ def _auto_iteration_blockers(model_id: str) -> Tuple[List[str], List[str]]:
     ungraduated: List[str] = []
     smoke_tests: List[str] = []
     for comp in data.get("components", []):
-        # ADAPT components also need per-component validation; they get
-        # canonical-wrapper stubs and per-component PCC tests just like NEW.
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        # Every category needs per-component validation and can be ungraduated:
+        # NEW (from scratch), ADAPT (editable copy), REUSE (import wrapper —
+        # tried as-is, demoted to ADAPT on failure). None is trusted blind.
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         name = str(comp.get("name", "")).strip()
         if not name:
