@@ -9702,6 +9702,7 @@ def _cmd_up_core_impl(args) -> int:
                 agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
                 mesh=getattr(args, "mesh", None),
                 max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
+                reverify=bool(getattr(args, "reverify", False)),
             )
             try:
                 from .run_report import emit_run_report
@@ -9836,6 +9837,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="use accuracy parametrization for prepare/execute and auto reruns",
     )
     pup.add_argument("--no-trace", action="store_true", help="disable trace for prepare/execute and auto reruns")
+    pup.add_argument(
+        "--reverify",
+        action="store_true",
+        help="clear restored graduation snapshots at run start so every component re-runs its PCC gate and re-earns graduation this run (stubs kept; guards against trusting a stale marker after deps/hydration change)",
+    )
     pup.add_argument(
         "--no-paged-attention",
         action="store_true",
@@ -10208,6 +10214,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         required=True,
         help="Mesh shape, e.g. '1,4' or '2x2' (required); must be canonical for --box.",
     )
+    paut.add_argument(
+        "--reverify",
+        action="store_true",
+        help="clear restored graduation snapshots at run start so every component re-runs its PCC gate and re-earns graduation this run (stubs kept; guards against trusting a stale marker after deps/hydration change)",
+    )
     paut.set_defaults(func=cmd_bringup)
 
     pprom = sub.add_parser(
@@ -10255,6 +10266,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     pprom.add_argument("--no-instruct", action="store_true")
     pprom.add_argument("--download-first", action="store_true")
     pprom.add_argument("--strict", action="store_true")
+    pprom.add_argument(
+        "--reverify",
+        action="store_true",
+        help="clear restored graduation snapshots at run start so every component re-runs its PCC gate and re-earns graduation this run (stubs kept; guards against trusting a stale marker after deps/hydration change)",
+    )
     pprom.add_argument(
         "--auto",
         action="store_true",

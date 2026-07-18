@@ -148,5 +148,6 @@ def _cmd_promote_impl(args) -> int:
             agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
             mesh=getattr(args, "mesh", None),
             max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
+            reverify=bool(getattr(args, "reverify", False)),
         )
         return _cc_rc

@@ -274,6 +274,23 @@ def _derive_shard_tp(model_id: str, mesh) -> int:
         return 1
 
 
+def _clear_graduation_snapshots(demo_dir) -> int:
+    """Remove restored ``.py.last_good_native`` / ``.py.last_good_sharded`` markers
+    under ``<demo_dir>/_stubs`` (the stub bodies are kept), so the gate treats each
+    component as not-yet-graduated and re-earns graduation via a fresh PCC run.
+    Returns the count removed."""
+    stubs_dir = Path(demo_dir) / "_stubs"
+    cleared = 0
+    for pattern in ("*.py.last_good_native", "*.py.last_good_sharded"):
+        for snap in stubs_dir.glob(pattern):
+            try:
+                snap.unlink()
+                cleared += 1
+            except OSError:
+                pass
+    return cleared
+
+
 def run_bringup_cc(
     *,
     model_id: str,
@@ -284,10 +301,19 @@ def run_bringup_cc(
     max_rounds: int = 1000,
     agent_bin: str = "claude",
     mesh=None,
+    reverify: bool = False,
 ) -> int:
     """Run bring-up via the cc engine. Returns 0 iff the gate reports can_stop (all material components
     graduated or capped-to-fallback). Graduation is persisted via the shared .last_good_native snapshot
-    contract, so promote/emit-e2e see it."""
+    contract, so promote/emit-e2e see it.
+
+    ``reverify`` clears any restored graduation snapshots at run start, so a
+    component that was graduated in a previous run is re-run through its PCC gate
+    and must re-earn graduation this run (rather than being trusted from a stale
+    marker). It leaves the stub bodies intact — only the .last_good_native /
+    .last_good_sharded markers are removed — so nothing is lost; the gate simply
+    re-verifies. The overlay/capture contract is untouched, so promote/emit-e2e
+    still see freshly-written markers afterward."""
     from .. import cc_harness
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -299,6 +325,12 @@ def run_bringup_cc(
 
         pybin = _sys.executable
     state_path = Path(demo_dir) / ".bringup_cc_state.json"
+    if reverify:
+        _cleared = _clear_graduation_snapshots(demo_dir)
+        print(
+            f"  [reverify] cleared {_cleared} restored graduation snapshot(s) — every component "
+            f"re-verifies (PCC re-run) this run; stubs kept, markers re-earned"
+        )
     import shutil as _shutil
 
     _agent_abs = _shutil.which(agent_bin) or agent_bin
