@@ -901,6 +901,33 @@ def _reclaim_device(devices: str) -> str:
     return "reclaimed device (killed holders %s) + %s" % (killed or "none", _reset_devices(devices))
 
 
+def _pg_cpu_jiffies(pgid: int) -> int:
+    total = 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0
+    target = str(pgid)
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        if len(fields) > 12 and fields[2] == target:
+            try:
+                total += int(fields[11]) + int(fields[12])
+            except ValueError:
+                pass
+    return total
+
+
 def _run_device_proc(
     cmd,
     cwd,
@@ -937,16 +964,14 @@ def _run_device_proc(
             out = out or ""
             rc = proc.returncode
         elif stall_s:
-            from agent.probes import _pgroup_cpu_jiffies
-
             pgid = proc.pid
             start = time.monotonic()
             last_progress = start
-            last_cpu = _pgroup_cpu_jiffies(pgid)
+            last_cpu = _pg_cpu_jiffies(pgid)
             while proc.poll() is None:
                 time.sleep(15)
                 now = time.monotonic()
-                cpu = _pgroup_cpu_jiffies(pgid)
+                cpu = _pg_cpu_jiffies(pgid)
                 if cpu > last_cpu + 10:
                     last_progress = now
                 last_cpu = cpu
