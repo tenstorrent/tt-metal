@@ -31,7 +31,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    SparseKVCacheFormat,
+    init_kvpe_cache,
+    init_sparse_kv_cache,
+    reconstruct_scaled_fp8_kv_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -42,6 +47,15 @@ SPARSE_KVPE_PCC = 0.99
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
 SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1", "glm_5_2"]
+
+
+def _collect_kvpe_cache(cache, mesh_device):
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    if cache.format == SparseKVCacheFormat.BF16:
+        return ttnn.to_torch(cache.tensor, mesh_composer=composer).to(torch.bfloat16)
+    packed = ttnn.to_torch(cache.tensor, mesh_composer=composer)
+    return reconstruct_scaled_fp8_kv_cache(packed)
+
 
 # ---------------------------------------------------------------------------
 # TEST MATRIX — single source of truth (see _sparse_cases for how it expands)
@@ -103,7 +117,28 @@ def _sparse_cases(seqs, anchor_only):
     return cases
 
 
-SPARSE_ACCURACY_CASES = _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False)
+def _sparse_accuracy_cases():
+    """BF16 covers both sparsity regimes; scaled FP8 covers only the real-pruning regime."""
+    cases = []
+    for case in _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False):
+        variant, mesh, seq_len = case.values
+        formats = [SparseKVCacheFormat.BF16]
+        if seq_len == SPARSE_SEQS_ANCHOR[0]:
+            formats.append(SparseKVCacheFormat.SCALED_FP8)
+        for cache_format in formats:
+            cases.append(
+                pytest.param(
+                    variant,
+                    mesh,
+                    seq_len,
+                    cache_format,
+                    id=f"{case.id}-kv_{cache_format.value}",
+                )
+            )
+    return cases
+
+
+SPARSE_ACCURACY_CASES = _sparse_accuracy_cases()
 SPARSE_ANCHOR_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=True)
 
 # All three fabric transports, keyed by name. Fabric is NOT swept: correctness is ~invariant to the
@@ -199,7 +234,15 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk):
 
 
 def run_sparse_mla_accuracy_case(
-    variant, config, mesh_device, seq_len, topology, ds_layer=None, ds_checkpoint=None, ds_repo=None
+    variant,
+    config,
+    mesh_device,
+    seq_len,
+    topology,
+    cache_format,
+    ds_layer=None,
+    ds_checkpoint=None,
+    ds_repo=None,
 ):
     """Sparse-MLA accuracy: device output + KVPE cache vs MLACPU sparse reference."""
     # Validity (tp<=cap, seq/sp>=min tokens, off-box shapes) is enforced by _sparse_cases at
@@ -216,15 +259,13 @@ def run_sparse_mla_accuracy_case(
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
     logger.debug(f"[{variant.name}] sparse MLA accuracy: initializing KVPE cache mesh_shape={mesh_shape}")
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    tt_kvpe_cache = init_sparse_kv_cache(
+        cache_format=cache_format,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     logger.info(f"[{variant.name}] sparse MLA accuracy: running TT inference")
@@ -262,10 +303,7 @@ def run_sparse_mla_accuracy_case(
     logger.info(f"[{variant.name}] Output PCC: {pcc_message}")
 
     logger.debug(f"[{variant.name}] sparse MLA accuracy: collecting KVPE cache")
-    tt_kvpe = ttnn.to_torch(
-        tt_kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)[:1, :1]
+    tt_kvpe = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:1, :1]
     kv = config.kv_lora_rank
     _, kv_pcc = assert_with_pcc(ref_kvpe[..., :kv], tt_kvpe[..., :kv], SPARSE_KVPE_PCC)
     _, pe_pcc = assert_with_pcc(ref_kvpe[..., kv:], tt_kvpe[..., kv:], SPARSE_KVPE_PCC)
@@ -335,18 +373,16 @@ def run_sparse_mla_determinism_case(
 
 
 def run_sparse_mla_chunked_case(
-    variant, config, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo, ds_input
+    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
 ):
     """Sparse chunked prefill: compare chunked ttMLA against MLACPU sparse chunked truth."""
     # Anchor mesh (TP>=2) and seq/SP validity are guaranteed by _sparse_cases (no runtime skips).
     #
-    # CACHE-QUANTIZATION NOTE: the CPU reference keeps KVPE in bf16 (SparseMLAReference defaults to
-    # simulate_fp8=False — see reference.cpu_deepseek_v32), matching the bf16 single-shot device
-    # cache. But the chunked DEVICE path reads the prefix back from the bf8 KVPE cache and upcasts it in
-    # _gather_kvpe_prefix, so this comparison crosses a bf8 cache round-trip the reference does not model.
-    # That quantization noise eats into the SPARSE_OUTPUT_PCC headroom here (vs single-shot). If chunked
-    # PCC ever drifts toward the threshold, add a simulate_fp8=True reference variant to separate expected
-    # cache-quantization noise from a true logic regression.
+    # CACHE-QUANTIZATION NOTE: the canonical CPU reference keeps KVPE in BF16. The BF16 device case
+    # therefore compares like-for-like, while the scaled-FP8 case intentionally measures the complete
+    # device quantize/store/gather/reconstruct path against BF16 truth. Any PCC delta between the two
+    # formats is expected quantization loss; the cache and final-output checks below keep it distinct from
+    # a cache-layout, block-cyclic-remap, or sparse-attention regression.
     seed = 42
     logger.info(
         f"[{variant.name}] sparse MLA chunked start: seq_len={seq_len} chunk={chunk} "
@@ -361,15 +397,13 @@ def run_sparse_mla_chunked_case(
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
     logger.debug(f"[{variant.name}] sparse MLA chunked: initializing KVPE cache mesh_shape={mesh_shape}")
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    tt_kvpe_cache = init_sparse_kv_cache(
+        cache_format=cache_format,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis)
@@ -384,6 +418,7 @@ def run_sparse_mla_chunked_case(
         tp_axis=tp_axis,
         is_chunked=True,
         layer_num=1,
+        sparse_kv_cache_format=cache_format,
     )
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk)
@@ -426,9 +461,7 @@ def run_sparse_mla_chunked_case(
 
     sp = mesh_device.shape[0]
     logger.debug(f"[{variant.name}] sparse MLA chunked: collecting KVPE cache")
-    cache_sr = ttnn.to_torch(
-        tt_kvpe_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    ).to(torch.bfloat16)[:, :1]
+    cache_sr = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:, :1]
     p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
@@ -444,6 +477,82 @@ def run_sparse_mla_chunked_case(
     logger.info(f"[{variant.name}] Chunked output PCC: {pcc_message}")
     ttnn.synchronize_device(mesh_device)
     logger.info(f"[{variant.name}] sparse MLA chunked complete")
+
+
+def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo):
+    """Last-layer chunked fast path must populate packed KVPE and tiled index caches without an output."""
+    seed = 42
+    weights, src_tag = build_weights(
+        variant, config, seed=seed, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo
+    )
+    config.max_seq_len = seq_len
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    cache_format = SparseKVCacheFormat.SCALED_FP8
+    tt_kvpe_cache = init_sparse_kv_cache(
+        cache_format=cache_format,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+    )
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis)
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_chunked=True,
+        layer_num=1,
+        sparse_kv_cache_format=cache_format,
+        kv_only=True,
+    )
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        seq_len, chunk
+    )
+    hidden = make_hidden(chunk, config.hidden_size, seed)
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+    tt_x = ttnn.from_torch(
+        hidden.unsqueeze(0),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=shard_dims),
+    )
+
+    out = mla_tt.forward(
+        tt_x,
+        rope_tensors,
+        tt_kvpe_cache,
+        actual_start=0,
+        index_kv_cache=tt_index_kv_cache,
+    )
+    assert out is None
+
+    _, ref_kvpe, ref_index = run_cpu_reference(
+        config,
+        weights,
+        hidden,
+        chunk,
+        cpu_ref_cache_dir(variant),
+        cache_tag=f"{src_tag}_funcidx_kvonly",
+    )
+    cache_sr = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:, :1]
+    positions = blockcyclic_positions(mesh_shape[sp_axis], chunk, cache_sr.shape[2])
+    cache_natural = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+    cache_natural[positions] = cache_sr[0, 0]
+    _, kv_msg = assert_with_pcc(ref_kvpe, cache_natural[:chunk].unsqueeze(0).unsqueeze(0), SPARSE_KVPE_PCC)
+
+    index_natural = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
+    _, index_msg = assert_with_pcc(ref_index[0, :chunk], index_natural[:chunk], SPARSE_INDEX_PCC)
+    logger.info(f"[{variant.name}] kv_only cache PCC: kvpe={kv_msg} index={index_msg}")
+    ttnn.synchronize_device(mesh_device)
 
 
 def run_sparse_mla_rotated_case(
@@ -590,17 +699,31 @@ def test_sparse_mla_rotated(
     run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo)
 
 
-# One combined parametrization (variant, mesh_device, seq_len) instead of three independent axes: the
-# cases are generated by _sparse_cases for the current box, so the collected matrix IS the run matrix.
-@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_ACCURACY_CASES, indirect=["variant", "mesh_device"])
+# One combined parametrization instead of independent variant/mesh/sequence/format axes. BF16 retains
+# both sparsity regimes; scaled FP8 is restricted to the real-pruning sequence to avoid redundant CI work.
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, cache_format",
+    SPARSE_ACCURACY_CASES,
+    indirect=["variant", "mesh_device"],
+)
 @pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_accuracy(
-    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+    mesh_device, seq_len, device_params, cache_format, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
     topology = _topology_from_device_params(device_params)
-    run_sparse_mla_accuracy_case(variant, config_only, mesh_device, seq_len, topology, ds_layer, ds_checkpoint, ds_repo)
+    run_sparse_mla_accuracy_case(
+        variant,
+        config_only,
+        mesh_device,
+        seq_len,
+        topology,
+        cache_format,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+    )
 
 
 # GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
@@ -683,11 +806,40 @@ def test_sparse_mla_determinism(
 @pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_ANCHOR_CASES, indirect=["variant", "mesh_device"])
 @pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
 @pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
+@pytest.mark.parametrize(
+    "cache_format",
+    [SparseKVCacheFormat.BF16, SparseKVCacheFormat.SCALED_FP8],
+    ids=["kv_bf16", "kv_scaled_fp8"],
+)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_chunked(
-    mesh_device, seq_len, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    device_params,
+    variant,
+    config_only,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
 ):
     run_sparse_mla_chunked_case(
-        variant, config_only, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo, ds_input
+        variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
     )
+
+
+SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_1" in c.id]
+
+
+@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_KV_ONLY_CASES, indirect=["variant", "mesh_device"])
+@pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
+@pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_kv_only(
+    mesh_device, seq_len, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    run_sparse_mla_kv_only_case(variant, config_only, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo)

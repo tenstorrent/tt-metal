@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat
 
 
 @dataclass
@@ -59,6 +60,7 @@ class TtPrefillRuntimeConfig:
     first_layer_idx: int = 0
     is_first_rank: bool = True
     is_last_rank: bool = True
+    sparse_kv_cache_format: SparseKVCacheFormat = SparseKVCacheFormat.BF16
 
     @property
     def sp_factor(self) -> int:
@@ -160,6 +162,7 @@ class TtPrefillRuntime:
             first_layer_idx=self.config.first_layer_idx,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            sparse_kv_cache_format=self.config.sparse_kv_cache_format,
         )
         self.model_built = True
 

@@ -45,9 +45,9 @@ Two-test pattern (mirrors tests/nightly/blackhole/sdpa):
     (warm/long) or forwards a chunk loop that fills them (cold), wrapping the measured forward(s) in
     signpost("start"/"stop"). Run under tracy.
   * test_mla_chunked_perf       — the driver, parametrized over [deepseek_v32, glm_5_1] × [warm, cold,
-    long] × [sparse, dense]. Spawns the impl under tracy via run_device_profiler (passing DS_PERF_VARIANT
-    + DS_PERF_SCENARIO + DS_PERF_ATTN_MODE), reads the device ops log for the signposted region, prints a
-    per-op table, and writes a per-(scenario, variant, mode) CSV under the per-(variant, mode) profiler dir.
+    long] × [sparse BF16, sparse scaled-FP8, dense]. Spawns the impl under tracy,
+    reads the device ops log for the signposted region, prints a per-op table, and writes a CSV under a
+    format-specific profiler directory so matched BF16/FP8 runs cannot overwrite each other.
 
 variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 (64 / 32). Both run the SAME TP=4
   meshes: GLM's thin per-chip head shard (64/4=16 < 32) is handled by the head→sequence reshard in
@@ -58,12 +58,18 @@ attn_mode axis — a baseline to compare the sparse impl against:
   * sparse — v3.2 DSA: indexer builds top-k index keys, sparse_sdpa attends only the top-k=2048 keys.
   * dense  — v3.1 baseline: has_indexer=False -> NullIndexer + full-prefix ring MLA (ring_joint_sdpa
     over the whole prefix, no indexer/top-k). Needs no cache fill (ring reads the prefix by logical_n).
-  Each (variant, mode) writes its own profiler subdir ({variant}_{sparse,dense}_mla_perf) so the runs
-  never clobber and the CSVs stay directly comparable.
+  Each case writes its own profiler subdir, including the sparse KV format in the directory name, so
+  reports never clobber and the CSVs stay directly comparable.
 
-Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenarios × 2 modes), or narrow via -k:
+kv_cache_format axis — sparse mode runs both supported persistent-cache formats:
+  * kv_bf16 — row-major BF16 baseline (1152 logical bytes/token).
+  * kv_scaled_fp8 — packed [512 E4M3 + four FP32 scales + 64 BF16 RoPE] rows (656 bytes/token).
+  Dense mode retains its tiled bfloat8_b cache and therefore has no sparse-cache-format sweep.
+
+Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenarios × 3 cache/mode cases), or narrow via -k:
     pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_mla_chunked_perf -s
-    pytest -m perf ...::test_mla_chunked_perf -k "glm_5_1 and cold and sparse" -s
+    pytest -m perf ...::test_mla_chunked_perf -k "glm_5_1 and cold and sparse and kv_scaled_fp8" -s
+    pytest -m perf ...::test_mla_chunked_perf -k "warm and sparse and kv_bf16" -s
     pytest -m perf ...::test_mla_chunked_perf -k "deepseek_v32 and dense" -s
 
 Knobs (env): DS_PERF_VARIANT (deepseek_v32|glm_5_1, default deepseek_v32 for a standalone impl run),
@@ -103,7 +109,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import m
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat, init_kvpe_cache, init_sparse_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
 CACHE_TOKENS = int(os.environ.get("DS_PERF_CACHE", 51200))  # 50 * 1024 already cached
@@ -115,7 +121,6 @@ LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
 # attn_mode axis: sparse (v3.2 DSA indexer + sparse_sdpa) vs dense (v3.1 full-prefix ring MLA — no
 # indexer, no top-k), a baseline to compare the sparse impl against. Each mode writes its own tracy
 # profiler subdir + per-scenario CSVs so the two runs never clobber and stay directly comparable.
-ATTN_MODES = ("sparse", "dense")
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # the impl selects its mode from this
 # Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 (64 / 32). BOTH run the
 # SAME TP=4 meshes — GLM's thin per-chip head shard (64/4=16 < 32) is handled by the head→sequence
@@ -133,14 +138,28 @@ _CONFIG_BUILDERS = {"deepseek_v32": deepseek_v32_hf_config, "glm_5_1": glm_hf_co
 PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
 
 
-def _subdir(variant: str, mode: str) -> str:
-    """Per-(variant, mode) tracy profiler subdir (raw device reports + per-scenario summary CSVs). Keeps
-    deepseek_v32/glm_5_1 × sparse/dense runs from clobbering each other."""
-    return f"{variant}_{mode}_mla_perf"
+def _cache_format_id(cache_format: SparseKVCacheFormat) -> str:
+    return {
+        SparseKVCacheFormat.BF16: "kv_bf16",
+        SparseKVCacheFormat.SCALED_FP8: "kv_scaled_fp8",
+    }[cache_format]
 
 
-def _csv_name(variant: str, mode: str) -> str:
-    return os.environ.get("DS_PERF_CSV" if mode == "sparse" else "DS_DENSE_PERF_CSV", f"{_subdir(variant, mode)}.csv")
+def _profile_case_id(mode: str, cache_format: SparseKVCacheFormat) -> str:
+    return f"{mode}-{_cache_format_id(cache_format)}" if mode == "sparse" else mode
+
+
+def _subdir(variant: str, mode: str, cache_format: SparseKVCacheFormat) -> str:
+    """Format-specific tracy directory; matched sparse BF16/FP8 reports must never clobber each other."""
+    profile_case = _profile_case_id(mode, cache_format).replace("-", "_")
+    return f"{variant}_{profile_case}_mla_perf"
+
+
+def _csv_name(variant: str, mode: str, cache_format: SparseKVCacheFormat) -> str:
+    return os.environ.get(
+        "DS_PERF_CSV" if mode == "sparse" else "DS_DENSE_PERF_CSV",
+        f"{_subdir(variant, mode, cache_format)}.csv",
+    )
 
 
 # Three profiling scenarios (select the impl's via DS_PERF_SCENARIO; the driver sweeps all three):
@@ -158,9 +177,9 @@ SCENARIOS = {
 SCENARIO = os.environ.get("DS_PERF_SCENARIO", "warm")
 
 
-def _scenario_csv(out_dir, scenario: str, variant: str, mode: str) -> str:
-    """Per-(scenario, variant, mode) summary CSV path under the tracy profiler dir (next to the raw reports)."""
-    root, ext = os.path.splitext(_csv_name(variant, mode))
+def _scenario_csv(out_dir, scenario: str, variant: str, mode: str, cache_format: SparseKVCacheFormat) -> str:
+    """Per-scenario summary CSV path under its format-specific tracy profiler directory."""
+    root, ext = os.path.splitext(_csv_name(variant, mode, cache_format))
     return os.path.join(out_dir, f"{root}_{scenario}{ext}")
 
 
@@ -214,7 +233,7 @@ def _git_head() -> dict:
         return {"commit": None, "branch": None}
 
 
-def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, command, workload) -> None:
+def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, cache_format, command, workload) -> None:
     """Drop a lean run_manifest.json into the tracy ``reports/<ts>/`` dir. Records ONLY what cannot be
     reconstructed from git (given the commit) or from the co-located ops CSV:
       * commit / branch — the code-state anchor (read subprocess-free from .git; no dirty flag — the
@@ -239,10 +258,11 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, command, wo
         )
         head = _git_head()
         manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "variant": variant,
             "scenario": scenario,
             "attn_mode": attn_mode,
+            "kv_cache_format": _cache_format_id(cache_format) if attn_mode == "sparse" else None,
             "commit": head["commit"],
             "branch": head["branch"],
             "device": {
@@ -373,9 +393,14 @@ def _require_perf(request):
     indirect=True,
 )
 @pytest.mark.parametrize("variant", [VARIANT], indirect=True, ids=[VARIANT])
+@pytest.mark.parametrize(
+    "kv_cache_format",
+    [SparseKVCacheFormat.BF16, SparseKVCacheFormat.SCALED_FP8] if ATTN_MODE == "sparse" else [SparseKVCacheFormat.BF16],
+    ids=["kv_bf16", "kv_scaled_fp8"] if ATTN_MODE == "sparse" else ["dense_cache"],
+)
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
 @pytest.mark.timeout(0)
-def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only):
+def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only, kv_cache_format):
     from tracy import signpost
 
     if PERF_SKIP_REASON:
@@ -400,8 +425,8 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
         f"must be divisible by TP={tp}"
     )
 
-    # Every model dimension (heads, index_*, rope interleave) comes from the single-source reference
-    # config (config_only → reference/{deepseek_v3_2,glm_5_1}_config.py). Mirror the correctness tests:
+    # Every model dimension (heads, index_*, rope interleave) comes from the variant's single-source
+    # reference config via config_only. Mirror the correctness tests:
     # set only max_seq_len and let ttMLA read all dims from the config — no per-variant overrides here.
     config = copy.deepcopy(config_only)
     config.max_seq_len = total  # rope-table / buffer length (same hack as the correctness tests)
@@ -419,23 +444,30 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
         is_chunked=True,
         layer_num=1,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
+        sparse_kv_cache_format=kv_cache_format if has_indexer else SparseKVCacheFormat.BF16,
     )
 
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
-    # KVPE cache format is mode-specific. sparse: sparse_sdpa reads it natively and requires an
-    # uncompressed bf16/fp8_e4m3 ROW_MAJOR cache (mla.py asserts) — NOT the init_kvpe_cache bfloat8_b/TILE
-    # default. dense: ring_joint_sdpa wants the default (bfloat8_b TILE) and derives its output dtype from
-    # the cache, so leave dense on the default.
-    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if has_indexer else {}
-    kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
-        mesh_device=mesh_device,
-        seq_len=total,
-        mesh_shape=list(mesh_device.shape),
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
-        **kvpe_dtype_layout,
-    )
+    # Sparse mode profiles the selected cache format. Dense ring attention retains its tiled bfloat8_b
+    # cache because it has a different cache contract.
+    if has_indexer:
+        kvpe_cache = init_sparse_kv_cache(
+            cache_format=kv_cache_format,
+            mesh_device=mesh_device,
+            seq_len=total,
+            mesh_shape=list(mesh_device.shape),
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+        )
+    else:
+        kvpe_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+            mesh_device=mesh_device,
+            seq_len=total,
+            mesh_shape=list(mesh_device.shape),
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+        )
 
     # Block-cyclic indexer key cache (SPARSE only): allocated externally (same ownership as the KVPE cache)
     # and passed into forward. warm/long leave it (and the KVPE cache) at zero init — for a profiling proxy
@@ -473,7 +505,9 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
     # signpost the WHOLE loop = total cold-start prefill cost. warm/long: one forward at start=cache.
     starts = list(range(0, cache + chunk, chunk)) if is_cold else [cache]
     logger.info(
-        f"profiling {PERF_WORKLOAD.system_name} {ATTN_MODE}/{SCENARIO} proxy: {len(starts)} × {chunk}-token "
+        f"profiling {PERF_WORKLOAD.system_name} {ATTN_MODE}/{SCENARIO}/"
+        f"{_cache_format_id(kv_cache_format) if has_indexer else 'dense-cache'} proxy: "
+        f"{len(starts)} × {chunk}-token "
         f"chunk(s) filling to end_pos={total} on SP={sp}×TP={tp}; local chunk={chunk // sp}, "
         f"local MLA heads={config.num_attention_heads // tp}"
         + (f", local indexer heads={config.index_n_heads // tp}" if has_indexer else " (dense: no indexer)")
@@ -489,12 +523,19 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
 # ============================================================================
 # Outer: drive the impl under tracy, post-process, print + write CSV
 # ============================================================================
-@pytest.mark.parametrize("attn_mode", list(ATTN_MODES), ids=list(ATTN_MODES))
+PERF_CASES = [
+    pytest.param("sparse", SparseKVCacheFormat.BF16, id="sparse-kv_bf16"),
+    pytest.param("sparse", SparseKVCacheFormat.SCALED_FP8, id="sparse-kv_scaled_fp8"),
+    pytest.param("dense", SparseKVCacheFormat.BF16, id="dense"),
+]
+
+
+@pytest.mark.parametrize("attn_mode,kv_cache_format", PERF_CASES)
 @pytest.mark.parametrize("scenario", list(SCENARIOS), ids=list(SCENARIOS))
 @pytest.mark.parametrize("variant", list(VARIANTS), ids=list(VARIANTS))
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test — run locally with tracy")
 @pytest.mark.timeout(0)
-def test_mla_chunked_perf(variant, scenario, attn_mode):
+def test_mla_chunked_perf(variant, scenario, attn_mode, kv_cache_format):
     from tracy.common import PROFILER_ARTIFACTS_DIR
     from tracy.process_model_log import run_device_profiler
 
@@ -505,7 +546,7 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
     if skip_reason:
         pytest.skip(skip_reason)
 
-    subdir = _subdir(variant, attn_mode)  # per-(variant, mode) dir: runs never clobber each other
+    subdir = _subdir(variant, attn_mode, kv_cache_format)
 
     # merge_device_rows: the deepseek_v3_d_p / tt_transformers convention for collapsing the device
     # dimension of a multi-chip Tracy ops log (see models/demos/deepseek_v3_d_p/utils/perf_utils.py).
@@ -524,6 +565,8 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
         "pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py"
         "::test_mla_chunked_perf_impl"
     )
+    if attn_mode == "sparse":
+        command += f" -k {_cache_format_id(kv_cache_format)}"
     # run_device_profiler defaults op_support_count to ~1333 ops/device — the tracy device-profiler
     # ring buffer silently drops ops beyond it. cold forwards ~11 chunks (~800 ops); raise the cap so a
     # future op-count bump can't silently truncate the log (which would corrupt the per-op totals).
@@ -564,7 +607,8 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
     span = f"full cold prefill 0→{cache}-tok cache" if is_cold else f"one chunk @ {cache}-tok cache"
     table = "\n".join(
         [
-            f"{variant} MLA chunked perf [{attn_mode}/{scenario}] — {workload.system_name} proxy "
+            f"{variant} MLA chunked perf [{_profile_case_id(attn_mode, kv_cache_format)}/{scenario}] — "
+            f"{workload.system_name} proxy "
             f"{workload.chunk_tokens}-tok chunk, {span}, SP={workload.sp}×TP={workload.tp}",
             f"Galaxy target: {CHUNK_TOKENS}-tok chunk @ {galaxy_cache}-tok cache, SP={GALAXY_SP}×TP={GALAXY_TP}; "
             f"local chunk={CHUNK_TOKENS // GALAXY_SP}, local MLA heads={workload.num_attention_heads // GALAXY_TP}",
@@ -579,7 +623,7 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
     logger.info("\n" + table)
     print("\n" + table)  # ensure full table reaches stdout even if logging is filtered
 
-    csv_out = _scenario_csv(PROFILER_ARTIFACTS_DIR / subdir, scenario, variant, attn_mode)
+    csv_out = _scenario_csv(PROFILER_ARTIFACTS_DIR / subdir, scenario, variant, attn_mode, kv_cache_format)
     by_op.reset_index().to_csv(csv_out, index=False)
     logger.info(f"per-op CSV written to {os.path.abspath(csv_out)}")
 
@@ -596,6 +640,7 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
             variant=variant,
             scenario=scenario,
             attn_mode=attn_mode,
+            cache_format=kv_cache_format,
             command=command,
             workload=workload,
         )
@@ -645,6 +690,12 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
         )
         logger.info("\n" + iter_table)
         print("\n" + iter_table)
-        iter_csv = _scenario_csv(PROFILER_ARTIFACTS_DIR / subdir, f"{scenario}_by_iter", variant, attn_mode)
+        iter_csv = _scenario_csv(
+            PROFILER_ARTIFACTS_DIR / subdir,
+            f"{scenario}_by_iter",
+            variant,
+            attn_mode,
+            kv_cache_format,
+        )
         by_iter_op.to_csv(iter_csv, index=False)
         logger.info(f"per-op×iteration CSV written to {os.path.abspath(iter_csv)}")

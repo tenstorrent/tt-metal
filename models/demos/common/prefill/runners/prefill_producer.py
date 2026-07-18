@@ -12,7 +12,7 @@ test suite as ProducerConfig data (see tests/test_producer_runner_e2e.py); this 
 
 After pushing, it drains the runner's per-layer LayerAcks and, if asked, reads the resulting KV cache
 back and PCC-checks it against the golden trace. The KV read (read_dram_umd over a bare UMD cluster)
-and the bfp8 decode are BOTH device-less on purpose: touching a real ttnn device here would take the
+and raw cache decode are BOTH device-less on purpose: touching a real ttnn device here would take the
 CHIP_IN_USE lock the runner already holds, and deadlock.
 
 `run_schedule()` takes injectable seams (push_fn / now_fn / sleep_fn / rng) so the scheduling logic
@@ -95,7 +95,7 @@ def _chunk_to_host_array(chunk_token_ids):
 
 
 # ---------------------------------------------------------------------------
-# Device-less helpers: read the KV table / device map, attach the LayerAck channel, decode bfp8.
+# Device-less helpers: read the KV table / device map, attach the LayerAck channel, decode cache data.
 # All device-less on purpose — none may touch a real ttnn device (that would take the CHIP_IN_USE
 # lock the runner holds and deadlock).
 # ---------------------------------------------------------------------------
@@ -224,6 +224,80 @@ def _decode_bf16_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
     by_face = f32.reshape(n_tiles, 2, 2, 16, 16).transpose(0, 1, 3, 2, 4).reshape(n_tiles, TILE, TILE)
     decoded = by_face.transpose(1, 0, 2).reshape(TILE, n_tiles * TILE)
     return torch.from_numpy(np.ascontiguousarray(decoded))
+
+
+def _decode_row_major_chunk(raw: bytes, head_dim: int, dtype: torch.dtype) -> torch.Tensor:
+    """Decode 32 native row pages, dropping any physical row padding."""
+    element_size = torch.empty((), dtype=dtype).element_size()
+    if len(raw) % _KV_CHUNK_TOKENS != 0:
+        raise ValueError(f"row-major KV chunk has {len(raw)} bytes, not a multiple of {_KV_CHUNK_TOKENS} rows")
+    row_size_bytes = len(raw) // _KV_CHUNK_TOKENS
+    logical_row_size_bytes = head_dim * element_size
+    if row_size_bytes < logical_row_size_bytes:
+        raise ValueError(f"row-major KV row has {row_size_bytes} bytes, smaller than {head_dim} x {element_size} bytes")
+
+    rows = torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(_KV_CHUNK_TOKENS, row_size_bytes)
+    logical = rows[:, :logical_row_size_bytes].contiguous()
+    return logical.view(dtype).reshape(_KV_CHUNK_TOKENS, head_dim).float()
+
+
+_KV_CHUNK_TOKENS = 32
+_BFP8_TILE_BYTES = 1088
+_SCALED_FP8_LATENT_DIM = 512
+_SCALED_FP8_SCALE_BLOCK = 128
+_SCALED_FP8_NUM_SCALES = _SCALED_FP8_LATENT_DIM // _SCALED_FP8_SCALE_BLOCK
+_SCALED_FP8_ROPE_DIM = 64
+_SCALED_FP8_SCALE_OFFSET = _SCALED_FP8_LATENT_DIM
+_SCALED_FP8_ROPE_OFFSET = _SCALED_FP8_SCALE_OFFSET + _SCALED_FP8_NUM_SCALES * 4
+_SCALED_FP8_ROW_BYTES = _SCALED_FP8_ROPE_OFFSET + _SCALED_FP8_ROPE_DIM * 2
+
+
+def _decode_scaled_fp8_kv_rows(rows: torch.Tensor, head_dim: int) -> torch.Tensor:
+    """Reconstruct ``[scaled latent | RoPE]`` from packed mixed-format row bytes."""
+    if head_dim != _SCALED_FP8_LATENT_DIM + _SCALED_FP8_ROPE_DIM:
+        raise ValueError(f"packed scaled-FP8 KV requires head_dim 576, got {head_dim}")
+
+    latent = rows[:, :_SCALED_FP8_SCALE_OFFSET].contiguous().view(torch.float8_e4m3fn).float()
+    scales = (
+        rows[:, _SCALED_FP8_SCALE_OFFSET:_SCALED_FP8_ROPE_OFFSET]
+        .contiguous()
+        .view(torch.float32)
+        .reshape(_KV_CHUNK_TOKENS, _SCALED_FP8_NUM_SCALES)
+    )
+    rope = (
+        rows[:, _SCALED_FP8_ROPE_OFFSET:_SCALED_FP8_ROW_BYTES]
+        .contiguous()
+        .view(torch.bfloat16)
+        .reshape(_KV_CHUNK_TOKENS, _SCALED_FP8_ROPE_DIM)
+        .float()
+    )
+    latent = latent * scales.repeat_interleave(_SCALED_FP8_SCALE_BLOCK, dim=-1)
+    return torch.cat((latent, rope), dim=-1)
+
+
+def _decode_kv_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
+    """Decode one raw 32-token MLA KV chunk by its table-reported physical byte size.
+
+    The deployed 576-wide formats have distinct physical row sizes: tiled bfp8_b, raw row-major
+    fp8_e4m3, packed scaled FP8, and row-major bfloat16. The packed format is reconstructed from its
+    512 E4M3 latent bytes, four FP32 scales, and 64 BF16 RoPE values. Row padding is discarded.
+    """
+    if head_dim % 32 == 0 and len(raw) == (head_dim // 32) * _BFP8_TILE_BYTES:
+        return _decode_bfp8_chunk(raw, head_dim)
+
+    if len(raw) % _KV_CHUNK_TOKENS != 0:
+        raise ValueError(f"unsupported KV chunk size {len(raw)} for head_dim {head_dim}")
+    row_size_bytes = len(raw) // _KV_CHUNK_TOKENS
+    rows = torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(_KV_CHUNK_TOKENS, row_size_bytes)
+    if head_dim == 576 and _SCALED_FP8_ROW_BYTES <= row_size_bytes < 2 * head_dim:
+        return _decode_scaled_fp8_kv_rows(rows, head_dim)
+    fp8_fits = row_size_bytes >= head_dim
+    bf16_fits = row_size_bytes >= 2 * head_dim
+    if fp8_fits and not bf16_fits:
+        return _decode_row_major_chunk(raw, head_dim, torch.float8_e4m3fn)
+    if bf16_fits and row_size_bytes == 2 * head_dim:
+        return _decode_row_major_chunk(raw, head_dim, torch.bfloat16)
+    raise ValueError(f"ambiguous or unsupported row-major KV row size {row_size_bytes} bytes for head_dim {head_dim}")
 
 
 def _resolve_unique_id(fabric_node_ids, device_map: dict) -> int:
@@ -403,7 +477,7 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
 
 # ---------------------------------------------------------------------------
-# Per-slot KV read-back + PCC (device-less: read_dram_umd over UMD + pure-numpy bfp8 decode)
+# Per-slot KV read-back + PCC (device-less: read_dram_umd over UMD + host cache decode)
 # ---------------------------------------------------------------------------
 
 
@@ -515,13 +589,13 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
     min_pcc = 1.0
     for layer in range(NUM_LAYERS):
-        # Read this layer's KV block by block over UMD, decode each bfp8 chunk, concat to [real_len, 576].
+        # Read this layer's KV block by block over UMD, decode its physical cache format, and concat.
         decoded_rows = []
         for pos in range(0, read_len, tokens_per_block):
             loc = table.lookup(layer, pos, slot_id)
             unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
             raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-            decoded_rows.append(_decode_bfp8_chunk(raw, HEAD_DIM))
+            decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
         device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (table un-rotates block-cyclic)
 
         golden = _load_golden_kv_post(trace_dir, layer, real_len)
