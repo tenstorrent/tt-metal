@@ -479,10 +479,23 @@ def note_board(card: str = "", device_count: int = 0, box: str = "", tt_smi: str
     _GALAXY_HOST = "galaxy" in text or device_count >= 32
 
 
+def _enumerated_device_count() -> int:
+    """How many local Tenstorrent chips the host exposes, counted from /dev/tenstorrent (works even when
+    the runtime is wedged and ttnn enumeration itself throws). Drives a box-complete reset device list."""
+    try:
+        import glob
+
+        return len([p for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit()])
+    except Exception:
+        return 0
+
+
 def _reset_arg_sets() -> list[list[str]]:
     """The tt-smi reset invocations to try, in order, for THIS host. An explicit override wins; else a
     Galaxy host uses the galaxy-tray reset (auto-retry first) with the plain reset as a last-ditch
-    fallback, and a non-Galaxy host uses the plain per-device reset."""
+    fallback, and a non-Galaxy host resets the FULL enumerated chip list (`-r 0,1,..,N-1`). A partial
+    reset (a subset of a multi-chip board's chips) leaves the untouched chips' clock arbiter inconsistent
+    and wedges device-open, so the reset must cover every chip the box exposes, not a fixed subset."""
     override = os.environ.get("TT_HW_PLANNER_RESET_ARGS")
     if override:
         return [override.split()]
@@ -491,6 +504,11 @@ def _reset_arg_sets() -> list[list[str]]:
         galaxy = os.environ.get("TT_HW_PLANNER_GALAXY", "").strip().lower() in ("1", "true", "yes")
     if galaxy:
         return [["-glx_reset_auto"], ["-glx_reset"], ["-r"]]
+    n = _enumerated_device_count()
+    if n >= 2:
+        return [["-r", ",".join(str(i) for i in range(n))]]
+    if n == 1:
+        return [["-r", "0"]]
     return [["-r"]]
 
 

@@ -234,6 +234,30 @@ def _needed_trace_region(text: str):
     return int(max(over) * 1.25) if over else None
 
 
+_DEVICE_DISRUPTION_RE = re.compile(
+    r"AICLK failed to settle|clamped by max-arbiter|Sysmem mapped at unexpected NOC|"
+    r"pin_or_map_sysmem_to_device|failed to open device|could not open device|GetPCIeDeviceID|"
+    r"GetNumPCIeDevices",
+    re.IGNORECASE,
+)
+
+
+def _is_device_disruption(rc, out: str) -> bool:
+    """A board-level disruption (device open / PCIe enumeration / clock / stale sysmem) rather than a
+    test-code bug: the test file is fine, the DEVICE is wedged, so regenerating the test cannot help —
+    the self-heal path (reset + cooldown + retry the SAME test) must run instead. Kept narrow so an
+    ordinary assertion / import error in a generated test still flows to the correction loop."""
+    if not out:
+        return False
+    if _DEVICE_DISRUPTION_RE.search(out):
+        return True
+    if "unordered_map::at" in out and re.search(
+        r"GetPCIeDeviceID|open_device|CreateDevice|MeshDevice|conftest\.py|device_params", out
+    ):
+        return True
+    return False
+
+
 def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
     def _once(ev):
         env = dict(os.environ)
@@ -262,21 +286,40 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
             shutil.rmtree(log.parent, ignore_errors=True)
 
     ev = dict(extra_env)
-    rc, out = _once(ev)
-    # model/hardware-agnostic trace region: never a fixed guess. The device reports the EXACT bytes a
-    # capture needs when the region is too small; grow to that (doubling to cover a multi-stage trace's
-    # cumulative growth) and re-run, until every stage's capture fits or the grow budget is exhausted.
-    for _ in range(_TRACE_REGION_GROW_ROUNDS):
-        need = _needed_trace_region(out)
-        if need is None:
-            break
-        cur = int(ev.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
-        target = max(need, cur * 2)
-        if target <= cur:
-            break
-        ev["TT_PERF_TRACE_REGION"] = str(target)
+    max_disrupt = int(os.environ.get("PERF_MCP_DEVICE_DISRUPT_RETRIES", "3") or "3")
+    disruptions = 0
+    while True:
         rc, out = _once(ev)
-    return rc, out
+        # model/hardware-agnostic trace region: never a fixed guess. The device reports the EXACT bytes a
+        # capture needs when the region is too small; grow to that (doubling to cover a multi-stage trace's
+        # cumulative growth) and re-run, until every stage's capture fits or the grow budget is exhausted.
+        for _ in range(_TRACE_REGION_GROW_ROUNDS):
+            need = _needed_trace_region(out)
+            if need is None:
+                break
+            cur = int(ev.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
+            target = max(need, cur * 2)
+            if target <= cur:
+                break
+            ev["TT_PERF_TRACE_REGION"] = str(target)
+            rc, out = _once(ev)
+        if disruptions < max_disrupt and _is_device_disruption(rc, out):
+            from . import probes as _pr
+
+            ok = _pr._device_reset()
+            try:
+                _pr._await_cool()
+            except Exception:  # noqa: BLE001
+                pass
+            disruptions += 1
+            print(
+                "      · device disruption detected (board wedge, not a test bug) — self-heal "
+                f"tt-smi reset (ok={ok}) + cooldown, retry {disruptions}/{max_disrupt}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        return rc, out
 
 
 def _write_trace_caps(out_path: Path, caps: dict) -> None:
@@ -290,6 +333,42 @@ def _write_trace_caps(out_path: Path, caps: dict) -> None:
 # terminal). It has NO fixed attempt budget — only a STALL guard: if the LLM fails to make forward
 # progress this many consecutive times, give up rather than spin forever on a pipeline it can't fix.
 _STALL_LIMIT = 6
+
+_TRACE_WEDGE_LIMIT = int(os.environ.get("PERF_MCP_TRACE_WEDGE_LIMIT", "3") or "3")
+
+_COMPONENT_WEDGE_REASON = (
+    "your trace capture HUNG the device (execute_trace blocked) — the timed forward contains HOST work "
+    "that a trace cannot record. The tool already builds the module + its inputs ONCE before the capture "
+    "and gives you a resident-buffer skeleton; your job is to make sure NOTHING between "
+    "ttnn.begin_trace_capture and ttnn.end_trace_capture touches the host: NO ttnn.from_torch / "
+    "ttnn.to_torch / .item() / .cpu() / torch tensor construction / python shape or control-flow decisions "
+    "inside _forward(). Move any mask / rope / position / scale construction ABOVE the capture (build once, "
+    "keep the ttnn tensor resident) and have _forward() call ONLY the module on the already-resident inputs. "
+    "If the module's OWN forward has an irreducible host op that cannot be removed, print "
+    "TRACE_NOT_TRACE_CAPABLE=1 and skip the trace block so it falls back to the eager FORWARD_WALL_MS number."
+)
+
+
+def _eager_terminal_ok(out_path: Path, task: str) -> bool:
+    """Run the generated component test with tracing OFF and accept its eager FORWARD_WALL_MS as the
+    terminal perf number when the module cannot be trace-captured. Records an eager-terminal caps sidecar
+    so the downstream reader treats it like the pipeline's TRACE_NOT_TRACE_CAPABLE fallback."""
+    vt = int(os.environ.get("PERF_MCP_VALIDATE_TIMEOUT", "900") or "900")
+    rc0, out0 = _run_perf_node(f"{out_path}::test_{task}_perf", {"TT_PERF_TRACE": "0"}, timeout_s=vt)
+    if rc0 == 0 and "FORWARD_WALL_MS=" in out0:
+        _write_trace_caps(
+            out_path,
+            {
+                "trace_1cq": False,
+                "trace_1cq_path": None,
+                "trace_2cq": False,
+                "trace_2cq_path": None,
+                "eager_terminal": True,
+            },
+        )
+        return True
+    return False
+
 
 # Lines from a failing pytest run that are NOISE, not the real error: nanobind/UMD teardown chatter,
 # raw backtraces, python-internal frames. Feeding these back to the LLM as "the error" wastes the
@@ -396,7 +475,7 @@ def _correction_feedback(reason: str, failure: str, prev_draft: str | None) -> s
     return "\n".join(parts)
 
 
-def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
+def validate_generated_perf_test(out_path: Path, task: str, component: bool = False) -> tuple[str, str]:
     """Execute the freshly-generated perf test and JUDGE it, model- and hardware-agnostically:
       skip      device/ttnn unavailable at generation time -> soft-accept (never a false rejection)
       ok_2cq    the 2-CQ probe genuinely engaged (TRACE_REPLAY_PATH=trace+2cq) -> ship it
@@ -409,6 +488,46 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
     what it saw in the trace_caps sidecar either way. Second return value is the failure detail fed back."""
     node_abs = f"{out_path}::test_{task}_perf"
     vt = int(os.environ.get("PERF_MCP_VALIDATE_TIMEOUT", "900") or "900")
+    if component:
+        rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_TRACE": "1", "TT_PERF_NUM_CQ": "1"}, timeout_s=vt)
+        if rc1 is None:
+            return "skip", out1
+        low = out1.lower()
+        if any(s in low for s in _DEVICE_UNAVAILABLE):
+            return "skip", "device/ttnn unavailable during generation-time validation"
+        has_eager = "FORWARD_WALL_MS=" in out1
+        traced = ("TRACE_PER_TOKEN_MS=" in out1) and bool(_parse_trace_path(out1))
+        if rc1 == 0 and traced:
+            _write_trace_caps(
+                out_path,
+                {
+                    "trace_1cq": True,
+                    "trace_1cq_path": _parse_trace_path(out1),
+                    "trace_2cq": False,
+                    "trace_2cq_path": None,
+                    "eager_terminal": False,
+                },
+            )
+            return "ok_1cq", ""
+        if rc1 == 0 and has_eager and _is_eager_terminal(out1):
+            _write_trace_caps(
+                out_path,
+                {
+                    "trace_1cq": False,
+                    "trace_1cq_path": None,
+                    "trace_2cq": False,
+                    "trace_2cq_path": None,
+                    "eager_terminal": True,
+                },
+            )
+            return "ok_marker", ""
+        if rc1 == 124 or "WEDGE" in out1:
+            return "invalid", "WEDGE: " + (_extract_error(out1) or "device hung capturing the module's forward")
+        return "invalid", (
+            _extract_error(out1)
+            or "module perf test produced FORWARD_WALL_MS but no TRACE_PER_TOKEN_MS and did not declare "
+            "TRACE_NOT_TRACE_CAPABLE=1"
+        )
     rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "1"}, timeout_s=vt)
     if rc1 is None:
         return "skip", out1
@@ -611,41 +730,56 @@ def test_<task>_perf(device_params, device):
     print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _t0) * 1000.0 / PERF_ITERS))
     assert out is not None
 
-    try:
-        _tid = ttnn.begin_trace_capture(device, cq_id=0)
-        _forward()
-        ttnn.end_trace_capture(device, _tid, cq_id=0)
-        ttnn.execute_trace(device, _tid, cq_id=0, blocking=True)
-        _tt0 = time.monotonic()
-        for _ in range(PERF_ITERS):
-            ttnn.execute_trace(device, _tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(device)
-        ttnn.release_trace(device, _tid)
-        print("TRACE_PER_TOKEN_MS=%.4f" % ((time.monotonic() - _tt0) * 1000.0 / PERF_ITERS))
-        print("TRACE_REPLAY_PATH=trace 1cq module-forward")
-    except Exception as _te:  # noqa: BLE001
-        print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
+    if os.environ.get("TT_PERF_TRACE") != "0":
+        try:
+            _forward()
+            ttnn.synchronize_device(device)
+            _tid = ttnn.begin_trace_capture(device, cq_id=0)
+            _forward()
+            ttnn.end_trace_capture(device, _tid, cq_id=0)
+            ttnn.execute_trace(device, _tid, cq_id=0, blocking=True)
+            _tt0 = time.monotonic()
+            for _ in range(PERF_ITERS):
+                ttnn.execute_trace(device, _tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            ttnn.release_trace(device, _tid)
+            print("TRACE_PER_TOKEN_MS=%.4f" % ((time.monotonic() - _tt0) * 1000.0 / PERF_ITERS))
+            print("TRACE_REPLAY_PATH=trace 1cq module-forward")
+        except Exception as _te:  # noqa: BLE001
+            print("TRACE_NOT_TRACE_CAPABLE=1", flush=True)
+            print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
 """
 
 
-def _component_prompt(out_rel: str, src_label: str, demo_src: str, task: str) -> str:
+def _component_prompt(out_rel: str, src_label: str, demo_src: str, task: str, cache_instr: str = "") -> str:
     """LLM prompt for a single-component perf test — the GENERAL path (covers any module/model type).
     Mirrors the demo path's proven 'lift the build+run from a complete source' recipe, but the source is
-    the component's per-component PCC test and the target is one module timed in isolation."""
+    the component's per-component PCC test and the target is one module timed in isolation. Carries the
+    golden-cache fast path (so candidates never reload the full model) and the resident-buffer trace rules
+    (so the isolated-module trace capture does not hang the device)."""
     return (
         f"Write a pytest PERFORMANCE test file `{out_rel}` that times ONE component of this TTNN model in "
         f"ISOLATION. The source below is that component's per-component CORRECTNESS (PCC) test — it ALREADY "
-        f"builds the module correctly and runs its forward. LIFT ITS SETUP EXACTLY: reproduce VERBATIM its "
-        f"reference-model load, submodule resolution, ttnn module build, and input-tensor construction — "
-        f"these are the ONLY correct source of the module's weights and input, so do NOT drop them and do "
-        f"NOT substitute AutoModel/from_pretrained; if it loads a model-local `_reference_loader`, load it "
-        f"the SAME way it does. DROP ONLY the final comp_pcc / assert_with_pcc correctness comparison, then "
-        f"time the module's forward per the skeleton. This is NOT a pipeline: do NOT use build_pipeline, "
+        f"builds the module correctly and runs its forward.\n"
+        + cache_instr
+        + f"LIFT ITS SETUP: reproduce its ttnn module build and input-tensor construction so the module has "
+        f"the SAME weights and inputs; on a golden-cache MISS reproduce the source's reference-model load / "
+        f"submodule resolution VERBATIM (do NOT substitute AutoModel/from_pretrained on the miss path; if it "
+        f"loads a model-local `_reference_loader`, load it the SAME way it does). Build the module + ALL its "
+        f"inputs ONCE before timing. DROP ONLY the final comp_pcc / assert_with_pcc correctness comparison, "
+        f"then time the module's forward per the skeleton. This is NOT a pipeline: do NOT use build_pipeline, "
         f"run_tts, run_main, generate, PipelineStageAdapter, measure_adapter, or PIPELINE_STAGES.\n"
         f"<pcc_test path='{src_label}'>\n{demo_src}\n</pcc_test>\n\n"
         f"Fill this structural skeleton — keep the drain, the eager timing, AND the trace-replay block "
-        f"VERBATIM; your ONLY edits are replacing the two `...` placeholders (the build/input in step 1 "
-        f"and the `_forward()` body in step 2) with code lifted from the source:\n{_SKELETON_COMPONENT}\n\n"
+        f"VERBATIM; your ONLY edits are replacing the two `...` placeholders (the build/input in step 1 and "
+        f"the `_forward()` body in step 2) with code lifted from the source. TRACE-CAPTURE RULE (critical — "
+        f"a violation HANGS the device): build the module and ALL its inputs/constants (masks, rope, "
+        f"positions, scales) in step 1, ONCE, before the capture, and keep them resident on device; "
+        f"`_forward()` must call ONLY the module on those already-built ttnn tensors — NO ttnn.from_torch / "
+        f"ttnn.to_torch / .item() / .cpu() / torch tensor construction / python shape or control-flow "
+        f"decisions inside `_forward()`. If the module's own forward has an irreducible host op, print "
+        f"TRACE_NOT_TRACE_CAPABLE=1 and skip the trace so it falls back to the eager number:\n"
+        f"{_SKELETON_COMPONENT}\n\n"
         f"Do NOT use any tools and do NOT write the file yourself — respond with ONLY the complete python "
         f"file content as your message text, no prose, no markdown fences."
     )
@@ -830,7 +964,7 @@ def generate_perf_test(
         "Respond with ONLY the complete python file content as your message text — no prose, no markdown fences."
     )
     if _component:
-        prompt = _component_prompt(out_rel, src_label, demo_src, task)
+        prompt = _component_prompt(out_rel, src_label, demo_src, task, cache_instr=_cache_instr)
     if self_traced and not _component:
         prompt = _self_traced_prompt(out_rel, task, src_label, demo_src, self_traced)
     # A generative demo's perf test must exercise the (capped) decode loop, not a prefill-only slice.
@@ -844,6 +978,7 @@ def generate_perf_test(
     feedback = ""
     prev_draft = None
     stall = 0
+    trace_wedges = 0
     while stall < _STALL_LIMIT:
         content = _strip_fence(gen(prompt + feedback) or "")
         if "def test_" not in content or "ttnn" not in content:
@@ -908,10 +1043,28 @@ def generate_perf_test(
         out_path.write_text(content)
         if not validate:
             return node
-        verdict, failure = validate_generated_perf_test(out_path, task)
+        verdict, failure = validate_generated_perf_test(out_path, task, component=_component)
         if verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
             return node
         stall += 1
+        if _component and "WEDGE" in failure:
+            trace_wedges += 1
+            print(
+                f"      · perf-test regen {stall}/{_STALL_LIMIT} (trace wedge {trace_wedges}/{_TRACE_WEDGE_LIMIT}): "
+                "device hung capturing this module's forward — reset + regenerating",
+                file=sys.stderr,
+                flush=True,
+            )
+            if trace_wedges >= _TRACE_WEDGE_LIMIT and _eager_terminal_ok(out_path, task):
+                print(
+                    f"      · module not trace-capturable after {_TRACE_WEDGE_LIMIT} attempts -> "
+                    "eager FORWARD_WALL_MS terminal",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return node
+            feedback = _correction_feedback(_COMPONENT_WEDGE_REASON, failure, prev_draft)
+            continue
         if "WEDGE" in failure:
             _why = "device wedged on a non-capturable step — reset + regenerating"
         elif "degraded to 1cq" in failure:
@@ -923,7 +1076,20 @@ def generate_perf_test(
             "the test ran but never held trace+2cq (it degraded to 1cq); the 2-CQ input overlap must "
             "engage so the optimize bookend doesn't silently downgrade"
             if "degraded to 1cq" in failure
-            else "the test did not run the full pipeline / errored"
+            else (
+                "the module perf test produced FORWARD_WALL_MS but no TRACE_PER_TOKEN_MS and did not declare "
+                "TRACE_NOT_TRACE_CAPABLE=1 — implement the trace-replay block, or declare the module "
+                "non-capturable"
+                if _component
+                else "the test did not run the full pipeline / errored"
+            )
         )
         feedback = _correction_feedback(reason, failure, prev_draft)
+    if _component and _eager_terminal_ok(out_path, task):
+        print(
+            "      · exhausted trace retries -> eager FORWARD_WALL_MS terminal",
+            file=sys.stderr,
+            flush=True,
+        )
+        return node
     return None
