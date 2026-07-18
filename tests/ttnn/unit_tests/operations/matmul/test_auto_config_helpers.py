@@ -747,7 +747,7 @@ def test_place_weight_recommends_sharding_activation_when_not_k_sharded(monkeypa
     assert any("row-parallel" in recommendation for recommendation in placement.recommendations)
 
 
-def test_place_weight_measured_pick_prefers_faster_verified_shard(monkeypatch):
+def test_place_weight_shards_on_k_and_verifies_for_k_sharded_activation(monkeypatch):
     fake_ttnn = _fake_ttnn_for_placement()
     monkeypatch.setattr(auto_matmul, "_ttnn", lambda: fake_ttnn)
     activation = fake_ttnn.Tensor()
@@ -755,12 +755,10 @@ def test_place_weight_measured_pick_prefers_faster_verified_shard(monkeypatch):
     monkeypatch.setattr(auto_matmul, "_stage_weight", lambda weight, device, **kwargs: kwargs["role"])
     monkeypatch.setattr(auto_matmul, "_get_cpp_base_operation", lambda is_linear: "base")
     monkeypatch.setattr(auto_matmul, "_placement_reference_output", lambda *args, **kwargs: "reference")
-    monkeypatch.setattr(auto_matmul, "_deallocate_result", lambda tensor: None)
 
     def fake_measure(activation, staged, **kwargs):
-        if staged == "weight_shard_k":
-            return {"avg_us": 8.0, "winner": {"kind": "reduce_scatter"}, "verified": True, "output_is_sharded": True}
-        return {"avg_us": 20.0, "winner": {"kind": "all_gather"}, "verified": True, "output_is_sharded": False}
+        assert staged == "weight_shard_k"
+        return {"avg_us": 8.0, "winner": {"kind": "reduce_scatter"}, "verified": True, "output_is_sharded": True}
 
     monkeypatch.setattr(auto_matmul, "_measure_weight_placement", fake_measure)
     weight = SimpleNamespace(shape=(64, 128))
@@ -771,9 +769,10 @@ def test_place_weight_measured_pick_prefers_faster_verified_shard(monkeypatch):
     assert placement.tensor == "weight_shard_k"
     assert placement.output_is_sharded is True
     assert placement.verified is True
+    assert placement.cluster_axis == 0
 
 
-def test_place_weight_measured_pick_falls_back_to_replicate_when_shard_unverified(monkeypatch):
+def test_place_weight_reports_unverified_shard_when_ground_truth_fails(monkeypatch):
     fake_ttnn = _fake_ttnn_for_placement()
     monkeypatch.setattr(auto_matmul, "_ttnn", lambda: fake_ttnn)
     activation = fake_ttnn.Tensor()
@@ -781,19 +780,17 @@ def test_place_weight_measured_pick_falls_back_to_replicate_when_shard_unverifie
     monkeypatch.setattr(auto_matmul, "_stage_weight", lambda weight, device, **kwargs: kwargs["role"])
     monkeypatch.setattr(auto_matmul, "_get_cpp_base_operation", lambda is_linear: "base")
     monkeypatch.setattr(auto_matmul, "_placement_reference_output", lambda *args, **kwargs: "reference")
-    monkeypatch.setattr(auto_matmul, "_deallocate_result", lambda tensor: None)
 
     def fake_measure(activation, staged, **kwargs):
-        if staged == "weight_shard_k":
-            # Faster, but did NOT verify -> must be rejected.
-            return {"avg_us": 5.0, "winner": {"kind": "reduce_scatter"}, "verified": False, "output_is_sharded": True}
-        return {"avg_us": 20.0, "winner": {"kind": "all_gather"}, "verified": True, "output_is_sharded": False}
+        return {"avg_us": None, "winner": None, "verified": False, "output_is_sharded": True}
 
     monkeypatch.setattr(auto_matmul, "_measure_weight_placement", fake_measure)
     weight = SimpleNamespace(shape=(64, 128))
 
     placement = auto_matmul.place_weight(weight, activation=activation, mesh_device=_FakeMeshDevice(2, (2,)))
 
-    assert placement.strategy == "replicate"
-    assert placement.tensor == "weight_replicate"
-    assert placement.output_is_sharded is False
+    # The K-sharded weight is the only shape-consistent placement for a K-sharded
+    # activation, so it is returned but flagged unverified with a recommendation.
+    assert placement.strategy == "shard_k"
+    assert placement.verified is False
+    assert any("did not match the ground-truth" in rec for rec in placement.recommendations)
