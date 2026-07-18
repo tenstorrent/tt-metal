@@ -324,25 +324,34 @@ def test_quasar_conv2d_split_program_e2e_shapes(mesh_device, shape, with_bias_re
 # ============================================================================
 
 
+# Deep-reduction K (tiles) sweep for the no-spill/split path. K = in_channels*3*3/32.
+#   K36 (C=128, layer2 3x3): fixed by raising kQuasarConvNoSpillMaxKTiles to 64 -> should PASS.
+#   K72 (C=256, layer3 3x3): K > 64 -> force_conv_no_spill does NOT fire (act_block_w != full_K) -> overrun/hang,
+#     AND even if the limit were raised the single full-K K-block (72 tiles) may not fit L1 -> OOM. This test
+#     pins WHICH it is (assert/overrun/hang vs allocation error), to decide raise-limit vs K-spill vs more-L1.
+#   K144 (C=512, layer4 3x3) is deferred (certain OOM at one K-block).
+_DEEP_K_CASES = [(128, "K36_layer2"), (256, "K72_layer3")]
+
+
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_quasar_gap_deep_k_over_32(mesh_device):
+@pytest.mark.parametrize("in_channels,cid", _DEEP_K_CASES, ids=[c[1] for c in _DEEP_K_CASES])
+def test_quasar_gap_deep_k_over_32(mesh_device, in_channels, cid):
     """GAP 1 — deep reduction K > 32 tiles (ResNet layer2-4 3x3 convs, in_channels >= 128).
 
-    The no-spill/split path is gated to K <= kQuasarConvNoSpillMaxKTiles(=32) in conv2d.cpp, so
-    force_conv_no_spill does NOT fire here (K = 128*3*3/32 = 36 tiles) and act_block_w is NOT set to
-    full_K -> the reader gathers full_K into a window-row-sized ACT CB (overrun) / the K-spill path.
-    FIX DIRECTION: raise the K limit and make the split tilize + single-K-block matmul handle K > 32
-    tiles (L1 fit + matmul in0_block_w > 32), OR spill K across tilize blocks without the 0x19/accumulate.
+    force_conv_no_spill only fires (sets act_block_w = full_K) when K <= kQuasarConvNoSpillMaxKTiles; above it
+    the split runs with act_block_w = window-row while the reader gathers full_K -> ACT-CB overrun / tilize
+    starvation hang (K36 hung on WH+Quasar at block 1 before the limit was raised 32->64).
+    FIX DIRECTION: raise the limit + single-K-block matmul/tilize (L1 fit), OR K-spill without the accumulate.
     """
     _run(
         mesh_device,
         with_bias_relu=False,
-        in_channels=128,
+        in_channels=in_channels,
         out_channels=64,
         kernel_size=(3, 3),
         out_h=8,
-        out_w=16,  # small spatial to fit L1 at K=36 tiles
+        out_w=16,  # small spatial to minimize L1 (act CB = act_block_h*full_K, weights = full_K*N)
         act_block_h_override=32,  # 1 tile -> <=4 M-tiles/gather (isolate the K gap from the reader gap)
         skip_known_quasar_fail=False,
     )

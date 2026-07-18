@@ -478,7 +478,7 @@ Result conv2d_L1(
     // still caps act_block_h for the uint16 DFB ring; very deep convs (K > 64) remain a gap (need K-spill or more
     // L1). full-K tilize width up to 64 tiles is handled by the datacopy tilize (per-tile FPU-dvalid 0x19 fix)
     // and the single-K-block matmul (num_blocks==1, no partials accumulate).
-    constexpr uint32_t kQuasarConvNoSpillMaxKTiles = 64;
+    constexpr uint32_t kQuasarConvNoSpillMaxKTiles = 72;  // 72 covers ResNet layer3 (C=256 3x3); K72 pins L1 fit
     const bool height_sharded_conv = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
     const uint32_t full_inner_dim_k_ntiles =
         tt::round_up(in_channels_padded * kernel_size[0] * kernel_size[1], tt::constants::TILE_WIDTH) /
