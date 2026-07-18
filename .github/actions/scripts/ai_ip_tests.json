@@ -1,0 +1,10 @@
+{
+  "_comment": "RTL sim tests that warrant a RELEASE Jira ticket when they fail. Each failed test from the 'RTL Sim CI test' check output is matched by (config, group, filter); a field omitted in an entry is a wildcard. Tests not listed here are ignored (no ticket). Add real relevant tests as they are identified.",
+  "relevant_tests": [
+    {
+      "config": "1x3",
+      "group": "unit_tests_api",
+      "filter": "RtlSimCheckOutput.DoesNotExist_ForcedFailure"
+    }
+  ]
+}
