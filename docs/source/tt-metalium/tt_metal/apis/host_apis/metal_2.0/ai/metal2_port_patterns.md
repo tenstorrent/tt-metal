@@ -67,8 +67,6 @@ experimental::DataflowBuffer cb_acc(dfb::acc);  // one wrapper drives both direc
 
 The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yielding `dfb::acc_w` and `dfb::acc_r` aliasing the same DFB) also works.
 
-**Prerequisite** (shared-name form only): per-kernel accessor-name dedup relaxation, commit `332413412af` on `akertesz/misc-op-port-fixes`. The two-distinct-names form has always worked.
-
 **See also**: [Anti-pattern: Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta) (separate pattern, but the same "host-side variation in `KernelSpec`" mental model).
 
 ---
@@ -285,8 +283,6 @@ No `.id` extraction, no temporary `DataflowBuffer` constructed just to retrieve 
 
 **Today vs. tomorrow**: Today's LLKs and kernel-lib helpers on WH/BH accept `uint32_t` — the implicit conversion is the right bridge for porting-scope work. Kernel-lib and LLK Quasar correctness is upstream of any WH/BH port; do not preemptively wrap or refactor.
 
-**Prerequisite**: implicit conversion on `DFBAccessor::operator uint32_t()`, commit `3fbb1016d08` on `akertesz/dfb-accessor-implicit-conv`, PR #44646.
-
 **See also**: [Anti-pattern: `.id` extraction or temp DFB wrappers](#anti-pattern-id-extraction-or-temp-dfb-wrappers-at-llk-call-sites).
 
 ---
@@ -480,8 +476,6 @@ uint32_t base = in.get_bank_base_address(bank_id) + offset;
 **Why wrong**: Each of these reinvents an implicit conversion that `DFBAccessor` already provides. The `.id` form encodes the LLK's CB-id vocabulary into kernel code that should be DFB-centric; temporary wrappers add construction cost for no benefit; typed shims reproduce the implicit conversion locally and clutter the call site.
 
 **Correct port**: See [Pattern: Pass DFB handles directly to LLKs and kernel-lib helpers](#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers).
-
-**Prerequisite**: `DFBAccessor::operator uint32_t()` exists, commit `3fbb1016d08` on `akertesz/dfb-accessor-implicit-conv`, PR #44646. On older Metal 2.0 snapshots without this conversion, the `.id` workaround was the right answer.
 
 ---
 
