@@ -3284,16 +3284,60 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return std::nullopt;
     };
 
+    // TODO(#50162): temporary place_link failure diagnostics (6u-split 0-connections investigation).
+    auto dump_place_fail = [&](const char* side, FabricNodeId node, MeshId neighbor, uint32_t need, bool want_z) {
+        auto it = dir_ports_by_node.find(node);
+        if (it == dir_ports_by_node.end()) {
+            log_warning(
+                tt::LogFabric,
+                "[place-fail] {} node {} NOT in dir_ports_by_node (need={} want_z={} nbr M{})",
+                side,
+                node,
+                need,
+                want_z,
+                *neighbor);
+            return;
+        }
+        for (const auto& [dir, ports] : it->second) {
+            std::size_t freec = 0;
+            for (const auto& p : ports) {
+                if (!occupied[node].contains(p)) {
+                    ++freec;
+                }
+            }
+            auto oit = dir_owner.find({node, dir});
+            log_warning(
+                tt::LogFabric,
+                "[place-fail] {} node {} dir={} is_z={} total={} free={} owner={} (need={} want_z={} nbr M{})",
+                side,
+                node,
+                static_cast<int>(dir),
+                is_z(dir),
+                ports.size(),
+                freec,
+                oit == dir_owner.end() ? std::string("none") : ("M" + std::to_string(*oit->second)),
+                need,
+                want_z,
+                *neighbor);
+        }
+    };
+
     // Place both endpoints of a link into one direction of the requested Z-ness; on success, occupy the
     // ports, record direction ownership, and emit symmetric annotated entries (one pair per channel).
     auto place_link = [&](Link& link, bool want_z) -> bool {
         const uint32_t need = static_cast<uint32_t>(link.connection_hashes.size());
         auto src_ports = find_free_dir(link.src_node, link.dst_node.mesh_id, need, want_z);
         if (!src_ports) {
+            if (intermesh_debug) {
+                dump_place_fail("src", link.src_node, link.dst_node.mesh_id, need, want_z);
+            }
             return false;
         }
         auto dst_ports = find_free_dir(link.dst_node, link.src_node.mesh_id, need, want_z);
         if (!dst_ports) {
+            if (intermesh_debug) {
+                dump_place_fail("dst", link.dst_node, link.src_node.mesh_id, need, want_z);
+            }
             return false;
         }
         const RoutingDirection src_dir = src_ports->front().first;
@@ -3335,17 +3379,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
 
     // count budget: a link fits if placing all its channels stays within the boundary's target/cap
     // (relaxed: per boundary; strict: per pinned src exit node).
-    auto within_budget = [&](const Boundary& boundary, const Link& link) -> bool {
-        const std::size_t n = link.connection_hashes.size();
-        if (strict_intermesh_port_binding) {
-            auto bit = budget_per_src_node.find(link.src_node);
-            const std::size_t budget = (bit == budget_per_src_node.end()) ? 0 : bit->second;
-            return placed_per_src_node[link.src_node] + n <= budget;
-        }
-        auto bit = budget_channels.find(boundary);
-        const std::size_t budget = (bit == budget_channels.end()) ? 0 : bit->second;
-        return placed_channels[boundary] + n <= budget;
-    };
     auto account_placed = [&](const Boundary& boundary, const Link& link) {
         const std::size_t n = link.connection_hashes.size();
         if (strict_intermesh_port_binding) {
@@ -3500,8 +3533,56 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     }
 
+    if (intermesh_debug && strict_intermesh_port_binding) {
+        for (const auto& [node, b] : budget_per_src_node) {
+            log_warning(tt::LogFabric, "[budget-dbg] budget_per_src_node[{}] = {}", node, b);
+        }
+        for (const auto& [boundary, links] : links_by_boundary) {
+            for (const auto& l : links) {
+                log_warning(
+                    tt::LogFabric,
+                    "[budget-dbg] link M{}<->M{}: src {} dst {} nch={}",
+                    boundary.first,
+                    boundary.second,
+                    l.src_node,
+                    l.dst_node,
+                    l.connection_hashes.size());
+            }
+        }
+    }
+
     auto is_marked = [&](const Boundary& boundary) {
         return mesh_graph.should_assign_z_direction(MeshId{boundary.first}, MeshId{boundary.second});
+    };
+
+    // Remaining budget for placing (more of) a link: strict counts per src exit node, relaxed per boundary.
+    auto budget_remaining = [&](const Boundary& boundary, const Link& link) -> std::size_t {
+        if (strict_intermesh_port_binding) {
+            auto bit = budget_per_src_node.find(link.src_node);
+            const std::size_t budget = (bit == budget_per_src_node.end()) ? 0 : bit->second;
+            const std::size_t placed =
+                placed_per_src_node.count(link.src_node) ? placed_per_src_node.at(link.src_node) : 0;
+            return budget > placed ? budget - placed : 0;
+        }
+        auto bit = budget_channels.find(boundary);
+        const std::size_t budget = (bit == budget_channels.end()) ? 0 : bit->second;
+        const std::size_t placed = placed_channels.count(boundary) ? placed_channels.at(boundary) : 0;
+        return budget > placed ? budget - placed : 0;
+    };
+
+    // A physical cable can expose more channels than the count the MGD requested (e.g. a 4-channel cable
+    // with count:2). Trim the link to the remaining budget so it places exactly the requested count instead
+    // of being rejected wholesale when its channel count exceeds the per-src-node / per-boundary budget
+    // (the strict device-level 6u-split "0 resolved" bug). Returns false when no budget remains.
+    auto trim_to_budget = [&](const Boundary& boundary, Link& link) -> bool {
+        const std::size_t rem = budget_remaining(boundary, link);
+        if (rem == 0) {
+            return false;
+        }
+        if (link.connection_hashes.size() > rem) {
+            link.connection_hashes.resize(rem);
+        }
+        return true;
     };
 
     // Phase 1a: marked (assign_z) boundaries are Z-only. They claim the Z lane here and are excluded from
@@ -3517,7 +3598,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         std::size_t placed_on_z = 0;        // links this boundary secured on Z
         Link* first_unplaceable = nullptr;  // first link that tried Z and failed (for the error message)
         for (auto& link : links) {
-            if (link.placed || !within_budget(boundary, link)) {
+            if (link.placed || !trim_to_budget(boundary, link)) {
                 continue;  // excess beyond the count cap; leave for the validation step
             }
             if (place_link(link, /*want_z=*/true)) {
@@ -3548,7 +3629,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 continue;  // assign_z boundaries never take NESW
             }
             for (auto& link : links) {
-                if (link.placed || !within_budget(boundary, link)) {
+                if (link.placed || !trim_to_budget(boundary, link)) {
                     continue;
                 }
                 if (place_link(link, /*want_z=*/false)) {
@@ -3571,7 +3652,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 continue;
             }
             for (auto& link : links) {
-                if (link.placed || !within_budget(boundary, link)) {
+                if (link.placed || !trim_to_budget(boundary, link)) {
                     continue;
                 }
                 if (place_link(link, /*want_z=*/true)) {
