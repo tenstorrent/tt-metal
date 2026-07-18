@@ -35,7 +35,7 @@
     "largest_passing_prefill": 32768,
     "workload_batch": 1,
     "full_prefill_executed": true,
-    "full_prefill_seconds": 0.17793416511267424,
+        "full_prefill_seconds": 0.17365164775401354,
     "paged_cache": {
       "page_block_size": 32,
       "physical_pages_per_device": 1024,
@@ -47,6 +47,37 @@
     "sampled_value_cache_pcc_vs_hf": 0.9947687843968028,
     "last_position_decode_executed": 32767,
     "finite_replicated_stack_output": true,
+    "optimized_multichip_runtime_resources": {
+      "stack_residual_contract": {
+        "logical_shape_per_device": [1, 1, 32, 3072],
+        "dtype_layout": "BF16 TILE L1 width-sharded",
+        "distribution": "replicated values across TP ranks; width-sharded within each device",
+        "residual_cores_per_device": 32,
+        "logical_bytes_per_device": 196608,
+        "logical_bytes_per_residual_core": 6144,
+        "inter_layer_collectives": 0,
+        "ownership": "decode_forward_to_residual produces this layout; decode_forward_from_residual consumes it directly; only the stack exit calls materialize_decode_output"
+      },
+      "persistent_async_all_reduce_pool": {
+        "logical_shape_per_device": [1, 1, 32, 12288],
+        "dtype_layout": "BF16 TILE L1 width-sharded on the same 32 residual cores",
+        "intermediate_bytes_per_device": 786432,
+        "intermediate_bytes_per_residual_core": 24576,
+        "intermediate_bytes_across_mesh": 3145728,
+        "global_semaphore_count": 2,
+        "semaphore_cores_per_device": 110,
+        "semaphore_word_bytes_per_core": 4,
+        "semaphore_bytes_per_device": 880,
+        "semaphore_bytes_across_mesh": 3520,
+        "total_persistent_l1_bytes_per_device": 787312,
+        "sub_device_manager": "one manager per mesh pool covering all 110 worker cores; subdevice 0 is the active stall group",
+        "sharing": "one DecodeAllReduceResources pool is shared by every sequential decoder layer; the first layer is the owner and later layers are non-owning users",
+        "lifetime": "created lazily before first decode/trace capture and retained for trace replay and the decoder-stack lifetime",
+        "cleanup": "release non-owning layers first, then the owner deallocates the intermediate, resets the stall group, and clears the loaded sub-device manager",
+        "context_effect": "L1-only allocation; it does not consume DRAM-backed paged-KV capacity or reduce the 32768-token context"
+      },
+      "validation": "two independently materialized decoder instances share one pool and preserve the residual contract at PCC 1.0 with zero inter-layer collectives"
+    },
     "batch32_full_stack_memory_projection": {
       "allocator_dram_grid_per_device": [8, 1],
       "allocator_dram_bytes_per_bank": 4272341376,
@@ -80,7 +111,7 @@
       },
       "explanation": "TP4 removes three quarters of projection and KV-head storage from every device. The 40-layer batch-32 HF-context KV projection is 22.817 GB per device. Projection residency uses the physical padded local MLP width 6,144: one prefill or decode copy is 35,389,440 bytes/layer, and the separate prefill plus decode copies total 2.831 GB across 40 layers. A direct TTNN allocator query reports 34.179 GB usable DRAM/device; known K/V plus both physical projection copies consume 25.648 GB, leaving 8.531 GB. A conservative itemized non-decoder/trace/activation/CCL/allocator budget reserves 6.577 GB of that headroom and leaves 1.954 GB uncommitted. The layer API uses internal 1,024-row MLP chunks and local KV heads; full-model scheduling of residual buffers remains a later-stage responsibility."
     },
-    "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/multichip_decoder/results/max_context_batch1.json",
+    "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/optimized_multichip_decoder/results/max_context_batch1.json",
     "explanation": "The target mesh executes the full HF-advertised logical context with paged local-head cache, nontrivial page-table mapping, sampled HF K/V correctness through the final page, and decode at the final valid position. No aligned-only public contract is introduced. The supported context is therefore extended to the HF model limit rather than carrying forward the single-chip DRAM boundary."
   },
   "notes": "The 6,528-token result remains the measured batch-32 single-device boundary, not a Falcon3 architecture limit. The fixed TP4 multichip decoder restores the compiler mesh plan, defaults to the HF limit of 32,768, and validates logical lengths 17, 31, 1,025, and 32,768 plus decode positions 17, 31, 32, and 32,767. The full-context execution is batch 1; batch-32 full-stack KV and weight storage is projected per device here, while full-model residual-buffer scheduling belongs to the later full-model stage.",

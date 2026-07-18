@@ -1,0 +1,35 @@
+{
+  "batch": 1,
+  "finite_replicated_output": true,
+  "full_prefill_executed": true,
+  "full_prefill_internal_mlp_chunks": 32,
+  "full_prefill_logical_sequence_length": 32768,
+  "full_prefill_seconds": 0.17365164775401354,
+  "generated_at_utc": "2026-07-18T22:18:19.059113+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "19385bd701b70ad6072266fdcd68aeba2c9d5d9dbd4841915dc18f3ce83bd174",
+  "last_position_executed": 32767,
+  "local_cache_shape_each_k_or_v": [
+    1024,
+    1,
+    32,
+    256
+  ],
+  "local_kv_heads_per_device": 1,
+  "max_cache_len": 32768,
+  "page_block_size": 32,
+  "page_table": "cyclic_permutation",
+  "physical_pages_per_device": 1024,
+  "repo_head": "3c69719127e668656ec77396bb042b024ff37659",
+  "sampled_key_cache_pcc_vs_hf": 0.9964203067745778,
+  "sampled_reference_positions": [
+    0,
+    31,
+    1023,
+    1024,
+    16383,
+    32767
+  ],
+  "sampled_value_cache_pcc_vs_hf": 0.9947687843968028,
+  "test_sha256": "32344521abf0a7da3afd5beac6c299b42aacca750ff9f7bc910d8c739c1ee871"
+}

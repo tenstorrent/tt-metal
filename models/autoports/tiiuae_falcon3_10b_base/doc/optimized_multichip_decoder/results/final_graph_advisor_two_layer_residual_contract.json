@@ -1,0 +1,34 @@
+{
+  "batch": 32,
+  "decode_matmul_mode": "final_shard_advisor",
+  "dram_boundary_ms": 0.9164600307121873,
+  "dram_boundary_samples_ms": [
+    0.9165188390761614,
+    0.9163400996476412,
+    0.9164600307121873,
+    0.9163810824975371,
+    0.9167891601100564
+  ],
+  "generated_at_utc": "2026-07-18T21:47:14.188267+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "6f435ff8b4f20897430245771633b642c3d8fe55fc7921e5118bbc56419477cb",
+  "inter_layer_collectives": 0,
+  "iterations_per_sample": 100,
+  "layers_per_replay": 2,
+  "pcc": 1.0,
+  "persistent_all_reduce_pool": "one shared owner-managed pool across both decoder instances",
+  "repo_head": "3c69719127e668656ec77396bb042b024ff37659",
+  "residual_contract": "replicated values, per-device L1 width-sharded [1,1,32,3072] on 96 cores",
+  "sequence_length": 17,
+  "sharded_boundary_ms": 0.8414187375456095,
+  "sharded_boundary_samples_ms": [
+    0.8412609389051795,
+    0.841541476547718,
+    0.8414187375456095,
+    0.8414608193561435,
+    0.8412555418908596
+  ],
+  "speedup": 1.0891842430149234,
+  "test_sha256": "32344521abf0a7da3afd5beac6c299b42aacca750ff9f7bc910d8c739c1ee871",
+  "weights": "real_layer_20_independently_materialized_for_two_decoder_instances"
+}

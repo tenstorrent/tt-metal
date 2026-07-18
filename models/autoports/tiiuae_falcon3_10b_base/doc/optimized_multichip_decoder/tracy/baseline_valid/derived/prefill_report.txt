@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Warning: 'HOST START TS' column not found. CSV will not be sorted.
+Using operations after 'MULTICHIP_PREFILL'.
+Using operations until 'MULTICHIP_PREFILL_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/tiiuae_falcon3_10b_base/doc/optimized_multichip_decoder/tracy/baseline_valid/derived/prefill_ops.csv
+Overall DRAM roofline (modeled ops): 9.2% (47 GB/s)
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UpdateKVCacheOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/tiiuae_falcon3_10b_base/doc/optimized_multichip_decoder/tracy/baseline_valid/derived/prefill_summary.csv
+Plotting PNG stacked report to models/autoports/tiiuae_falcon3_10b_base/doc/optimized_multichip_decoder/tracy/baseline_valid/derived/prefill_summary.png

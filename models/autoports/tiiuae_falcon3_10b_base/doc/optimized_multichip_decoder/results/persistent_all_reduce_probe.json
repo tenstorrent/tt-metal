@@ -1,0 +1,36 @@
+{
+  "default_ms": 0.05697023123502731,
+  "default_samples_ms": [
+    0.057062008418142796,
+    0.05698506720364094,
+    0.05693566985428333,
+    0.05697023123502731,
+    0.05696432199329138
+  ],
+  "dtype": "bf16",
+  "generated_at_utc": "2026-07-18T20:34:01.925720+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "367adedd029320acc828ce3160160f3822b543dfdf9ad6a144b8050340616f20",
+  "iterations_per_sample": 100,
+  "num_links": 2,
+  "pcc": 0.9999974220190564,
+  "persistent_ms": 0.022101239301264286,
+  "persistent_samples_ms": [
+    0.022130198776721954,
+    0.022103451192378998,
+    0.022097029723227024,
+    0.022101239301264286,
+    0.022096727043390274
+  ],
+  "repo_head": "3c69719127e668656ec77396bb042b024ff37659",
+  "residual_layout": "L1 width-sharded, 8x4 cores, shard [32,96]",
+  "shape_per_rank": [
+    1,
+    1,
+    32,
+    3072
+  ],
+  "speedup": 2.5776939681282203,
+  "test_sha256": "74ec7a4c1b94b83d2a554feeae944576d859a47eddd91f0f8fe578db2178a62b",
+  "topology": "ring"
+}

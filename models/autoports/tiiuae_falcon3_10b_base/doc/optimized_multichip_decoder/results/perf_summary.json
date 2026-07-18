@@ -1,0 +1,143 @@
+{
+  "stage": "optimized-multichip-decoder",
+  "model": "tiiuae/Falcon3-10B-Base",
+  "scope": "real decoder layer 20 on TP=4; no full-model or vLLM work",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "stage_start_head": "3c69719127e668656ec77396bb042b024ff37659",
+  "input_stage_checkpoint": "64e3199158e765e2558115bbfcc1ed2e4edcd68a",
+  "final_source": {
+    "implementation_sha256": "52d49bcf238ccd76ab2e763d9b5cd3c028ac12d40764eed84272aff5813f90ea",
+    "test_sha256": "d0f4bed85fc6b33a922184f3b2a0a374258ba99634f4058b97e7f9e6896b8642",
+    "measured_implementation_sha256": "19385bd701b70ad6072266fdcd68aeba2c9d5d9dbd4841915dc18f3ce83bd174",
+    "measured_test_sha256": "32344521abf0a7da3afd5beac6c299b42aacca750ff9f7bc910d8c739c1ee871",
+    "post_measurement_change": "repository hooks applied formatting-only import ordering and line wrapping"
+  },
+  "selected_configuration": {
+    "tensor_parallel": 4,
+    "topology": "ring",
+    "num_links": 2,
+    "weight_dtype_fidelity": "BFP4_B/LoFi",
+    "activation_and_residual_dtype": "BF16",
+    "kv_cache_dtype": "BFP8_B",
+    "ccl_dtype": "BF16",
+    "decode_matmul_mode": "dram_sharded",
+    "decode_rope_mode": "dedicated for tile-aligned batches, owned explicit route otherwise",
+    "decode_output_mode": "direct DRAM for matching physical/logical rows, owned sliced staging otherwise",
+    "persistent_decode_all_reduce": true,
+    "packed_mlp": false,
+    "core_targets_qkv_o_gate_up_down": [4, 2, 24, 8],
+    "prefill_grid_x": 11,
+    "prefill_in0_block_w": 8
+  },
+  "batch32_sequence17": {
+    "measurement": "median of five warmed prefill samples; median of five samples of 100 traced decode replays",
+    "fresh_stage_entry": {
+      "prefill_ms": 3.0034794472157955,
+      "traced_decode_ms": 0.5766031797975302
+    },
+    "final_default": {
+      "prefill_ms": 3.0306768603622913,
+      "traced_decode_ms": 0.3914251131936908
+    },
+    "change_percent": {
+      "prefill": 0.9055301900503309,
+      "traced_decode": -32.11533912609765
+    },
+    "historical_input_best": {
+      "prefill_ms": 2.77158292,
+      "traced_decode_ms": 0.57682409,
+      "final_change_percent_prefill": 9.348229796505283,
+      "final_change_percent_traced_decode": -32.14133737138288
+    },
+    "pcc_vs_optimized_single_chip": {
+      "prefill": 0.9999995050948224,
+      "decode": 0.9999999307079475,
+      "key_cache": 0.9999957486816198,
+      "value_cache": 0.9999985386045782
+    }
+  },
+  "batch1_sequence17": {
+    "historical_input_prefill_ms": 0.853517,
+    "historical_input_traced_decode_ms": 0.370774,
+    "final_prefill_ms": 0.917850062251091,
+    "final_traced_decode_ms": 0.3182423207908869,
+    "change_percent_prefill": 7.537408423158652,
+    "change_percent_traced_decode": -14.168112976938275
+  },
+  "two_layer_residual_contract": {
+    "description": "replicated values, per-device BF16 L1 width-sharded [1,1,32,3072] on 32 cores",
+    "dram_boundary_ms": 0.7789806602522731,
+    "sharded_boundary_ms": 0.7100551715120673,
+    "speedup": 1.0970706101519245,
+    "pcc": 1.0,
+    "inter_layer_collectives": 0,
+    "layers_per_replay": 2,
+    "iterations_per_sample": 100,
+    "samples": 5,
+    "decoder_instances": 2,
+    "persistent_pool": "one shared owner-managed pool"
+  },
+  "final_decode_profile_per_replay": {
+    "device_operations": 45,
+    "profile_wall_us": 431.9632425904274,
+    "summed_device_time_us": 381.79333333333335,
+    "op_to_op_gaps_us_excluding_cross_iteration_gap": 35.600333333325885,
+    "unaccounted_wall_us": 14.569575923768163,
+    "excluded_cross_iteration_gap_us": 90574.71,
+    "matmul_us": 136.863,
+    "async_all_reduce_us": 27.991333333333333,
+    "rotary_embedding_us": 29.159666666666666,
+    "dram_reshape_view_us": 66.143,
+    "modeled_projection_weight_bytes_per_rank": 31457280,
+    "modeled_dram_gb_s": 82.39347640084515,
+    "modeled_dram_percent": 16.092475859540066,
+    "raw_csv": "tracy/final_default_post_advisor/reports/2026_07_18_22_20_27/ops_perf_results_2026_07_18_22_20_27.csv",
+    "derived_csv": "tracy/final_default_post_advisor/derived/decode_perf_report.csv"
+  },
+  "entry_decode_profile_per_replay": {
+    "device_operations": 68,
+    "summed_device_time_us": 518.00275,
+    "op_to_op_gaps_us_excluding_cross_iteration_gap": 82.7507,
+    "matmul_us": 137.09,
+    "reduce_scatter_plus_all_gather_us": 76.96666666666667
+  },
+  "context": {
+    "max_cache_len": 32768,
+    "physically_tested_batch": 1,
+    "full_prefill_executed": true,
+    "last_decode_position": 32767,
+    "sampled_key_cache_pcc_vs_hf": 0.9964203067745778,
+    "sampled_value_cache_pcc_vs_hf": 0.9947687843968028,
+    "max_context_changed": false,
+    "context_contract_documentation_updated": true,
+    "persistent_l1_bytes_per_device": 787312
+  },
+  "post_review_family_closure": {
+    "final_graph_advisor": {
+      "prefill_ms": 2.8927340172231197,
+      "traced_decode_ms": 0.4518916364759207,
+      "decode_pcc": 0.9999990368472514,
+      "two_layer_dram_boundary_ms": 0.8883659215644002,
+      "two_layer_sharded_boundary_ms": 0.8192001795396209,
+      "residual_cores": 96,
+      "inter_layer_collectives": 0,
+      "decision": "reject; corrected full feasible graph is 15.45% slower than the final default even with its coherent residual contract"
+    },
+    "packed_gate_up_current_graph": {
+      "dram_unpack_decode_ms": 0.39269976783543825,
+      "l1_sharded_unpack_decode_ms": 0.3971051697153598,
+      "decision": "reject; neither improves the current separate-projection default"
+    }
+  },
+  "gates": {
+    "real_multichip_pcc": "pass",
+    "non_aligned_sequence_31": "pass",
+    "sequence_1025": "pass",
+    "heterogeneous_batch2_positions": "pass",
+    "strict_runtime_fallback": "2 passed",
+    "broad_functional_suite": "5 passed, 8 intentional manual skips",
+    "watcher": "pass; ETH instrumentation disabled for platform config-buffer limitation",
+    "tt_smi": "four live devices, zero GDDR errors",
+    "stage_review": "clean-pass after initial review and first-rereview remediation"
+  }
+}

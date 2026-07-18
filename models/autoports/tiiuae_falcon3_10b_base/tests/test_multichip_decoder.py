@@ -39,6 +39,7 @@ from models.autoports.tiiuae_falcon3_10b_base.tt.functional_decoder import IR_RE
 from models.autoports.tiiuae_falcon3_10b_base.tt.multichip_decoder import (
     TARGET_MESH_SHAPE,
     TENSOR_PARALLEL_SIZE,
+    DecodeAllReduceResources,
     MultichipDecoder,
 )
 from models.autoports.tiiuae_falcon3_10b_base.tt.optimized_decoder import OptimizedDecoder, _compute_config
@@ -174,6 +175,8 @@ def _release_model(model) -> None:
         "up_weight",
         "gate_decode_weight",
         "up_decode_weight",
+        "gate_up_weight",
+        "gate_up_decode_weight",
         "down_weight",
         "down_decode_weight",
         "input_norm_weight",
@@ -186,6 +189,8 @@ def _release_model(model) -> None:
     if getattr(model, "owns_rope_cache", False):
         model.cos_cache.deallocate(True)
         model.sin_cache.deallocate(True)
+    if getattr(model, "owns_decode_all_reduce_resources", False):
+        model.decode_all_reduce_resources.close()
     del model
     gc.collect()
 
@@ -211,18 +216,23 @@ def test_multichip_runtime_is_owned_and_host_fallback_free():
     hot_methods = (
         MultichipDecoder.prefill_forward,
         MultichipDecoder.decode_forward,
+        MultichipDecoder.decode_forward_to_residual,
+        MultichipDecoder.decode_forward_from_residual,
+        MultichipDecoder.materialize_decode_output,
         MultichipDecoder._prefill_attention,
         MultichipDecoder._prefill_linear_chunked,
         MultichipDecoder._decode_attention,
         MultichipDecoder._decode_qkv,
+        MultichipDecoder._apply_decode_rope_dedicated,
         MultichipDecoder._prefill_mlp,
         MultichipDecoder._prefill_mlp_chunk,
         MultichipDecoder._decode_mlp,
         MultichipDecoder._all_reduce_partial,
+        DecodeAllReduceResources.all_reduce,
     )
     forbidden = ("from_torch", "to_torch", "OptimizedDecoder.", "FunctionalDecoder.")
     for method in hot_methods:
-        assert method.__qualname__.startswith("MultichipDecoder.")
+        assert method.__qualname__.startswith(("MultichipDecoder.", "DecodeAllReduceResources."))
         source = inspect.getsource(method)
         for token in forbidden:
             assert token not in source, f"{method.__name__} contains runtime fallback token {token!r}"
@@ -722,6 +732,13 @@ def test_multichip_directly_matches_single_chip_optimized_baseline():
     batch, seq_len = 32, 17
     state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
     prefill, decode_hidden = _recorded_layer20_inputs(batch)
+    precision_policy = os.getenv("FALCON3_MULTICHIP_PRECISION_POLICY", "all_bfp4_lofi")
+    decode_matmul_mode = os.getenv("FALCON3_MULTICHIP_DECODE_MATMUL_MODE", "dram_sharded")
+    use_packed_mlp = os.getenv("FALCON3_MULTICHIP_PACKED_MLP", "0") == "1"
+    packed_mlp_unpack_mode = os.getenv("FALCON3_MULTICHIP_PACKED_UNPACK", "dram")
+    decode_rope_mode = os.getenv("FALCON3_MULTICHIP_DECODE_ROPE_MODE", "dedicated")
+    decode_output_mode = os.getenv("FALCON3_MULTICHIP_DECODE_OUTPUT_MODE", "direct_dram")
+    use_persistent_decode_all_reduce = os.getenv("FALCON3_MULTICHIP_PERSISTENT_DECODE_AR", "1") == "1"
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     baseline_device = ttnn.open_device(device_id=0, trace_region_size=100_000_000)
@@ -733,6 +750,7 @@ def test_multichip_directly_matches_single_chip_optimized_baseline():
             mesh_device=baseline_device,
             batch=batch,
             max_cache_len=64,
+            precision_policy=precision_policy,
         )
         baseline_input = _single_device_input(prefill, baseline_device)
         baseline_key, baseline_value = baseline.allocate_kv_cache()
@@ -781,6 +799,12 @@ def test_multichip_directly_matches_single_chip_optimized_baseline():
             mesh_device=mesh_device,
             batch=batch,
             max_cache_len=64,
+            decode_matmul_mode=decode_matmul_mode,
+            use_packed_mlp=use_packed_mlp,
+            packed_mlp_unpack_mode=packed_mlp_unpack_mode,
+            decode_rope_mode=decode_rope_mode,
+            decode_output_mode=decode_output_mode,
+            use_persistent_decode_all_reduce=use_persistent_decode_all_reduce,
         )
         key_cache, value_cache = model.allocate_kv_cache()
         tt_prefill = _mesh_input(prefill, mesh_device)
@@ -812,13 +836,20 @@ def test_multichip_directly_matches_single_chip_optimized_baseline():
         )[1]
         assert min(prefill_pcc, decode_pcc, key_pcc, value_pcc) >= REAL_WEIGHT_PCC
         _write_result_artifact(
-            "direct_optimized_baseline_pcc.json",
+            os.getenv("FALCON3_MULTICHIP_PCC_FILENAME", "direct_optimized_baseline_pcc.json"),
             {
                 "batch": batch,
                 "sequence_length": seq_len,
                 "weights": "real_layer_20",
+                "precision_policy": precision_policy,
                 "single_chip_baseline": "OptimizedDecoder defaults",
-                "multichip": "MultichipDecoder TP=4 defaults",
+                "multichip": "MultichipDecoder TP=4",
+                "decode_matmul_mode": decode_matmul_mode,
+                "use_packed_mlp": use_packed_mlp,
+                "packed_mlp_unpack_mode": packed_mlp_unpack_mode,
+                "decode_rope_mode": decode_rope_mode,
+                "decode_output_mode": decode_output_mode,
+                "persistent_decode_all_reduce": use_persistent_decode_all_reduce,
                 "prefill_pcc": prefill_pcc,
                 "decode_pcc": decode_pcc,
                 "key_cache_pcc": key_pcc,
@@ -861,6 +892,13 @@ def test_warmed_multichip_trace_performance(mesh_device):
     topology = ttnn.Topology.Ring if topology_name == "ring" else ttnn.Topology.Linear
     ccl_dtype_name = os.getenv("FALCON3_MULTICHIP_CCL_DTYPE", "bf16").lower()
     ccl_dtype = ttnn.bfloat16 if ccl_dtype_name == "bf16" else ttnn.bfloat8_b
+    precision_policy = os.getenv("FALCON3_MULTICHIP_PRECISION_POLICY", "all_bfp4_lofi")
+    decode_matmul_mode = os.getenv("FALCON3_MULTICHIP_DECODE_MATMUL_MODE", "dram_sharded")
+    use_packed_mlp = os.getenv("FALCON3_MULTICHIP_PACKED_MLP", "0") == "1"
+    packed_mlp_unpack_mode = os.getenv("FALCON3_MULTICHIP_PACKED_UNPACK", "dram")
+    decode_rope_mode = os.getenv("FALCON3_MULTICHIP_DECODE_ROPE_MODE", "dedicated")
+    decode_output_mode = os.getenv("FALCON3_MULTICHIP_DECODE_OUTPUT_MODE", "direct_dram")
+    use_persistent_decode_all_reduce = os.getenv("FALCON3_MULTICHIP_PERSISTENT_DECODE_AR", "1") == "1"
     state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
     model = MultichipDecoder.from_state_dict(
         state_dict,
@@ -868,6 +906,7 @@ def test_warmed_multichip_trace_performance(mesh_device):
         mesh_device=mesh_device,
         batch=batch,
         max_cache_len=max_cache_len,
+        precision_policy=precision_policy,
         qkv_target_cores=qkv_target_cores,
         o_target_cores=o_target_cores,
         gate_up_target_cores=gate_up_target_cores,
@@ -877,6 +916,12 @@ def test_warmed_multichip_trace_performance(mesh_device):
         ccl_dtype=ccl_dtype,
         num_links=num_links,
         topology=topology,
+        decode_matmul_mode=decode_matmul_mode,
+        use_packed_mlp=use_packed_mlp,
+        packed_mlp_unpack_mode=packed_mlp_unpack_mode,
+        decode_rope_mode=decode_rope_mode,
+        decode_output_mode=decode_output_mode,
+        use_persistent_decode_all_reduce=use_persistent_decode_all_reduce,
     )
     prefill, decode = _recorded_layer20_inputs(batch)
     decode_position = int(prefill.shape[1])
@@ -947,8 +992,15 @@ def test_warmed_multichip_trace_performance(mesh_device):
             "prefill_grid_x": prefill_grid_x,
             "prefill_in0_block_w": prefill_in0_block_w,
             "ccl_dtype": ccl_dtype_name,
+            "precision_policy": precision_policy,
             "num_links": num_links,
             "api_topology": topology_name,
+            "decode_matmul_mode": decode_matmul_mode,
+            "use_packed_mlp": use_packed_mlp,
+            "packed_mlp_unpack_mode": packed_mlp_unpack_mode,
+            "decode_rope_mode": decode_rope_mode,
+            "decode_output_mode": decode_output_mode,
+            "persistent_decode_all_reduce": use_persistent_decode_all_reduce,
             "prefill_samples_ms": prefill_samples,
             "multichip_prefill_ms": prefill_ms,
             "single_chip_prefill_ms": single_prefill_ms,
@@ -970,6 +1022,271 @@ def test_warmed_multichip_trace_performance(mesh_device):
     _release_model(model)
 
 
+@pytest.mark.skipif(
+    os.getenv("FALCON3_RUN_MULTICHIP_STACK_CONTRACT") != "1",
+    reason="manual two-layer residual-layout contract A/B",
+)
+@pytest.mark.parametrize("mesh_device,device_params", MESH_PARAMS, indirect=True)
+@pytest.mark.timeout(1800)
+def test_warmed_two_layer_residual_contract(mesh_device):
+    """Compare the public DRAM boundary with a stack-native L1 residual boundary."""
+    config = _config()
+    batch = 32
+    state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+    decode_matmul_mode = os.getenv("FALCON3_MULTICHIP_DECODE_MATMUL_MODE", "dram_sharded")
+    first_model = MultichipDecoder.from_state_dict(
+        state_dict,
+        hf_config=config,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=64,
+        decode_matmul_mode=decode_matmul_mode,
+    )
+    second_model = MultichipDecoder.from_state_dict(
+        state_dict,
+        hf_config=config,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=64,
+        decode_matmul_mode=decode_matmul_mode,
+    )
+    first_model._ensure_decode_all_reduce_resources()
+    second_model.decode_all_reduce_resources = first_model.decode_all_reduce_resources
+    second_model._ensure_decode_all_reduce_resources()
+    prefill, decode = _recorded_layer20_inputs(batch)
+    decode_position = int(prefill.shape[1])
+    model_cache_pairs = [
+        (first_model, first_model.allocate_kv_cache()),
+        (second_model, second_model.allocate_kv_cache()),
+        (first_model, first_model.allocate_kv_cache()),
+        (second_model, second_model.allocate_kv_cache()),
+    ]
+    tt_prefill = _mesh_input(prefill, mesh_device)
+    for model, (key_cache, value_cache) in model_cache_pairs:
+        prefill_output = model.prefill_forward(
+            tt_prefill,
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+        ttnn.synchronize_device(mesh_device)
+        prefill_output.deallocate(True)
+    tt_decode = _mesh_input(decode, mesh_device)
+    position = _mesh_int32(torch.full((batch,), decode_position, dtype=torch.int32), mesh_device)
+
+    def dram_boundary():
+        first = first_model.decode_forward(
+            tt_decode,
+            key_cache=model_cache_pairs[0][1][0],
+            value_cache=model_cache_pairs[0][1][1],
+            cache_position=position,
+            position_index=decode_position,
+        )
+        second = second_model.decode_forward(
+            first,
+            key_cache=model_cache_pairs[1][1][0],
+            value_cache=model_cache_pairs[1][1][1],
+            cache_position=position,
+            position_index=decode_position,
+        )
+        first.deallocate(True)
+        return second
+
+    def sharded_boundary():
+        first = first_model.decode_forward_to_residual(
+            tt_decode,
+            key_cache=model_cache_pairs[2][1][0],
+            value_cache=model_cache_pairs[2][1][1],
+            cache_position=position,
+            position_index=decode_position,
+        )
+        second = second_model.decode_forward_from_residual(
+            first,
+            key_cache=model_cache_pairs[3][1][0],
+            value_cache=model_cache_pairs[3][1][1],
+            cache_position=position,
+            position_index=decode_position,
+        )
+        return second_model.materialize_decode_output(second)
+
+    baseline_warm, baseline_trace_output, baseline_trace_id, baseline_ms, baseline_samples = _trace_mesh_callable(
+        mesh_device, dram_boundary, samples=5, iterations=100
+    )
+    baseline_host = _first_rank(baseline_warm)
+    ttnn.release_trace(mesh_device, baseline_trace_id)
+    baseline_warm.deallocate(True)
+    baseline_trace_output.deallocate(True)
+
+    sharded_warm, sharded_trace_output, sharded_trace_id, sharded_ms, sharded_samples = _trace_mesh_callable(
+        mesh_device, sharded_boundary, samples=5, iterations=100
+    )
+    sharded_host = _first_rank(sharded_warm)
+    pcc = comp_pcc(baseline_host.float(), sharded_host.float())[1]
+    assert pcc >= REAL_WEIGHT_PCC
+    _write_result_artifact(
+        os.getenv("FALCON3_MULTICHIP_STACK_FILENAME", "two_layer_residual_contract.json"),
+        {
+            "batch": batch,
+            "sequence_length": decode_position,
+            "weights": "real_layer_20_independently_materialized_for_two_decoder_instances",
+            "decode_matmul_mode": decode_matmul_mode,
+            "layers_per_replay": 2,
+            "iterations_per_sample": 100,
+            "dram_boundary_samples_ms": baseline_samples,
+            "dram_boundary_ms": baseline_ms,
+            "sharded_boundary_samples_ms": sharded_samples,
+            "sharded_boundary_ms": sharded_ms,
+            "speedup": baseline_ms / sharded_ms,
+            "pcc": pcc,
+            "inter_layer_collectives": 0,
+            "residual_contract": (
+                "replicated values, per-device L1 width-sharded [1,1,32,3072] "
+                f"on {first_model.residual_num_cores} cores"
+            ),
+            "persistent_all_reduce_pool": "one shared owner-managed pool across both decoder instances",
+        },
+    )
+    ttnn.release_trace(mesh_device, sharded_trace_id)
+    sharded_warm.deallocate(True)
+    sharded_trace_output.deallocate(True)
+    for tensor in (tt_prefill, tt_decode, position):
+        tensor.deallocate(True)
+    for _, (key_cache, value_cache) in model_cache_pairs:
+        key_cache.deallocate(True)
+        value_cache.deallocate(True)
+    _release_model(second_model)
+    _release_model(first_model)
+
+
+@pytest.mark.skipif(
+    os.getenv("FALCON3_RUN_MULTICHIP_PERSISTENT_AR") != "1",
+    reason="manual persistent-buffer all-reduce A/B",
+)
+@pytest.mark.parametrize("mesh_device,device_params", MESH_PARAMS, indirect=True)
+@pytest.mark.timeout(1800)
+def test_persistent_all_reduce_residual_probe(mesh_device):
+    """A/B the exact decode residual all-reduce shape and layout."""
+    torch.manual_seed(20260718)
+    rows, hidden = 32, 3072
+    residual_grid = ttnn.CoreGrid(x=8, y=4)
+    residual_memory_config = ttnn.create_sharded_memory_config(
+        shape=(rows, hidden // residual_grid.num_cores),
+        core_grid=residual_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    host = torch.randn((1, 1, rows, TENSOR_PARALLEL_SIZE * hidden), dtype=torch.bfloat16)
+    residual = ttnn.from_torch(
+        host,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=residual_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    )
+    all_cores = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    mesh_device.compute_with_storage_grid_size().x - 1,
+                    mesh_device.compute_with_storage_grid_size().y - 1,
+                ),
+            )
+        }
+    )
+    sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([all_cores])], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group([sub_device_id])
+    semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+    intermediate_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            residual_memory_config.shard_spec.grid,
+            (rows, TENSOR_PARALLEL_SIZE * hidden // residual_grid.num_cores),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    persistent_buffer = ttnn.zeros(
+        (1, 1, rows, TENSOR_PARALLEL_SIZE * hidden),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=intermediate_memory_config,
+    )
+
+    def baseline():
+        return ttnn.all_reduce(
+            residual,
+            cluster_axis=1,
+            topology=ttnn.Topology.Ring,
+            num_links=2,
+            memory_config=residual_memory_config,
+            subdevice_id=sub_device_id,
+        )
+
+    def persistent():
+        return ttnn.experimental.all_reduce_async(
+            residual,
+            persistent_buffer,
+            cluster_axis=1,
+            mesh_device=mesh_device,
+            multi_device_global_semaphore=semaphore,
+            memory_config=residual_memory_config,
+            dtype=ttnn.bfloat16,
+            topology=ttnn.Topology.Ring,
+            num_links=2,
+            subdevice_id=sub_device_id,
+        )
+
+    try:
+        baseline_warm, baseline_trace_output, baseline_trace_id, baseline_ms, baseline_samples = _trace_mesh_callable(
+            mesh_device, baseline, samples=5, iterations=100
+        )
+        baseline_host = _first_rank(baseline_warm)
+        ttnn.release_trace(mesh_device, baseline_trace_id)
+        baseline_warm.deallocate(True)
+        baseline_trace_output.deallocate(True)
+        (
+            persistent_warm,
+            persistent_trace_output,
+            persistent_trace_id,
+            persistent_ms,
+            persistent_samples,
+        ) = _trace_mesh_callable(mesh_device, persistent, samples=5, iterations=100)
+        persistent_host = _first_rank(persistent_warm)
+        pcc = comp_pcc(baseline_host.float(), persistent_host.float())[1]
+        assert pcc >= 0.9999
+        _write_result_artifact(
+            "persistent_all_reduce_probe.json",
+            {
+                "shape_per_rank": [1, 1, rows, hidden],
+                "residual_layout": "L1 width-sharded, 8x4 cores, shard [32,96]",
+                "topology": "ring",
+                "num_links": 2,
+                "dtype": "bf16",
+                "iterations_per_sample": 100,
+                "default_samples_ms": baseline_samples,
+                "default_ms": baseline_ms,
+                "persistent_samples_ms": persistent_samples,
+                "persistent_ms": persistent_ms,
+                "speedup": baseline_ms / persistent_ms,
+                "pcc": pcc,
+            },
+        )
+        ttnn.release_trace(mesh_device, persistent_trace_id)
+        persistent_warm.deallocate(True)
+        persistent_trace_output.deallocate(True)
+    finally:
+        residual.deallocate(True)
+        persistent_buffer.deallocate(True)
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+        gc.collect()
+
+
 @pytest.mark.skipif(os.getenv("FALCON3_RUN_MULTICHIP_PROFILE") != "1", reason="manual Tracy profile")
 @pytest.mark.parametrize("mesh_device,device_params", MESH_PARAMS, indirect=True)
 @pytest.mark.timeout(1800)
@@ -979,6 +1296,13 @@ def test_profile_selected_multichip_decoder(mesh_device):
 
     config = _config()
     batch, seq_len = 32, 17
+    precision_policy = os.getenv("FALCON3_MULTICHIP_PRECISION_POLICY", "all_bfp4_lofi")
+    decode_matmul_mode = os.getenv("FALCON3_MULTICHIP_DECODE_MATMUL_MODE", "dram_sharded")
+    use_packed_mlp = os.getenv("FALCON3_MULTICHIP_PACKED_MLP", "0") == "1"
+    packed_mlp_unpack_mode = os.getenv("FALCON3_MULTICHIP_PACKED_UNPACK", "dram")
+    decode_rope_mode = os.getenv("FALCON3_MULTICHIP_DECODE_ROPE_MODE", "dedicated")
+    decode_output_mode = os.getenv("FALCON3_MULTICHIP_DECODE_OUTPUT_MODE", "direct_dram")
+    use_persistent_decode_all_reduce = os.getenv("FALCON3_MULTICHIP_PERSISTENT_DECODE_AR", "1") == "1"
     state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
     model = MultichipDecoder.from_state_dict(
         state_dict,
@@ -986,6 +1310,13 @@ def test_profile_selected_multichip_decoder(mesh_device):
         mesh_device=mesh_device,
         batch=batch,
         max_cache_len=64,
+        precision_policy=precision_policy,
+        decode_matmul_mode=decode_matmul_mode,
+        use_packed_mlp=use_packed_mlp,
+        packed_mlp_unpack_mode=packed_mlp_unpack_mode,
+        decode_rope_mode=decode_rope_mode,
+        decode_output_mode=decode_output_mode,
+        use_persistent_decode_all_reduce=use_persistent_decode_all_reduce,
     )
     hidden, decode_hidden = _recorded_layer20_inputs(batch)
     key_cache, value_cache = model.allocate_kv_cache()
@@ -1046,11 +1377,18 @@ def test_profile_selected_multichip_decoder(mesh_device):
     finally:
         ttnn.release_trace(mesh_device, trace_id)
     _write_result_artifact(
-        "profile_wall.json",
+        os.getenv("FALCON3_MULTICHIP_PROFILE_FILENAME", "profile_wall.json"),
         {
             "batch": batch,
             "sequence_length": seq_len,
             "weights": "real_layer_20",
+            "precision_policy": precision_policy,
+            "decode_matmul_mode": decode_matmul_mode,
+            "use_packed_mlp": use_packed_mlp,
+            "packed_mlp_unpack_mode": packed_mlp_unpack_mode,
+            "decode_rope_mode": decode_rope_mode,
+            "decode_output_mode": decode_output_mode,
+            "persistent_decode_all_reduce": use_persistent_decode_all_reduce,
             "prefill_iterations": prefill_iterations,
             "prefill_wall_total_ms": prefill_wall_total_ms,
             "prefill_wall_ms": prefill_wall_total_ms / prefill_iterations,

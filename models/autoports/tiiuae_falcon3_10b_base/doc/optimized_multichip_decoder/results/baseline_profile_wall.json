@@ -1,0 +1,17 @@
+{
+  "batch": 32,
+  "decode_iterations": 3,
+  "decode_matmul_mode": "dram_sharded",
+  "decode_wall_ms": 0.6169133509198824,
+  "decode_wall_total_ms": 1.8507400527596474,
+  "generated_at_utc": "2026-07-18T20:17:38.474113+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "100193804cfa6234fddb3e5262a1ec6d889964ad3107e7239bfe7bd048481df6",
+  "prefill_iterations": 2,
+  "prefill_wall_ms": 4.424733342602849,
+  "prefill_wall_total_ms": 8.849466685205698,
+  "repo_head": "3c69719127e668656ec77396bb042b024ff37659",
+  "sequence_length": 17,
+  "test_sha256": "526f324606c0ff437af2d45f8533f72813d335dd2c0e4404be09c266891dc75a",
+  "weights": "real_layer_20"
+}

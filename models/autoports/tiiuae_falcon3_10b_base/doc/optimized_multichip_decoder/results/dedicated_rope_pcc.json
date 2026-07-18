@@ -1,0 +1,21 @@
+{
+  "batch": 32,
+  "decode_matmul_mode": "dram_sharded",
+  "decode_pcc": 0.9999999307079475,
+  "decode_rope_mode": "dedicated",
+  "generated_at_utc": "2026-07-18T20:45:32.723307+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "b7c708ed2e450c723dd6ae8309b5391b1a926f8b10ef814974a564f1b55eb64c",
+  "key_cache_pcc": 0.9999957486816198,
+  "multichip": "MultichipDecoder TP=4",
+  "packed_mlp_unpack_mode": "dram",
+  "persistent_decode_all_reduce": true,
+  "prefill_pcc": 0.9999995050948224,
+  "repo_head": "3c69719127e668656ec77396bb042b024ff37659",
+  "sequence_length": 17,
+  "single_chip_baseline": "OptimizedDecoder defaults",
+  "test_sha256": "5acc5e588cd7511dc03badab002e27552c9a0bc01f7a5970f6017a3ca1c5ae94",
+  "use_packed_mlp": false,
+  "value_cache_pcc": 0.9999985386045782,
+  "weights": "real_layer_20"
+}

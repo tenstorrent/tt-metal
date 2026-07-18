@@ -1,0 +1,76 @@
+{
+  "profile_run": {
+    "raw_csv": "tracy/final_default_post_advisor/reports/2026_07_18_22_20_27/ops_perf_results_2026_07_18_22_20_27.csv",
+    "derived_csv": "tracy/final_default_post_advisor/derived/decode_perf_report.csv",
+    "wall_artifact": "results/final_default_profile_wall_post_advisor.json",
+    "decode_replays": 3,
+    "operations_per_replay": 45,
+    "profile_wall_us_per_replay": 431.9632425904274,
+    "summed_device_us_per_replay": 381.79333333333335,
+    "op_gap_us_per_replay_excluding_cross_iteration_gap": 35.600333333325885,
+    "unaccounted_wall_us_per_replay": 14.569575923768163,
+    "excluded_cross_iteration_gap_us": 90574.71,
+    "accounting_identity": "431.963243 = 381.793333 device + 35.600333 in-replay gaps + 14.569576 residual",
+    "percent_of_wall": {
+      "device": 88.38560685019596,
+      "in_replay_gaps": 8.241519144044599,
+      "residual": 3.3728740057594506
+    }
+  },
+  "tt_perf_report_weight_roofline": {
+    "scope": "logical BFP4 projection-weight payload per TP rank; this is exactly the byte model used by the report's overall 82 GB/s line",
+    "local_projection_bytes": {
+      "qkv_3072x1280": 1966080,
+      "o_768x3072": 1179648,
+      "gate_3072x6144": 9437184,
+      "up_3072x6144": 9437184,
+      "down_6144x3072": 9437184,
+      "total_per_rank": 31457280,
+      "total_across_four_rank_mesh": 125829120
+    },
+    "assumed_peak_dram_bytes_per_second_per_device": 512000000000,
+    "assumed_peak_dram_bytes_per_second_mesh_aggregate": 2048000000000,
+    "ideal_weight_read_us": 61.44,
+    "equivalent_achieved_gb_s": 82.39347640084515,
+    "roofline_percent": 16.092475859540066,
+    "report_console_value_rounded": "82 GB/s, 16.1%"
+  },
+  "additional_known_logical_dram_traffic_per_rank": {
+    "scope": "explicit logical payloads from the selected graph; listed separately because tt-perf-report excludes non-matmul bytes from its overall roofline and physical tile/alignment traffic is implementation-dependent",
+    "logical_dimensions": "batch 32, 3 local Q heads, 1 local K/V head, head_dim 256, decode position 17 reads 18 cache tokens",
+    "public_input_read_plus_output_write_bf16": 393216,
+    "q_plus_k_prepare_dram_writes_bf16": 65536,
+    "dedicated_q_plus_k_rope_transpose_and_rotary_reads_writes_bf16": 458752,
+    "selected_cos_sin_rows_read_plus_embedding_outputs_bf16": 65536,
+    "sdpa_query_and_output_boundary_bf16": 163840,
+    "kv_cache_bfp8_updates": 16384,
+    "kv_cache_bfp8_reads_through_position_17": 294912,
+    "cache_position_int32_reads": 640,
+    "two_rms_norm_weight_reads_bf16": 12288,
+    "known_non_projection_total": 1471104,
+    "projection_plus_known_logical_total": 32928384,
+    "supplemental_ideal_us_at_512_gb_s": 64.31325,
+    "supplemental_equivalent_gb_s_over_measured_device_time": 86.24661858946376,
+    "supplemental_roofline_percent": 16.84504269325464
+  },
+  "collective_wire_traffic": {
+    "residual_partial_bytes_per_rank_per_collective": 196608,
+    "ring_all_reduce_formula": "2 * (TP-1) / TP * payload",
+    "wire_bytes_per_rank_per_collective": 294912,
+    "collectives_per_decoder_replay": 2,
+    "wire_bytes_per_rank_per_decoder_replay": 589824,
+    "wire_byte_hops_across_mesh_per_decoder_replay": 2359296,
+    "note": "fabric wire traffic, not folded into the DRAM roofline"
+  },
+  "core_count_semantics": {
+    "raw_core_count": 80,
+    "raw_available_worker_core_count": 110,
+    "raw_meaning": "device-profiler launch metadata for each DRAM-sharded matmul",
+    "derived_cores": 12,
+    "derived_meaning": "tt-perf-report analytical override used for FLOP efficiency whenever the attributes contain MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig; it is not a measured or configured grid",
+    "selected_program_target_cores_qkv_o_gate_up_down": [4, 2, 24, 24, 8],
+    "authoritative_runtime_geometry": "the program attributes and output shard specs in the raw CSV; the target-core sequence is QKV, O, gate, up, down"
+  },
+  "implementation_sha256": "19385bd701b70ad6072266fdcd68aeba2c9d5d9dbd4841915dc18f3ce83bd174",
+  "test_sha256": "32344521abf0a7da3afd5beac6c299b42aacca750ff9f7bc910d8c739c1ee871"
+}

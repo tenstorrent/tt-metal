@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="2.712" timestamp="2026-07-18T20:31:48.522087+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.tiiuae_falcon3_10b_base.tests.test_multichip_decoder" name="test_persistent_all_reduce_residual_probe[blackhole-1x4-ring]" time="1.786"><properties><property name="start_timestamp" value="2026-07-18T20:31:49" /><property name="end_timestamp" value="2026-07-18T20:31:51" /></properties><failure message="TypeError: &#10;ttnn.all_reduce(): incompatible function arguments.&#10;&#10;Called with:&#10;  all_reduce(ttnn.Tensor, cluster_axis=1, mesh_device=MeshDevice(1x4 grid, 4 devices), topology=Topology.Ring, num_links=2, memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{&quot;start&quot;:{&quot;x&quot;:0,&quot;y&quot;:0},&quot;end&quot;:{&quot;x&quot;:7,&quot;y&quot;:3}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), dtype=DataType.BFLOAT16)&#10;&#10;Available signatures:&#10;  all_reduce(input_tensor: ttnn.Tensor, *, cluster_axis: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None, memory_config: ttnn.MemoryConfig | None = None, num_links: int | None = None, topology: ttnn.ccl.Topology | None = None)">self = FastOperation(python_fully_qualified_name='ttnn.all_reduce', function=&lt;ttnn._ttnn.operations.ccl.all_reduce_t object a...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor(&lt;buffer is not allocated&gt;, shape=Shape([1, 1, 32, 3072]), dtype=DataType::BFLOAT16, layout=Layout::TILE),)
+function_kwargs = {'cluster_axis': 1, 'dtype': DataType.BFLOAT16, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_...W_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'mesh_device': MeshDevice(1x4 grid, 4 devices), ...}
+cq_id = None, recording = False
+enhanced_msg = '\nttnn.all_reduce(): incompatible function arguments.\n\nCalled with:\n  all_reduce(ttnn.Tensor, cluster_axis=1, mesh...mory_config: ttnn.MemoryConfig | None = None, num_links: int | None = None, topology: ttnn.ccl.Topology | None = None)'
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: __call__(): incompatible function arguments. The following argument types are supported:
+E                   1. __call__(self, input_tensor: ttnn._ttnn.tensor.Tensor, *, cluster_axis: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None, memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None, num_links: int | None = None, topology: ttnn._ttnn.operations.ccl.Topology | None = None) -&gt; ttnn._ttnn.tensor.Tensor
+E
+E               Invoked with types: ttnn._ttnn.operations.ccl.all_reduce_t, ttnn._ttnn.tensor.Tensor, kwargs = { cluster_axis: int, mesh_device: ttnn._ttnn.multi_device.MeshDevice, topology: ttnn._ttnn.operations.ccl.Topology, num_links: int, memory_config: ttnn._ttnn.tensor.MemoryConfig, dtype: ttnn._ttnn.tensor.DataType }
+
+ttnn/ttnn/decorators.py:473: TypeError
+
+The above exception was the direct cause of the following exception:
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.skipif(
+        os.getenv("FALCON3_RUN_MULTICHIP_PERSISTENT_AR") != "1",
+        reason="manual persistent-buffer all-reduce A/B",
+    )
+    @pytest.mark.parametrize("mesh_device,device_params", MESH_PARAMS, indirect=True)
+    @pytest.mark.timeout(1800)
+    def test_persistent_all_reduce_residual_probe(mesh_device):
+        """A/B the exact decode residual all-reduce shape and layout."""
+        torch.manual_seed(20260718)
+        rows, hidden = 32, 3072
+        residual_grid = ttnn.CoreGrid(x=8, y=4)
+        residual_memory_config = ttnn.create_sharded_memory_config(
+            shape=(rows, hidden // residual_grid.num_cores),
+            core_grid=residual_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        host = torch.randn((1, 1, rows, TENSOR_PARALLEL_SIZE * hidden), dtype=torch.bfloat16)
+        residual = ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=residual_memory_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        )
+        all_cores = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        mesh_device.compute_with_storage_grid_size().x - 1,
+                        mesh_device.compute_with_storage_grid_size().y - 1,
+                    ),
+                )
+            }
+        )
+        sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([all_cores])], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group([sub_device_id])
+        semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+        intermediate_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                residual_memory_config.shard_spec.grid,
+                (rows, TENSOR_PARALLEL_SIZE * hidden // residual_grid.num_cores),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        persistent_buffer = ttnn.zeros(
+            (1, 1, rows, TENSOR_PARALLEL_SIZE * hidden),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=intermediate_memory_config,
+        )
+
+        def baseline():
+            return ttnn.all_reduce(
+                residual,
+                cluster_axis=1,
+                mesh_device=mesh_device,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                memory_config=residual_memory_config,
+                dtype=ttnn.bfloat16,
+            )
+
+        def persistent():
+            return ttnn.experimental.all_reduce_async(
+                residual,
+                persistent_buffer,
+                cluster_axis=1,
+                mesh_device=mesh_device,
+                multi_device_global_semaphore=semaphore,
+                memory_config=residual_memory_config,
+                dtype=ttnn.bfloat16,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                subdevice_id=sub_device_id,
+            )
+
+        try:
+&gt;           baseline_warm, baseline_trace_output, baseline_trace_id, baseline_ms, baseline_samples = _trace_mesh_callable(
+                mesh_device, baseline, samples=5, iterations=100
+            )
+
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py:1190:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py:196: in _trace_mesh_callable
+    warm_output = function()
+                  ^^^^^^^^^^
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py:1165: in baseline
+    return ttnn.all_reduce(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.all_reduce', function=&lt;ttnn._ttnn.operations.ccl.all_reduce_t object a...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor(&lt;buffer is not allocated&gt;, shape=Shape([1, 1, 32, 3072]), dtype=DataType::BFLOAT16, layout=Layout::TILE),)
+function_kwargs = {'cluster_axis': 1, 'dtype': DataType.BFLOAT16, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_...W_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'mesh_device': MeshDevice(1x4 grid, 4 devices), ...}
+cq_id = None, recording = False
+enhanced_msg = '\nttnn.all_reduce(): incompatible function arguments.\n\nCalled with:\n  all_reduce(ttnn.Tensor, cluster_axis=1, mesh...mory_config: ttnn.MemoryConfig | None = None, num_links: int | None = None, topology: ttnn.ccl.Topology | None = None)'
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+                result = self.function(*function_args, **function_kwargs)
+            else:
+                with command_queue(cq_id):
+                    result = self.function(*function_args, **function_kwargs)
+        except TypeError as e:
+            enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
+            if enhanced_msg:
+&gt;               raise TypeError(enhanced_msg) from e
+E               TypeError:
+E               ttnn.all_reduce(): incompatible function arguments.
+E
+E               Called with:
+E                 all_reduce(ttnn.Tensor, cluster_axis=1, mesh_device=MeshDevice(1x4 grid, 4 devices), topology=Topology.Ring, num_links=2, memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":3}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), dtype=DataType.BFLOAT16)
+E
+E               Available signatures:
+E                 all_reduce(input_tensor: ttnn.Tensor, *, cluster_axis: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None, memory_config: ttnn.MemoryConfig | None = None, num_links: int | None = None, topology: ttnn.ccl.Topology | None = None)
+
+ttnn/ttnn/decorators.py:480: TypeError</failure></testcase></testsuite></testsuites>

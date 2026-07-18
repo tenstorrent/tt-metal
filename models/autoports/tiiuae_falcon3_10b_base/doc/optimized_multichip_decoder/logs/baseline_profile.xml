@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="2.884" timestamp="2026-07-18T20:16:29.785751+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.tiiuae_falcon3_10b_base.tests.test_multichip_decoder" name="test_profile_selected_multichip_decoder[blackhole-1x4-ring]" time="1.907"><properties><property name="start_timestamp" value="2026-07-18T20:16:30" /><property name="end_timestamp" value="2026-07-18T20:16:32" /></properties><failure message="NameError: name 'decode_matmul_mode' is not defined">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.skipif(os.getenv("FALCON3_RUN_MULTICHIP_PROFILE") != "1", reason="manual Tracy profile")
+    @pytest.mark.parametrize("mesh_device,device_params", MESH_PARAMS, indirect=True)
+    @pytest.mark.timeout(1800)
+    def test_profile_selected_multichip_decoder(mesh_device):
+        """Profile the selected TP4 layer with separate prefill/decode regions."""
+        from tracy import signpost
+
+        config = _config()
+        batch, seq_len = 32, 17
+        state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+        model = MultichipDecoder.from_state_dict(
+            state_dict,
+            hf_config=config,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_cache_len=64,
+&gt;           decode_matmul_mode=decode_matmul_mode,
+                               ^^^^^^^^^^^^^^^^^^
+        )
+E       NameError: name 'decode_matmul_mode' is not defined
+
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py:995: NameError</failure></testcase></testsuite></testsuites>
