@@ -10,12 +10,12 @@ Negative latency deltas mean the current implementation is faster.
 
 | Model | Case | Legacy total (ms) | Current total (ms) | Latency delta | Legacy collective (ms) | Current collective (ms) | Collective delta |
 |---|---|---:|---:|---:|---:|---:|---:|
-| DeepSeek v3.2 | warm | 9.414 | 9.020 | -4.2% | 1.227 | 0.996 | -18.8% |
-| DeepSeek v3.2 | cold | 88.466 | 80.841 | -8.6% | 13.066 | 7.741 | -40.8% |
-| DeepSeek v3.2 | long | 19.415 | 17.291 | -10.9% | 7.843 | 6.819 | -13.1% |
-| GLM 5.1 | warm | 7.950 | 6.374 | -19.8% | 3.859 | 2.453 | -36.4% |
-| GLM 5.1 | cold | 83.342 | 62.151 | -25.4% | 42.721 | 23.988 | -43.8% |
-| GLM 5.1 | long | 17.442 | 14.125 | -19.0% | 10.507 | 8.309 | -20.9% |
+| DeepSeek v3.2 | warm | 9.414 | 8.964 | -4.8% | 1.227 | 0.980 | -20.1% |
+| DeepSeek v3.2 | cold | 88.466 | 80.760 | -8.7% | 13.066 | 7.308 | -44.1% |
+| DeepSeek v3.2 | long | 19.415 | 17.140 | -11.7% | 7.843 | 6.765 | -13.7% |
+| GLM 5.1 | warm | 7.950 | 6.344 | -20.2% | 3.859 | 2.447 | -36.6% |
+| GLM 5.1 | cold | 83.342 | 61.892 | -25.7% | 42.721 | 23.630 | -44.7% |
+| GLM 5.1 | long | 17.442 | 13.998 | -19.7% | 10.507 | 8.211 | -21.9% |
 
 Collective time is accounted as follows:
 
@@ -23,10 +23,12 @@ Collective time is accounted as follows:
 - Current: native all-gather kernels reported as `ccl`, plus `AllBroadcast`.
 
 The cold proxy is the meaningful prefix-gather comparison: it fills an already
-allocated cache over eleven iterations, reducing current total latency by 3.7 ms
-(DeepSeek) and 3.2 ms (GLM) versus the prior native result. Warm and long allocate
-their cache to exactly the measured context, so the populated prefix is the full
-slab and they are expected to be within run-to-run noise of the prior result.
+allocated cache over eleven iterations. Fusing the index-cache slot selection and
+valid-prefix limit into its gather reduces current total latency by a further
+0.081 ms (DeepSeek) and 0.259 ms (GLM) versus the prior native result. Warm and
+long allocate their caches to exactly the measured context, so the populated prefix
+is the full slab and they are expected to be within run-to-run noise of the prior
+result.
 
 Warm/long collective program counts:
 
