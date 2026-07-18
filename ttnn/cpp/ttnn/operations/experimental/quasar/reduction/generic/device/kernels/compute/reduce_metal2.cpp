@@ -10,11 +10,23 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // [DIAG avgpool x1.15] remove after
 
 void kernel_main() {
     uint32_t Ht = get_arg(args::Ht);
     uint32_t Wt = get_arg(args::Wt);
     uint32_t NC = get_arg(args::NC);
+
+    // [DIAG avgpool x1.15 -- remove after] Does the COMPILED kernel actually have REDUCE_POST_MUL +
+    // the right post_mul bits? JIT kernel, so this shows on rerun with no ninja. If RPM_OFF prints
+    // (or bits != 0x3ca72f05) while the host factory said use_post_mul=true, the compiled kernel is
+    // stale/wrong (hash/cache). If RPM_ON with correct bits but output is still x1.15, the bug is in
+    // the reduce/GAPOOL sum, not the post-mul.
+#ifdef REDUCE_POST_MUL
+    UNPACK(DPRINT("RPM_ON post_mul_bits=" << HEX() << (uint32_t)get_arg(args::post_mul_scaler_bits) << ENDL()));
+#else
+    UNPACK(DPRINT("RPM_OFF" << ENDL()));
+#endif
 
     compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
 

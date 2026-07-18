@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <bit>
 
 namespace ttnn::prim::qsr {
 
@@ -210,6 +211,24 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
 ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
+}
+
+ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& a, const tensor_args_t& tensor_args) {
+    // See the header note: opt out of the branch's buggy default reflection hash (#46385/#47232 not
+    // yet on this branch) and fold in the distinguishing fields explicitly. scaler / post_mul_scaler
+    // are hashed as their raw fp32 bit patterns so 1.0 vs 1/49 (and post-mul on vs off) never collide.
+    return ttsl::hash::hash_objects_with_default_seed(
+        static_cast<uint32_t>(a.math_op),
+        static_cast<uint32_t>(a.dim),
+        std::bit_cast<uint32_t>(a.scaler),
+        std::bit_cast<uint32_t>(a.post_mul_scaler),
+        a.negate,
+        a.row_major_w_dense_path,
+        a.row_major_h_dense_path,
+        static_cast<uint32_t>(a.output_dtype),
+        a.output_mem_config,
+        tensor_args);
 }
 
 ttnn::Tensor reduce(
