@@ -108,6 +108,11 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
 
     from .sdk_retry import run_with_retry
 
+    try:
+        from .structural_agent import _DEVICE_CALL_TIMEOUT_S as _agent_timeout
+    except Exception:  # noqa: BLE001
+        _agent_timeout = None
+
     prompt = (
         prompt_body + f"\n\nWrite the test file at `{out_rel}` (relative to your working directory) with the Write "
         "tool. Then CALL run_perf_test, read its raw output, and iterate (Edit -> run_perf_test) until "
@@ -136,7 +141,7 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
                         chunks.append(block.text)
 
     try:
-        run_with_retry(_go, lambda: chunks.clear(), timeout=None)
+        run_with_retry(_go, lambda: chunks.clear(), timeout=_agent_timeout)
     except Exception:  # noqa: BLE001
         return False
     return True
