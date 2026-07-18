@@ -195,6 +195,10 @@ void kernel_main() {
 
     uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    // Drain the inbound read before the tt_memmove consumers below: each tt_memmove is itself a NoC
+    // op whose SOURCE is packet_l1_addr, and on the weak NoC there is no read->read landing order, so
+    // the memmove could forward stale/partial packet data. Mirrors root2_receive_reader_kernel.cpp.
+    noc_async_read_barrier();
 
     // moving l tensor
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
@@ -217,8 +221,6 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_m, 1);
 
     cb_push_back(packet_cb_id, 1);
-
-    noc_async_read_barrier();
 
     // now the similar behaviour when device 2 is sending data to device 1
     // will be waiting on another semaphore, and fabric is for the other 2 muxes
@@ -305,6 +307,8 @@ void kernel_main() {
     dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
     packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    // Drain the inbound read before the tt_memmove consumers (see first occurrence above).
+    noc_async_read_barrier();
 
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
@@ -324,6 +328,4 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
-
-    noc_async_read_barrier();
 }
