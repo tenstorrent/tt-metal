@@ -390,15 +390,21 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
         return None, ""
     raw = raw or ""
     sigs = None
+    seq = []
     for line in raw.splitlines():
         if line.startswith("PERF_OP_SIGS="):
             try:
                 sigs = set(json.loads(line.split("=", 1)[1]))
-            except Exception:  # noqa: BLE001
+            except (ValueError, TypeError):
                 sigs = None
+        elif line.startswith("PERF_OP_SIG_SEQUENCE="):
+            try:
+                seq = json.loads(line.split("=", 1)[1])
+            except (ValueError, TypeError):
+                seq = []
     if not sigs:
-        return None, raw
-    return sigs, raw
+        return None, raw, []
+    return sigs, raw, seq
 
 
 _LAYER_PATTERN_ATTRS = ("hybrid_override_pattern", "layer_types", "layers_block_type", "block_types")
@@ -478,12 +484,13 @@ def _coverage_layers(
     model_name: str = "",
     config_ref: str = "",
 ):
-    """MODEL-AGNOSTIC profiling-window sizing = the smallest layer depth that still covers EVERY distinct
-    layer kind, so the profiled slice is representative and a fix to a shared per-kind block reaches all
-    its instances. PRIMARY path reads the kinds from the model's HF-config-declared per-layer pattern —
-    no forward pass, no memory pressure, and it sees a kind that first appears deep in the stack. FALLBACK
-    (no declared pattern) is the observed climb: grow the depth until the distinct op-signature set stops
-    growing. Result is cached per model (invalidated by source mtime). Disable via PERF_MCP_COVERAGE_SIZING=0."""
+    """MODEL-AGNOSTIC profiling-window sizing. One all-layers probe (TT_PERF_LAYERS=0, no tracy)
+    enumerates EVERY distinct op across all layers (overflow-safe: host-side op wrapping, no marker
+    buffer) and, via its per-block signposts, the block each op first appears in. The tracy timing window
+    is the smallest depth that still holds a fresh instance of every op, capped at 16 (the marker limit);
+    ops that first appear past 16 are reported as present-but-un-timed. Falls back to the config-declared
+    layer pattern when the k=0 probe yields nothing (a model that reads TT_PERF_LAYERS=0 as an empty
+    stack). Cached per model. Disable via PERF_MCP_COVERAGE_SIZING=0."""
     facts: dict = {}
     if os.environ.get("PERF_MCP_COVERAGE_SIZING", "1") != "1" or not node:
         return None, facts
@@ -491,41 +498,46 @@ def _coverage_layers(
     if cached is not None:
         print(f"  [optimize/cc] coverage (cached): TT_PERF_LAYERS={cached}")
         return cached, facts
+    sigs, raw, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, 0)
+    if sigs:
+        facts = _parse_facts(raw, sigs)
+        facts["all_ops"] = sorted(sigs)
+        first_block: dict = {}
+        cur = 0
+        for tok in seq or []:
+            if isinstance(tok, str) and tok.startswith("PERF_BLOCK_SIGNPOST:"):
+                try:
+                    cur = int(tok.split(":", 1)[1])
+                except (ValueError, IndexError):
+                    pass
+            else:
+                first_block.setdefault(tok, cur)
+        if first_block:
+            deepest = max(first_block.values())
+            deep = sorted(op for op, b in first_block.items() if b >= 16)
+        else:
+            _kc, _ = _config_layer_kinds(config_ref or model_name)
+            deepest = (_kc - 1) if _kc else 1
+            deep = []
+        _cov = min(max(deepest + 1, 2), 16)
+        facts["deep_ops"] = deep
+        tail = f"; {len(deep)} op(s) appear only past layer 16 (present, un-timed)" if deep else ""
+        print(
+            f"  [optimize/cc] coverage (all-layers probe): {len(sigs)} distinct op(s); deepest new op at "
+            f"block {deepest} -> TT_PERF_LAYERS={_cov}{tail}"
+        )
+        _coverage_cache_put(repo_root, node, case, _cov)
+        return _cov, facts
     k, n_kinds = _config_layer_kinds(config_ref or model_name)
     if k is not None:
+        _cov = min(k, 16)
         print(
-            f"  [optimize/cc] coverage (config pattern): {n_kinds} distinct layer kind(s), deepest first "
-            f"appears at layer {k - 1} -> TT_PERF_LAYERS={k}"
+            f"  [optimize/cc] coverage (config fallback; k=0 probe empty): {n_kinds} kind(s), deepest first "
+            f"appears at layer {k - 1} -> TT_PERF_LAYERS={_cov}"
         )
-        if k > 16:
-            print(
-                f"  [optimize/cc] note: deepest kind at layer {k - 1} exceeds the fit-safe depth (16) — profiling it may need more memory/mesh"
-            )
-        _fk = min(k, 16)
-        sigs, raw = _run_op_sigs(repo_root, mcp_env, devices, node, case, _fk)
-        if sigs is not None:
-            facts = _parse_facts(raw, sigs)
-        _coverage_cache_put(repo_root, node, case, k)
-        return k, facts
-    results: list = []
-    for k in (2, 4, 8, 16):
-        k = min(k, n_layers)
-        sigs, raw = _run_op_sigs(repo_root, mcp_env, devices, node, case, k)
-        if sigs is None:
-            break
-        facts = _parse_facts(raw, sigs)
-        print(f"  [optimize/cc] coverage probe: {k} layer(s) -> {len(sigs)} distinct op signatures")
-        results.append((k, sigs))
-        if k >= n_layers:
-            break
-    if not results:
-        return None, facts
-    max_sigs = max((s for _, s in results), key=len)
-    if results[-1][1] == max_sigs and len(results) >= 2 and results[-2][1] != max_sigs and results[-1][0] >= n_layers:
-        print("  [optimize/cc] coverage still growing at the depth cap — op coverage may be incomplete")
-    _cov = next((k for k, s in results if s == max_sigs), results[-1][0])
-    _coverage_cache_put(repo_root, node, case, _cov)
-    return _cov, facts
+        _coverage_cache_put(repo_root, node, case, _cov)
+        return _cov, facts
+    return None, facts
 
 
 def _print_scorecard(
