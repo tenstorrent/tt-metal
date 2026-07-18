@@ -119,6 +119,41 @@ def test_quasar_global_avgpool(mesh_device, channels, cid):
         f"in=[{in_lo:.4f},{in_hi:.4f}] dev=[{dev_lo:.4f},{dev_hi:.4f}] golden=[{float(golden.min()):.4f},{float(golden.max()):.4f}]"
     )
 
+    # -------------------- [DIAG] error-structure localizer (remove after avgpool is fixed) --------------------
+    # Width-sharding splits channels CONTIGUOUSLY across cores: core k owns channels [k*Cpc, (k+1)*Cpc).
+    # in_ntiles_c per core = Cpc/32; in_nblocks_c = ceil(in_ntiles_c / 4) (MAX_TILES_PER_REDUCTION for avg).
+    g = golden.reshape(-1).float()  # [C], channel-major
+    d = tt_out.reshape(-1).float()  # [C]
+    err = (d - g).abs()
+    cpc = channels // num_cores
+    tiles_per_core = max(1, cpc // 32)
+    n_blocks_c = (tiles_per_core + 3) // 4
+    n_bad = int((err > 0.02).sum())
+    print(
+        f"  [DIAG {cid}] Cpc={cpc} tiles/core={tiles_per_core} nblocks_c={n_blocks_c} | "
+        f"n_bad(|e|>0.02)={n_bad}/{channels} ({100.0*n_bad/channels:.1f}%) "
+        f"max|e|={float(err.max()):.4f} mean(d-g)={float((d-g).mean()):+.4f} std(d-g)={float((d-g).std()):.4f}"
+    )
+    # per-core slice: is one core (channel half) wrong and the other right? (points at per-core reduce vs shared)
+    for k in range(num_cores):
+        sl = slice(k * cpc, (k + 1) * cpc)
+        gk, dk = g[sl], d[sl]
+        pcc_k = float(torch.corrcoef(torch.stack([gk, dk]))[0, 1]) if gk.numel() > 1 else float("nan")
+        print(
+            f"  [DIAG {cid}] core{k} ch[{k*cpc}:{(k+1)*cpc}] pcc={pcc_k:.4f} "
+            f"mean(d-g)={float((dk - gk).mean()):+.4f} n_bad={int((err[sl] > 0.02).sum())}/{cpc}"
+        )
+    # per-32-channel-tile mean error within core0 (does a specific c-tile / c-block go wrong?)
+    for t in range(tiles_per_core):
+        sl = slice(t * 32, (t + 1) * 32)
+        print(
+            f"  [DIAG {cid}] core0 tile{t} (blk{t // 4}) ch[{t*32}:{(t+1)*32}] "
+            f"mean(d-g)={float((d[sl] - g[sl]).mean()):+.4f} max|e|={float(err[sl].max()):.4f}"
+        )
+    # first 6 channels raw, so we can eyeball golden vs dev
+    print(f"  [DIAG {cid}] ch0..5 golden={[round(float(x),4) for x in g[:6]]} dev={[round(float(x),4) for x in d[:6]]}")
+    # ---------------------------------------------------------------------------------------------------------
+
     # an average can never leave the input range (catches bad scale / stale-L1 leak).
     assert dev_lo >= in_lo - 1e-2 and dev_hi <= in_hi + 1e-2, (
         f"avg out range [{dev_lo:.4f},{dev_hi:.4f}] escaped input range [{in_lo:.4f},{in_hi:.4f}] "
