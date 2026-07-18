@@ -100,6 +100,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         return 1
 
     os.environ["TT_PERF_MODULE_LEVEL"] = "1"
+    os.environ.setdefault("PERF_MCP_VALIDATE_STALL_SEC", "120")
     print("  [optimize/module] module-level optimize over %d graduated module(s): %s" % (len(mods), mods))
     rows = []
     for i, m in enumerate(mods, 1):
