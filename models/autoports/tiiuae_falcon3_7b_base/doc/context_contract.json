@@ -25,19 +25,20 @@
     "all_layers_both_kv_caches_bytes_per_device": 499122176,
     "bf16_residual_bytes_per_device": 201326592,
     "bf16_rotary_cache_bytes_per_device": 33554432,
-    "all_layers_two_phase_projection_and_norm_bytes_per_device": 1926414336,
+    "all_layers_two_phase_projection_and_norm_bytes_per_device": 1937080320,
     "decode_mlp_padding_bytes_per_device": 55738368,
     "trace_region_reserve_bytes_per_device": 100000000,
     "prefill_chunk_rows": 1024,
     "calculated_live_chunk_activation_bytes_per_device": 63176704,
-    "reserved_transient_activation_bytes_per_device": 100663296,
-    "calculated_batch1_resident_plus_reserved_bytes_per_device": 2861080832,
+    "calculated_full_context_peak_transient_bytes_per_device": 452984832,
+    "reserved_transient_activation_bytes_per_device": 536870912,
+    "calculated_batch1_resident_plus_reserved_bytes_per_device": 3307954432,
     "sampled_key_cache_pcc_vs_hf": 0.9964410657318681,
     "sampled_value_cache_pcc_vs_hf": 0.9953481660889436,
     "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/multichip_decoder/results/max_context_batch1.json",
-    "explanation": "TP4 stores one of four KV heads per device, and the decoder chunks dense prefill rows internally. BFP8 cache accounting uses the physical 1,088-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer. The 63,176,704-byte calculated live-chunk activation set includes three local MLP buffers, two full-hidden collective buffers, local QKV, and two norm/full-hidden buffers; the contract reserves 96 MiB for these buffers and allocator headroom. A full 32,768-token paged prefill plus decode at position 32,767 completed on the target 1x4 Blackhole mesh."
+    "explanation": "TP4 stores one of four KV heads per device, and the decoder chunks dense prefill rows internally. BFP8 cache accounting uses the physical 1,088-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer. A local 1,024-row kernel has a 63,176,704-byte calculated live set, but the source retains full-sequence tensors around chunked linears. The largest explicit additional set is at O-projection chunk concatenation: 50,331,648 bytes of local attention input plus 201,326,592 bytes of accumulated output chunks plus a 201,326,592-byte concatenated output, or 452,984,832 bytes beyond the separately counted resident residual. The contract reserves 512 MiB for this peak and allocator headroom. A full 32,768-token paged prefill plus decode at position 32,767 completed on the target 1x4 Blackhole mesh."
   },
-  "notes": "The multichip decoder restores the full Hugging Face advertised 32,768-token context; batch 1 is the fully executed capacity gate. BFP8 rank-local KV storage, TP4 projection weights, and internally chunked dense MLP execution make it physical on the target mesh. The calculated batch-1 resident plus trace/transient reserve is 2,861,080,832 bytes per device. Batch 32 remains validated for the compiler-derived short workload and heterogeneous decode positions, but full-context batch 32 is not claimed by this decoder-only stage because it was not executed: its all-layer local KV caches and BF16 residual would consume 15,971,909,632 and 6,442,450,944 bytes per device, respectively, and the resident lower bound including weights, rotary cache, and trace reserve is 24,474,329,344 bytes before full-prefill concatenation and attention temporaries.",
+  "notes": "The multichip decoder restores the full Hugging Face advertised 32,768-token context; batch 1 is the fully executed capacity gate. BFP8 rank-local KV storage, TP4 projection weights, and internally chunked dense MLP execution make it physical on the target mesh. The calculated batch-1 resident plus trace/transient reserve is 3,307,954,432 bytes per device. The projection-and-norm term includes physical TILE_LAYOUT padding of each logical BF16 [3072] norm vector to [32,3072], and the 512 MiB transient reserve covers full-sequence buffers retained around the chunked linears. Batch 32 remains validated for the compiler-derived short workload and heterogeneous decode positions, but full-context batch 32 is not claimed by this decoder-only stage because it was not executed: its all-layer local KV caches and BF16 residual would consume 15,971,909,632 and 6,442,450,944 bytes per device, respectively, and the resident lower bound including weights, rotary cache, and trace reserve is 24,484,995,328 bytes before full-prefill concatenation and attention temporaries.",
   "paths": {
     "prefill": {
       "status": "multichip_validated",

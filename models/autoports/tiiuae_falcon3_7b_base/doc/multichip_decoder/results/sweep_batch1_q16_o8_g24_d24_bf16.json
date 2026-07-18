@@ -4,15 +4,15 @@
   "down_target_cores": 24,
   "effective_ccl_topology": "Ring",
   "gate_up_target_cores": 24,
-  "generated_at_utc": "2026-07-18T06:20:26.625270+00:00",
+  "generated_at_utc": "2026-07-18T07:15:54.190980+00:00",
   "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
-  "implementation_sha256": "2393f5ff856ea38e1b8c88440ee745f9872c8476f094e1b7c618b6036aa98272",
+  "implementation_sha256": "b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573",
   "iterations_per_sample": 100,
-  "multichip_prefill_ms": 0.8739866316318512,
-  "multichip_trace_ms": 0.36519271787256,
+  "multichip_prefill_ms": 0.8035036735236645,
+  "multichip_trace_ms": 0.36528763826936483,
   "num_links": 2,
   "o_target_cores": 8,
-  "parallel_efficiency": 0.44089506538253287,
+  "parallel_efficiency": 0.4407804983121725,
   "physical_decode_geometry": {
     "down_grid": [
       8,
@@ -44,27 +44,27 @@
   },
   "prefill_parallel_efficiency": null,
   "prefill_samples": [
-    1.09080970287323,
-    0.8819820359349251,
-    0.8739866316318512,
-    0.832398422062397,
-    0.8077411912381649
+    1.1148173362016678,
+    0.7530869916081429,
+    0.7441900670528412,
+    0.8753808215260506,
+    0.8035036735236645
   ],
   "prefill_speedup": null,
   "qkv_target_cores": 16,
-  "repo_head": "b35b3c1cbf7610b87f2813448f6d11f6df502b0c",
+  "repo_head": "069f3fc3fc2ac9f6ffcaa7da15059f64efd251d7",
   "samples": [
-    0.36513551138341427,
-    0.3653305023908615,
-    0.36516856867820024,
-    0.36523460876196623,
-    0.36519271787256
+    0.36528763826936483,
+    0.36542109213769436,
+    0.3653171006590128,
+    0.36519094835966825,
+    0.365180429071188
   ],
   "sequence_length": 17,
   "single_chip_baseline_ms": 0.644046668894589,
   "single_chip_prefill_ms": null,
   "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch1.json",
-  "speedup": 1.7635802615301315,
-  "test_sha256": "97f2dfea6fcba843076d246cbe5c76c750c0555db817552bd76ee65b5a559ee0",
+  "speedup": 1.76312199324869,
+  "test_sha256": "b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557",
   "weights": "real_layer_14"
 }

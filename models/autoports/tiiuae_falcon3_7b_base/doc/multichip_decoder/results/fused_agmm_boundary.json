@@ -1,0 +1,75 @@
+{
+  "agmm": {
+    "ag_shard_shape": [
+      32,
+      768
+    ],
+    "ag_shards": 4,
+    "chunks_per_sync": 10,
+    "core_grid_offset": [
+      0,
+      4
+    ],
+    "in0_block_w": 12,
+    "num_buffers_per_channel": 2,
+    "num_links": 1,
+    "num_workers_per_link": 2,
+    "out_subblock_w": 1,
+    "per_core_M": 1,
+    "per_core_N": 5,
+    "qkv_program_grid": [
+      8,
+      1
+    ]
+  },
+  "boundary": "row-parallel partial -> residual add -> RMSNorm -> real next QKV",
+  "explicit_pcc_vs_replicated": 0.9998980261235911,
+  "fractured_explicit_all_gather_ms": 0.10996149852871895,
+  "fractured_explicit_all_gather_samples": [
+    0.10996149852871895,
+    0.10994145646691322,
+    0.11001270264387131,
+    0.10992963798344135,
+    0.10998235084116459
+  ],
+  "fractured_fused_all_gather_matmul_ms": 0.11068068444728851,
+  "fractured_fused_all_gather_matmul_samples": [
+    0.11065212078392506,
+    0.11071354150772095,
+    0.11068068444728851,
+    0.1106422021985054,
+    0.11069880798459053
+  ],
+  "fused_pcc_vs_replicated": 0.9998586057718842,
+  "generated_at_utc": "2026-07-18T07:46:22.775021+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573",
+  "mesh": [
+    1,
+    4
+  ],
+  "probe_test_sha256": "3cad18bf78b30efb54e853077a6cf8feef09c7925c6704d3840e71438611b998",
+  "replicated_ms": 0.09754979982972145,
+  "replicated_samples": [
+    0.09757194202393293,
+    0.09752715937793255,
+    0.097483666613698,
+    0.09757633786648512,
+    0.09754979982972145
+  ],
+  "repo_head": "069f3fc3fc2ac9f6ffcaa7da15059f64efd251d7",
+  "selected": "replicated",
+  "shape": [
+    1,
+    1,
+    32,
+    3072
+  ],
+  "test_sha256": "b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557",
+  "trace_replay_bitwise_deterministic": {
+    "fractured_explicit_all_gather": true,
+    "fractured_fused_all_gather_matmul": true,
+    "replicated": true
+  },
+  "weights": "real layer-14 RMSNorm and interleaved BFP4 QKV"
+}

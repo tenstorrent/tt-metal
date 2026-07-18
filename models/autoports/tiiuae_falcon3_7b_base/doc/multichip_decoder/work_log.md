@@ -73,6 +73,23 @@ single-chip results are 0.644047 and 0.768483 ms.  Batch-32 prefill is 2.740996
 ms versus 3.262737 ms single-chip.  Final and rejected-candidate JSON files are
 under `results/`.
 
+The final completion audit found that the source also exposes distinct
+12-core gate/up and down grids.  Three additional serialized runs on the exact
+final implementation/test hashes measured gate12/down8 at 0.363515 ms,
+gate24/down12 at 0.357040 ms, and gate12/down12 at 0.363764 ms.  The selected
+gate24/down8 artifact is 0.356696 ms; its five samples do not overlap the
+12-core-down sample range.  These runs close the midpoint geometry rather than
+inferring it from the previously measured 8/24 endpoints.
+
+For stale-artifact closure, the audit then reran every earlier QKV/O/MLP,
+BF16-versus-BFP8 CCL, and one-versus-two-link control.  All thirteen
+`sweep_*.json` files now bind to the final implementation SHA
+`b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573`
+and test SHA
+`b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557`
+and include resolved physical grids and padding.  The refreshed ordering is
+unchanged; the selected 8/8/24/8, BF16, two-link path remains fastest.
+
 One QKV16 sweep completed its timing but initially failed while serializing a
 report-only field (`local_intermediate` versus `local_intermediate_size`); it
 was fixed and rerun successfully.  The first final profiler command omitted
@@ -139,8 +156,68 @@ now measured, the missing geometry sweep selected 8-core down, and
 and activation reserves.  The reviewer also requested pytest stdout from the
 exact Watcher run; it is preserved and hashed.
 
-The fresh final `$stage-review` returned `clean-pass` with no required work.
-Its controlled anomaly ledger and residual risks are recorded in
+The final completion audit found and corrected one additional conservative
+capacity-ledger detail.  A host-only TTNN probe of a BF16 TILE-layout norm
+weight reported logical shape `[3072]`, padded shape `[32,3072]`, and volume
+98,304 elements.  The all-layer projection-and-norm term therefore uses
+1,937,080,320 physical bytes rather than 1,926,414,336 logical-norm bytes.  The
+same audit then accounted for full-sequence buffers retained around the
+1,024-row linears: the explicit O-concatenation peak is 452,984,832 bytes
+beyond the resident residual, so the transient reserve is 512 MiB and the
+complete batch-1 resident-plus-reserve total is 3,307,954,432 bytes per device.
+Neither correction changes the executed 32,768-token contract.
+
+An earlier `$stage-review` returned `clean-pass` before this conservative
+completion audit.  The final review is rerun below on the remediated tree so
+that `stage_review.md` does not overstate which artifacts were inspected.
+
+## 2026-07-18 — fused all-gather/matmul closure and recovery
+
+The completion reviewer found that the residual-sharded topology audit had
+measured explicit all-gather but had not exercised the repository's fused
+all-gather/matmul family.  A focused probe now carries a row-parallel partial
+through reduce-scatter, local residual addition, distributed RMSNorm, and the
+real next layer-14 BFP4 QKV projection.  The serialized command was:
+
+```text
+FALCON3_RUN_MULTICHIP_FUSED_AGMM=1 timeout 900 python -m pytest -q -s \
+  models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder_agmm_probe.py::test_fractured_residual_fused_all_gather_qkv
+```
+
+The hook-formatted safe one-link candidate passed in 7.82 seconds.  Median
+5x100 warmed trace times were 0.097549800 ms replicated, 0.109961499 ms
+fractured with explicit all-gather, and 0.110680684 ms fractured with fused
+all-gather/QKV.  PCC versus
+replicated was 0.999898026 and 0.999858606; every trace was bitwise
+deterministic.  The durable probe SHA is
+`3cad18bf78b30efb54e853077a6cf8feef09c7925c6704d3840e71438611b998`.
+The final bounded `tt-smi -ls --local` after that run again reported devices
+0 through 3 as available and resettable.
+
+AutoFix's source hypothesis that a hard-coded transfer count would block this
+shape was refuted by hardware.  In the non-assert build the real reader loops
+over four executed slices; the stale assertion matters only in Watcher or
+lightweight-assert builds.  Because the candidate loses performance and is
+not selected, that debug-build limitation does not enter production.
+
+A temporary probe then added the target's two-link fused candidate (SHA
+`8f501b918edbf4b6d3cfb7e2b33b4204f453b3d13ca06be4434960df42795665`).
+It compiled and passed the eager PCC assertions, then made no progress during
+trace replay for over three minutes.  Before terminating only PIDs 1509224 and
+1509225, the required `tt-triage` report and summary were captured under
+`triage/`.  Detailed NoC reads were limited by an installed tt-exalens binding
+overload mismatch, while the summary's ARC, Ethernet, binary, Watcher-ring,
+and broken-component checks passed.  Recovery used bounded
+`tt-smi -ls --local`, `tt-smi -r`, and a second list; all four p300c devices
+were visible, followed by `MESH_SMOKE_OK` from a `MeshShape(1,4)` open/close.
+The exact hashes and recovery record are in
+`results/fused_agmm_links2_trace_hang.json`.  The durable probe was restored
+to its safe, hash-coherent one-link form.  The selected two-link decoder does
+not call the experimental fused operation.
+
+The final independent `$stage-review` then reread the complete remediated tree
+and returned `clean-pass` with no required work.  Its anomaly ledger,
+controlled concerns, and explicit later-stage gaps are recorded in
 `stage_review.md`.
 
 ## Handoff
@@ -149,6 +226,10 @@ Its controlled anomaly ledger and residual risks are recorded in
   multichip decoder`).  The commit used `SKIP=check-large-files` only for the
   accepted 1.7-MiB raw Tracy ops CSV referenced by `profile_provenance.json`;
   every other pre-commit hook passed.
+- Initial review-log commit: `069f3fc3fc2` (`Record Falcon3 TP4 stage review`).
+- The completion-audit checkpoint uses `SKIP=check-large-files` only for the
+  4.9-MiB LLM-readable `tt-triage` dump from the rejected two-link fused trace
+  hang.  Its SHA is bound in the compact JSON/summary; all other hooks pass.
 - Implementation SHA256:
   `b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573`.
 - Test SHA256:

@@ -64,37 +64,51 @@ The alternatives considered before implementation were:
 | --- | --- | --- |
 | local matmul + all-reduce | O AR, down AR | selected compiler-proven baseline; lowest integration risk and direct stacked boundary |
 | reduce-scatter + immediate all-gather | O RS+AG, down RS+AG | rejected: same bytes as all-reduce plus extra dispatches and no residency benefit |
-| residual-sharded with delayed all-gather | O RS, local residual add, distributed RMSNorm, AG before next QKV; analogous MLP boundary | rejected by complete boundary measurement: 0.109954 ms versus 0.097611 ms replicated (1.1265x slower), PCC 0.999898 through real next QKV |
-| fused all-gather + matmul | delayed AG fused into next column-parallel projection | rejected for this layer baseline: needs persistent CCL semaphores and a residual-sharded stack contract absent from the compiler graph |
+| residual-sharded with delayed all-gather | O RS, local residual add, distributed RMSNorm, AG before next QKV; analogous MLP boundary | rejected by complete boundary measurement: 0.109961 ms versus 0.097550 ms replicated (1.1272x slower), PCC 0.999898 through real next QKV |
+| fused all-gather + matmul | delayed AG fused into next column-parallel projection | rejected by real next-QKV measurement: the one-link fused boundary is slower than replicated, while the two-link variant stalls during trace replay |
 | fused matmul + reduce-scatter | row-parallel matmul fused with RS | rejected on this target: the repository disables the primitive on Blackhole because of a nondeterministic synchronization race |
 | sequence parallelism | shard prefill rows/tokens | rejected for the final layer baseline: decode has one logical token and paged-cache ownership becomes more complex without reducing TP weight memory |
 
-The residual-sharded and fused-boundary probes must beat the selected complete
-boundary, preserve PCC, and leave no deferred communication before they can
-replace it.  Otherwise the selected all-reduce path remains the final path.
+The one-link fused candidate uses persistent CCL semaphores and the real
+interleaved BFP4 next-QKV weight.  It reaches PCC 0.99985861 and deterministic
+trace replay, but takes 0.110681 ms versus 0.097550 ms for the replicated
+boundary.  A temporary two-link variant compiled and passed its eager PCC
+assertions, then stalled during trace replay for more than three minutes.  Its
+triage, exact temporary probe hash, and clean reset/mesh recovery are recorded
+in `results/fused_agmm_links2_trace_hang.json`.  The durable focused probe is
+kept at the safe measured one-link setting.  Thus neither unfused nor fused
+residual sharding beats the selected complete boundary or provides an equally
+safe stack contract.
 
 ## Context and per-device capacity plan
 
 TP4 changes both weight and cache residency.  The two optimized physical
 projection copies (prefill and DRAM-sharded decode), plus two BF16 norm
-weights, consume 1,926,414,336 bytes per device for all 28 layers.  This is an
-exact tile calculation using 576 bytes per 32x32 BFP4 tile; decode-only MLP
-padding accounts for 55,738,368 bytes of that total.  At the advertised
+weights, consume 1,937,080,320 bytes per device for all 28 layers.  This is an
+exact tile calculation using 576 bytes per 32x32 BFP4 tile and 2,048 bytes per
+32x32 BF16 tile.  Each logical `[3072]` norm vector has physical padded shape
+`[32,3072]`; decode-only MLP padding accounts for 55,738,368 bytes of the
+projection total.  At the advertised
 32,768-token context, both BFP8 caches for all 28 layers consume 499,122,176
 bytes per device for batch 1.  This uses the physical 1,088-byte BFP8 tile:
 each K or V cache has 8,192 tiles per layer and device.  The shared BF16 rotary
 cache is 33,554,432 bytes per device and the BF16 residual is 201,326,592
-bytes.  Trace capture reserves another 100,000,000 bytes.  The 1,024-row
-prefill chunk has a calculated 63,176,704-byte live activation set; the plan
-reserves 100,663,296 bytes (96 MiB) for it and allocator headroom.  Total
-batch-1 resident storage plus these reserves is 2,861,080,832 bytes per device,
+bytes.  Trace capture reserves another 100,000,000 bytes.  A 1,024-row local
+prefill kernel has a calculated 63,176,704-byte live activation set, but the
+source retains full-sequence tensors around chunked linears.  The largest
+explicit additional set occurs at O-projection chunk concatenation:
+50,331,648 bytes of local attention input, 201,326,592 bytes of accumulated
+output chunks, and a 201,326,592-byte concatenated output total 452,984,832
+bytes beyond the separately counted resident residual.  The plan reserves
+536,870,912 bytes (512 MiB) for this peak and allocator headroom.  Total
+batch-1 resident storage plus these reserves is 3,307,954,432 bytes per device,
 which fits comfortably in the roughly 34 GB device DRAM.  The multichip
 contract therefore restores the advertised 32,768 context, with batch 1 as the
 fully executed capacity gate.  Batch 32 still supports the compiler/optimized
 short-sequence workload; full-context batch 32 is not claimed by this
 decoder-only stage because it was not executed.  Its KV cache and residual
 would consume 15,971,909,632 and 6,442,450,944 bytes per device, and its
-resident lower bound is 24,474,329,344 bytes before full-prefill concatenation
+resident lower bound is 24,484,995,328 bytes before full-prefill concatenation
 and attention temporaries.
 
 ## Validation and performance
@@ -139,13 +153,21 @@ warmed trace replays.  The baseline is the completed single-chip
 The precision-locked batch-1 tuning sweep selected QKV/O core counts 8/8,
 MLP gate/down counts 24/8, BF16 CCL, and two links.  The resolved physical
 grids and padding are recorded in each new sweep artifact.  Nearby controls
-were slower: QKV16/O8 was 0.365193 ms, QKV8/O12 was 0.359111 ms, gate8/down24
-was 0.379098 ms, gate8/down8 was 0.368295 ms, QKV8/O24 was 0.363258 ms, BFP8
-CCL was 0.370917 ms, and one link was 0.360265 ms.  The 8-core down-only
-candidate was repeatably faster than 24 cores (0.356590 versus 0.358628 ms)
+were slower: QKV16/O8 was 0.365288 ms, QKV8/O12 was 0.359033 ms, gate8/down24
+was 0.379130 ms, gate8/down8 was 0.368289 ms, QKV8/O24 was 0.363173 ms, BFP8
+CCL was 0.370925 ms, and one link was 0.360302 ms.  The 8-core down-only
+candidate was repeatably faster than 24 cores (0.356671 versus 0.358672 ms)
 and became the production default.  Gate/up still requires the shared
 load-time padding from 5,760 to 6,144; padded values remain zero and do not
 change the logical output.
+
+The final completion audit also closed the distinct 12-core MLP midpoint on
+the exact production source and precision.  Gate12/down8 was 0.363515 ms,
+gate24/down12 was 0.357040 ms, and gate12/down12 was 0.363764 ms.  All five
+12-core-down samples (0.356883--0.357131 ms) were slower than all five selected
+8-core-down samples (0.356616--0.356742 ms), so the 24/8 MLP default remains
+the measured winner.  The three current-hash artifacts are
+`results/sweep_batch1_q8_o8_{g12_d8,g24_d12,g12_d12}_bf16.json`.
 
 ### Profiler and topology audit
 
@@ -161,10 +183,13 @@ human tables, CSVs, raw ops CSV, and hashes are under `tracy/tp4_selected/`.
 The authoritative residual-boundary experiment carries a fractured partial
 through reduce-scatter, local residual add, distributed RMSNorm, hidden
 all-gather, and the next real layer-14 QKV.  It produces PCC 0.999898 but takes
-0.109954 ms versus 0.097611 ms for all-reduce/add/RMSNorm/QKV, so the complete
-fractured boundary is 1.1265x slower.  The earlier RS/add/AG microprobe measured
-only the collective boundary and is not selection evidence.  The
-compiler-proven replicated boundary remains the stack baseline.
+0.109961 ms versus 0.097550 ms for all-reduce/add/RMSNorm/QKV.  The fused
+one-link all-gather/QKV candidate produces PCC 0.999859 and takes 0.110681 ms;
+all three boundary traces are bitwise deterministic.  Its attempted
+two-link trace stalled and was triaged as described above.  The earlier
+RS/add/AG microprobe measured only the collective boundary and is not
+selection evidence.  The compiler-proven replicated boundary remains the
+stack baseline.
 
 ### Safety and limitations
 
@@ -184,6 +209,9 @@ The implementation is deliberately fixed to this four-chip mesh.  The host
 also warns that firmware 19.8 is newer than fully tested 19.5, `/dev/shm` has
 only a narrow margin over the 16-MiB MPI allocation, and the pre-existing
 Inspector directory has a permissions problem; none caused a test failure.
+The rejected two-link fused-AGMM probe required one bounded reset after its
+trace hang; all four devices returned and a `MeshShape(1,4)` open/close smoke
+passed.  That experimental fused operation is absent from the selected path.
 This stage remains decoder-only and does not begin full-model, generation, or
 vLLM work.
 
@@ -196,6 +224,11 @@ vLLM work.
   logical-position, arbitrary-length, and largest-context gates.
 - `results/final_batch{1,32}.json`: final warmed wall latency and speedup.
 - `results/sweep_*.json`: rejected kernel/CCL candidates.
+- `results/fused_agmm_boundary.json` and
+  `../../tests/test_multichip_decoder_agmm_probe.py`: real next-QKV fused/unfused
+  residual-boundary PCC, trace determinism, and timing.
+- `results/fused_agmm_links2_trace_hang.json` and `triage/fused-agmm-links2-*`:
+  exact two-link fused trace-hang and recovery evidence.
 - `tracy/tp4_selected/{prefill,decode}_perf_report.{txt,csv}` and
   `profile_provenance.json`: human and machine profiler evidence.
 - `watcher/{watcher.log,pytest_stdout.log,watcher_clean.json}`: exact Watcher

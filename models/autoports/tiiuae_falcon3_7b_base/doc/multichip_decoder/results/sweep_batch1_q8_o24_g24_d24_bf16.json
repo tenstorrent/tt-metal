@@ -4,38 +4,67 @@
   "down_target_cores": 24,
   "effective_ccl_topology": "Ring",
   "gate_up_target_cores": 24,
-  "generated_at_utc": "2026-07-18T05:43:40.892582+00:00",
+  "generated_at_utc": "2026-07-18T07:16:19.241797+00:00",
   "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
-  "implementation_sha256": "2393f5ff856ea38e1b8c88440ee745f9872c8476f094e1b7c618b6036aa98272",
+  "implementation_sha256": "b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573",
   "iterations_per_sample": 100,
-  "multichip_prefill_ms": 0.8314470760524273,
-  "multichip_trace_ms": 0.3632577834650874,
+  "multichip_prefill_ms": 0.8900188840925694,
+  "multichip_trace_ms": 0.3631734801456332,
   "num_links": 2,
   "o_target_cores": 24,
-  "parallel_efficiency": 0.4432435437109416,
+  "parallel_efficiency": 0.4433464336632765,
+  "physical_decode_geometry": {
+    "down_grid": [
+      8,
+      3
+    ],
+    "down_grid_cores": 24,
+    "gate_up_grid": [
+      8,
+      3
+    ],
+    "gate_up_grid_cores": 24,
+    "mlp_local_width": 5760,
+    "mlp_padded_width": 6144,
+    "mlp_padding": 384,
+    "o_grid": [
+      8,
+      3
+    ],
+    "o_grid_cores": 24,
+    "o_local_input_width": 768,
+    "qkv_grid": [
+      8,
+      1
+    ],
+    "qkv_grid_cores": 8,
+    "qkv_local_width": 1280,
+    "qkv_padded_width": 1280,
+    "qkv_padding": 0
+  },
   "prefill_parallel_efficiency": null,
   "prefill_samples": [
-    1.413486897945404,
-    0.9025922045111656,
-    0.8314470760524273,
-    0.8205249905586243,
-    0.8044550195336342
+    1.1731288395822048,
+    0.947057269513607,
+    0.8900188840925694,
+    0.7914500311017036,
+    0.8086338639259338
   ],
   "prefill_speedup": null,
   "qkv_target_cores": 8,
-  "repo_head": "b35b3c1cbf7610b87f2813448f6d11f6df502b0c",
+  "repo_head": "069f3fc3fc2ac9f6ffcaa7da15059f64efd251d7",
   "samples": [
-    0.36342330276966095,
-    0.3631018940359354,
-    0.3632679022848606,
-    0.3632577834650874,
-    0.3632388496771455
+    0.3633544174954295,
+    0.3633988229557872,
+    0.3631734801456332,
+    0.36310283932834864,
+    0.36315775010734797
   ],
   "sequence_length": 17,
   "single_chip_baseline_ms": 0.644046668894589,
   "single_chip_prefill_ms": null,
   "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch1.json",
-  "speedup": 1.7729741748437664,
-  "test_sha256": "d658fa7740b004644c9add7023e6f7ce577349c685083c907d6b52448d729433",
+  "speedup": 1.773385734653106,
+  "test_sha256": "b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557",
   "weights": "real_layer_14"
 }
