@@ -342,3 +342,5 @@ revision `381fc969f78efac66bc87ff7ddeadb7e73c218a7`, locally at
   performance arithmetic, checked all 30 JSON artifacts and retained hashes,
   and verified every prior finding fixed or explicitly controlled. The full
   verdict is retained in `stage_review.md`.
+- Stage-owned implementation/evidence commit: `ba8a83b14fd`. This commit was
+  created locally after all repository hooks passed and was not pushed.
