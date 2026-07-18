@@ -7,6 +7,7 @@
 #include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <optional>
@@ -315,6 +316,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
+    // The row-major repack path has different CB ownership and still uses Welford. Tile-layout
+    // inputs use two-pass SFPU by default, with an opt-out for bring-up and A/B comparisons.
+    const bool sfpu_two_pass = use_welford && !tilize_in && std::getenv("TTNN_GROUPNORM_USE_WELFORD") == nullptr;
 
     // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
@@ -609,6 +613,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
+        {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
     };
 
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args_group_2 = {
@@ -643,6 +648,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
+        {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
     };
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
@@ -745,6 +751,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"padded_hw", pad.padded_hw},
         {"pad_scaler_bits", pad.scaler_bits(reduce_factor_w_group_1)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
+        {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(
+                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
     };
 
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_2 = {
@@ -779,6 +790,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"padded_hw", pad.padded_hw},
         {"pad_scaler_bits", pad.scaler_bits(reduce_factor_w_group_2)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
+        {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(
+                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_2 / tile_width)))},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {

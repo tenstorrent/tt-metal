@@ -190,7 +190,11 @@ void kernel_main() {
             transpose_init(dfb_in0_id);
         }
         tile_regs_acquire();
-        welford_init();
+        if constexpr (sfpu_two_pass) {
+            two_pass_stats_init();
+        } else {
+            welford_init();
+        }
 
         std::uint32_t block_xy_coord = 0;
 
@@ -347,7 +351,7 @@ void kernel_main() {
                     for (std::uint32_t g = min_group; g < num_groups; ++g) {
                         const std::uint32_t cols_available = tile_width - group_offset;
                         const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
-                        two_pass_stats_update_rows<true>(input_dst, group_offset, cols_consumed);
+                        two_pass_stats_update_rows<true, num_groups == 1>(input_dst, group_offset, cols_consumed);
                         channels_left -= cols_consumed;
                         group_offset += cols_consumed;
                         if (channels_left > 0) {
@@ -369,10 +373,10 @@ void kernel_main() {
                 block_xy_coord += num_channels_per_group;
             }
             // Finalize the resident last group before loading the others.
-            welford_finalize_to_face<0>(mean_dst, active_group, block_xy_coord - 1, empty_reciprocal_lut);
+            two_pass_stats_finalize_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
             for (std::uint32_t g = 0; g + 1 < num_groups; ++g) {
                 welford_restore_state(mean_dst, g);
-                welford_finalize_to_face<0>(mean_dst, g, block_xy_coord - 1, empty_reciprocal_lut);
+                two_pass_stats_finalize_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
             }
         } else {
             for (std::uint32_t g = 0; g < num_groups; ++g) {

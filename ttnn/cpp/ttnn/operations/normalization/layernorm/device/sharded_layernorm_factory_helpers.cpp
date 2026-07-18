@@ -76,7 +76,8 @@ const m2::SemaphoreSpecName REDUCE_SECOND_STAGE{"reduce_second_stage"};
 // Validation and data format helpers
 //////////////////////////////////////////////////////////////////////////////
 
-void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, uint32_t subblock_wt) {
+void assert_subblock_compute_config_compatible(
+    bool dst_full_sync_en, bool fp32_dest_acc_en, std::uint32_t subblock_wt) {
     if (!dst_full_sync_en) {
         if (fp32_dest_acc_en) {
             TT_FATAL(
@@ -149,7 +150,7 @@ bool should_use_two_stage_reduce(
 }
 
 // Internal helper: computes number of blocks based on grid configuration
-uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec) {
+std::uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec) {
     if (mcast_1d) {
         return shard_spec.num_cores();
     }
@@ -165,11 +166,11 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 // Grid and worker distribution
 //////////////////////////////////////////////////////////////////////////////
 
-GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
+GridParams GridParams::compute(const Tensor& input, std::uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
     auto spec = input.shard_spec().value();
-    const uint32_t tile_height = input.tensor_spec().tile().get_height();
-    uint32_t M = input.physical_volume() / input.padded_shape()[-1];
-    uint32_t block_h = block_ht * tile_height;
+    const std::uint32_t tile_height = input.tensor_spec().tile().get_height();
+    std::uint32_t M = input.physical_volume() / input.padded_shape()[-1];
+    std::uint32_t block_h = block_ht * tile_height;
     bool mcast = M == block_h;
     bool rw = spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = spec.grid.bounding_box();
@@ -193,7 +194,7 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
         .grid_is_rectangular = rectangular};
 }
 
-WorkerDistribution WorkerDistribution::compute(const GridParams& grid, uint32_t block_ht) {
+WorkerDistribution WorkerDistribution::compute(const GridParams& grid, std::uint32_t block_ht) {
     WorkerDistribution w;
     w.num_rows_per_all_to_all_worker = tt::div_up(block_ht, grid.num_blocks);
     if (grid.use_two_stage_reduce) {
@@ -382,8 +383,8 @@ CoreRanges compute_core_ranges_2d(const GridParams& grid, const WorkerDistributi
     cr.start_core = start_core;
     cr.all_cores = grid.shard_spec.grid.merge_ranges();
 
-    uint32_t num_cores_x = grid.grid_size.x;
-    uint32_t num_cores_y = grid.grid_size.y;
+    std::uint32_t num_cores_x = grid.grid_size.x;
+    std::uint32_t num_cores_y = grid.grid_size.y;
 
     if (grid.row_wise) {
         cr.sender_cores = {
@@ -509,7 +510,7 @@ KernelPaths KernelPaths::get(
 DFBSizeParams::Sizes DFBSizeParams::compute() const {
     Sizes sizes;
 
-    uint32_t in0_block_tiles = block_wt * block_ht;
+    std::uint32_t in0_block_tiles = block_wt * block_ht;
 
     sizes.in0_dfb_size = in0_block_tiles * in_single_tile_size;
     sizes.in1_dfb_size = sizes.in0_dfb_size;
@@ -1483,7 +1484,7 @@ void add_kernel_and_work_unit_specs(
 // Runtime argument building
 //////////////////////////////////////////////////////////////////////////////
 
-CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx) {
+CoreIndices CoreIndices::compute(std::uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx) {
     CoreIndices idx;
 
     if (ctx.grid.mcast_1d) {
@@ -1523,7 +1524,7 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
     // no per-column mask). Cores before the last own a full block_w; the final real core owns the
     // remaining logical columns (which may end in a partial tile); any all-padding core beyond it owns
     // none. For a single width shard this is just the whole logical width.
-    const uint32_t block_w = ctx.block_wt * TILE_WIDTH;
+    const std::uint32_t block_w = ctx.block_wt * TILE_WIDTH;
     if (idx.width_index < ctx.last_core_width_index) {
         idx.welford_reduce_w = block_w;
     } else if (idx.width_index == ctx.last_core_width_index) {
@@ -1632,9 +1633,9 @@ std::vector<uint32_t> write_back_varargs(
     uint32_t worker_offset = 0;
 
     while (worker_offset < ctx.block_wt) {
-        uint32_t tiles_available = ctx.block_wt_resharded - current_storage_core_offset;
-        uint32_t tiles_left = ctx.block_wt - worker_offset;
-        uint32_t tiles_to_write = std::min(tiles_left, tiles_available);
+        std::uint32_t tiles_available = ctx.block_wt_resharded - current_storage_core_offset;
+        std::uint32_t tiles_left = ctx.block_wt - worker_offset;
+        std::uint32_t tiles_to_write = std::min(tiles_left, tiles_available);
 
         num_segments_out += 1;
         args.push_back(tiles_to_write * ctx.out_single_tile_size);
@@ -1711,10 +1712,10 @@ RunArgsAndWriterVarargs build_run_args(
     auto* writer_receiver = find_run_args(run_args, WRITER_RECEIVER);
     auto* compute_not_all_to_all = find_run_args(run_args, COMPUTE_NOT_ALL_TO_ALL);
 
-    uint32_t current_storage_core = 0;
-    uint32_t current_storage_core_offset = 0;
+    std::uint32_t current_storage_core = 0;
+    std::uint32_t current_storage_core_offset = 0;
 
-    for (uint32_t i = 0; i < cores.size(); ++i) {
+    for (std::uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         const auto idx = CoreIndices::compute(i, core, ctx);
         const bool is_all_to_all = idx.is_all_to_all(ctx);

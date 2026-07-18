@@ -105,7 +105,7 @@ extern const m2::SemaphoreSpecName REDUCE_SECOND_STAGE;
 // Validation and data format helpers
 //////////////////////////////////////////////////////////////////////////////
 
-void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, uint32_t subblock_wt);
+void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, std::uint32_t subblock_wt);
 
 std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
 get_dfb_data_formats(
@@ -126,26 +126,26 @@ struct GridParams {
     std::optional<CoreCoord> grid_offset;
     bool mcast_1d = false;
     bool row_wise = false;
-    uint32_t num_blocks = 0;
+    std::uint32_t num_blocks = 0;
     bool use_mcast = false;
     bool use_two_stage_reduce = false;
     bool grid_is_rectangular = true;
 
-    static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
+    static GridParams compute(const Tensor& input, std::uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
 };
 
 // Struct to hold worker distribution parameters
 struct WorkerDistribution {
-    uint32_t num_rows_per_all_to_all_worker = 0;
-    uint32_t num_rows_per_all_to_all_worker_last = 0;
-    uint32_t num_cores_all_to_all = 0;
-    uint32_t num_cores_all_to_all_first_stage = 0;
-    uint32_t num_cores_all_to_all_second_stage = 0;
-    uint32_t num_none_all_to_all_workers = 0;
-    uint32_t num_blocks_first_stage = 0;
-    uint32_t num_blocks_second_stage = 0;
+    std::uint32_t num_rows_per_all_to_all_worker = 0;
+    std::uint32_t num_rows_per_all_to_all_worker_last = 0;
+    std::uint32_t num_cores_all_to_all = 0;
+    std::uint32_t num_cores_all_to_all_first_stage = 0;
+    std::uint32_t num_cores_all_to_all_second_stage = 0;
+    std::uint32_t num_none_all_to_all_workers = 0;
+    std::uint32_t num_blocks_first_stage = 0;
+    std::uint32_t num_blocks_second_stage = 0;
 
-    static WorkerDistribution compute(const GridParams& grid, uint32_t block_ht);
+    static WorkerDistribution compute(const GridParams& grid, std::uint32_t block_ht);
 };
 
 // Struct to hold computed core ranges for kernels
@@ -268,6 +268,7 @@ struct SpecConfig {
     // Exposes the Welford intake under a second buffer index configured for UnpackToDest, so
     // transpose_tile does not truncate Float32 input to TF32 on the SrcA path.
     bool welford_fp32_alias = false;
+    bool sfpu_two_pass = false;
 
     // Buffer sizes
     DFBSizeParams::Sizes sizes;
@@ -284,13 +285,13 @@ struct SpecConfig {
     tt::DataFormat reciprocal_dfb_data_format = tt::DataFormat::Float32;
 
     // Tile sizes
-    uint32_t in_single_tile_size = 0;
-    uint32_t single_tile_size = 0;
-    uint32_t out_single_tile_size = 0;
-    uint32_t gamma_single_tile_size = 0;
-    uint32_t beta_single_tile_size = 0;
-    uint32_t stats_single_tile_size = 0;
-    uint32_t bfloat16_tile_size = 0;
+    std::uint32_t in_single_tile_size = 0;
+    std::uint32_t single_tile_size = 0;
+    std::uint32_t out_single_tile_size = 0;
+    std::uint32_t gamma_single_tile_size = 0;
+    std::uint32_t beta_single_tile_size = 0;
+    std::uint32_t stats_single_tile_size = 0;
+    std::uint32_t bfloat16_tile_size = 0;
 
     // Compile-time argument values
     uint32_t block_ht = 0;
@@ -363,23 +364,23 @@ struct RuntimeArgsContext {
     const CoreRanges& core_ranges;
 
     // NOC coordinates for multicast
-    std::vector<uint32_t> mcast_noc_x;
-    std::vector<uint32_t> mcast_noc_y;
+    std::vector<std::uint32_t> mcast_noc_x;
+    std::vector<std::uint32_t> mcast_noc_y;
 
     // Packed values for writer
-    uint32_t packed_cinv_value = 0;
-    uint32_t packed_cinv_value_one = 0;
-    uint32_t packed_winv_value = 0;
-    uint32_t eps_u = 0;
+    std::uint32_t packed_cinv_value = 0;
+    std::uint32_t packed_cinv_value_one = 0;
+    std::uint32_t packed_winv_value = 0;
+    std::uint32_t eps_u = 0;
 
     // Tile and block info
-    uint32_t single_tile_size = 0;
-    uint32_t out_single_tile_size = 0;
-    uint32_t block_wt = 0;
-    uint32_t block_wt_resharded = 0;
-    uint32_t Kt = 0;
-    uint32_t logical_K = 0;
-    uint32_t last_core_width_index = 0;
+    std::uint32_t single_tile_size = 0;
+    std::uint32_t out_single_tile_size = 0;
+    std::uint32_t block_wt = 0;
+    std::uint32_t block_wt_resharded = 0;
+    std::uint32_t Kt = 0;
+    std::uint32_t logical_K = 0;
+    std::uint32_t last_core_width_index = 0;
 
     // Flags
     bool is_post_all_gather = false;
@@ -388,27 +389,27 @@ struct RuntimeArgsContext {
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
 
     // Storage core info for write-back
-    std::vector<uint32_t> storage_core_noc_x;
-    std::vector<uint32_t> storage_core_noc_y;
-    uint32_t num_storage_cores = 0;
+    std::vector<std::uint32_t> storage_core_noc_x;
+    std::vector<std::uint32_t> storage_core_noc_y;
+    std::uint32_t num_storage_cores = 0;
 };
 
 // Per-core indices computed from core position
 struct CoreIndices {
-    uint32_t height_index = 0;
-    uint32_t width_index = 0;
-    uint32_t width_index_two_stage = 0;
-    uint32_t all_to_all_worker_tile_offset_bytes = 0;
+    std::uint32_t height_index = 0;
+    std::uint32_t width_index = 0;
+    std::uint32_t width_index_two_stage = 0;
+    std::uint32_t all_to_all_worker_tile_offset_bytes = 0;
     // This core's first tile index along the width (the normalized dimension): width_index * block_wt,
     // the start of this core's width shard.
-    uint32_t width_shard_tile_start_id = 0;
-    uint32_t num_reduce_tiles_per_block_h = 0;
+    std::uint32_t width_shard_tile_start_id = 0;
+    std::uint32_t num_reduce_tiles_per_block_h = 0;
     // Real (logical) column count this core reduces over. Equals the per-core block width for full
     // shards and the remaining logical columns for the final real shard; used by the Welford compute
     // kernel, which has no per-column mask and must reduce exactly the logical columns.
-    uint32_t welford_reduce_w = 0;
+    std::uint32_t welford_reduce_w = 0;
 
-    static CoreIndices compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx);
+    static CoreIndices compute(std::uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx);
 
     // Returns true if this core is an all-to-all worker based on its indices
     bool is_all_to_all(const RuntimeArgsContext& ctx) const;

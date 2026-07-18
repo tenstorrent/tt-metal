@@ -61,6 +61,13 @@ inline void _llk_math_welfords_sfpu_init_()
     _program_welfords_replay_buffer_();
 }
 
+inline void _llk_math_two_pass_sfpu_init_()
+{
+    sfpu::_init_sfpu_config_reg();
+    welfords_sfpu_configure_addrmod();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
 /**
  * Re-establish MATH address mods and MOP state for the SFPU Welford path after an
  * arbitrary MATH/FPU op (e.g. eltwise binary scalar multiply). Does not touch the

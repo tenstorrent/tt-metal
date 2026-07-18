@@ -112,6 +112,7 @@ void kernel_main() {
     constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
+    constexpr uint32_t retained_input_dst = 3;
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
@@ -194,7 +195,11 @@ void kernel_main() {
         // dfb_x_welford has UnpackToDest mode so transpose_tile preserves fp32 precision.
         transpose_init(dfb_x_welford);
         tile_regs_acquire();
-        welford_init();
+        if constexpr (sfpu_two_pass) {
+            two_pass_stats_init();
+        } else {
+            welford_init();
+        }
         // Welford's recurrence and the fp32 transpose collide in the math thread's replay
         // buffer. The buffer has 32 slots, conventionally split between SFPU [0, 16) and
         // FPU [16, 32). Welford violates that split: welford_init records 32 instructions
@@ -257,7 +262,11 @@ void kernel_main() {
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
 
         // Store the mean and variance to the destination registers
-        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
+        if constexpr (sfpu_two_pass) {
+            two_pass_stats_finalize_to_row(mean_dst, (*p_reciprocals)[W - 1]);
+        } else {
+            welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
+        }
         tile_regs_commit();
 
         // Pop dfb_x_welford so its rd_ptr advances in lock-step with dfb_x's pop in the eltwise

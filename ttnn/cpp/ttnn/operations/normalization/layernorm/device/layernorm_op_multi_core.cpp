@@ -20,8 +20,9 @@
 
 #include <optional>
 #include <bit>
+#include <cstdlib>
+#include <cstdint>
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -198,11 +199,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     const auto& logical_shape = a.logical_shape();
     const auto& padded_shape = a.padded_shape();
-    uint32_t W = logical_shape[-1];
+    std::uint32_t W = logical_shape[-1];
     const bool input_is_row_major = a.layout() == Layout::ROW_MAJOR;
-    uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
-    uint32_t HWp = Hp * Wp;
-    uint32_t NC = a.physical_volume() / HWp;
+    std::uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
+    std::uint32_t HWp = Hp * Wp;
+    std::uint32_t NC = a.physical_volume() / HWp;
     // For ROW_MAJOR inputs the tensor height is not padded to tile boundaries.
     // Round Hp up to the next TILE_HEIGHT multiple so that Ht >= 1 for any H < TILE_HEIGHT.
     // HWp and NC are computed above from the original (unpadded) Hp, so they remain correct.
@@ -211,7 +212,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     // Total logical (non-padded) row count. Used by RM reader/writer kernels to
     // avoid OOB DRAM reads/writes when H is not a multiple of TILE_HEIGHT.
-    const uint32_t H_logical = static_cast<uint32_t>(NC) * static_cast<uint32_t>(logical_shape[-2]);
+    const std::uint32_t H_logical = static_cast<std::uint32_t>(NC) * static_cast<std::uint32_t>(logical_shape[-2]);
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
@@ -227,16 +228,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const std::uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = a.tensor_spec().tile().get_width();
 
     // Data span in tiles, rounded up to tile boundaries
-    uint32_t Wt = Wp / tile_width;
-    uint32_t Ht = Hp / tile_height;
+    std::uint32_t Wt = Wp / tile_width;
+    std::uint32_t Ht = Hp / tile_height;
 
     // Block size that maximizes dest usage depending on
     // whether fp32 accumulation is enabled
-    uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+    std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -269,7 +270,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
+    std::uint32_t inb_single_tile_size = 0;
     if (b) {
         inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
         inb_single_tile_size = tt::tile_size(inb_data_format);
@@ -318,12 +319,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         im6_t = Wt_next_block_up;
         in0_t = 2 * block_size;
     }
-    uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
-    uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
-    uint32_t im1_t = 2;
-    uint32_t in2_t = 2;  // scaler for reduce coming from reader
-    uint32_t in3_t = 2;  // epsilon coming from reader
-    uint32_t im2_t = 2;  //
+    std::uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
+    std::uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
+    std::uint32_t im1_t = 2;
+    std::uint32_t in2_t = 2;  // scaler for reduce coming from reader
+    std::uint32_t in3_t = 2;  // epsilon coming from reader
+    std::uint32_t im2_t = 2;  //
 
     bool large_tensor_needed = false;
     // The following constants were chosen empirically to
@@ -436,6 +437,45 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
+    // Two-pass SFPU replaces Welford for LayerNorm. Retain an opt-out while the Welford kernel
+    // remains useful for architecture bring-up and direct numerical/performance comparisons.
+    const bool use_sfpu_two_pass = use_welford_and_not_rms_norm && std::getenv("TTNN_LAYERNORM_USE_WELFORD") == nullptr;
+    const bool sfpu_two_pass = use_sfpu_two_pass && !large_tensor_needed;
+    const bool sfpu_two_pass_large = use_sfpu_two_pass && large_tensor_needed;
+
+    // The two-pass kernel retains the current row until its mean, centered M2,
+    // and x-mean traversals are complete. When L1 permits, let the reader fill
+    // the next two rows instead of stalling on that longer retention interval.
+    // The non-fused c_29 FP32 alias shares cb_in's read-ahead storage. On the
+    // fused path the current a/b row has already been consumed into cb_x, so two
+    // rows in each input CB allow the reader to stay ahead of the longer compute
+    // phase.
+    if (sfpu_two_pass) {
+        const std::uint32_t read_ahead_in0_t = fuse_pre_add ? 2 * Wt_next_block_up : 3 * in0_t;
+        const std::uint32_t read_ahead_in1_t = fuse_pre_add ? 2 * Wt_next_block_up : in1_t;
+        const bool read_ahead_input_fits = CB_can_fit_in_L1(
+            read_ahead_in0_t * in_single_tile_size,
+            read_ahead_in1_t * inb_single_tile_size,
+            out0_t * out_single_tile_size,
+            im0_t * single_tile_size,
+            im3_t * single_tile_size,
+            in5_t * gamma_single_tile_size,
+            in6_t * beta_single_tile_size,
+            im6_t * single_tile_size,
+            im5_t * single_tile_size,
+            im4_t * single_tile_size,
+            im1_t * single_tile_size,
+            in2_t * scaler_tile_size,
+            in3_t * bfloat16_tile_size,
+            im2_t * single_tile_size,
+            reciprocal_CB_size_bytes,
+            in_rm_size + out_rm_size,
+            a.device()->l1_size_per_core());
+        if (read_ahead_input_fits) {
+            in0_t = read_ahead_in0_t;
+            in1_t = read_ahead_in1_t;
+        }
+    }
 
     // For Float32 input on the Welford path: expose the input tile data under two buffer indices
     // backed by the same SRAM (aliased buffers). dfb_x retains the default unpack mode so
@@ -933,10 +973,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     uint32_t curr_row = 0;
     auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
-    for (uint32_t i = 0; i < num_cores; ++i) {
+    for (std::uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = all_core_coords[i];
 
-        uint32_t num_tile_rows_per_core = 0;
+        std::uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -945,13 +985,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             TT_THROW("Core not in specified core ranges");
         }
 
-        uint32_t tile_offset = curr_row * Wt;
+        std::uint32_t tile_offset = curr_row * Wt;
 
         // Merged readers (rm_and_tile, large_tensor_rm_and_tile) use a unified start_tile_row = curr_row.
         // Legacy kernels (welford large-tensor, rm_gb) still expect tile_offset = curr_row * Wt.
         const bool using_legacy_tile_reader =
             (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
-        const uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
+        const std::uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
 
         m2::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,

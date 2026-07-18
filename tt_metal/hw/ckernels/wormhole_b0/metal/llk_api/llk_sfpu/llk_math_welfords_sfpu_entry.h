@@ -14,21 +14,52 @@ namespace ckernel {
 
 inline void llk_math_welfords_sfpu_init() { _llk_math_welfords_sfpu_init_(); }
 
+inline void llk_math_two_pass_sfpu_init() { _llk_math_two_pass_sfpu_init_(); }
+
 inline void llk_math_welfords_sfpu_clear_previous_mean_and_m2() { ckernel::sfpu::_clear_previous_mean_and_m2_(); }
 
-template <bool accumulate_m2>
+template <bool accumulate_m2, bool dual_m2>
 inline void llk_math_two_pass_sfpu_update_rows(
     std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_two_pass_update_rows_<accumulate_m2>, input_dst_idx, start_row, num_rows);
+        ckernel::sfpu::_two_pass_update_rows_<accumulate_m2, dual_m2>, input_dst_idx, start_row, num_rows);
 }
 
 inline void llk_math_two_pass_sfpu_finish_mean(std::uint32_t reciprocal_bits) {
     ckernel::sfpu::_two_pass_finish_mean_(reciprocal_bits);
 }
 
+inline void llk_math_two_pass_sfpu_clear_stats() { ckernel::sfpu::_two_pass_clear_stats_(); }
+
+template <bool dual_m2>
+inline void llk_math_two_pass_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_idx) {
+    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_two_pass_store_mean_m2_to_dst_<dual_m2>, mean_dst_idx);
+}
+
+template <bool dual_m2>
+inline void llk_math_two_pass_sfpu_combine_block_to_dst(
+    std::uint32_t mean_dst_idx, std::uint32_t total_reciprocal_bits, std::uint32_t block_n_bits) {
+    _llk_math_welfords_sfpu_params_(
+        ckernel::sfpu::_two_pass_combine_block_to_dst_<dual_m2>, mean_dst_idx, total_reciprocal_bits, block_n_bits);
+}
+
+template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_finish_variance(std::uint32_t reciprocal_bits) {
-    ckernel::sfpu::_two_pass_finish_variance_(reciprocal_bits);
+    ckernel::sfpu::_two_pass_finish_variance_<dual_m2>(reciprocal_bits);
+}
+
+template <bool dual_m2>
+inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_row(
+    std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
+    _llk_math_welfords_sfpu_params_(
+        ckernel::sfpu::_two_pass_store_mean_var_to_dst_row_<dual_m2>, mean_dst_idx, reciprocal_bits);
+}
+
+template <bool dual_m2>
+inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_raw(
+    std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
+    _llk_math_welfords_sfpu_params_(
+        ckernel::sfpu::_two_pass_store_mean_var_to_dst_raw_group_<dual_m2>, mean_dst_idx, group_id, reciprocal_bits);
 }
 
 template <bool is_fp32_dest_acc_en>

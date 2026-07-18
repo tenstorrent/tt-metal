@@ -46,7 +46,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     bool inplace = program_config.inplace;
     bool use_welford = operation_attributes.use_welford;
-    const bool sfpu_two_pass = use_welford && std::getenv("TTNN_GROUPNORM_SFPU_TWO_PASS") != nullptr;
+    // Two-pass SFPU is the default numerically-stable implementation. Keep an opt-out while
+    // Welford remains available for architecture bring-up and direct A/B comparisons.
+    const bool sfpu_two_pass = use_welford && std::getenv("TTNN_GROUPNORM_USE_WELFORD") == nullptr;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // Begin sharded implementation

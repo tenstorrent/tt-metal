@@ -18,6 +18,7 @@
 #include "api/compute/transpose.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/dataflow_buffer.h"
 
@@ -214,6 +215,173 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 }
 #else
 
+template <
+    uint32_t dfb_in,
+    uint32_t dfb_inb,
+    uint32_t dfb_interm_pre_add,
+    uint32_t dfb_ex,
+    uint32_t dfb_ex2,
+    uint32_t dfb_ex_welford,
+    uint32_t dfb_ex2_welford,
+    bool welford_state_fp32_alias,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t var_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk>
+void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
+    DataflowBuffer dfb_in_obj(dfb_in);
+    DataflowBuffer dfb_inb_obj(dfb_inb);
+    DataflowBuffer dfb_interm_pre_add_obj(dfb_interm_pre_add);
+    DataflowBuffer dfb_ex_obj(dfb_ex);
+    DataflowBuffer dfb_ex2_obj(dfb_ex2);
+    DataflowBuffer dfb_ex_welford_obj(dfb_ex_welford);
+    DataflowBuffer dfb_ex2_welford_obj(dfb_ex2_welford);
+
+    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr bool is_last_tile_full = last_tile_rows == 0;
+    constexpr uint32_t full_block_n = blk * tile_width;
+    constexpr uint32_t last_block_start = ((Wt - 1) / blk) * blk * tile_width;
+    constexpr uint32_t last_block_n = W - last_block_start;
+    const uint32_t full_block_n_bits = generic::bit_cast<uint32_t>(static_cast<float>(full_block_n));
+    const uint32_t last_block_n_bits = generic::bit_cast<uint32_t>(static_cast<float>(last_block_n));
+
+    uint32_t accumulated_n = 0;
+    for (auto block : generic::blocks(Wt, blk)) {
+        // Materialize x = a + b once in L1. Both statistics passes below reread
+        // this block locally; they do not add another traversal of a or b.
+        reconfig_data_format(dfb_in, dfb_inb);
+        add_tiles_init(dfb_in, dfb_inb);
+        dfb_in_obj.wait_front(block.full_block_size());
+        dfb_inb_obj.wait_front(block.full_block_size());
+        tile_regs_acquire();
+        for (auto i : block.local()) {
+            add_tiles(dfb_in, dfb_inb, i, i, i);
+        }
+        tile_regs_commit();
+        dfb_in_obj.pop_front(block.full_block_size());
+        dfb_inb_obj.pop_front(block.full_block_size());
+
+        pack_reconfig_data_format(dfb_interm_pre_add);
+        dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
+        tile_regs_wait();
+        for (auto i : block.local()) {
+            pack_tile(i, dfb_interm_pre_add);
+        }
+        tile_regs_release();
+        dfb_interm_pre_add_obj.push_back(block.full_block_size());
+
+        dfb_interm_pre_add_obj.wait_front(block.full_block_size());
+        if (!block.is_first()) {
+            dfb_ex_obj.wait_front(1);
+            dfb_ex2_obj.wait_front(1);
+            if constexpr (welford_state_fp32_alias) {
+                dfb_ex_welford_obj.wait_front(1);
+                dfb_ex2_welford_obj.wait_front(1);
+            }
+        }
+
+        tile_regs_acquire();
+        if (!block.is_first()) {
+            // Preserve the previous blocks' raw (mean, M2) in adjacent DEST
+            // tiles. The SFPU Chan merge consumes them after this block's M2
+            // has been accumulated in LREG4/5/6.
+            reconfig_data_format_srca(dfb_ex_welford);
+            copy_tile_init(dfb_ex_welford);
+            copy_tile(dfb_ex_welford, 0, mean_dst);
+            reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
+            copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2_welford);
+            copy_tile(dfb_ex2_welford, 0, var_dst);
+        }
+
+        reconfig_data_format_srca(dfb_interm_pre_add);
+        transpose_init(dfb_interm_pre_add);
+        two_pass_stats_init();
+        two_pass_stats_clear();
+
+        uint32_t block_n = 0;
+        for (auto i : block.local()) {
+            const uint32_t global_tile = block.to_global(i);
+            const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
+            transpose_tile(dfb_interm_pre_add, i, input_dst);
+            two_pass_stats_update_rows<false>(input_dst, 0, rows);
+            block_n += rows;
+        }
+        two_pass_stats_finish_mean(reciprocal_lut[block_n - 1]);
+
+        for (auto i : block.local()) {
+            const uint32_t global_tile = block.to_global(i);
+            const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
+            transpose_tile(dfb_interm_pre_add, i, input_dst);
+            two_pass_stats_update_rows<true>(input_dst, 0, rows);
+        }
+
+        if (block.is_first()) {
+            two_pass_stats_save_state(mean_dst);
+        } else {
+            two_pass_stats_combine_block(
+                mean_dst,
+                reciprocal_lut[accumulated_n + block_n - 1],
+                block.is_full() ? full_block_n_bits : last_block_n_bits);
+        }
+        accumulated_n += block_n;
+        tile_regs_commit();
+
+        dfb_interm_pre_add_obj.pop_front(block.full_block_size());
+        if (!block.is_first()) {
+            dfb_ex_obj.pop_front(1);
+            dfb_ex2_obj.pop_front(1);
+            if constexpr (welford_state_fp32_alias) {
+                dfb_ex_welford_obj.pop_front(1);
+                dfb_ex2_welford_obj.pop_front(1);
+            }
+        }
+
+        dfb_ex_obj.reserve_back(1);
+        dfb_ex2_obj.reserve_back(1);
+        if constexpr (welford_state_fp32_alias) {
+            dfb_ex_welford_obj.reserve_back(1);
+            dfb_ex2_welford_obj.reserve_back(1);
+        }
+        tile_regs_wait();
+        pack_reconfig_data_format(dfb_interm_pre_add, dfb_ex);
+        pack_tile(mean_dst, dfb_ex);
+        pack_tile(var_dst, dfb_ex2);
+        tile_regs_release();
+        dfb_ex_obj.push_back(1);
+        dfb_ex2_obj.push_back(1);
+        if constexpr (welford_state_fp32_alias) {
+            dfb_ex_welford_obj.push_back(1);
+            dfb_ex2_welford_obj.push_back(1);
+        }
+    }
+
+    dfb_ex_obj.wait_front(1);
+    dfb_ex2_obj.wait_front(1);
+    if constexpr (welford_state_fp32_alias) {
+        dfb_ex_welford_obj.wait_front(1);
+        dfb_ex2_welford_obj.wait_front(1);
+    }
+    tile_regs_acquire();
+    reconfig_data_format_srca(dfb_ex_welford);
+    copy_tile_init(dfb_ex_welford);
+    copy_tile(dfb_ex_welford, 0, mean_dst);
+    reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
+    copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2_welford);
+    copy_tile(dfb_ex2_welford, 0, var_dst);
+    welford_restore_state(mean_dst);
+    two_pass_stats_finalize_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+    tile_regs_commit();
+    dfb_ex_obj.pop_front(1);
+    dfb_ex2_obj.pop_front(1);
+    if constexpr (welford_state_fp32_alias) {
+        dfb_ex_welford_obj.pop_front(1);
+        dfb_ex2_welford_obj.pop_front(1);
+    }
+}
+
 /* @brief: Welford's algorithm for no fused pre-add
  * @param: dfb_in: input buffer
  * @param: input_dst: input tile for Welford's algorithm
@@ -322,6 +490,82 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     dfb_in_obj.pop_front(num_to_sync);
 }
 #endif
+
+template <
+    uint32_t dfb_in,
+    uint32_t dfb_x_welford,
+    bool welford_fp32_alias,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk>
+void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
+    DataflowBuffer dfb_in_obj(dfb_in);
+    DataflowBuffer dfb_x_welford_obj(dfb_x_welford);
+
+    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr bool is_last_tile_full = last_tile_rows == 0;
+    constexpr uint32_t full_block_n = blk * tile_width;
+    constexpr uint32_t last_block_start = ((Wt - 1) / blk) * blk * tile_width;
+    constexpr uint32_t last_block_n = W - last_block_start;
+    const uint32_t full_block_n_bits = generic::bit_cast<uint32_t>(static_cast<float>(full_block_n));
+    const uint32_t last_block_n_bits = generic::bit_cast<uint32_t>(static_cast<float>(last_block_n));
+
+    reconfig_data_format_srca(dfb_x_welford);
+    transpose_init(dfb_x_welford);
+    tile_regs_acquire();
+    two_pass_stats_init();
+
+    uint32_t accumulated_n = 0;
+    for (auto block : generic::blocks(Wt, blk)) {
+        if constexpr (welford_fp32_alias) {
+            dfb_x_welford_obj.wait_front(block.full_block_size());
+        } else {
+            dfb_in_obj.wait_front(block.full_block_size());
+        }
+
+        two_pass_stats_clear();
+        uint32_t block_n = 0;
+        for (auto i : block.local()) {
+            const uint32_t global_tile = block.to_global(i);
+            const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
+            transpose_tile(dfb_x_welford, i, input_dst);
+            two_pass_stats_update_rows<false>(input_dst, 0, rows);
+            block_n += rows;
+        }
+        two_pass_stats_finish_mean(reciprocal_lut[block_n - 1]);
+
+        // The block remains at the CB front, so the second SFPU traversal is
+        // an L1 reread rather than another DRAM traversal.
+        for (auto i : block.local()) {
+            const uint32_t global_tile = block.to_global(i);
+            const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
+            transpose_tile(dfb_x_welford, i, input_dst);
+            two_pass_stats_update_rows<true>(input_dst, 0, rows);
+        }
+
+        if (block.is_first()) {
+            two_pass_stats_save_state(mean_dst);
+        } else {
+            two_pass_stats_combine_block(
+                mean_dst,
+                reciprocal_lut[accumulated_n + block_n - 1],
+                block.is_full() ? full_block_n_bits : last_block_n_bits);
+        }
+        accumulated_n += block_n;
+
+        if constexpr (welford_fp32_alias) {
+            dfb_x_welford_obj.pop_front(block.full_block_size());
+        }
+        dfb_in_obj.pop_front(block.full_block_size());
+    }
+
+    welford_restore_state(mean_dst);
+    two_pass_stats_finalize_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+    tile_regs_commit();
+}
 
 void kernel_main() {
     namespace kutil = norm::kernel_util;
