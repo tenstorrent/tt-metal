@@ -1,8 +1,6 @@
 # Porting an Op to Metal 2.0 — Feasibility Audit
 
 > This is the first of two documents covering the Metal 2.0 op port workflow. **This document covers the feasibility audit only — the gate that decides whether a given op can be ported today.** The port recipe (inventory, planning, construction, verification) lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) and is loaded only after the audit clears with explicit user go-ahead.
->
-> If you encounter a feature in the framework headers whose Appendix A status looks stale — most commonly, an `UNSUPPORTED` entry whose API has clearly landed — see [§Maintenance: keeping Appendix A current](#maintenance-keeping-appendix-a-current) for the override procedure.
 
 ## Read this first
 
@@ -48,7 +46,7 @@ Which features are unsupported is settled by Appendix A — treat that list as *
 
 - A **RED** report feeds the **prereq-migration efforts**. The `ProgramDescriptor` migration team and the Device 2.0 migration team consume RED audits to scope and sequence the work that unblocks the Metal 2.0 port. A RED isn't a dead end — it's evidence routed to the team that resolves the gap.
 - A **GREEN** report feeds the **Metal 2.0 port recipe** at [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). The porter loads the audit as context when performing the port itself.
-- A **YELLOW** report is **genuinely ambiguous** and is evaluated case-by-case with the user to decide which downstream path the op takes.
+- A **YELLOW** report is a **near-pass** — feasible, with the brief issued, but gated on a small prerequisite the porter must clear first (today: isolated Device 2.0 holdovers). Once that prerequisite is cleared it takes the same downstream path as a GREEN — no re-audit.
 
 Your tier assignment, your subset suggestions, and the specificity of your finding details all carry weight in these downstream uses. Too-conservative RED misroutes work to a prereq team that doesn't need it; too-lenient GREEN sends a port attempt into a fail. The single strongest thing you can do is **be specific**: name files and lines; quote the construct you saw; describe what triggered the rule. Vague findings are the hardest to use downstream.
 
@@ -70,7 +68,7 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 For the op in scope, work through the audit in eleven subjects. The three **prerequisite gates** run first — a failed gate means no port: **[Device 2.0 prerequisite](#device-20-prerequisite)**, **[Feature compatibility](#feature-compatibility)**, and **[TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite)**. The remaining subjects gather the porter's working detail: **[TTNN porting shape](#ttnn-porting-shape)**, **[TensorParameter relaxations](#tensorparameter-relaxations)**, **[TensorParameter analysis](#tensorparameter-analysis)**, **[TensorAccessor 3rd argument](#tensoraccessor-3rd-argument)**, **[CB endpoints](#cb-endpoints)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[RTA varargs](#rta-varargs)**, and **[Incidental anomalies](#incidental-anomalies)**. Each subject's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
-- **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
+- **Yellow** — a *near-pass*: the check would clear but for a small, well-defined prerequisite the porter must resolve **first** (today, only isolated Device 2.0 holdovers — see that subject). It does not block feasibility — the brief still issues and no re-audit is needed — but the prerequisite is flagged prominently as a must-clear-first blocker. Yellow is **not** a judgment call handed back to the user.
 - **Red** — record the reason in the audit report and continue the audit. A RED outcome means the port is blocked on this finding; it does not mean stop auditing. Always complete the remaining checks and steps so the report captures everything the port will eventually need to clear, not just the first blocker.
 
 **Reference data (recommended).** Before working the subjects, fetch the per-factory porting-readiness data (the readiness *"Operations analysis"* sheet, maintained by the TTNN team) and grep out your op's rows — it pre-classifies several of the signals you're about to check (factory concept, custom hash, RTA-smuggled pointers, pybind-of-internals, custom override-runtime-args). Treat it as an informative **prior, not ground truth**: let it orient your search, but your own `file:line` evidence decides every finding, and you note any place the sheet and your evidence disagree. Fetch procedure + column legend: [`../analyses/ttnn_op_porting_readiness.md`](../analyses/ttnn_op_porting_readiness.md).
@@ -137,7 +135,7 @@ For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-meta
 
 - **Green**: no entry's recognition signals fire.
 - **Red (GATE)**: an entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and the rest of the audit — complete the full audit even after a RED match.
-- **Yellow**: an entry's signals match *ambiguously* (you cannot be sure whether the feature is in use). Ask the user; on confirmation it becomes a GATE, otherwise green.
+- **Ambiguous match**: if you cannot tell from the code whether the feature is in use, investigate harder — the auditor reads the code, so ambiguity usually means look further. If it stays genuinely undeterminable, default **conservative** (treat it as in use → RED the gate) and record the uncertainty in the report's *Questions* section for the owner. Do not hand the call to the launcher.
 
 A feature **not listed** in Appendix A is supported — port it; don't gate on it or reverse-engineer support from the API surface. (In the rare case something genuinely unsupported slips through, it surfaces during the port and gets added to Appendix A then.)
 
@@ -478,7 +476,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 
 ## Result
 
-**GREEN → brief issued** · **RED → blocked on `<gate>`**, routed to the owning team (`Device 2.0` / `TTNN-or-PD-migration` / feature / `ops` / `readiness-sheet owner`) · **YELLOW → open questions (see below)**. State the primary blocker(s) in plain language; if localized, name a clean subset (`RED at op level; subset <X> is clear`).
+**GREEN → brief issued** · **RED → blocked on `<gate>`**, routed to the owning team (`Device 2.0` / `TTNN-or-PD-migration` / feature / `ops` / `readiness-sheet owner`) · **YELLOW → brief issued, with a must-clear-first prerequisite** (today: isolated Device 2.0 holdovers). State the primary blocker(s) in plain language; if localized, name a clean subset (`RED at op level; subset <X> is clear`).
 
 ## Gate detail
 
@@ -602,9 +600,8 @@ Save the file(s) and surface the path(s) with the Result line. **Stop here.** Th
 ### After the audit: what happens next
 
 - **On RED**: this op cannot be ported in its current state. Surface the `METAL2_PREPORT_AUDIT.md` path and Result; stop. No brief is written, and the recipe is not loaded.
-- **On YELLOW**: surface the path, the Result, and the open questions. Wait for the user's decisions. On resolution, update the team doc in place and confirm GREEN before any handoff.
-- **On GREEN**: both files are written (the team doc and the brief) and you STOP — that is the audit deliverable. **Then, only on explicit user go-ahead**, load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port, passing the audit files as context — the recipe needs the cleared gates and decisions, *including the TTNN factory analysis*. Do not load the recipe on your own initiative; the user must explicitly approve.
-- **On GREEN with isolated Device 2.0 holdovers**: both files are written — the brief carries the **Blocked-until** notice. Surface the brief, the team doc, and the holdover list. The path forward: the holdovers are fixed **first**, on the Device 2.0 track (*not* as part of the port), after which the porter proceeds with the already-issued brief — **no re-audit**. The recipe loads once the holdovers are clean and the user gives go-ahead.
+- **On YELLOW** (isolated Device 2.0 holdovers): both files are written — the brief carries the **Blocked-until** notice. Surface the brief, the team doc, and the holdover list. The path forward: the holdovers are fixed **first**, on the Device 2.0 track (*not* as part of the port), after which the porter proceeds with the already-issued brief — **no re-audit**. The recipe loads once the holdovers are clean and the user gives go-ahead.
+- **On GREEN**: both files are written (the team doc and the brief) and you STOP — that is the audit deliverable. **Then, only on explicit user go-ahead**, load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port, passing the audit files as context — the recipe needs the cleared gates and decisions, *including the TTNN factory analysis*. Do not load the recipe on your own initiative; the user must explicitly approve. (A YELLOW clears to this same path once its holdovers are fixed — no re-audit.)
 
 ---
 
@@ -616,13 +613,7 @@ This appendix lists legacy-API features that **Metal 2.0 does not yet support** 
 
 Appendix A is actively maintained as Metal 2.0's feature surface evolves. When a feature listed here gains Metal 2.0 support, the doc maintainer **removes its entry** — it becomes a mechanical porting-recipe translation, not an audit gate — rather than reclassifying it in place.
 
-**Staleness override for porting AIs.** If during the audit you observe a feature in the codebase whose Appendix A entry is marked `UNSUPPORTED` but the framework headers clearly show the API has landed (e.g., the spec/field/method the legacy construct would need to translate to is *visibly present* in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`), this likely means the audit doc is stale. Do not refuse the port reflexively. Instead:
-
-1. Report the row as **YELLOW (staleness override)** rather than RED.
-2. In the report's Questions for the user section, flag the apparent discrepancy: cite the Appendix A row, name the framework header / commit that contradicts it, and ask the user to confirm whether the feature is now supported.
-3. Respect the user's answer; if they confirm support, proceed with the port using the new construct. The doc maintainer will update Appendix A separately.
-
-This override mechanism is a safety net for the brief windows between a framework merge and the audit-doc update. Do not invent it for entries that are clearly still unsupported (no API surface present); only for cases where the codebase contradicts the doc.
+**For porting AIs: treat the current list as definitive.** If an entry looks stale to you — the API seems to have landed — do **not** override it or reverse-engineer support from the framework headers; report per the list as written. Metal 2.0 is mature and its supported/unsupported surface is settled; keeping Appendix A current is the maintainer's job, and any genuine lag is fixed there (a re-run then clears it), never worked around in your audit.
 
 When scanning during the [Feature compatibility](#feature-compatibility) subject, match each feature's recognition signals against the op's source. If any signal matches, take the action declared in the entry.
 
@@ -752,4 +743,4 @@ Either signal fires the rule.
 
 ## After you submit
 
-A grounded RED audit is not a failed port; it is the audit working as designed. The same goes for a YELLOW where you raised the question rather than guess. The deliverable here is clarity — what porting this op would actually require, surfaced clearly enough that a colleague can act on it. Your job in this document was to decide whether the port is feasible, not to perform it; once the report is on its way, that work is complete.
+A grounded RED audit is not a failed port; it is the audit working as designed — and so is a YELLOW that issues the brief alongside the prerequisites to clear first. The deliverable here is clarity — what porting this op would actually require, surfaced clearly enough that a colleague can act on it. Your job in this document was to decide whether the port is feasible, not to perform it; once the report is on its way, that work is complete.
