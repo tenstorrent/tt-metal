@@ -70,6 +70,10 @@ void kernel_main() {
     const uint8_t rect_e_hops_alt = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t rect_w_hops_alt = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t rect_spine_hops_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t line_physical_direction = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_e_physical_direction = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_w_physical_direction = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_spine_physical_direction = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -94,15 +98,30 @@ void kernel_main() {
     FabricRange ranges_alt[2] = {};  // [0] = E-line, [1] = S-rect (Fabric_2D only)
 #ifdef FABRIC_2D
     {
+        auto set_physical_direction = [](FabricRange& range, uint8_t direction, uint8_t hops) {
+            if (direction == static_cast<uint8_t>(tt::tt_fabric::eth_chan_directions::EAST)) {
+                range.e = hops;
+            } else if (direction == static_cast<uint8_t>(tt::tt_fabric::eth_chan_directions::WEST)) {
+                range.w = hops;
+            } else if (direction == static_cast<uint8_t>(tt::tt_fabric::eth_chan_directions::NORTH)) {
+                range.n = hops;
+            } else {
+                range.s = hops;
+            }
+        };
         uint32_t idx = 0;
         if (line_hops > 0) {
-            ranges[idx] = FabricRange{line_hops, 0, 0, 0};
-            ranges_alt[idx] = FabricRange{line_hops_alt, 0, 0, 0};
+            set_physical_direction(ranges[idx], line_physical_direction, line_hops);
+            set_physical_direction(ranges_alt[idx], line_physical_direction, line_hops_alt);
             ++idx;
         }
         if (rect_spine_hops > 0) {
-            ranges[idx] = FabricRange{rect_e_hops, rect_w_hops, 0, rect_spine_hops};
-            ranges_alt[idx] = FabricRange{rect_e_hops_alt, rect_w_hops_alt, 0, rect_spine_hops_alt};
+            set_physical_direction(ranges[idx], rect_e_physical_direction, rect_e_hops);
+            set_physical_direction(ranges[idx], rect_w_physical_direction, rect_w_hops);
+            set_physical_direction(ranges[idx], rect_spine_physical_direction, rect_spine_hops);
+            set_physical_direction(ranges_alt[idx], rect_e_physical_direction, rect_e_hops_alt);
+            set_physical_direction(ranges_alt[idx], rect_w_physical_direction, rect_w_hops_alt);
+            set_physical_direction(ranges_alt[idx], rect_spine_physical_direction, rect_spine_hops_alt);
             ++idx;
         }
     }
