@@ -31,6 +31,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     model_path,
     parametrize_mesh_tp,
     replicate_to_device,
+    shard_to_device,
     tp_composer,
 )
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
@@ -125,7 +126,8 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
-    x_tt = replicate_to_device(mesh_device, x)
+    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
+    x_tt = shard_to_device(mesh_device, x, dim=-1)
     composer = tp_composer(mesh_device)
 
     # ---- Prefill ----

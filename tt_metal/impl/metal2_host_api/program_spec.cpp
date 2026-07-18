@@ -29,6 +29,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "distributed/mesh_workload_impl.hpp"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <variant>
@@ -2816,11 +2817,9 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
     return processors;
 }
 
-// ============================================================================
-// Public Entry Point
-// ============================================================================
+namespace {
 
-Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
@@ -3190,6 +3189,47 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     }
 
     return Program(std::move(program_impl));
+}
+
+}  // namespace
+
+// ============================================================================
+// Public Entry Points
+// ============================================================================
+
+Program MakeProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+    Program program = BuildProgramFromSpec(mesh_device, spec, skip_validation);
+    program.impl().compile_and_allocate(&mesh_device, false);
+    return program;
+}
+
+distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
+    distributed::MeshDevice& mesh_device,
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
+    bool skip_validation) {
+    const distributed::MeshCoordinateRange mesh_extent(mesh_device.shape());
+    distributed::MeshWorkload workload;
+    TT_FATAL(!program_specs.empty(), "At least one ProgramSpec is required to create a MeshWorkload.");
+    for (const auto& [device_range, program_spec] : program_specs) {
+        TT_FATAL(
+            mesh_extent.contains(device_range),
+            "Device range {} is outside MeshDevice shape {}",
+            device_range,
+            mesh_device.shape());
+        workload.impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
+    }
+    workload.impl().compile(&mesh_device);
+    return workload;
+}
+
+distributed::MeshWorkload MakeMeshWorkloadFromSpec(
+    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation) {
+    distributed::MeshWorkload workload;
+    workload.impl().add_program(
+        distributed::MeshCoordinateRange(mesh_device.shape()),
+        BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
+    workload.impl().compile(&mesh_device);
+    return workload;
 }
 
 }  // namespace tt::tt_metal::experimental
