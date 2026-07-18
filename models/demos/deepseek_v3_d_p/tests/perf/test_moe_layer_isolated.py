@@ -73,7 +73,7 @@ _LAYER_IDS = list(range(NUM_DENSE_LAYERS, NUM_MOE_LAYERS))  # 1..60
 _CHUNK_IDS = list(range(11))
 # Iteration counts to expose as a parameter. Iteration 0 is always a warmup (builds the
 # program cache) and is dropped from the reported mean/median/std, so use >= 2.
-_NUM_ITERS = [2, 10, 15, 20, 25, 100, 1000]
+_NUM_ITERS = [2, 10, 15, 20, 25, 100, 1000, 2000]
 
 
 def _parse_ttnn_dtype(s: str):
@@ -280,7 +280,8 @@ def _log_per_op_device_stats(ops_csv, chunk_id, layer_id, iter_ids):
     logger.info(f"[moe_isolated] per-op device-kernel matrix written to {out_csv}")
 
 
-@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [False, True], ids=["overlap_off", "overlap_on"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [False, True], ids=["rc_overlap_off", "rc_overlap_on"])
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [False, True], ids=["sd_overlap_off", "sd_overlap_on"])
 @pytest.mark.parametrize("num_iters", _NUM_ITERS, ids=[f"iters{i}" for i in _NUM_ITERS])
 @pytest.mark.parametrize("layer_id", _LAYER_IDS, ids=[f"layer{i}" for i in _LAYER_IDS])
 @pytest.mark.parametrize("chunk_id", _CHUNK_IDS, ids=[f"chunk{i}" for i in _CHUNK_IDS])
@@ -312,6 +313,7 @@ def test_moe_layer_isolated(
     layer_id,
     num_iters,
     overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
 ):
     """Replay one (chunk_id, layer_id) MoE forward from a captured activation, num_iters times.
 
@@ -376,6 +378,7 @@ def test_moe_layer_isolated(
         routing_use_l1_small_for_semaphores=True,
         is_balanced=False,
         overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
 
     # (Re)create the sharded device input from the captured host tensor. TtMoe.forward
