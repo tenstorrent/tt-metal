@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -99,28 +98,29 @@ void kernel_main() {
 
         cb_in0.reserve_back(num_tiles_per_row * has_rows);
         uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        uint32_t dst_offset = 0;
         for (uint32_t k = 0; k < num_rows; k++) {
             uint32_t start_of_row_l1_write_addr = l1_write_addr;
             for (uint32_t i = 0; i < num_pages_in_row - 1; i++) {
-                CoreLocalMem<uint32_t> dst(l1_write_addr);
                 noc.async_read(
                     s,
-                    dst,
+                    cb_in0,
                     page_size,
                     {.page_id = base_page_id + k * num_pages_in_row + i, .offset_bytes = 0},
-                    {.offset_bytes = 0});
+                    {.offset_bytes = dst_offset});
+                dst_offset += page_size;
                 l1_write_addr += page_size;
             }
             // Process the last page in a row separately, as it may have padding at the end
-            CoreLocalMem<uint32_t> dst(l1_write_addr);
             noc.async_read(
                 s,
-                dst,
+                cb_in0,
                 size_of_valid_data_in_last_page_in_row,
                 {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
-                {.offset_bytes = 0});
+                {.offset_bytes = dst_offset});
             uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
             fill_with_val<elem_size>(start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
+            dst_offset += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
             l1_write_addr += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
         }
 
