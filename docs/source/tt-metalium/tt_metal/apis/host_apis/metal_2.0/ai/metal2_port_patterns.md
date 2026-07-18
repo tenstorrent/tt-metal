@@ -135,7 +135,7 @@ experimental::DataflowBuffer dfb_scratch(dfb::scratch);  // (B) same
 
 **Why this is hard.** Metal 2.0's `dfb::<name>` namespace is generated from the actual host bindings: if the host omits SCALED from `dfb_bindings`, `dfb::cb_scaled` is not declared in `kernel_bindings_generated.h`. C++ `if constexpr` in a non-template function (which `kernel_main()` is) still performs name lookup on the discarded branch — so `if constexpr (false) { ... dfb::cb_scaled ... }` fails to compile at parse time even though the branch is dead at codegen. The same constraint hits kernels that reference the conditional DFB name from file-scope contexts like ternaries: both operands resolve at parse time regardless of which branch the constant condition selects. The fix is to gate the kernel-side references at the **preprocessor** level, before C++ parsing sees them.
 
-This applies verbatim to `ta::<name>` (optional tensors) and `sem::<name>` — all three namespaces are emitted by genfiles **per-binding**, so a resource no kernel binds on the off-path produces no token at all. Optional **tensors** are the case where the `#ifdef` gate is not merely preferred but **mandatory**: an absent tensor often has nothing to bind even in principle (the argument may simply not be passed), so there is no always-bind fallback to reach for.
+This applies verbatim to `tensor::<name>` (optional tensors) and `sem::<name>` — all three namespaces are emitted by genfiles **per-binding**, so a resource no kernel binds on the off-path produces no token at all. Optional **tensors** are the case where the `#ifdef` gate is not merely preferred but **mandatory**: an absent tensor often has nothing to bind even in principle (the argument may simply not be passed), so there is no always-bind fallback to reach for.
 
 **Decision.** Conditionally bind the DFB on the host. Emit a matching preprocessor define via `KernelSpec::defines` when the binding is present. On the kernel side, `#ifdef`-gate the constexpr alias of the DFB name and all expressions that reference it.
 
@@ -405,7 +405,7 @@ In the wild: `ttnn/cpp/ttnn/operations/data_movement/slice/` (slice computes a p
 **Decision**: Three-part rewrite:
 
 1. **Keep the host-side offset arithmetic on the host.** Whatever computation derives the offset value from attributes / shapes / strides stays exactly where it was. Only its *target* changes — it no longer pre-shifts a pointer.
-2. **Pass the original tensor as a `TensorParameter` / `TensorBinding`** — the standard binding-mechanism translation. The kernel constructs `TensorAccessor(ta::<name>)` and obtains the base address from it.
+2. **Pass the original tensor as a `TensorParameter` / `TensorBinding`** — the standard binding-mechanism translation. The kernel constructs `TensorAccessor(tensor::<name>)` and obtains the base address from it.
 3. **Pass the computed offset as a named compile-time argument** on the `KernelSpec`. Add the offset on the kernel side, in a single line after retrieving the base address from the accessor.
 
 **Synthetic example**.
@@ -438,7 +438,7 @@ KernelSpec reader{
 };
 
 // Metal 2.0 kernel (one-line addition — the sanctioned exception):
-auto in = TensorAccessor(ta::in);
+auto in = TensorAccessor(tensor::in);
 constexpr auto offset = get_arg(args::offset);
 uint32_t base = in.get_bank_base_address(bank_id) + offset;
 // ... use `base` as the read address ...
@@ -509,7 +509,7 @@ uint32_t base = in.get_bank_base_address(bank_id) + offset;
 
 1. **In-place modification** — when every consumer op of the kernel is being ported to Metal 2.0 in the same PR or bundled set. Modify the kernel source and update each consumer's factory consistently. Before editing, grep for all consumers (`grep -rl <kernel-filename> ttnn/cpp/ttnn/operations/`) and verify each one is in the bundled set.
 
-2. **Fork with `_metal2` suffix** — the typical answer during the bulk-port window, when consumers cannot all co-migrate. Copy the kernel into a `_metal2`-suffixed file alongside the original (e.g., `writer_unary_interleaved_start_id_metal2.cpp` next to the legacy `writer_unary_interleaved_start_id.cpp`). Modify the copy for Metal 2.0 — named bindings, `dfb::name`, `ta::name`, named RTAs. Reference the new file from the ported factory's `KernelSpec::source`. The legacy copy stays in place for unmigrated consumers.
+2. **Fork with `_metal2` suffix** — the typical answer during the bulk-port window, when consumers cannot all co-migrate. Copy the kernel into a `_metal2`-suffixed file alongside the original (e.g., `writer_unary_interleaved_start_id_metal2.cpp` next to the legacy `writer_unary_interleaved_start_id.cpp`). Modify the copy for Metal 2.0 — named bindings, `dfb::name`, `tensor::name`, named RTAs. Reference the new file from the ported factory's `KernelSpec::source`. The legacy copy stays in place for unmigrated consumers.
 
    **Sunset:** delete the legacy copy when the last unmigrated consumer ports. The `_metal2` suffix is a load-bearing signal during this window — anyone touching the legacy copy should see the suffix and consider whether the change also belongs on the fork.
 

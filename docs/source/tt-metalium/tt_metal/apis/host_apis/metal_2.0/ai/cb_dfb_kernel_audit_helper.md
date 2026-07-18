@@ -471,7 +471,7 @@ BindDFB(compute, ACC_DFB, "acc", DFBEndpointType::CONSUMER);
 
 **Litmus:** Does the kernel touch resident tensor L1 **without** FIFO sync that another kernel waits on (`push_back` / `wait_front` never form a real hand-off)? If yes **and** backing is **borrowed from a tensor** → target **LTA**, not a DFB. If backing is **private** (non-borrowed) L1 → use `**ScratchpadSpec`**, not LTA.
 
-Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTensorAccessor<T>(ta::name)` (see `[local_tensor_accessor.h](../../../../../../../tt_metal/hw/inc/api/tensor/local_tensor_accessor.h)`). For Case-2a ports, prefer `**get_bank_base_address()` / `get_unsafe_ptr()`** and keep legacy byte arithmetic — do not rewrite into `operator[]` iteration during the port.
+Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTensorAccessor<T>(tensor::name)` (see `[local_tensor_accessor.h](../../../../../../../tt_metal/hw/inc/api/tensor/local_tensor_accessor.h)`). For Case-2a ports, prefer `**get_bank_base_address()` / `get_unsafe_ptr()`** and keep legacy byte arithmetic — do not rewrite into `operator[]` iteration during the port.
 
 **Where LTA applies** (by audit class):
 
