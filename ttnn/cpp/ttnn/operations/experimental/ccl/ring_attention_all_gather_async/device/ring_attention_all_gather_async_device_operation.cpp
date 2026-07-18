@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_attention_all_gather_async_device_operation.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -203,7 +204,8 @@ ring_attention_all_gather_async_build_operation_args(
             .input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> RingAttentionAllGatherAsyncDeviceOperation::get_dynamic_runtime_args(
+void RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/,
@@ -260,7 +262,10 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> RingAttentionAllGatherAsyncDeviceOp
         dynamic_args.push_back(
             {dyn::kWriterBackwardKernelIdx, backward_core, dyn::kWriterSemaphoreArg, backward_sem_addr});
     }
-    return dynamic_args;
+    // WorkloadDescriptor override: resolve_bindings covers tensor addresses; this re-applies the
+    // hash-excluded semaphore addresses to the cached program (no create_workload_descriptor rebuild,
+    // so no GlobalSemaphore/MeshBuffer realloc). Replaces get_dynamic_runtime_args.
+    tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
 }
 
 }  // namespace ttnn::experimental::prim
