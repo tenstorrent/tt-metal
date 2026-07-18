@@ -35,6 +35,7 @@ Warm/long collective program counts:
 | DeepSeek v3.2 | 5 `AllGatherAsync` + 2 `AllBroadcast` | 6 `ccl` + 1 `AllBroadcast` |
 | GLM 5.1 | 7 `AllGatherAsync` + 2 `AllBroadcast` | 8 `ccl` + 1 `AllBroadcast` |
 
-The remaining current `AllBroadcast` is the indexer weight all-reduce. Its
-reduce-scatter output contains four bf16 weights per TP rank, which is TILE-padded
-and too small for the native row-major path's 16-byte NoC-write alignment.
+The remaining current `AllBroadcast` is the broadcast phase of one composite
+all-gather fallback. Its tiled input has padding on the gather dimension, whereas
+the native path requires that logical and padded extents match. It is unrelated to
+the direct KVPE-prefix gather above.
