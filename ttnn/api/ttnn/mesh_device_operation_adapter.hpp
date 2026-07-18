@@ -632,10 +632,24 @@ public:
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
                     }
-                    // The WorkloadDescriptor variant never rebuilds, so a value a custom hash
-                    // excluded would stay frozen at first miss — re-apply declared dynamic args.
-                    apply_dynamic_runtime_args_if_declared(
-                        program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                    // The WorkloadDescriptor variant never rebuilds, so a value a custom hash excluded would
+                    // stay frozen at first miss. Prefer the op's override_runtime_arguments() (the descriptor-era
+                    // re-apply) — it re-derives every per-dispatch value (e.g. semaphore addresses baked as raw
+                    // rt-args that resolve_bindings can't track) via the per-coord builder, WITHOUT re-running
+                    // create_workload_descriptor (no GlobalSemaphore/MeshBuffer realloc). resolve_bindings above
+                    // still covers tensor addresses, so an override that no-ops for a pure-workload factory is
+                    // safe. Fall back to the legacy get_dynamic re-apply for un-migrated workload ops.
+                    if constexpr (has_override_runtime_arguments()) {
+                        DeviceOperation::override_runtime_arguments(
+                            program,
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    } else {
+                        apply_dynamic_runtime_args_if_declared(
+                            program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                    }
                 } else if constexpr (has_override_runtime_arguments()) {
                     // ProgramDescriptor variant, op owns its cache-hit re-derivation (the descriptor-era
                     // override_runtime_arguments()): re-apply ALL per-dispatch state — every runtime arg
