@@ -907,3 +907,31 @@ def test_reshape_4d_5d_layout(device):
 
     diff = (result.float() - expected.float()).abs().max().item()
     assert diff == 0.0
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((128, 4096), (64, 8192)),  # 128 source rows -> >1 page per core; wide rows (multi-packet writes)
+        ((256, 2048), (128, 4096)),
+    ],
+)
+def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shape):
+    """
+    Guards the row-major interleaved reshape data-movement kernel (rm_reshape_interleaved) on the
+    write-after-read-prone path: DRAM row-major input, 16B-aligned wide rows (the clean async_write
+    branch), and >1 source page per core.
+
+    That kernel reuses a single L1 source_buffer slot every iteration; the next iteration's read can
+    overwrite it while the previous iteration's async_write is still reading it (WAR).  A
+    noc.async_writes_flushed() before the read closes the window.  The race is latent (masked by
+    read/write latency), so this is a correctness guard for that path; a forced-corruption reproducer
+    (clobbering source_buffer before the read) is documented in the PR.
+    """
+    torch.manual_seed(0)
+    t = torch.randn(*input_shape, dtype=torch.bfloat16)
+    x = ttnn.from_torch(
+        t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    y = ttnn.reshape(x, output_shape)
+    assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))

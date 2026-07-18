@@ -35,9 +35,10 @@ Runtime arguments
 void kernel_main() {
     // We are guaranteed to be in 2D going to 2D
 
-    const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
-    //If DDR this is source_page_size_bytes + 64 (rounded up to next 64B), if L1 this is source_page_size_bytes + 16 (rounded up to next 16B)
+    // If DDR this is source_page_size_bytes + 64 (rounded up to next 64B), if L1 this is source_page_size_bytes + 16
+    // (rounded up to next 16B)
     const uint32_t source_read_size_bytes = get_arg_val<uint32_t>(2);
     const uint32_t read_start_page = get_arg_val<uint32_t>(3);
     const uint32_t read_end_page = get_arg_val<uint32_t>(4);
@@ -54,9 +55,9 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<6>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    //Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this core
-    if (nop == 1)
-    {
+    // Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this
+    // core
+    if (nop == 1) {
         return;
     }
 
@@ -70,8 +71,8 @@ void kernel_main() {
     uint32_t end_to_write = 0;
     uint32_t transaction = 0;
     uint32_t writable = dest_page_size_bytes - write_start_offset;
-    //cb_id_in0 is a CB source_read_size_bytes page size, 1 page
-    //cb_id_in1 is a CB dest_page_size_bytes + allignment_to_64 page size, 1 page
+    // cb_id_in0 is a CB source_read_size_bytes page size, 1 page
+    // cb_id_in1 is a CB dest_page_size_bytes + allignment_to_64 page size, 1 page
     cb_reserve_back(cb_id_in0, 1);
     cb_reserve_back(cb_id_in1, 1);
     const uint32_t source_buffer = get_write_ptr(cb_id_in0);
@@ -85,8 +86,14 @@ void kernel_main() {
     constexpr bool can_be_clean = ((source_page_size_bytes % 16) == 0 && (dest_page_size_bytes % 16) == 0);
     uint64_t dst_noc_addr_offset = 0;
     for (uint32_t i = read_start_page; i < read_end_page; i++) {
-        //Read from source
-        uint64_t src_noc_addr = s.get_noc_addr(i,0);
+        // Drain any prior iteration's writes that read source_buffer before this iteration's read
+        // overwrites it: source_buffer is a single fixed CB slot reused every iteration, and the
+        // clean-path enhanced_noc_async_write below reads it asynchronously.  Without this flush the
+        // next read can overwrite the slot while the previous write's source-read is still in flight
+        // (write-after-read), corrupting the output.  Uses the object-noc flush to match the writes.
+        noc.async_writes_flushed();
+        // Read from source
+        uint64_t src_noc_addr = s.get_noc_addr(i, 0);
 
         if constexpr (src_aligned_to_64 || ((!src_args.is_dram) && src_aligned_to_16)) {  // Aligned to 64 bytes or 16
                                                                                           // bytes but L1
@@ -106,12 +113,10 @@ void kernel_main() {
         readable = source_page_size_bytes;
         noc_async_read_barrier();
 
-        //Write to dest
-        while (readable > 0)
-        {
+        // Write to dest
+        while (readable > 0) {
             noc_async_write_barrier();
-            if (readable < writable)
-            {
+            if (readable < writable) {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
@@ -131,9 +136,7 @@ void kernel_main() {
                 writable = writable - readable;
                 readable = 0;
 
-            }
-            else if (readable == writable)
-            {
+            } else if (readable == writable) {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
@@ -158,9 +161,7 @@ void kernel_main() {
                     write_offset = dst_noc_addr & OFFSET_16;
                     begin_write_offset = write_offset;
                 }
-            }
-            else
-            {
+            } else {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, writable);
