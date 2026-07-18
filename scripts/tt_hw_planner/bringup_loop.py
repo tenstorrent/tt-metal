@@ -716,43 +716,65 @@ def test_{component_safe}(device_params, device):
         _seed = 0
     torch.manual_seed(_seed)
 
-    print("[bringup] stage=build_torch_reference", flush=True)
-    _set_stage_timeout(stage_budget_s)
-    try:
-        torch_module, sample_kwargs, primary = _build_torch_reference()
-    finally:
-        _clear_stage_timeout()
+    _module_level = os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False")
+    _golden_cache_file = None
+    _golden_hit = None
+    if _module_level:
+        try:
+            from models.common.golden_cache import golden_cache_path, load_golden_cache
 
-    try:
-        torch_module = torch_module.float()
-    except Exception:
-        pass
-    for _k in list(sample_kwargs.keys()):
-        _v = sample_kwargs[_k]
-        if isinstance(_v, torch.Tensor) and _v.is_floating_point():
-            sample_kwargs[_k] = _v.to(torch.float32)
-    _pn, _pt = primary
-    if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():
-        primary = (_pn, _pt.to(torch.float32))
+            _golden_cache_file = golden_cache_path(__file__, COMPONENT_NAME, _seed)
+            _golden_hit = load_golden_cache(_golden_cache_file)
+        except Exception:
+            _golden_hit = None
+    if _golden_hit is not None:
+        torch_module, sample_kwargs, primary, torch_out = _golden_hit
+        print("[bringup] stage=golden_cache_hit (skipped full-model load)", flush=True)
+    else:
+        print("[bringup] stage=build_torch_reference", flush=True)
+        _set_stage_timeout(stage_budget_s)
+        try:
+            torch_module, sample_kwargs, primary = _build_torch_reference()
+        finally:
+            _clear_stage_timeout()
 
-    print("[bringup] stage=torch_forward", flush=True)
-    _set_stage_timeout(stage_budget_s)
-    try:
-        with torch.no_grad():
+        try:
+            torch_module = torch_module.float()
+        except Exception:
+            pass
+        for _k in list(sample_kwargs.keys()):
+            _v = sample_kwargs[_k]
+            if isinstance(_v, torch.Tensor) and _v.is_floating_point():
+                sample_kwargs[_k] = _v.to(torch.float32)
+        _pn, _pt = primary
+        if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():
+            primary = (_pn, _pt.to(torch.float32))
+
+        print("[bringup] stage=torch_forward", flush=True)
+        _set_stage_timeout(stage_budget_s)
+        try:
+            with torch.no_grad():
+                try:
+                    torch_out = torch_module(**sample_kwargs)
+                except Exception as exc:
+                    pytest.skip(
+                        f"HF reference forward({{list(sample_kwargs.keys())}}) raised "
+                        f"{{type(exc).__name__}} for {{COMPONENT_NAME}}: {{exc}} -- "
+                        f"the synthetic inputs from _make_arg_for() are incompatible "
+                        f"with this submodule's expected shapes. Either edit the test "
+                        f"to provide model-specific kwargs, or skip this Phase-2 PCC "
+                        f"and validate via the top-level demo instead."
+                    )
+        finally:
+            _clear_stage_timeout()
+        torch_out = _normalize_out(torch_out)
+        if _module_level and _golden_cache_file:
             try:
-                torch_out = torch_module(**sample_kwargs)
-            except Exception as exc:
-                pytest.skip(
-                    f"HF reference forward({{list(sample_kwargs.keys())}}) raised "
-                    f"{{type(exc).__name__}} for {{COMPONENT_NAME}}: {{exc}} -- "
-                    f"the synthetic inputs from _make_arg_for() are incompatible "
-                    f"with this submodule's expected shapes. Either edit the test "
-                    f"to provide model-specific kwargs, or skip this Phase-2 PCC "
-                    f"and validate via the top-level demo instead."
-                )
-    finally:
-        _clear_stage_timeout()
-    torch_out = _normalize_out(torch_out)
+                from models.common.golden_cache import save_golden_cache
+
+                save_golden_cache(_golden_cache_file, torch_module, sample_kwargs, primary, torch_out)
+            except Exception:
+                pass
 
     print("[bringup] stage=ttnn_build", flush=True)
     _set_stage_timeout(stage_budget_s)
