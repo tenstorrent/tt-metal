@@ -145,6 +145,10 @@ Its controlled anomaly ledger and residual risks are recorded in
 
 ## Handoff
 
+- Stage implementation/evidence commit: `b2666fe1505` (`Add Falcon3 TP4
+  multichip decoder`).  The commit used `SKIP=check-large-files` only for the
+  accepted 1.7-MiB raw Tracy ops CSV referenced by `profile_provenance.json`;
+  every other pre-commit hook passed.
 - Implementation SHA256:
   `b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573`.
 - Test SHA256:
