@@ -30,9 +30,10 @@ struct RotaryEmbeddingDeviceOperation {
     // them into static reader/writer runtime args, while token_idx is deliberately excluded from
     // compute_program_hash so successive decode positions cache-hit the same program.  Those two
     // scalars must therefore be re-applied on every cache hit -- otherwise the cached program keeps
-    // the first token's offsets and every later token reads the wrong cos/sin rows.  Prefill mode
-    // (no token_idx) derives the offsets from hashed shapes, so this returns no dynamic args there.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // the first token's offsets and every later token reads the wrong cos/sin rows.  override_runtime_arguments
+    // re-derives the descriptor and re-applies them (prefill derives offsets from hashed shapes -- a no-op there).
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output,

@@ -899,49 +899,16 @@ ProgramDescriptor RotaryEmbeddingProgramFactory::create_descriptor(
     return create_multi_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> RotaryEmbeddingDeviceOperation::get_dynamic_runtime_args(
+void RotaryEmbeddingDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const auto& token_idx = operation_attributes.token_idx;
-    // Prefill mode (no token_idx) derives cos_sin_start_id from hashed shapes (num_tiles_written %
-    // HtWt), so the cached program's static args are already correct on a hit -- nothing to re-apply.
-    if (!token_idx.has_value()) {
-        return {};
-    }
-
-    const auto& input = tensor_args.input;
-    // Wt == 1 on the single-tile path (X == TILE_WIDTH); this expression yields 1 there too.
-    const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
-    const uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
-    // Identical arithmetic to create_*_descriptor's decode branch.
-    const uint32_t cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
-    const uint32_t cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
-
-    // Reproduce the descriptor's work distribution so we target the exact same cores and, via
-    // grid_to_cores, the identical ordering used when the runtime args were built.
-    const auto work = compute_rotary_work_split(input, output, Wt);
-    const auto cores = grid_to_cores(work.num_cores, work.num_cores_x, work.num_cores_y, work.row_major);
-
-    // Kernel push order in create_descriptor: reader (0), writer (1), compute (2[, 3]).
-    constexpr uint32_t kReaderKernelIdx = 0;
-    constexpr uint32_t kWriterKernelIdx = 1;
-    // cos_sin_start_id is the last reader runtime arg; the interleaved reader prepends the src buffer
-    // (arg 0), shifting it to index 6, while the sharded reader omits src, leaving it at index 4.
-    const uint32_t reader_cos_sin_start_id_arg_idx = work.in_sharded ? 4 : 6;
-    // Writer runtime args: {dst, num_rows*Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes}.
-    constexpr uint32_t kWriterCosSinOffsetArgIdx = 3;
-
-    // In decode mode both offsets are constant across cores (they depend only on token_idx), so every
-    // work core gets the same re-applied values.
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size() * 2);
-    for (const auto& core : cores) {
-        dynamic_args.push_back({kReaderKernelIdx, core, reader_cos_sin_start_id_arg_idx, cos_sin_start_id});
-        dynamic_args.push_back({kWriterKernelIdx, core, kWriterCosSinOffsetArgIdx, cos_sin_offset});
-    }
-    return dynamic_args;
+    // Re-derive all per-dispatch state from the single source of truth (create_descriptor) for the
+    // current tensors and re-apply to the cached program -- no rebuild, still a cache hit.
+    auto desc = RotaryEmbeddingProgramFactory::create_descriptor(operation_attributes, tensor_args, output);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::experimental::prim
