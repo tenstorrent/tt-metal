@@ -494,7 +494,15 @@ void kernel_main() {
                     // Drain the packer engine before posting the credit. Mirrors the "wait for pack to finish"
                     // STALLWAIT idiom in llk_pack_common.h:307. No-op-equivalent on HW (redundant with the wr_done
                     // wait); remove once the sim models PUSH_TILES.packer_wr_done_wait_mask.
-                    PACK((TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK)));
+                    // Quasar-only: this barrier fixes the emulator's failure to honor PUSH_TILES'
+                    // packer_wr_done_wait_mask (see comment above). WH/BH HW honor it, so the stall is a no-op
+                    // there -- and TTI_STALLWAIT has a DIFFERENT arity per arch (Quasar takes 4 args, WH takes 2),
+                    // so it must be arch-gated to compile at all. NB: TTI_STALLWAIT expands to a bare __asm__
+                    // statement, so it must NOT be wrapped in the expression-form PACK((...)) parens -- PACK(...)
+                    // is variadic, so the comma-separated p_stall args pass straight through as one asm statement.
+#ifdef ARCH_QUASAR
+                    PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
+#endif
                     curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
                 }
 #else
