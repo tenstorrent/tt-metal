@@ -58,6 +58,20 @@ def _load_audio(path: str, sample_rate: int) -> torch.Tensor:
     return _resample(audio, sr, sample_rate)
 
 
+def _safe_output_path(out_dir: str, name: str) -> str:
+    """Resolve ``name`` inside ``out_dir``, rejecting path-traversal in ``name``.
+
+    ``name`` is reduced to its basename and the resolved destination is required
+    to stay within ``out_dir`` so a crafted input filename cannot escape it.
+    """
+    safe_name = os.path.basename(name)
+    out_dir_abs = os.path.abspath(out_dir)
+    dest = os.path.abspath(os.path.join(out_dir_abs, safe_name))
+    if os.path.commonpath([out_dir_abs, dest]) != out_dir_abs:
+        raise ValueError(f"Unsafe output path derived from {name!r}")
+    return dest
+
+
 def _save_audio(audio: torch.Tensor, path: str, sample_rate: int) -> None:
     import soundfile as sf
 
@@ -109,7 +123,7 @@ def _run_one(model, audio, sr, args, *, out_name):
         rtf, latency = None, None
         logger.info("[{}] non-streaming conversion done, out shape {}", out_name, tuple(out.shape))
     if not args.synthetic:
-        _save_audio(out.squeeze(0), os.path.join(args.out_dir, out_name), sr)
+        _save_audio(out.squeeze(0), _safe_output_path(args.out_dir, out_name), sr)
     return out, rtf, latency
 
 

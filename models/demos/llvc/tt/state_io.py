@@ -20,7 +20,8 @@ def load_llvc_checkpoint(model: Net, checkpoint_path: str | Path) -> Net:
 
     KoeAI checkpoints store the generator under the ``"model"`` key.
     """
-    ckpt = torch.load(str(checkpoint_path), map_location="cpu")
+    ckpt_file = Path(checkpoint_path).resolve(strict=True)
+    ckpt = torch.load(str(ckpt_file), map_location="cpu")
     state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
@@ -34,7 +35,8 @@ def load_llvc_checkpoint(model: Net, checkpoint_path: str | Path) -> Net:
 
 def load_llvc_config_and_model(config_path: str | Path, checkpoint_path: str | Path) -> tuple[LLVCConfig, Net]:
     """Build ``(LLVCConfig, reference Net)`` from KoeAI ``config.json`` + checkpoint."""
-    with open(config_path) as f:
+    config_file = Path(config_path).resolve(strict=True)
+    with config_file.open() as f:
         raw = json.load(f)
     model_params = raw["model_params"]
     config = llvc_config_from_json(model_params, dtype="bfloat16")
