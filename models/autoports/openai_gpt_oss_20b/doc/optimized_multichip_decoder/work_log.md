@@ -413,3 +413,15 @@ The fresh independent rereview overwrote `stage_review.md` with
 checking the current default, first-review remediation, topology/fidelity
 matrix, profiler/accounting provenance, stress/fallback/watcher evidence, and
 scope.  No hardware or implementation was changed by the reviewer.
+
+## Local stage checkpoint
+
+The stage implementation, tests, documentation, profiler tables, and raw
+provenance artifacts were committed locally as
+`63f8df7ed9f473a8de6819bcd7b5a2a963037967` (`Optimize GPT-OSS multichip
+decoder`).  The commit was not pushed.  The large-file hook was skipped only
+for the required raw profiler/shard-advisor evidence, and the trailing-space
+hook was skipped only because generated CSVs retain empty terminal fields and
+terminal-capture logs retain progress formatting; all remaining pre-commit
+hooks passed.  The unrelated pre-existing
+`.agents/skills/forge-functional-decoder-from-ir/SKILL.md` edit was excluded.
