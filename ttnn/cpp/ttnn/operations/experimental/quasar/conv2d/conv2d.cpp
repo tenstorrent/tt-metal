@@ -470,7 +470,15 @@ Result conv2d_L1(
     // NOTE: this is Quasar-only (experimental/quasar/conv2d tree); the shared conv2d_utils / prepare_conv2d_weights
     // decisions are left untouched, so non-Quasar convs (which set full_inner_dim=true on height-sharded layers,
     // e.g. resnet50) are unaffected.
-    constexpr uint32_t kQuasarConvNoSpillMaxKTiles = 32;  // stem full-K ~= 16 tiles; conservative L1/DFB headroom
+    // Max full-K (tiles) the no-spill/split path packs into ONE K-block. Below this force_conv_no_spill fires
+    // and sets act_block_w = full_K; ABOVE it the split does NOT engage its act_block_w=full_K override, so if
+    // full_inner_dim is still requested the split runs with act_block_w = window-row while the reader gathers
+    // full_K -> ACT-CB overrun / tilize starvation hang (test_quasar_gap_deep_k_over_32, hangs on WH+Quasar at
+    // tilize block 1). Raised 32 -> 64 to cover deeper 3x3 convs (in_channels 128, K=36 tiles). force_conv_no_spill
+    // still caps act_block_h for the uint16 DFB ring; very deep convs (K > 64) remain a gap (need K-spill or more
+    // L1). full-K tilize width up to 64 tiles is handled by the datacopy tilize (per-tile FPU-dvalid 0x19 fix)
+    // and the single-K-block matmul (num_blocks==1, no partials accumulate).
+    constexpr uint32_t kQuasarConvNoSpillMaxKTiles = 64;
     const bool height_sharded_conv = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
     const uint32_t full_inner_dim_k_ntiles =
         tt::round_up(in_channels_padded * kernel_size[0] * kernel_size[1], tt::constants::TILE_WIDTH) /
