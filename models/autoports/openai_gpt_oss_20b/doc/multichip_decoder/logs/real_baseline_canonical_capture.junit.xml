@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="2" time="21.377" timestamp="2026-07-18T10:12:36.509575+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_capture_real_weight_single_chip_optimized_reference[blackhole-sliding_attention-mesh_device0-device_params0]" time="11.066"><properties><property name="start_timestamp" value="2026-07-18T10:12:37" /><property name="end_timestamp" value="2026-07-18T10:12:48" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+OPTIMIZED_REFERENCE_ARTIFACT /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/optimized_reference_sliding_attention.pt
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 10:12:37.977 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 10:12:37.977 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 10:12:38.645 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_capture_real_weight_single_chip_optimized_reference[blackhole-full_attention-mesh_device0-device_params0]" time="9.635"><properties><property name="start_timestamp" value="2026-07-18T10:12:48" /><property name="end_timestamp" value="2026-07-18T10:12:57" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+OPTIMIZED_REFERENCE_ARTIFACT /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/optimized_reference_full_attention.pt
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 10:12:48.472 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 10:12:48.472 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 10:12:48.554 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase></testsuite></testsuites>

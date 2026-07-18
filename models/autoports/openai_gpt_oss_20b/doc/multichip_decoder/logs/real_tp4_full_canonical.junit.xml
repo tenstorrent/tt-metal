@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="12.990" timestamp="2026-07-18T10:13:32.222985+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-tp-mesh_device0-device_params0]" time="12.321"><properties><property name="start_timestamp" value="2026-07-18T10:13:32" /><property name="end_timestamp" value="2026-07-18T10:13:45" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+PCC_RESULT path=tp-full_attention-prefill threshold=0.99 0.9979135628625134
+PCC_RESULT path=tp-full_attention-attention-128 threshold=0.99 0.9999036544420155
+PCC_RESULT path=tp-full_attention-routing-128 threshold=0.99 0.9999982021288952
+PCC_RESULT path=tp-full_attention-decode-128 threshold=0.99 0.9990849366663243
+PCC_RESULT path=tp-full_attention-attention-129 threshold=0.99 0.9999345433994443
+PCC_RESULT path=tp-full_attention-routing-129 threshold=0.99 1.0
+PCC_RESULT path=tp-full_attention-decode-129 threshold=0.99 0.9987767260823791
+PCC_RESULT path=tp-full_attention-attention-130 threshold=0.99 0.9999408974784855
+PCC_RESULT path=tp-full_attention-routing-130 threshold=0.99 0.9999747855506039
+PCC_RESULT path=tp-full_attention-decode-130 threshold=0.99 0.9989687830069692
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 10:13:33.680 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 10:13:33.680 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 10:13:34.393 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+
+</system-err></testcase></testsuite></testsuites>

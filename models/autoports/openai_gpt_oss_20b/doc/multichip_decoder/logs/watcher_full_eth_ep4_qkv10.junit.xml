@@ -1,0 +1,337 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="2" failures="0" skipped="0" tests="2" time="1.863" timestamp="2026-07-18T11:44:12.677071+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0]" time="0.870"><properties><property name="start_timestamp" value="2026-07-18T11:44:13" /><property name="end_timestamp" value="2026-07-18T11:44:14" /></properties><error message="failed on setup with &quot;RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset &lt;= max_size&#10;info:&#10;Program size (27920) too large for kernel config buffer (25600) on ACTIVE_ETH&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ed0da) [0x74f513eed0da]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x74f513ecb6fe]&#10; --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)&#10; --- tt::tt_metal::Device::configure_fabric()&#10; --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()&#10; --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector&lt;tt::tt_metal::Device*, std::allocator&lt;tt::tt_metal::Device*&gt; &gt; const&amp;, std::unordered_set&lt;tt::tt_metal::InitializerKey, std::hash&lt;tt::tt_metal::InitializerKey&gt;, std::equal_to&lt;tt::tt_metal::InitializerKey&gt;, std::allocator&lt;tt::tt_metal::InitializerKey&gt; &gt; const&amp;)&#10; --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()&#10; --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;, tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)&#10; --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)&#10; --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshShape&gt; const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, std::vector&lt;int, std::allocator&lt;int&gt; &gt; const&amp;, unsigned long)&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x801f96) [0x74f517001f96]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x74f516b15575]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1812dc3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18121cd]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xba3) [0x18139e3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x74f55d1251ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x74f55d12528b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]&quot;">request = &lt;SubRequest 'mesh_device' for &lt;Function test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0]&gt;&gt;
+silicon_arch_name = 'blackhole'
+device_params = {'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 67108864}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+        request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+        try:
+            param = request.param
+        except (ValueError, AttributeError):
+            # Get number of devices from the system mesh descriptor.
+            param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+
+        if isinstance(param, tuple):
+            grid_dims = param
+            assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
+            num_devices_requested = grid_dims[0] * grid_dims[1]
+            # This is a workaround to support skipping tests where configuring mesh devices whose size does not match the physical
+            # number of devices causes the runtime to crash. Theoretically the runtime should support mesh devices smaller than the
+            # number of physical devices, but that hasn't been the case when testing. TODO remove when such behavior is more widely supported.
+            if (
+                device_params.get("require_exact_physical_num_devices", False)
+                and num_devices_requested != ttnn.get_num_devices()
+            ):
+                pytest.skip(
+                    f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({ttnn.get_num_devices()})."
+                )
+
+            if not ttnn.using_distributed_env() and num_devices_requested &gt; ttnn.get_num_devices():
+                pytest.skip(
+                    f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                )
+            mesh_shape = ttnn.MeshShape(*grid_dims)
+        else:
+            if not ttnn.using_distributed_env() and param &gt; ttnn.get_num_devices():
+                pytest.skip(
+                    f"Requested more devices ({param}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                )
+            mesh_shape = ttnn.MeshShape(1, param)
+
+        override_trace_region_size = get_supported_trace_region_size(request, param)
+        if override_trace_region_size:
+            device_params["trace_region_size"] = override_trace_region_size
+            logger.info(f"Overriding trace region size to {override_trace_region_size}")
+
+        updated_device_params = get_updated_device_params(device_params)
+        updated_device_params.pop("require_exact_physical_num_devices", False)
+        fabric_config = updated_device_params.pop("fabric_config", None)
+        fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
+        reliability_mode = updated_device_params.pop("reliability_mode", None)
+        fabric_manager = updated_device_params.pop("fabric_manager", None)
+        fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+        set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
+&gt;       mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+conftest.py:593:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_shape = MeshShape([1, 4]), l1_small_size = 0, trace_region_size = 67108864
+num_command_queues = 1
+dispatch_core_config = &lt;ttnn.device.DispatchCoreConfig object at 0x74f4c2c3bcf0&gt;
+offset = None, physical_device_ids = [], worker_l1_size = 0
+
+    def open_mesh_device(
+        mesh_shape: ttnn.MeshShape = None,
+        l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+        trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
+        num_command_queues: int = 1,
+        dispatch_core_config: ttnn.DispatchCoreConfig = None,
+        offset: Optional[ttnn.MeshCoordinate] = None,
+        physical_device_ids: List[int] = [],
+        worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    ):
+        """
+        Open a mesh device with the specified configuration.
+
+        Args:
+            mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
+            l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+            trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+            num_command_queues (int, optional): Number of command queues. Defaults to 1.
+            dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+            offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
+            physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
+            worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
+
+        Returns:
+            ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
+        """
+&gt;       return ttnn._ttnn.multi_device.open_mesh_device(
+            l1_small_size=l1_small_size,
+            trace_region_size=trace_region_size,
+            num_command_queues=num_command_queues,
+            dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+            mesh_shape=mesh_shape,
+            offset=offset,
+            physical_device_ids=physical_device_ids,
+            worker_l1_size=worker_l1_size,
+        )
+E       RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset &lt;= max_size
+E       info:
+E       Program size (27920) too large for kernel config buffer (25600) on ACTIVE_ETH
+E       backtrace:
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ed0da) [0x74f513eed0da]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x74f513ecb6fe]
+E        --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+E        --- tt::tt_metal::Device::configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector&lt;tt::tt_metal::Device*, std::allocator&lt;tt::tt_metal::Device*&gt; &gt; const&amp;, std::unordered_set&lt;tt::tt_metal::InitializerKey, std::hash&lt;tt::tt_metal::InitializerKey&gt;, std::equal_to&lt;tt::tt_metal::InitializerKey&gt;, std::allocator&lt;tt::tt_metal::InitializerKey&gt; &gt; const&amp;)
+E        --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+E        --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;, tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)
+E        --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)
+E        --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshShape&gt; const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, std::vector&lt;int, std::allocator&lt;int&gt; &gt; const&amp;, unsigned long)
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x801f96) [0x74f517001f96]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x74f516b15575]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1812dc3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18121cd]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xba3) [0x18139e3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x74f55d1251ca]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x74f55d12528b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/distributed/distributed.py:671: RuntimeError</error></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0]" time="0.294"><properties><property name="start_timestamp" value="2026-07-18T11:44:14" /><property name="end_timestamp" value="2026-07-18T11:44:14" /></properties><error message="failed on setup with &quot;RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset &lt;= max_size&#10;info:&#10;Program size (27920) too large for kernel config buffer (25600) on ACTIVE_ETH&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ed0da) [0x74f513eed0da]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x74f513ecb6fe]&#10; --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)&#10; --- tt::tt_metal::Device::configure_fabric()&#10; --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()&#10; --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector&lt;tt::tt_metal::Device*, std::allocator&lt;tt::tt_metal::Device*&gt; &gt; const&amp;, std::unordered_set&lt;tt::tt_metal::InitializerKey, std::hash&lt;tt::tt_metal::InitializerKey&gt;, std::equal_to&lt;tt::tt_metal::InitializerKey&gt;, std::allocator&lt;tt::tt_metal::InitializerKey&gt; &gt; const&amp;)&#10; --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()&#10; --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;, tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)&#10; --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)&#10; --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshShape&gt; const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, std::vector&lt;int, std::allocator&lt;int&gt; &gt; const&amp;, unsigned long)&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x801f96) [0x74f517001f96]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x74f516b15575]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1812dc3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18121cd]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xba3) [0x18139e3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x74f55d1251ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x74f55d12528b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]&quot;">request = &lt;SubRequest 'mesh_device' for &lt;Function test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0]&gt;&gt;
+silicon_arch_name = 'blackhole'
+device_params = {'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 67108864}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+        request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+        try:
+            param = request.param
+        except (ValueError, AttributeError):
+            # Get number of devices from the system mesh descriptor.
+            param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+
+        if isinstance(param, tuple):
+            grid_dims = param
+            assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
+            num_devices_requested = grid_dims[0] * grid_dims[1]
+            # This is a workaround to support skipping tests where configuring mesh devices whose size does not match the physical
+            # number of devices causes the runtime to crash. Theoretically the runtime should support mesh devices smaller than the
+            # number of physical devices, but that hasn't been the case when testing. TODO remove when such behavior is more widely supported.
+            if (
+                device_params.get("require_exact_physical_num_devices", False)
+                and num_devices_requested != ttnn.get_num_devices()
+            ):
+                pytest.skip(
+                    f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({ttnn.get_num_devices()})."
+                )
+
+            if not ttnn.using_distributed_env() and num_devices_requested &gt; ttnn.get_num_devices():
+                pytest.skip(
+                    f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                )
+            mesh_shape = ttnn.MeshShape(*grid_dims)
+        else:
+            if not ttnn.using_distributed_env() and param &gt; ttnn.get_num_devices():
+                pytest.skip(
+                    f"Requested more devices ({param}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                )
+            mesh_shape = ttnn.MeshShape(1, param)
+
+        override_trace_region_size = get_supported_trace_region_size(request, param)
+        if override_trace_region_size:
+            device_params["trace_region_size"] = override_trace_region_size
+            logger.info(f"Overriding trace region size to {override_trace_region_size}")
+
+        updated_device_params = get_updated_device_params(device_params)
+        updated_device_params.pop("require_exact_physical_num_devices", False)
+        fabric_config = updated_device_params.pop("fabric_config", None)
+        fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
+        reliability_mode = updated_device_params.pop("reliability_mode", None)
+        fabric_manager = updated_device_params.pop("fabric_manager", None)
+        fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+        set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
+&gt;       mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+conftest.py:593:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_shape = MeshShape([1, 4]), l1_small_size = 0, trace_region_size = 67108864
+num_command_queues = 1
+dispatch_core_config = &lt;ttnn.device.DispatchCoreConfig object at 0x74f4c2c3bbb0&gt;
+offset = None, physical_device_ids = [], worker_l1_size = 0
+
+    def open_mesh_device(
+        mesh_shape: ttnn.MeshShape = None,
+        l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+        trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
+        num_command_queues: int = 1,
+        dispatch_core_config: ttnn.DispatchCoreConfig = None,
+        offset: Optional[ttnn.MeshCoordinate] = None,
+        physical_device_ids: List[int] = [],
+        worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    ):
+        """
+        Open a mesh device with the specified configuration.
+
+        Args:
+            mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
+            l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+            trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+            num_command_queues (int, optional): Number of command queues. Defaults to 1.
+            dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+            offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
+            physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
+            worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
+
+        Returns:
+            ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
+        """
+&gt;       return ttnn._ttnn.multi_device.open_mesh_device(
+            l1_small_size=l1_small_size,
+            trace_region_size=trace_region_size,
+            num_command_queues=num_command_queues,
+            dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+            mesh_shape=mesh_shape,
+            offset=offset,
+            physical_device_ids=physical_device_ids,
+            worker_l1_size=worker_l1_size,
+        )
+E       RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset &lt;= max_size
+E       info:
+E       Program size (27920) too large for kernel config buffer (25600) on ACTIVE_ETH
+E       backtrace:
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ed0da) [0x74f513eed0da]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x74f513ecb6fe]
+E        --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+E        --- tt::tt_metal::Device::configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector&lt;tt::tt_metal::Device*, std::allocator&lt;tt::tt_metal::Device*&gt; &gt; const&amp;, std::unordered_set&lt;tt::tt_metal::InitializerKey, std::hash&lt;tt::tt_metal::InitializerKey&gt;, std::equal_to&lt;tt::tt_metal::InitializerKey&gt;, std::allocator&lt;tt::tt_metal::InitializerKey&gt; &gt; const&amp;)
+E        --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+E        --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;, tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)
+E        --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&amp;, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, unsigned long)
+E        --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshShape&gt; const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, std::vector&lt;int, std::allocator&lt;int&gt; &gt; const&amp;, unsigned long)
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x801f96) [0x74f517001f96]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x74f516b15575]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1812dc3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18121cd]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xba3) [0x18139e3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x74f55d1251ca]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x74f55d12528b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/distributed/distributed.py:671: RuntimeError</error></testcase></testsuite></testsuites>

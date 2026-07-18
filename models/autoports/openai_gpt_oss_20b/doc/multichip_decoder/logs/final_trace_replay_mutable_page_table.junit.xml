@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="25.203" timestamp="2026-07-18T11:58:45.631505+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_warmed_trace_replay_updates_hidden_position_and_paged_cache[blackhole-sliding_attention-mesh_device0-device_params0]" time="13.234"><properties><property name="start_timestamp" value="2026-07-18T11:58:46" /><property name="end_timestamp" value="2026-07-18T11:58:59" /></properties><failure message="AssertionError: 0.4311482354682141&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_type = 'sliding_attention'
+
+    @_mesh_test
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_warmed_trace_replay_updates_hidden_position_and_paged_cache(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        # Five pages leave two not-yet-populated physical allocations that can be
+        # swapped after capture without illegally remapping live KV history.
+        decoder = _decoder(_real_state_dict(), config, mesh_device, max_cache_len=320)
+        reverse_blocks = list(reversed(range(decoder.num_cache_blocks)))
+        eager_page_table = decoder.create_page_table(reverse_blocks)
+        trace_page_table = decoder.create_page_table(reverse_blocks)
+        eager_key, eager_value = decoder.create_kv_cache()
+        trace_key, trace_value = decoder.create_kv_cache()
+        generator = torch.Generator().manual_seed(4040)
+        prefill_len = config.sliding_window
+        prefill_hidden = torch.randn(1, prefill_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+        tt_prefill = _to_tt(prefill_hidden, mesh_device)
+        decoder.prefill_forward(
+            tt_prefill,
+            key_cache=eager_key,
+            value_cache=eager_value,
+            page_table=eager_page_table,
+        )
+        decoder.prefill_forward(
+            tt_prefill,
+            key_cache=trace_key,
+            value_cache=trace_value,
+            page_table=trace_page_table,
+        )
+
+        cases = []
+        for position in range(prefill_len, prefill_len + 3):
+            hidden = torch.randn(1, 1, config.hidden_size, generator=generator).to(torch.bfloat16)
+            cases.append(
+                {
+                    "position": position,
+                    "hidden": hidden,
+                    "eager_hidden": _to_tt(hidden, mesh_device),
+                    "eager_position": _position_tensor(position, mesh_device),
+                    "host_hidden": _host_hidden(hidden, mesh_device),
+                    "host_position": _host_position(position, mesh_device),
+                }
+            )
+
+        trace_hidden = _to_tt(cases[0]["hidden"], mesh_device)
+        trace_position = _position_tensor(prefill_len, mesh_device)
+        decoder.decode_forward(
+            trace_hidden,
+            key_cache=trace_key,
+            value_cache=trace_value,
+            page_table=trace_page_table,
+            cache_position=prefill_len,
+            cache_position_tensor=trace_position,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        eager_references = []
+        for case in cases:
+            eager = decoder.decode_forward(
+                case["eager_hidden"],
+                key_cache=eager_key,
+                value_cache=eager_value,
+                page_table=eager_page_table,
+                cache_position=case["position"],
+                cache_position_tensor=case["eager_position"],
+            )
+            ttnn.synchronize_device(mesh_device)
+            eager_references.append(_to_torch(eager).clone())
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_output = decoder.decode_forward(
+            trace_hidden,
+            key_cache=trace_key,
+            value_cache=trace_value,
+            page_table=trace_page_table,
+            cache_position=prefill_len,
+            cache_position_tensor=trace_position,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        try:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            _assert_pcc(f"trace-{layer_type}-capture", eager_references[0], _to_torch(traced_output), 0.999)
+            for case, eager_reference in zip(cases[1:], eager_references[1:]):
+                ttnn.copy_host_to_device_tensor(case["host_hidden"], trace_hidden)
+                ttnn.copy_host_to_device_tensor(case["host_position"], trace_position)
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                _assert_pcc(
+                    f"trace-{layer_type}-mutable-{case['position']}", eager_reference, _to_torch(traced_output), 0.999
+                )
+                _assert_replicated(f"trace-{layer_type}-{case['position']}", traced_output)
+
+            # Replace the logical-to-physical mapping in place after capture.  A
+            # serving trace owns stable tensor addresses, not immutable page-table
+            # contents, so replay must observe the new mapping without recapture.
+            alternate_blocks = reverse_blocks.copy()
+            alternate_blocks[-2], alternate_blocks[-1] = alternate_blocks[-1], alternate_blocks[-2]
+            host_page_table = _host_page_table(alternate_blocks, mesh_device)
+            ttnn.copy_host_to_device_tensor(host_page_table, eager_page_table)
+            ttnn.copy_host_to_device_tensor(host_page_table, trace_page_table)
+            alternate_position = 3 * PAGE_BLOCK_SIZE
+            alternate_hidden = torch.randn(
+                1,
+                1,
+                config.hidden_size,
+                generator=generator,
+            ).to(torch.bfloat16)
+            eager_alternate = decoder.decode_forward(
+                _to_tt(alternate_hidden, mesh_device),
+                key_cache=eager_key,
+                value_cache=eager_value,
+                page_table=eager_page_table,
+                cache_position=alternate_position,
+                cache_position_tensor=_position_tensor(alternate_position, mesh_device),
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.copy_host_to_device_tensor(_host_hidden(alternate_hidden, mesh_device), trace_hidden)
+            ttnn.copy_host_to_device_tensor(_host_position(alternate_position, mesh_device), trace_position)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+&gt;           _assert_pcc(
+                f"trace-{layer_type}-mutable-page-table-{alternate_position}",
+                _to_torch(eager_alternate),
+                _to_torch(traced_output),
+                0.999,
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:862:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'trace-sliding_attention-mutable-page-table-192'
+reference = tensor([[[ -3.1094,   4.0312,  -4.4375,  ...,  11.5625,  -7.1250, -10.9375]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 8.8750,  0.0312,  0.0625,  ...,  2.5625, -2.1250,  1.0625]]],
+       dtype=torch.bfloat16)
+threshold = 0.999
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+&gt;       assert passed, message
+E       AssertionError: 0.4311482354682141
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_warmed_trace_replay_updates_hidden_position_and_paged_cache[blackhole-full_attention-mesh_device0-device_params0]" time="11.036"><properties><property name="start_timestamp" value="2026-07-18T11:58:59" /><property name="end_timestamp" value="2026-07-18T11:59:10" /></properties><failure message="AssertionError: 0.44918137485169396&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_type = 'full_attention'
+
+    @_mesh_test
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_warmed_trace_replay_updates_hidden_position_and_paged_cache(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        # Five pages leave two not-yet-populated physical allocations that can be
+        # swapped after capture without illegally remapping live KV history.
+        decoder = _decoder(_real_state_dict(), config, mesh_device, max_cache_len=320)
+        reverse_blocks = list(reversed(range(decoder.num_cache_blocks)))
+        eager_page_table = decoder.create_page_table(reverse_blocks)
+        trace_page_table = decoder.create_page_table(reverse_blocks)
+        eager_key, eager_value = decoder.create_kv_cache()
+        trace_key, trace_value = decoder.create_kv_cache()
+        generator = torch.Generator().manual_seed(4040)
+        prefill_len = config.sliding_window
+        prefill_hidden = torch.randn(1, prefill_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+        tt_prefill = _to_tt(prefill_hidden, mesh_device)
+        decoder.prefill_forward(
+            tt_prefill,
+            key_cache=eager_key,
+            value_cache=eager_value,
+            page_table=eager_page_table,
+        )
+        decoder.prefill_forward(
+            tt_prefill,
+            key_cache=trace_key,
+            value_cache=trace_value,
+            page_table=trace_page_table,
+        )
+
+        cases = []
+        for position in range(prefill_len, prefill_len + 3):
+            hidden = torch.randn(1, 1, config.hidden_size, generator=generator).to(torch.bfloat16)
+            cases.append(
+                {
+                    "position": position,
+                    "hidden": hidden,
+                    "eager_hidden": _to_tt(hidden, mesh_device),
+                    "eager_position": _position_tensor(position, mesh_device),
+                    "host_hidden": _host_hidden(hidden, mesh_device),
+                    "host_position": _host_position(position, mesh_device),
+                }
+            )
+
+        trace_hidden = _to_tt(cases[0]["hidden"], mesh_device)
+        trace_position = _position_tensor(prefill_len, mesh_device)
+        decoder.decode_forward(
+            trace_hidden,
+            key_cache=trace_key,
+            value_cache=trace_value,
+            page_table=trace_page_table,
+            cache_position=prefill_len,
+            cache_position_tensor=trace_position,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        eager_references = []
+        for case in cases:
+            eager = decoder.decode_forward(
+                case["eager_hidden"],
+                key_cache=eager_key,
+                value_cache=eager_value,
+                page_table=eager_page_table,
+                cache_position=case["position"],
+                cache_position_tensor=case["eager_position"],
+            )
+            ttnn.synchronize_device(mesh_device)
+            eager_references.append(_to_torch(eager).clone())
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_output = decoder.decode_forward(
+            trace_hidden,
+            key_cache=trace_key,
+            value_cache=trace_value,
+            page_table=trace_page_table,
+            cache_position=prefill_len,
+            cache_position_tensor=trace_position,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        try:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            _assert_pcc(f"trace-{layer_type}-capture", eager_references[0], _to_torch(traced_output), 0.999)
+            for case, eager_reference in zip(cases[1:], eager_references[1:]):
+                ttnn.copy_host_to_device_tensor(case["host_hidden"], trace_hidden)
+                ttnn.copy_host_to_device_tensor(case["host_position"], trace_position)
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                _assert_pcc(
+                    f"trace-{layer_type}-mutable-{case['position']}", eager_reference, _to_torch(traced_output), 0.999
+                )
+                _assert_replicated(f"trace-{layer_type}-{case['position']}", traced_output)
+
+            # Replace the logical-to-physical mapping in place after capture.  A
+            # serving trace owns stable tensor addresses, not immutable page-table
+            # contents, so replay must observe the new mapping without recapture.
+            alternate_blocks = reverse_blocks.copy()
+            alternate_blocks[-2], alternate_blocks[-1] = alternate_blocks[-1], alternate_blocks[-2]
+            host_page_table = _host_page_table(alternate_blocks, mesh_device)
+            ttnn.copy_host_to_device_tensor(host_page_table, eager_page_table)
+            ttnn.copy_host_to_device_tensor(host_page_table, trace_page_table)
+            alternate_position = 3 * PAGE_BLOCK_SIZE
+            alternate_hidden = torch.randn(
+                1,
+                1,
+                config.hidden_size,
+                generator=generator,
+            ).to(torch.bfloat16)
+            eager_alternate = decoder.decode_forward(
+                _to_tt(alternate_hidden, mesh_device),
+                key_cache=eager_key,
+                value_cache=eager_value,
+                page_table=eager_page_table,
+                cache_position=alternate_position,
+                cache_position_tensor=_position_tensor(alternate_position, mesh_device),
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.copy_host_to_device_tensor(_host_hidden(alternate_hidden, mesh_device), trace_hidden)
+            ttnn.copy_host_to_device_tensor(_host_position(alternate_position, mesh_device), trace_position)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+&gt;           _assert_pcc(
+                f"trace-{layer_type}-mutable-page-table-{alternate_position}",
+                _to_torch(eager_alternate),
+                _to_torch(traced_output),
+                0.999,
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:862:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'trace-full_attention-mutable-page-table-192'
+reference = tensor([[[ 9.0625, -0.6406, -1.3516,  ..., -1.2188, -3.6406, -2.1094]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 6.3125, -9.1250,  7.6562,  ...,  1.7812, 12.3750,  3.3906]]],
+       dtype=torch.bfloat16)
+threshold = 0.999
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+&gt;       assert passed, message
+E       AssertionError: 0.44918137485169396
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError</failure></testcase></testsuite></testsuites>

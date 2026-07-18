@@ -1,0 +1,39 @@
+{
+  "decode_efficiency": 0.39422897473961926,
+  "decode_speedup": 1.576915898958477,
+  "expert_strategy": "ep",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_prefill_ms": 26.734725572168827,
+  "multichip_traced_decode_ms": 0.6189452204853296,
+  "prefill_efficiency": 0.12553520027890847,
+  "prefill_repeats": 10,
+  "prefill_speedup": 0.5021408011156339,
+  "qkv_candidate": [
+    45,
+    2,
+    2,
+    2
+  ],
+  "qkv_geometry": [
+    45,
+    2,
+    2,
+    2
+  ],
+  "seq_len": 128,
+  "single_chip": {
+    "mesh": [
+      1,
+      1
+    ],
+    "prefill_ms": 13.424596516415477,
+    "prefill_repeats": 10,
+    "seq_len": 128,
+    "trace_replays": 100,
+    "traced_decode_ms": 0.9760245587676764
+  },
+  "trace_replays": 100
+}

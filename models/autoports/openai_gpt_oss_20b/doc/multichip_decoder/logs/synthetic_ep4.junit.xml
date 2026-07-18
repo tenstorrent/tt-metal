@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="7.760" timestamp="2026-07-18T10:05:30.041820+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_matches_optimized_and_cache_is_head_local[blackhole-ep-mesh_device0-device_params0]" time="7.055"><properties><property name="start_timestamp" value="2026-07-18T10:05:30" /><property name="end_timestamp" value="2026-07-18T10:05:37" /></properties><failure message="RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_device_operation.cpp:166: (output_tensor_shape[-1] % TILE_WIDTH == 0) &amp;&amp; (args.slice_start[-1] % TILE_WIDTH == 0)&#10;info:&#10;Can only slice tilized tensor with width begin index aligned to tiles&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4ef2) [0x7044ab3c4ef2]&#10; --- ttnn::prim::SliceDeviceOperation::validate_on_program_cache_miss(ttnn::prim::SliceParams const&amp;, ttnn::prim::SliceInputs const&amp;)&#10; --- ttnn::operations::ccl::MeshPartitionDeviceOperation::MeshPartition::create_at(ttnn::operations::ccl::MeshPartitionDeviceOperation::operation_attributes_t const&amp;, tt::tt_metal::distributed::MeshCoordinate const&amp;, ttnn::operations::ccl::MeshPartitionDeviceOperation::tensor_args_t const&amp;, tt::tt_metal::Tensor&amp;)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9d1eb8) [0x7044a9bd1eb8]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations3ccl28MeshPartitionDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x259) [0x7044a9bcd579]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations3ccl28MeshPartitionDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d3) [0x7044a9bb8743]&#10; --- ttnn::prim::mesh_partition(tt::tt_metal::Tensor const&amp;, int, std::optional&lt;unsigned int&gt;, tt::tt_metal::MemoryConfig const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;)&#10; --- ttnn::mesh_partition(tt::tt_metal::Tensor const&amp;, int, std::optional&lt;unsigned int&gt;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;)&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3743a4) [0x7044ab3743a4]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7044ab315575]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7044f17911ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7044f179128b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]">mesh_device = MeshDevice(1x4 grid, 4 devices), expert_strategy = 'ep'
+
+    @_mesh_test
+    @pytest.mark.parametrize("expert_strategy", [EXPERT_STRATEGY_TP, EXPERT_STRATEGY_EP])
+    def test_synthetic_non_aligned_prefill_matches_optimized_and_cache_is_head_local(mesh_device, expert_strategy):
+        assert SYNTHETIC_REFERENCE_PATH.exists(), "run the isolated optimized baseline capture first"
+        reference = torch.load(SYNTHETIC_REFERENCE_PATH, map_location="cpu", weights_only=True)
+        config = _config()
+        decoder = _decoder(
+            _synthetic_state_dict(config),
+            config,
+            mesh_device,
+            max_cache_len=128,
+            expert_strategy=expert_strategy,
+        )
+        assert decoder.local_num_heads == 16
+        assert decoder.local_num_kv_heads == 2
+        assert decoder.local_intermediate_size == 720
+        assert decoder.local_num_experts == 8
+        qkv_grid = decoder.tp_qkv_program_config.compute_with_storage_grid_size
+        assert (qkv_grid.x, qkv_grid.y) == (11, 3)
+        assert tuple(decoder.tp_qkv_input_config.shard_spec.shape) == (32, 96)
+        assert tuple(decoder.tp_qkv_output_config.shard_spec.shape) == (32, 64)
+        local_qkv = _all_device_torch(decoder.weights["qkv_weight"])
+        assert [tuple(weight.shape) for weight in local_qkv] == [(2880, 1280)] * TP_DEGREE
+
+        reverse_blocks = list(reversed(range(decoder.num_cache_blocks)))
+        page_table = decoder.create_page_table(reverse_blocks)
+        key_cache, value_cache = decoder.create_kv_cache()
+        generator = torch.Generator().manual_seed(20260718)
+        for seq_len in (EMITTED_PREFILL_SEQUENCE, 33):
+            hidden = torch.randn(1, seq_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+&gt;           output = decoder.prefill_forward(
+                _to_tt(hidden, mesh_device),
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:194:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/openai_gpt_oss_20b/tt/tp2_multichip_decoder.py:916: in prefill_forward
+    return self._moe_forward(hidden_states, seq_len)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/openai_gpt_oss_20b/tt/multichip_decoder.py:587: in _moe_forward
+    return self._active_prefill_sparse_moe(hidden_states, normalized, routing_weights, seq_len)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/openai_gpt_oss_20b/tt/tp2_multichip_decoder.py:872: in _active_prefill_sparse_moe
+    self._active_prefill_expert_chunk(normalized_chunk, routing_chunk)
+models/autoports/openai_gpt_oss_20b/tt/multichip_decoder.py:574: in _active_prefill_expert_chunk
+    return self._ep_active_expert_chunk(normalized, routing_weights, is_decode=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/openai_gpt_oss_20b/tt/multichip_decoder.py:488: in _ep_active_expert_chunk
+    local_routing = ttnn.mesh_partition(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.mesh_partition', function=&lt;ttnn._ttnn.operations.ccl.mesh_partition_t ...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[ 0.0000,  0.0000,  ...,  0.2441,  0.6328],
+             [ 0.0000, ...   [ 0.0000,  0.0000,  ...,  0.0000,  0.0000]], shape=Shape([32, 32]), dtype=DataType::BFLOAT16, layout=Layout::TILE),)
+function_kwargs = {'cluster_axis': 1, 'dim': 1, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_device_operation.cpp:166: (output_tensor_shape[-1] % TILE_WIDTH == 0) &amp;&amp; (args.slice_start[-1] % TILE_WIDTH == 0)
+E               info:
+E               Can only slice tilized tensor with width begin index aligned to tiles
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4ef2) [0x7044ab3c4ef2]
+E                --- ttnn::prim::SliceDeviceOperation::validate_on_program_cache_miss(ttnn::prim::SliceParams const&amp;, ttnn::prim::SliceInputs const&amp;)
+E                --- ttnn::operations::ccl::MeshPartitionDeviceOperation::MeshPartition::create_at(ttnn::operations::ccl::MeshPartitionDeviceOperation::operation_attributes_t const&amp;, tt::tt_metal::distributed::MeshCoordinate const&amp;, ttnn::operations::ccl::MeshPartitionDeviceOperation::tensor_args_t const&amp;, tt::tt_metal::Tensor&amp;)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9d1eb8) [0x7044a9bd1eb8]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations3ccl28MeshPartitionDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x259) [0x7044a9bcd579]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations3ccl28MeshPartitionDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d3) [0x7044a9bb8743]
+E                --- ttnn::prim::mesh_partition(tt::tt_metal::Tensor const&amp;, int, std::optional&lt;unsigned int&gt;, tt::tt_metal::MemoryConfig const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;)
+E                --- ttnn::mesh_partition(tt::tt_metal::Tensor const&amp;, int, std::optional&lt;unsigned int&gt;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;)
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3743a4) [0x7044ab3743a4]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7044ab315575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7044f17911ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7044f179128b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 10:05:31.516 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 10:05:31.516 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 10:05:32.234 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+
+</system-err></testcase></testsuite></testsuites>

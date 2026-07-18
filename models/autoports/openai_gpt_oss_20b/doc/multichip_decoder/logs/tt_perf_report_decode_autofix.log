@@ -1,0 +1,24 @@
+Script started on 2026-07-18 11:41:49+00:00 [COMMAND="tt-perf-report models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/perf/ops_perf_results_ep4_qkv10_autofix.csv --start-signpost PERF_DECODE_MULTICHIP_EP --end-signpost PERF_DECODE_MULTICHIP_EP_END --csv models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/perf/decode_report_autofix.csv --summary-file models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/perf/decode_summary_autofix.csv --active-experts 4 --no-color" <not executed on terminal>]
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE_MULTICHIP_EP'.
+Using operations until 'PERF_DECODE_MULTICHIP_EP_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/perf/decode_report_autofix.csv
+Overall DRAM roofline (modeled ops): 40.5% (207 GB/s)
+Warning: Unclassified operation 'RotaryEmbeddingHfDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MorehSumOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MeshPartitionDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RepeatDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllBroadcastDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/perf/decode_summary_autofix.csv.csv
+Plotting PNG stacked report to models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/perf/decode_summary_autofix.csv.png
+
+Script done on 2026-07-18 11:41:49+00:00 [COMMAND_EXIT_CODE="0"]

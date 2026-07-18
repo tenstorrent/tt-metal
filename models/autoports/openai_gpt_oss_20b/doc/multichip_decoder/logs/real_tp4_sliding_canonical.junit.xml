@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="12.949" timestamp="2026-07-18T10:13:08.871993+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-tp-mesh_device0-device_params0]" time="12.282"><properties><property name="start_timestamp" value="2026-07-18T10:13:09" /><property name="end_timestamp" value="2026-07-18T10:13:21" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+PCC_RESULT path=tp-sliding_attention-prefill threshold=0.99 0.9993218677174456
+PCC_RESULT path=tp-sliding_attention-attention-128 threshold=0.99 0.9999937943150203
+PCC_RESULT path=tp-sliding_attention-routing-128 threshold=0.99 0.9999975900279576
+PCC_RESULT path=tp-sliding_attention-decode-128 threshold=0.99 0.9992078891929858
+PCC_RESULT path=tp-sliding_attention-attention-129 threshold=0.99 0.9999944065620271
+PCC_RESULT path=tp-sliding_attention-routing-129 threshold=0.99 0.9999982778078222
+PCC_RESULT path=tp-sliding_attention-decode-129 threshold=0.99 0.999161244473095
+PCC_RESULT path=tp-sliding_attention-attention-130 threshold=0.99 0.9999943094230757
+PCC_RESULT path=tp-sliding_attention-routing-130 threshold=0.99 0.9999942774811055
+PCC_RESULT path=tp-sliding_attention-decode-130 threshold=0.99 0.9992896065561403
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 10:13:10.280 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 10:13:10.280 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 10:13:10.993 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+
+</system-err></testcase></testsuite></testsuites>

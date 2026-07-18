@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="15.585" timestamp="2026-07-18T10:05:03.793915+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_matches_optimized_and_cache_is_head_local[blackhole-tp-mesh_device0-device_params0]" time="14.907"><properties><property name="start_timestamp" value="2026-07-18T10:05:04" /><property name="end_timestamp" value="2026-07-18T10:05:19" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+PCC_RESULT path=tp-synthetic-prefill-17 threshold=0.99 0.9999994138663331
+PCC_RESULT path=tp-synthetic-prefill-33 threshold=0.99 0.9999994849705968
+PCC_RESULT path=tp-rank-0-logical-page-0-local-kv-heads threshold=0.999 1.0
+PCC_RESULT path=tp-rank-1-logical-page-0-local-kv-heads threshold=0.999 1.0
+PCC_RESULT path=tp-rank-2-logical-page-0-local-kv-heads threshold=0.999 1.0
+PCC_RESULT path=tp-rank-3-logical-page-0-local-kv-heads threshold=0.999 1.0
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 10:05:05.210 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 10:05:05.210 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 10:05:05.926 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+
+</system-err></testcase></testsuite></testsuites>

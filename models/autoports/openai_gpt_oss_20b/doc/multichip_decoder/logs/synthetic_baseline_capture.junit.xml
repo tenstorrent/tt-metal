@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="7.502" timestamp="2026-07-18T10:02:28.396811+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_capture_synthetic_single_chip_optimized_reference[blackhole-mesh_device0-device_params0]" time="6.833"><properties><property name="start_timestamp" value="2026-07-18T10:02:29" /><property name="end_timestamp" value="2026-07-18T10:02:35" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+OPTIMIZED_REFERENCE_ARTIFACT /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/optimized_reference_synthetic.pt
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 10:02:29.750 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 10:02:29.750 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 10:02:30.417 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase></testsuite></testsuites>

@@ -1,0 +1,34 @@
+Script started on 2026-07-18 12:01:18+00:00 [COMMAND="timeout 60 tt-smi -ls --local" <not executed on terminal>]
+[90m2026-07-18 12:01:18.239[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating TopologyDiscovery for architecture: blackhole[0m [90m(topology_discovery.cpp:75)[0m
+[90m2026-07-18 12:01:18.239[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting topology discovery.[0m [90m(topology_discovery.cpp:92)[0m
+[90m2026-07-18 12:01:18.240[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mLow power mode is disabled while UMD holds open file descriptors. The device will return to low power mode once all file descriptors are closed.[0m [90m(topology_discovery.cpp:140)[0m
+[90m2026-07-18 12:01:18.241[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.8.0[0m [90m(topology_discovery.cpp:544)[0m
+[90m2026-07-18 12:01:18.241[0m | [32minfo    [m | [35m            UMD[0m | [37mFirmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported.[0m [90m(topology_discovery.cpp:570)[0m
+[90m2026-07-18 12:01:18.242[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mLow power mode is disabled while UMD holds open file descriptors. The device will return to low power mode once all file descriptors are closed.[0m [90m(topology_discovery.cpp:140)[0m
+[90m2026-07-18 12:01:18.243[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mLow power mode is disabled while UMD holds open file descriptors. The device will return to low power mode once all file descriptors are closed.[0m [90m(topology_discovery.cpp:140)[0m
+[90m2026-07-18 12:01:18.244[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mLow power mode is disabled while UMD holds open file descriptors. The device will return to low power mode once all file descriptors are closed.[0m [90m(topology_discovery.cpp:140)[0m
+[90m2026-07-18 12:01:18.245[0m | [32minfo    [m | [35m            UMD[0m | [37mCompleted topology discovery.[0m [90m(topology_discovery.cpp:96)[0m
+Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+
+                      All available boards on host (UMD):
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ UMD Chip   ┃            ┃            ┃            ┃ Device      ┃ Board      ┃
+┃ ID         ┃ PCI BDF    ┃ PCI Dev ID ┃ Board Type ┃ Series      ┃ Number     ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ 0          │ 0000:01:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 1          │ 0000:02:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 2          │ 0000:03:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 3          │ 0000:04:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+└────────────┴────────────┴────────────┴────────────┴─────────────┴────────────┘
+                        Boards that can be reset (UMD):
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ UMD Chip   ┃            ┃            ┃            ┃ Device      ┃ Board      ┃
+┃ ID         ┃ PCI BDF    ┃ PCI Dev ID ┃ Board Type ┃ Series      ┃ Number     ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ 0          │ 0000:01:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 1          │ 0000:02:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 2          │ 0000:03:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 3          │ 0000:04:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+└────────────┴────────────┴────────────┴────────────┴─────────────┴────────────┘
+
+Script done on 2026-07-18 12:01:18+00:00 [COMMAND_EXIT_CODE="0"]
