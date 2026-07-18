@@ -322,7 +322,7 @@ def test_quasar_conv2d_split_program_e2e_shapes(mesh_device, shape, with_bias_re
 #     AND even if the limit were raised the single full-K K-block (72 tiles) may not fit L1 -> OOM. This test
 #     pins WHICH it is (assert/overrun/hang vs allocation error), to decide raise-limit vs K-spill vs more-L1.
 #   K144 (C=512, layer4 3x3) is deferred (certain OOM at one K-block).
-_DEEP_K_CASES = [(128, "K36_layer2"), (256, "K72_layer3")]
+_DEEP_K_CASES = [(128, "K36_layer2"), (256, "K72_layer3"), (512, "K144_layer4")]
 
 
 @pytest.mark.timeout(1200)
