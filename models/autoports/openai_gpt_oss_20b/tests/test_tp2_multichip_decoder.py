@@ -27,7 +27,7 @@ from models.autoports.openai_gpt_oss_20b.tests.test_functional_decoder import (
     _to_tt,
 )
 from models.autoports.openai_gpt_oss_20b.tt.functional_decoder import _require_tensor
-from models.autoports.openai_gpt_oss_20b.tt.multichip_decoder import (
+from models.autoports.openai_gpt_oss_20b.tt.tp2_multichip_decoder import (
     PAGE_BLOCK_SIZE,
     SUPPORTED_CONTEXT,
     TARGET_MESH_SHAPE,
@@ -44,7 +44,7 @@ FABRIC_DEVICE_PARAMS = {
     "trace_region_size": 32 * 1024 * 1024,
 }
 SINGLE_CHIP_DEVICE_PARAMS = {"trace_region_size": 32 * 1024 * 1024}
-EVIDENCE_DIR = Path(__file__).parents[1] / "doc" / "multichip_decoder" / "logs"
+EVIDENCE_DIR = Path(__file__).parents[1] / "doc" / "tp2_multichip_decoder" / "logs"
 SYNTHETIC_REFERENCE_PATH = EVIDENCE_DIR / "optimized_reference_synthetic.pt"
 CANONICAL_REAL_PCC_SEEDS = {
     # Reuse the optimized decoder's existing boundary/trace seed for sliding
@@ -1176,7 +1176,7 @@ def test_capture_single_chip_optimized_perf_reference(mesh_device):
 
 
 @_mesh_test
-def test_multichip_decoder_perf(mesh_device):
+def test_tp2_multichip_decoder_perf(mesh_device):
     if os.environ.get("RUN_MULTICHIP_DECODER_PERF") != "1":
         pytest.skip("set RUN_MULTICHIP_DECODER_PERF=1 to run warmed multichip timing")
     config = _config()
