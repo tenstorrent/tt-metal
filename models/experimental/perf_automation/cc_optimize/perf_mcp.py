@@ -1143,10 +1143,20 @@ def _capture_attempt_diff(max_lines: int = 40) -> str:
             pathspec = str(_MODEL_ROOT.relative_to(repo))
         except ValueError:
             pathspec = "."
+        # Exclude tool-generated artifacts so the captured "code change" is the
+        # ACTUAL source edit — not the report quoting itself (RUN_REPORT.md lives
+        # in the model dir, so without this the diff embeds its own live-update
+        # churn -> the optimize table nests/duplicates) nor scaffold/state files.
+        _excludes = [
+            ":(exclude,glob)**/RUN_REPORT.md",
+            ":(exclude,glob)**/bringup_status.json",
+            ":(exclude,glob)**/.bringup_cc_state.json",
+            ":(exclude,glob)**/*.opplan.json",
+        ]
         out = ""
         for cmd in (
-            ["git", "-C", str(repo), "diff", "HEAD", "--", pathspec],
-            ["git", "-C", str(repo), "show", "--format=", "HEAD", "--", pathspec],
+            ["git", "-C", str(repo), "diff", "HEAD", "--", pathspec, *_excludes],
+            ["git", "-C", str(repo), "show", "--format=", "HEAD", "--", pathspec, *_excludes],
         ):
             r = _sp.run(cmd, capture_output=True, text=True, timeout=30)
             if r.returncode == 0 and r.stdout.strip():

@@ -530,7 +530,13 @@ def run_bringup_cc(
     try:
         from ..run_report import emit_run_report
 
-        emit_run_report(model_id, demo_dir, converged=bool(final.get("can_stop")), stop_reason=_reason)
+        emit_run_report(
+            model_id,
+            demo_dir,
+            converged=bool(final.get("can_stop")),
+            iterations_run=res.get("rounds"),
+            stop_reason=_reason,
+        )
         _mark_summary_emitted()
     except Exception as _tbl_exc:
         print(f"  [run-report] skipped: {type(_tbl_exc).__name__}: {_tbl_exc}")
