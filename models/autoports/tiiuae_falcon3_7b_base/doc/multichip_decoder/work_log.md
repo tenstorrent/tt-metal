@@ -227,6 +227,8 @@ controlled concerns, and explicit later-stage gaps are recorded in
   accepted 1.7-MiB raw Tracy ops CSV referenced by `profile_provenance.json`;
   every other pre-commit hook passed.
 - Initial review-log commit: `069f3fc3fc2` (`Record Falcon3 TP4 stage review`).
+- Completion-audit/evidence commit: `cdbf998b3d6` (`Complete Falcon3 TP4
+  multichip audit`).
 - The completion-audit checkpoint uses `SKIP=check-large-files` only for the
   4.9-MiB LLM-readable `tt-triage` dump from the rejected two-link fused trace
   hang.  Its SHA is bound in the compact JSON/summary; all other hooks pass.
