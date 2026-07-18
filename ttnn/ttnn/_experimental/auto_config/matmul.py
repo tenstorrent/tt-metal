@@ -1194,6 +1194,37 @@ def _build_program_config_candidates(
     return candidates
 
 
+def _is_single_output_tile(signature: AutoMatmulSignature) -> bool:
+    m_tiles, _, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+    return m_tiles <= 1 and n_tiles <= 1
+
+
+def _default_candidate_kwargs(
+    signature: AutoMatmulSignature,
+    prepared: PreparedMatmulInputs,
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Effective kwargs for the default candidate.
+
+    For single-output-tile matmuls, run the default op with fp32 accumulation
+    (when the caller hasn't pinned a compute config): tuning is skipped at this
+    size, and the lower-precision stock default can drift ~1 ULP from the
+    reference, so we opt into the high-accuracy compute config for free.  Applied
+    identically here and in cache reconstruction so a cached winner rebuilds the
+    same op.  Larger shapes are returned unchanged."""
+    if not _is_single_output_tile(signature):
+        return kwargs
+    if kwargs.get("compute_kernel_config") is not None:
+        return kwargs
+    device = prepared.input_tensor_a.device()
+    accurate_cc = _get_default_compute_kernel_config(device, None)
+    if accurate_cc is None:
+        return kwargs
+    adjusted = dict(kwargs)
+    adjusted["compute_kernel_config"] = accurate_cc
+    return adjusted
+
+
 def _build_default_candidate(
     *,
     base_operation: Any,
@@ -1674,7 +1705,7 @@ def _build_candidate_from_descriptor(
         return _build_default_candidate(
             base_operation=base_operation,
             prepared=prepared,
-            kwargs=kwargs,
+            kwargs=_default_candidate_kwargs(signature, prepared, kwargs),
             signature=signature,
         )
     if kind == "minimal_matmul":
@@ -1749,6 +1780,21 @@ def _build_candidates(
     elif distributed_plan.kind == "unsupported":
         return []
     else:
+        # A single-output-tile matmul has nothing to distribute across the core
+        # grid and completes in noise-level time, so tuning is pointless and only
+        # risks selecting a less-accurate config by timing noise.  Skip the sweep
+        # and run the default op alone (with fp32 accumulation via
+        # _default_candidate_kwargs for reference precision).
+        if _is_single_output_tile(signature):
+            return [
+                _build_default_candidate(
+                    base_operation=base_operation,
+                    prepared=prepared,
+                    kwargs=_default_candidate_kwargs(signature, prepared, kwargs),
+                    signature=signature,
+                )
+            ]
+
         candidates.append(
             _build_default_candidate(
                 base_operation=base_operation,
@@ -1757,13 +1803,6 @@ def _build_candidates(
                 signature=signature,
             )
         )
-        # A single-output-tile matmul has nothing to distribute across the core
-        # grid and completes in noise-level time, so benchmarking tuned candidates
-        # only risks selecting a marginally-less-accurate config by timing noise.
-        # Use the default alone for deterministic, reference-accurate results.
-        m_tiles, _, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
-        if m_tiles <= 1 and n_tiles <= 1:
-            return candidates
         candidates.extend(_build_program_config_candidates(signature, prepared, kwargs, base_operation=base_operation))
         candidates.extend(_build_local_minimal_candidates(signature, prepared, kwargs))
 
