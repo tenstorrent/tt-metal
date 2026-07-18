@@ -340,8 +340,9 @@ void bind_sdpa(nb::module_& mod) {
 
         Args:
             q (ttnn.Tensor):       [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)
-            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16 or fp8_e4m3 (fp8 halves the K-gather bytes; tilized to bfp8_b in-op).
-                                   When cache_batch_idx is set, [B, 1, T, K_DIM] and may be ND-sharded across DRAM banks.
+            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16/raw fp8, or one packed scaled-FP8 row per token.
+                                   The packed DSA row is [512 FP8 | 4 FP32 scales | 64 BF16 RoPE] = 656 bytes.
+                                   When cache_batch_idx is set, B may exceed 1 and kv may be ND-sharded.
             indices (ttnn.Tensor): [1, 1, S, TOPK] uint32
             v_dim (int):           width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
 
@@ -350,7 +351,8 @@ void bind_sdpa(nb::module_& mod) {
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
-                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+                It is a dynamic runtime arg, so changing the slot does not recompile. Changing T also reuses the
+                program for a plain interleaved cache, but recompiles for sharded or block-cyclic caches.
             block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), `indices` are NATURAL
                 token positions and kv is stored block-cyclic across an SP-sharded cache; the kernel remaps each
                 index natural->physical page on the fly (no host reorder needed). This is the MESH axis the cache
@@ -359,7 +361,6 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
                 Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
-
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
