@@ -60,7 +60,7 @@ class MultiChipConfig:
 
     optimized: OptimizationConfig = field(
         default_factory=lambda: OptimizationConfig(
-            decode_matmul_strategy="dram_sharded",
+            decode_matmul_strategy="advisor_1d",
             qkv_cores=16,
             output_cores=16,
             gate_up_cores=16,
@@ -71,6 +71,27 @@ class MultiChipConfig:
     topology: object = ttnn.Topology.Ring
     num_links: int = 2
     collective_dtype: object = ttnn.bfloat16
+    decode_collective_dtype: object = None
+    prefill_sharded_norm: bool = False
+    advisor_qkv_cores: int = 24
+    advisor_qkv_in0_block_w: int = 32
+    advisor_other_in0_block_w: int = 8
+    advisor_output_in0_block_w: int | None = 32
+    advisor_gate_up_in0_block_w: int | None = None
+    advisor_down_in0_block_w: int | None = None
+    advisor_output_per_core_n: int = 2
+    advisor_gate_up_per_core_n: int = 2
+    advisor_down_per_core_n: int = 2
+    advisor_output_out_subblock_w: int = 2
+    advisor_gate_up_out_subblock_w: int = 2
+    advisor_down_out_subblock_w: int = 2
+    advisor_output_grid: tuple[int, int] = (11, 6)
+    advisor_gate_up_grid: tuple[int, int] = (11, 6)
+    advisor_down_grid: tuple[int, int] = (11, 6)
+    decode_all_reduce_strategy: str = "minimal"
+    minimal_all_reduce_buffer_count: int = 1
+    minimal_all_reduce_use_noc1_only: bool = False
+    minimal_all_reduce_use_optimal_ccl_for_llama: bool = False
 
 
 def _mesh_tensor(
@@ -156,36 +177,94 @@ class MultiChipDecoder(OptimizedDecoder):
             raise ValueError("local/global KV-head ownership is inconsistent")
         if self.global_intermediate_size != self.intermediate_size * self.tp_degree:
             raise ValueError("local/global MLP ownership is inconsistent")
+        if self.multichip_config.decode_all_reduce_strategy not in {"composite", "minimal"}:
+            raise ValueError("decode_all_reduce_strategy must be 'composite' or 'minimal'")
+        if self.multichip_config.minimal_all_reduce_buffer_count not in {1, 2}:
+            raise ValueError("minimal_all_reduce_buffer_count must be 1 or 2")
+        if self.multichip_config.advisor_qkv_cores not in {24, 48}:
+            raise ValueError("advisor_qkv_cores must be 24 or 48")
+        if self.multichip_config.advisor_qkv_in0_block_w not in {8, 16, 32, 64, 128}:
+            raise ValueError("advisor_qkv_in0_block_w must be a tested divisor of 128 K tiles")
+        if self.multichip_config.advisor_other_in0_block_w not in {8, 16}:
+            raise ValueError("advisor_other_in0_block_w must be 8 or 16")
 
         padded_rows = TILE_SIZE * math.ceil(self.batch / TILE_SIZE)
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         if self.use_advisor_1d:
-            # Shape-adapt the optimized baseline's interleaved BFP4 1-D
-            # family to TP4-local projection widths.  These exact grids cover
-            # the local N tiles without output padding.
+            # Exact TP4-local batch-one decode choices emitted by the shard
+            # advisor.  Each output shard covers an integral number of N tiles.
+            qkv_cores = self.multichip_config.advisor_qkv_cores
+            qkv_grid = (11, 5) if qkv_cores == 48 else (8, 3)
+            qkv_per_core_n = 48 // qkv_cores
             self.qkv_decode_program_config = _advisor_matmul_program_config(
-                grid=(8, 3), in0_block_w=2, per_core_n=2, out_subblock_w=2
+                grid=qkv_grid,
+                in0_block_w=self.multichip_config.advisor_qkv_in0_block_w,
+                per_core_n=qkv_per_core_n,
+                out_subblock_w=qkv_per_core_n,
             )
-            self.output_decode_program_config = _advisor_matmul_program_config(
-                grid=(8, 8), in0_block_w=8, per_core_n=2, out_subblock_w=2
-            )
-            self.gate_up_decode_program_config = _advisor_matmul_program_config(
-                grid=(7, 4), in0_block_w=2, per_core_n=4, out_subblock_w=4
-            )
-            self.down_decode_program_config = _advisor_matmul_program_config(
-                grid=(8, 8), in0_block_w=8, per_core_n=2, out_subblock_w=2
-            )
+            gate_up_width = self.intermediate_size * (2 if self.optimization_config.packed_gate_up else 1)
+            role_geometries = {
+                "output": (
+                    self.hidden_size,
+                    self.multichip_config.advisor_output_per_core_n,
+                    self.multichip_config.advisor_output_out_subblock_w,
+                    self.multichip_config.advisor_output_grid,
+                    self.multichip_config.advisor_output_in0_block_w,
+                ),
+                "gate_up": (
+                    gate_up_width,
+                    self.multichip_config.advisor_gate_up_per_core_n,
+                    self.multichip_config.advisor_gate_up_out_subblock_w,
+                    self.multichip_config.advisor_gate_up_grid,
+                    self.multichip_config.advisor_gate_up_in0_block_w,
+                ),
+                "down": (
+                    self.hidden_size,
+                    self.multichip_config.advisor_down_per_core_n,
+                    self.multichip_config.advisor_down_out_subblock_w,
+                    self.multichip_config.advisor_down_grid,
+                    self.multichip_config.advisor_down_in0_block_w,
+                ),
+            }
+            role_configs = {}
+            role_output_mem_configs = {}
+            for role, (width, per_core_n, out_subblock_w, grid, in0_block_w) in role_geometries.items():
+                output_tiles = width // TILE_SIZE
+                if width % TILE_SIZE or output_tiles % per_core_n:
+                    raise ValueError(f"advisor {role}: per_core_N={per_core_n} must divide N tiles={output_tiles}")
+                if per_core_n % out_subblock_w:
+                    raise ValueError(
+                        f"advisor {role}: out_subblock_w={out_subblock_w} must divide per_core_N={per_core_n}"
+                    )
+                active_cores = output_tiles // per_core_n
+                if active_cores > grid[0] * grid[1]:
+                    raise ValueError(f"advisor {role}: {active_cores} active cores do not fit grid={grid}")
+                role_configs[role] = _advisor_matmul_program_config(
+                    grid=grid,
+                    in0_block_w=in0_block_w or self.multichip_config.advisor_other_in0_block_w,
+                    per_core_n=per_core_n,
+                    out_subblock_w=out_subblock_w,
+                )
+                role_output_mem_configs[role] = _advisor_width_sharded_l1(
+                    rows=padded_rows,
+                    width=width,
+                    cores=active_cores,
+                    grid=grid,
+                )
+            self.output_decode_program_config = role_configs["output"]
+            self.gate_up_decode_program_config = role_configs["gate_up"]
+            self.down_decode_program_config = role_configs["down"]
             self.advisor_qkv_output_mem_config = _advisor_width_sharded_l1(
-                rows=padded_rows, width=1536, cores=24, grid=(8, 3)
+                rows=padded_rows, width=1536, cores=qkv_cores, grid=qkv_grid
             )
-            self.advisor_gate_up_output_mem_config = _advisor_width_sharded_l1(
-                rows=padded_rows, width=self.intermediate_size, cores=28, grid=(7, 4)
-            )
+            self.advisor_output_projection_mem_config = role_output_mem_configs["output"]
+            self.advisor_gate_up_output_mem_config = role_output_mem_configs["gate_up"]
+            self.advisor_down_output_mem_config = role_output_mem_configs["down"]
             self.advisor_down_input_mem_config = _advisor_width_sharded_l1(
-                rows=padded_rows, width=self.intermediate_size, cores=28, grid=(7, 4)
+                rows=padded_rows, width=self.intermediate_size, cores=56, grid=(11, 6)
             )
             self.advisor_residual_output_mem_config = _advisor_width_sharded_l1(
-                rows=padded_rows, width=self.hidden_size, cores=64, grid=(8, 8)
+                rows=padded_rows, width=self.hidden_size, cores=64, grid=(11, 6)
             )
         else:
             output_cores = self.optimization_config.output_cores
@@ -211,6 +290,94 @@ class MultiChipDecoder(OptimizedDecoder):
         if self.tt_ccl.mesh_device is not self.mesh_device:
             raise ValueError("tt_ccl must belong to the decoder's mesh_device")
         self._barrier_semaphores = self.tt_ccl.barrier_semaphore_handles[2]
+
+        # The minimal all-reduce consumes and produces the existing decode
+        # width-sharded residual directly.  Its globally-addressed reduction
+        # CB must hold one output shard for every rank.  Allocate it only when
+        # decode is prepared so this decode-only L1 reservation cannot disturb
+        # prefill.  Attention, MLP, and decoder layers execute sequentially on
+        # the command queue, so the whole stack safely reuses one mesh-owned
+        # pool.  Keeping the pool on the already stack-shared TT_CCL owner is
+        # important: one 1-MiB/device buffer per layer would overcommit the same
+        # 16 worker cores in a 32-layer stack.
+        self._minimal_all_reduce_buffers = []
+        self._minimal_all_reduce_buffer_idx = 0
+        if getattr(self, "use_advisor_exact_chain", False):
+            # Match the advisor's non-rectangular 64-core residual CoreRangeSet;
+            # the minimal all-reduce requires every output core in its buffer CB.
+            self._minimal_all_reduce_buffer_mem_config = _advisor_width_sharded_l1(
+                rows=padded_rows,
+                width=self.hidden_size * self.tp_degree,
+                cores=64,
+                grid=(11, 6),
+            )
+        else:
+            self._minimal_all_reduce_buffer_mem_config = _width_sharded_l1(
+                rows=padded_rows,
+                width=self.hidden_size * self.tp_degree,
+                cores=self.optimization_config.residual_cores,
+                device_grid=device_grid,
+            )
+        self._minimal_all_reduce_padded_rows = padded_rows
+        self._minimal_all_reduce_pool_key = (
+            "llama31_tp4_minimal_all_reduce",
+            padded_rows,
+            self.hidden_size,
+            self.tp_degree,
+            str(self.multichip_config.decode_collective_dtype or self.multichip_config.collective_dtype),
+            self.multichip_config.minimal_all_reduce_buffer_count,
+            bool(getattr(self, "use_advisor_exact_chain", False)),
+            self.optimization_config.residual_cores,
+        )
+
+    def _allocate_minimal_all_reduce_buffers(self):
+        buffer_host = torch.zeros(
+            (*TARGET_MESH_SHAPE, self._minimal_all_reduce_padded_rows, self.hidden_size * self.tp_degree),
+            dtype=torch.bfloat16,
+        )
+        buffer_mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            dims=(0, 1),
+            mesh_shape=TARGET_MESH_SHAPE,
+        )
+        return [
+            _mesh_tensor(
+                buffer_host,
+                self.mesh_device,
+                mesh_mapper=buffer_mapper,
+                dtype=self.multichip_config.decode_collective_dtype or self.multichip_config.collective_dtype,
+                memory_config=self._minimal_all_reduce_buffer_mem_config,
+            )
+            for _ in range(self.multichip_config.minimal_all_reduce_buffer_count)
+        ]
+
+    def prepare_decode(self):
+        """Allocate phase weights and acquire the mesh-shared decode CCL pool."""
+        for name, tensor, mapper, dtype in getattr(self, "_decode_weight_specs", []):
+            setattr(
+                self,
+                name,
+                _mesh_tensor(
+                    tensor,
+                    self.mesh_device,
+                    mesh_mapper=mapper,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            )
+        self._decode_weight_specs = []
+        if self.multichip_config.decode_all_reduce_strategy != "minimal" or self._minimal_all_reduce_buffers:
+            return
+        pool_registry_name = "_llama31_tp4_minimal_all_reduce_pools"
+        pools = getattr(self.tt_ccl, pool_registry_name, None)
+        if pools is None:
+            pools = {}
+            setattr(self.tt_ccl, pool_registry_name, pools)
+        buffers = pools.get(self._minimal_all_reduce_pool_key)
+        if buffers is None:
+            buffers = self._allocate_minimal_all_reduce_buffers()
+            pools[self._minimal_all_reduce_pool_key] = buffers
+        self._minimal_all_reduce_buffers = buffers
 
     @classmethod
     def from_state_dict(
@@ -293,13 +460,9 @@ class MultiChipDecoder(OptimizedDecoder):
         attention_dtype = policy.optimized.attention_weight_dtype
         gate_up_dtype = policy.optimized.gate_up_weight_dtype
         down_dtype = policy.optimized.down_weight_dtype
-        weight_memory_config = (
-            (lambda _k, _n: ttnn.DRAM_MEMORY_CONFIG)
-            if policy.optimized.decode_matmul_strategy == "advisor_1d"
-            else (lambda k, n: _dram_weight_memory_config(mesh_device, k=k, n=n))
-        )
+        prefill_weight_memory_config = lambda k, n: _dram_weight_memory_config(mesh_device, k=k, n=n)
 
-        return cls(
+        decoder = cls(
             multichip_config=policy,
             mesh_device=mesh_device,
             layer_idx=layer_idx,
@@ -322,21 +485,21 @@ class MultiChipDecoder(OptimizedDecoder):
                 mesh_device,
                 mesh_mapper=shard_last,
                 dtype=attention_dtype,
-                memory_config=weight_memory_config(hidden_size, local_qkv_width),
+                memory_config=prefill_weight_memory_config(hidden_size, local_qkv_width),
             ),
             output_weight=_mesh_tensor(
                 output_t,
                 mesh_device,
                 mesh_mapper=shard_first,
                 dtype=attention_dtype,
-                memory_config=weight_memory_config(hidden_size // TARGET_TP_DEGREE, hidden_size),
+                memory_config=prefill_weight_memory_config(hidden_size // TARGET_TP_DEGREE, hidden_size),
             ),
             gate_weight=_mesh_tensor(
                 packed_gate_up if packed_gate_up is not None else gate_t,
                 mesh_device,
                 mesh_mapper=shard_last,
                 dtype=gate_up_dtype,
-                memory_config=weight_memory_config(hidden_size, local_gate_up_width),
+                memory_config=prefill_weight_memory_config(hidden_size, local_gate_up_width),
             ),
             up_weight=(
                 None
@@ -346,7 +509,7 @@ class MultiChipDecoder(OptimizedDecoder):
                     mesh_device,
                     mesh_mapper=shard_last,
                     dtype=gate_up_dtype,
-                    memory_config=weight_memory_config(hidden_size, local_intermediate_size),
+                    memory_config=prefill_weight_memory_config(hidden_size, local_intermediate_size),
                 )
             ),
             down_weight=_mesh_tensor(
@@ -354,7 +517,7 @@ class MultiChipDecoder(OptimizedDecoder):
                 mesh_device,
                 mesh_mapper=shard_first,
                 dtype=down_dtype,
-                memory_config=weight_memory_config(local_intermediate_size, hidden_size),
+                memory_config=prefill_weight_memory_config(local_intermediate_size, hidden_size),
             ),
             rotary_cos=_mesh_tensor(cos, mesh_device, mesh_mapper=replicate),
             rotary_sin=_mesh_tensor(sin, mesh_device, mesh_mapper=replicate),
@@ -366,6 +529,25 @@ class MultiChipDecoder(OptimizedDecoder):
                 dtype=ttnn.int32,
             ),
         )
+        if policy.optimized.decode_matmul_strategy == "advisor_1d":
+            # Prefill benefits from channel-aligned DRAM sharding, while the
+            # advisor's 1-D decode programs require interleaved DRAM weights.
+            # Keep both persistent layouts so neither phase pays a runtime
+            # conversion or inherits the other phase's slower storage policy.
+            decoder._decode_weight_specs = [
+                ("decode_qkv_weight", packed_qkv, shard_last, attention_dtype),
+                ("decode_output_weight", output_t, shard_first, attention_dtype),
+                (
+                    "decode_gate_weight",
+                    packed_gate_up if packed_gate_up is not None else gate_t,
+                    shard_last,
+                    gate_up_dtype,
+                ),
+                ("decode_down_weight", down_t, shard_first, down_dtype),
+            ]
+            if packed_gate_up is None:
+                decoder._decode_weight_specs.append(("decode_up_weight", up_t, shard_last, gate_up_dtype))
+        return decoder
 
     @staticmethod
     def mesh_mapper_for_input(mesh_device):
@@ -402,26 +584,53 @@ class MultiChipDecoder(OptimizedDecoder):
             raise ValueError(f"page_table must have local shape [{self.batch}, pages], got {page_shape}")
 
     def _all_reduce_partial(self, partial, *, memory_config=None):
-        output_memory_config = memory_config or self.residual_mem_config
+        output_memory_config = memory_config or (
+            partial.memory_config()
+            if self.multichip_config.decode_all_reduce_strategy == "minimal"
+            else self.residual_mem_config
+        )
+        collective_dtype = self.multichip_config.collective_dtype
+        if memory_config is None and self.multichip_config.decode_collective_dtype is not None:
+            collective_dtype = self.multichip_config.decode_collective_dtype
         payload = partial
-        if self.multichip_config.collective_dtype != ttnn.bfloat16:
+        if collective_dtype != ttnn.bfloat16:
             payload = ttnn.typecast(
                 partial,
-                self.multichip_config.collective_dtype,
+                collective_dtype,
                 memory_config=output_memory_config,
             )
-        reduced = ttnn.experimental.all_reduce_async(
-            payload,
-            num_devices=self.tp_degree,
-            barrier_semaphores=self._barrier_semaphores,
-            rs_global_semaphores=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            ag_global_semaphores=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-            math_op=ttnn.ReduceType.Sum,
-            num_links=self.multichip_config.num_links,
-            memory_config=output_memory_config,
-            topology=self.multichip_config.topology,
-        )
-        if self.multichip_config.collective_dtype != ttnn.bfloat16:
+        if self.multichip_config.decode_all_reduce_strategy == "minimal" and memory_config is None:
+            self.prepare_decode()
+            buffer = self._minimal_all_reduce_buffers[self._minimal_all_reduce_buffer_idx]
+            self._minimal_all_reduce_buffer_idx = (self._minimal_all_reduce_buffer_idx + 1) % len(
+                self._minimal_all_reduce_buffers
+            )
+            reduced = ttnn.experimental.all_reduce_async(
+                payload,
+                buffer,
+                cluster_axis=1,
+                mesh_device=self.mesh_device,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                dtype=collective_dtype,
+                memory_config=output_memory_config,
+                topology=self.multichip_config.topology,
+                num_links=self.multichip_config.num_links,
+                use_noc1_only=self.multichip_config.minimal_all_reduce_use_noc1_only,
+                use_optimal_ccl_for_llama=(self.multichip_config.minimal_all_reduce_use_optimal_ccl_for_llama),
+            )
+        else:
+            reduced = ttnn.experimental.all_reduce_async(
+                payload,
+                num_devices=self.tp_degree,
+                barrier_semaphores=self._barrier_semaphores,
+                rs_global_semaphores=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                ag_global_semaphores=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                math_op=ttnn.ReduceType.Sum,
+                num_links=self.multichip_config.num_links,
+                memory_config=output_memory_config,
+                topology=self.multichip_config.topology,
+            )
+        if collective_dtype != ttnn.bfloat16:
             reduced = ttnn.typecast(reduced, ttnn.bfloat16, memory_config=output_memory_config)
         return reduced
 
@@ -447,6 +656,36 @@ class MultiChipDecoder(OptimizedDecoder):
     def _mlp_decode_tp(self, hidden_states):
         return self._all_reduce_partial(super()._mlp_decode(hidden_states))
 
+    def _prefill_norm(self, hidden_states, weight, seq_len: int):
+        if not self.multichip_config.prefill_sharded_norm:
+            return ttnn.rms_norm(
+                hidden_states,
+                epsilon=self.rms_norm_eps,
+                weight=weight,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.norm_compute_kernel,
+            )
+        padded_rows = TILE_SIZE * math.ceil(self.batch * seq_len / TILE_SIZE)
+        memory_config = _width_sharded_l1(
+            rows=padded_rows,
+            width=self.hidden_size,
+            cores=self.optimization_config.residual_cores,
+            device_grid=self.mesh_device.compute_with_storage_grid_size(),
+        )
+        normed = ttnn.to_memory_config(hidden_states, memory_config)
+        normed = ttnn.rms_norm(
+            normed,
+            epsilon=self.rms_norm_eps,
+            weight=weight,
+            program_config=self._make_norm_program_config(
+                self.optimization_config.residual_cores,
+                padded_rows,
+            ),
+            memory_config=memory_config,
+            compute_kernel_config=self.norm_compute_kernel,
+        )
+        return ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
+
     def prefill_forward(self, hidden_states, key_cache, value_cache, *, page_table=None):
         seq_len = self._validate_hidden_states(hidden_states)
         self._validate_caches(key_cache, value_cache, page_table)
@@ -454,13 +693,7 @@ class MultiChipDecoder(OptimizedDecoder):
             raise ValueError("page_table does not cover the logical prefill length")
 
         residual = hidden_states
-        normed = ttnn.rms_norm(
-            hidden_states,
-            epsilon=self.rms_norm_eps,
-            weight=self.input_norm,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.norm_compute_kernel,
-        )
+        normed = self._prefill_norm(hidden_states, self.input_norm, seq_len)
         fused_qkv = self._prefill_linear(
             normed,
             self.qkv_weight,
@@ -534,13 +767,7 @@ class MultiChipDecoder(OptimizedDecoder):
         )
 
         residual = hidden_states
-        hidden_states = ttnn.rms_norm(
-            hidden_states,
-            epsilon=self.rms_norm_eps,
-            weight=self.post_attention_norm,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.norm_compute_kernel,
-        )
+        hidden_states = self._prefill_norm(hidden_states, self.post_attention_norm, seq_len)
         hidden_states = self._mlp_prefill_tp(hidden_states, seq_len)
         return ttnn.add(
             residual,
@@ -550,6 +777,7 @@ class MultiChipDecoder(OptimizedDecoder):
         )
 
     def decode_forward(self, hidden_states, key_cache, value_cache, *, current_pos: int, page_table=None):
+        self.prepare_decode()
         self._validate_hidden_states(hidden_states, expected_seq_len=1)
         self._validate_caches(key_cache, value_cache, page_table)
         if current_pos < 0 or current_pos >= self.max_cache_len:
@@ -558,14 +786,24 @@ class MultiChipDecoder(OptimizedDecoder):
             raise ValueError("page_table does not cover current_pos")
 
         hidden_states = ttnn.reshape(hidden_states, [1, 1, self.batch, self.hidden_size])
-        hidden_states = ttnn.to_memory_config(hidden_states, self.residual_mem_config)
+        decode_residual_mem_config = (
+            self.advisor_residual_output_mem_config if self.use_advisor_exact_chain else self.residual_mem_config
+        )
+        hidden_states = ttnn.to_memory_config(hidden_states, decode_residual_mem_config)
         residual = hidden_states
+        input_norm_mem_config = (
+            self.advisor_input_norm_mem_config if self.use_advisor_exact_chain else self.residual_mem_config
+        )
+        input_norm_program_config = (
+            self.advisor_input_norm_program_config if self.use_advisor_exact_chain else self.norm_program_config
+        )
+        hidden_states = ttnn.to_memory_config(hidden_states, input_norm_mem_config)
         normed = ttnn.rms_norm(
             hidden_states,
             epsilon=self.rms_norm_eps,
             weight=self.input_norm,
-            program_config=self.norm_program_config,
-            memory_config=self.residual_mem_config,
+            program_config=input_norm_program_config,
+            memory_config=input_norm_mem_config,
             compute_kernel_config=self.norm_compute_kernel,
         )
         normed = ttnn.to_memory_config(
@@ -574,7 +812,7 @@ class MultiChipDecoder(OptimizedDecoder):
         )
         fused_qkv = ttnn.linear(
             normed,
-            self.qkv_weight,
+            getattr(self, "decode_qkv_weight", self.qkv_weight),
             dtype=ttnn.bfloat16,
             memory_config=(
                 self.advisor_qkv_output_mem_config if self.use_advisor_1d else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
@@ -582,7 +820,8 @@ class MultiChipDecoder(OptimizedDecoder):
             program_config=self.qkv_decode_program_config,
             compute_kernel_config=self.attention_compute_kernel,
         )
-        fused_qkv = ttnn.sharded_to_interleaved(fused_qkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+        if not self.use_advisor_1d:
+            fused_qkv = ttnn.sharded_to_interleaved(fused_qkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
         query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
             fused_qkv,
             num_heads=self.num_heads,
@@ -673,30 +912,40 @@ class MultiChipDecoder(OptimizedDecoder):
         )
         attention = ttnn.linear(
             attention,
-            self.output_weight,
+            getattr(self, "decode_output_weight", self.output_weight),
             dtype=ttnn.bfloat16,
             memory_config=(
-                self.advisor_residual_output_mem_config if self.use_advisor_1d else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+                self.advisor_output_projection_mem_config
+                if self.use_advisor_1d
+                else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
             ),
             program_config=self.output_decode_program_config,
             compute_kernel_config=self.attention_compute_kernel,
         )
-        attention = ttnn.to_memory_config(attention, self.residual_mem_config)
+        if not self.use_advisor_exact_chain:
+            attention = ttnn.to_memory_config(attention, self.residual_mem_config)
         attention = self._all_reduce_partial(attention)
         hidden_states = ttnn.add(
             residual,
             attention,
             dtype=ttnn.bfloat16,
-            memory_config=self.residual_mem_config,
+            memory_config=decode_residual_mem_config,
         )
 
         residual = hidden_states
+        post_norm_mem_config = (
+            self.advisor_post_norm_mem_config if self.use_advisor_exact_chain else self.residual_mem_config
+        )
+        post_norm_program_config = (
+            self.advisor_post_norm_program_config if self.use_advisor_exact_chain else self.norm_program_config
+        )
+        hidden_states = ttnn.to_memory_config(hidden_states, post_norm_mem_config)
         hidden_states = ttnn.rms_norm(
             hidden_states,
             epsilon=self.rms_norm_eps,
             weight=self.post_attention_norm,
-            program_config=self.norm_program_config,
-            memory_config=self.residual_mem_config,
+            program_config=post_norm_program_config,
+            memory_config=post_norm_mem_config,
             compute_kernel_config=self.norm_compute_kernel,
         )
         hidden_states = self._mlp_decode_tp(hidden_states)
@@ -704,7 +953,7 @@ class MultiChipDecoder(OptimizedDecoder):
             residual,
             hidden_states,
             dtype=ttnn.bfloat16,
-            memory_config=self.residual_mem_config,
+            memory_config=decode_residual_mem_config,
         )
         return ttnn.reshape(hidden_states, [1, self.batch, 1, self.hidden_size])
 

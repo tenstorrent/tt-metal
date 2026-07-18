@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="2" time="11.890" timestamp="2026-07-18T13:50:19.461531+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_multichip_decoder" name="test_single_chip_warmed_perf_reference[blackhole-blackhole-single-chip-reference]" time="4.175"><properties><property name="start_timestamp" value="2026-07-18T13:50:20" /><property name="end_timestamp" value="2026-07-18T13:50:24" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+SINGLE_CHIP_PERF_REFERENCE variant=default batch=1 seq=18 single_prefill_ms=1.377057 single_decode_ms=0.601621 prefill_repeats=1 trace_replays=10
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_multichip_decoder" name="test_single_and_multichip_warmed_perf[blackhole-p300-1x4-ring]" time="6.876"><properties><property name="start_timestamp" value="2026-07-18T13:50:24" /><property name="end_timestamp" value="2026-07-18T13:50:31" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+perf default output: 0.9999998068156027
+MULTICHIP_PERF_RESULT variant=default batch=1 seq=18 single_prefill_ms=1.377057 multi_prefill_ms=1.324506 prefill_speedup=1.039676 prefill_efficiency=0.259919 single_decode_ms=0.601621 multi_decode_ms=0.275304 decode_speedup=2.185299 decode_efficiency=0.546325 prefill_repeats=1 trace_replays=10
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase></testsuite></testsuites>

@@ -192,19 +192,7 @@ def _patterned_state(config):
 
 
 def _selected_policy(multichip_config: MultiChipConfig | None = None):
-    return multichip_config or MultiChipConfig(
-        optimized=OptimizationConfig(
-            attention_weight_dtype=ttnn.bfloat4_b,
-            gate_up_weight_dtype=ttnn.bfloat4_b,
-            down_weight_dtype=ttnn.bfloat4_b,
-            decode_matmul_strategy="dram_sharded",
-            qkv_cores=16,
-            output_cores=16,
-            gate_up_cores=16,
-            down_cores=16,
-            residual_cores=16,
-        )
-    )
+    return multichip_config or MultiChipConfig()
 
 
 def _build_baseline(mesh_device, *, batch: int, multichip_config: MultiChipConfig | None = None):
@@ -277,11 +265,27 @@ def test_multichip_context_capacity_contract():
     kv_elements = 32 * 2 * 131072 * 128 * 2
     assert evidence["per_device_bf16_kv_cache_bytes"] == kv_elements * 2
     assert evidence["per_device_bfp8_kv_cache_bytes"] == kv_elements * 1088 // 1024
+    assert evidence["per_device_bfp4_projection_weight_bytes"] == 981467136
+    assert evidence["per_device_bfp4_decode_weight_bytes"] == 981467136
+    assert evidence["worker_l1_bytes_per_core"] == 1572864
+    assert evidence["stack_shared_minimal_all_reduce_buffers_per_mesh"] == 1
+    assert evidence["stack_shared_minimal_all_reduce_buffer_bytes_per_device"] == 1048576
+    assert evidence["stack_shared_minimal_all_reduce_buffer_bytes_per_worker_core"] == 65536
+    assert (
+        evidence["stack_shared_minimal_all_reduce_buffer_bytes_per_worker_core"] < evidence["worker_l1_bytes_per_core"]
+    )
+    assert evidence["bf16_plan_total_bytes"] == (
+        evidence["per_device_bf16_kv_cache_bytes"]
+        + evidence["per_device_bfp4_projection_weight_bytes"]
+        + evidence["per_device_bfp4_decode_weight_bytes"]
+        + evidence["conservative_non_decoder_weight_allowance_bytes"]
+        + evidence["reserved_trace_activation_ccl_headroom_bytes"]
+    )
     assert evidence["bf16_plan_total_bytes"] < evidence["device_allocator_dram_bytes"]
 
 
 def test_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
-    """A 32-layer stack must share one persistent semaphore owner per mesh."""
+    """A 32-layer stack shares semaphores and one persistent CCL buffer pool."""
 
     class Grid:
         x = 11
@@ -367,9 +371,26 @@ def test_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
         assert all(layer._barrier_semaphores is shared.barrier_semaphore_handles[2] for layer in layers)
         assert resolver_calls == [mesh] * 32
 
+        buffer_allocations = []
+
+        def allocate_shared_buffers(layer):
+            buffers = [object() for _ in range(layer.multichip_config.minimal_all_reduce_buffer_count)]
+            buffer_allocations.append(buffers)
+            return buffers
+
+        monkeypatch.setattr(MultiChipDecoder, "_allocate_minimal_all_reduce_buffers", allocate_shared_buffers)
+        for layer in layers:
+            layer.prepare_decode()
+        assert len(buffer_allocations) == 1
+        assert all(layer._minimal_all_reduce_buffers is buffer_allocations[0] for layer in layers)
+        assert len(getattr(shared, "_llama31_tp4_minimal_all_reduce_pools")) == 1
+
         injected = MultiChipDecoder(**constructor_kwargs, tt_ccl=shared)
         assert injected.tt_ccl is shared
         assert resolver_calls == [mesh] * 32
+        injected.prepare_decode()
+        assert injected._minimal_all_reduce_buffers is buffer_allocations[0]
+        assert len(buffer_allocations) == 1
 
         foreign_owner = tt_ccl_module.get_tt_ccl(foreign_mesh)
         with pytest.raises(ValueError, match="decoder's mesh_device"):  # allow-pytest.raises: fake mesh contract
@@ -508,8 +529,22 @@ def test_multichip_correctness_cache_determinism_and_trace_contract(mesh_device)
     batch = 32
     seq_len = 7
     config, state, multichip = _build_multichip(mesh_device, batch=batch)
+    stacked_multichip = MultiChipDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+        batch=batch,
+        max_cache_len=MAX_CACHE_LEN,
+        multichip_config=_selected_policy(),
+        tt_ccl=multichip.tt_ccl,
+    )
+    multichip.prepare_decode()
+    stacked_multichip.prepare_decode()
     assert multichip.tt_ccl is get_tt_ccl(mesh_device)
     assert get_tt_ccl(mesh_device) is get_tt_ccl(mesh_device)
+    assert stacked_multichip.tt_ccl is multichip.tt_ccl
+    assert stacked_multichip._minimal_all_reduce_buffers is multichip._minimal_all_reduce_buffers
 
     # Non-aligned contiguous prefill/decode and local KV-head ownership.
     mesh_key, mesh_value = _mesh_contiguous_caches(config, mesh_device, batch=batch)
@@ -552,7 +587,7 @@ def test_multichip_correctness_cache_determinism_and_trace_contract(mesh_device)
     # fail even though the boundary tensor itself is in DRAM for prefill.
     ttnn.deallocate(actual_decode)
     stack_key, stack_value = _mesh_contiguous_caches(config, mesh_device, batch=batch)
-    actual_stacked_prefill = multichip.prefill_forward(actual_prefill, stack_key, stack_value)
+    actual_stacked_prefill = stacked_multichip.prefill_forward(actual_prefill, stack_key, stack_value)
     ttnn.synchronize_device(mesh_device)
     _assert_pcc(
         reference["stacked_prefill"],
@@ -567,7 +602,7 @@ def test_multichip_correctness_cache_determinism_and_trace_contract(mesh_device)
     # Regenerate the first layer's decode result after freeing prefill state,
     # then feed its width-sharded L1 result directly into the next layer.
     actual_decode = multichip.decode_forward(decode_input, mesh_key, mesh_value, current_pos=seq_len)
-    actual_stacked_decode = multichip.decode_forward(actual_decode, stack_key, stack_value, current_pos=seq_len)
+    actual_stacked_decode = stacked_multichip.decode_forward(actual_decode, stack_key, stack_value, current_pos=seq_len)
     ttnn.synchronize_device(mesh_device)
     _assert_pcc(
         reference["stacked_decode"],
@@ -1147,6 +1182,8 @@ def test_multichip_fused_matmul_reduce_scatter_probe(mesh_device):
 
 def _variant_config() -> MultiChipConfig:
     variant = os.environ.get("MULTICHIP_DECODER_VARIANT", "default")
+    if variant == "default":
+        return MultiChipConfig()
     optimized = OptimizationConfig(
         decode_matmul_strategy="dram_sharded",
         qkv_cores=16,
@@ -1156,8 +1193,31 @@ def _variant_config() -> MultiChipConfig:
         residual_cores=16,
     )
     collective_dtype = ttnn.bfloat16
+    decode_collective_dtype = None
+    prefill_sharded_norm = False
+    advisor_qkv_cores = 48
+    advisor_qkv_in0_block_w = 8
+    advisor_other_in0_block_w = 8
+    advisor_output_in0_block_w = None
+    advisor_gate_up_in0_block_w = None
+    advisor_down_in0_block_w = None
+    advisor_output_per_core_n = 2
+    advisor_gate_up_per_core_n = 2
+    advisor_down_per_core_n = 2
+    advisor_output_out_subblock_w = 2
+    advisor_gate_up_out_subblock_w = 2
+    advisor_down_out_subblock_w = 2
+    advisor_output_grid = (11, 6)
+    advisor_gate_up_grid = (11, 6)
+    advisor_down_grid = (11, 6)
     num_links = 2
-    if variant == "geometry16":
+    decode_all_reduce_strategy = "composite"
+    minimal_all_reduce_buffer_count = 1
+    minimal_all_reduce_use_noc1_only = False
+    minimal_all_reduce_use_optimal_ccl_for_llama = False
+    if variant == "legacy_composite":
+        pass
+    elif variant == "geometry16":
         optimized = optimized.with_changes(
             qkv_cores=16, output_cores=16, gate_up_cores=16, down_cores=16, residual_cores=16
         )
@@ -1202,12 +1262,242 @@ def _variant_config() -> MultiChipConfig:
         )
     elif variant == "interleaved_1d":
         optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
-    elif variant != "default":
+    elif variant == "minimal_all_reduce_advisor_1d":
+        decode_all_reduce_strategy = "minimal"
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_1d_sharded_prefill_norm":
+        decode_all_reduce_strategy = "minimal"
+        prefill_sharded_norm = True
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_1d_in0_16":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_in0_block_w = 16
+        advisor_other_in0_block_w = 16
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_1d_qkv24":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_1d_qkv24_in0_16":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_other_in0_block_w = 16
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_1d_qkv24_qkv_in0_16":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_packed_gate_up":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_gate_up_per_core_n = 4
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d", packed_gate_up=True)
+    elif variant == "cumulative_qkv32_packed_gate_up":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 32
+        advisor_gate_up_per_core_n = 4
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d", packed_gate_up=True)
+    elif variant == "final_advisor_qkv_k32":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 32
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_qkv_k64":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 64
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_output_k32":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_output_in0_block_w = 32
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "cumulative_qkv32_output_k32":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 32
+        advisor_output_in0_block_w = 32
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_output_core32":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_output_in0_block_w = 16
+        advisor_output_per_core_n = 4
+        advisor_output_out_subblock_w = 4
+        advisor_output_grid = (8, 4)
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_output_subblock1":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_output_out_subblock_w = 1
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "cumulative_qkv32_output_subblock1":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 32
+        advisor_output_out_subblock_w = 1
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_gate_core28":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_gate_up_in0_block_w = 16
+        advisor_gate_up_per_core_n = 4
+        advisor_gate_up_out_subblock_w = 4
+        advisor_gate_up_grid = (7, 4)
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_gate_k32":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_gate_up_in0_block_w = 32
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_gate_k64":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_gate_up_in0_block_w = 64
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_gate_core16_nonpower_n":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_gate_up_in0_block_w = 16
+        advisor_gate_up_per_core_n = 7
+        advisor_gate_up_out_subblock_w = 1
+        advisor_gate_up_grid = (8, 2)
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_gate_subblock1":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_gate_up_out_subblock_w = 1
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_down_core32_nonpower_k14":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_down_in0_block_w = 14
+        advisor_down_per_core_n = 4
+        advisor_down_out_subblock_w = 4
+        advisor_down_grid = (8, 4)
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_down_core16_nonpower_k28":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_down_in0_block_w = 28
+        advisor_down_per_core_n = 8
+        advisor_down_out_subblock_w = 4
+        advisor_down_grid = (8, 2)
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_down_k56":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_down_in0_block_w = 56
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "final_advisor_down_subblock1":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 16
+        advisor_down_out_subblock_w = 1
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "cumulative_qkv32_down_subblock1":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_qkv_in0_block_w = 32
+        advisor_down_out_subblock_w = 1
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_1d_qkv24_other_in0_16":
+        decode_all_reduce_strategy = "minimal"
+        advisor_qkv_cores = 24
+        advisor_other_in0_block_w = 16
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_1d_bfp8":
+        decode_all_reduce_strategy = "minimal"
+        decode_collective_dtype = ttnn.bfloat8_b
+        optimized = optimized.with_changes(decode_matmul_strategy="advisor_1d")
+    elif variant == "minimal_all_reduce_advisor_exact":
+        decode_all_reduce_strategy = "minimal"
+        optimized = optimized.with_changes(
+            decode_matmul_strategy="advisor_1d",
+            advisor_exact_residual_chain=True,
+            residual_cores=64,
+        )
+    elif variant == "minimal_all_reduce_advisor_exact_bfp8":
+        decode_all_reduce_strategy = "minimal"
+        decode_collective_dtype = ttnn.bfloat8_b
+        optimized = optimized.with_changes(
+            decode_matmul_strategy="advisor_1d",
+            advisor_exact_residual_chain=True,
+            residual_cores=64,
+        )
+    elif variant == "minimal_all_reduce_bfp8_packed_gate_up":
+        decode_all_reduce_strategy = "minimal"
+        decode_collective_dtype = ttnn.bfloat8_b
+        optimized = optimized.with_changes(packed_gate_up=True)
+    elif variant == "minimal_all_reduce":
+        decode_all_reduce_strategy = "minimal"
+    elif variant == "minimal_all_reduce_residual32":
+        decode_all_reduce_strategy = "minimal"
+        optimized = optimized.with_changes(residual_cores=32)
+    elif variant == "minimal_all_reduce_residual64":
+        decode_all_reduce_strategy = "minimal"
+        optimized = optimized.with_changes(residual_cores=64)
+    elif variant == "minimal_all_reduce_double_buffer":
+        decode_all_reduce_strategy = "minimal"
+        minimal_all_reduce_buffer_count = 2
+    elif variant == "minimal_all_reduce_optimal_workers":
+        decode_all_reduce_strategy = "minimal"
+        minimal_all_reduce_use_optimal_ccl_for_llama = True
+    elif variant == "minimal_all_reduce_noc1":
+        decode_all_reduce_strategy = "minimal"
+        minimal_all_reduce_use_noc1_only = True
+    elif variant == "minimal_all_reduce_link1":
+        decode_all_reduce_strategy = "minimal"
+        num_links = 1
+    elif variant == "minimal_all_reduce_bfp8":
+        decode_all_reduce_strategy = "minimal"
+        decode_collective_dtype = ttnn.bfloat8_b
+    else:
         raise ValueError(f"Unknown MULTICHIP_DECODER_VARIANT={variant!r}")
-    return MultiChipConfig(optimized=optimized, collective_dtype=collective_dtype, num_links=num_links)
+    return MultiChipConfig(
+        optimized=optimized,
+        collective_dtype=collective_dtype,
+        decode_collective_dtype=decode_collective_dtype,
+        prefill_sharded_norm=prefill_sharded_norm,
+        advisor_qkv_cores=advisor_qkv_cores,
+        advisor_qkv_in0_block_w=advisor_qkv_in0_block_w,
+        advisor_other_in0_block_w=advisor_other_in0_block_w,
+        advisor_output_in0_block_w=advisor_output_in0_block_w,
+        advisor_gate_up_in0_block_w=advisor_gate_up_in0_block_w,
+        advisor_down_in0_block_w=advisor_down_in0_block_w,
+        advisor_output_per_core_n=advisor_output_per_core_n,
+        advisor_gate_up_per_core_n=advisor_gate_up_per_core_n,
+        advisor_down_per_core_n=advisor_down_per_core_n,
+        advisor_output_out_subblock_w=advisor_output_out_subblock_w,
+        advisor_gate_up_out_subblock_w=advisor_gate_up_out_subblock_w,
+        advisor_down_out_subblock_w=advisor_down_out_subblock_w,
+        advisor_output_grid=advisor_output_grid,
+        advisor_gate_up_grid=advisor_gate_up_grid,
+        advisor_down_grid=advisor_down_grid,
+        num_links=num_links,
+        decode_all_reduce_strategy=decode_all_reduce_strategy,
+        minimal_all_reduce_buffer_count=minimal_all_reduce_buffer_count,
+        minimal_all_reduce_use_noc1_only=minimal_all_reduce_use_noc1_only,
+        minimal_all_reduce_use_optimal_ccl_for_llama=minimal_all_reduce_use_optimal_ccl_for_llama,
+    )
 
 
-def _trace_latency(mesh_device, forward, replay_count: int):
+def _trace_latency(mesh_device, forward, replay_count: int, *, replay_signpost: str | None = None):
     forward()
     ttnn.synchronize_device(mesh_device)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -1215,11 +1505,16 @@ def _trace_latency(mesh_device, forward, replay_count: int):
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     try:
+        if replay_signpost is not None:
+            signpost(header=replay_signpost)
         start = time.perf_counter()
         for _ in range(replay_count):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        return (time.perf_counter() - start) * 1000.0 / replay_count, output
+        replay_ms = (time.perf_counter() - start) * 1000.0 / replay_count
+        if replay_signpost is not None:
+            signpost(header=f"{replay_signpost}_END")
+        return replay_ms, output
     finally:
         ttnn.release_trace(mesh_device, trace_id)
 
@@ -1236,7 +1531,25 @@ def test_single_chip_warmed_perf_reference(mesh_device):
     prefill_repeats = int(os.environ.get("MULTICHIP_DECODER_PREFILL_REPEATS", "10"))
     trace_replays = int(os.environ.get("MULTICHIP_DECODER_TRACE_REPLAYS", "100"))
     variant = os.environ.get("MULTICHIP_DECODER_VARIANT", "default")
-    config, state, baseline = _build_baseline(mesh_device, batch=batch, multichip_config=_variant_config())
+    # Keep one invariant accepted single-chip reference across every TP4
+    # candidate.  Applying a TP4 decode-layout experiment to this warm-up
+    # changes both the PCC oracle and the thermal history before multi-chip
+    # prefill, which makes paired candidate timings incomparable.
+    config, state, baseline = _build_baseline(
+        mesh_device,
+        batch=batch,
+        multichip_config=MultiChipConfig(
+            optimized=OptimizationConfig(
+                decode_matmul_strategy="dram_sharded",
+                qkv_cores=16,
+                output_cores=16,
+                gate_up_cores=16,
+                down_cores=16,
+                residual_cores=16,
+            ),
+            decode_all_reduce_strategy="composite",
+        ),
+    )
     single_key, single_value = _single_caches(config, mesh_device, batch=batch, dtype=ttnn.bfloat8_b)
     generator = torch.Generator().manual_seed(2026)
     prefill_host = torch.randn((1, batch, seq_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
@@ -1259,6 +1572,7 @@ def test_single_chip_warmed_perf_reference(mesh_device):
         mesh_device,
         lambda: baseline.decode_forward(single_decode, single_key, single_value, current_pos=seq_len),
         trace_replays,
+        replay_signpost="PERF_SINGLE_DECODE_REPLAY",
     )
     signpost(header="PERF_SINGLE_DECODE_END")
 
@@ -1311,11 +1625,13 @@ def test_single_and_multichip_warmed_perf(mesh_device):
     multi_prefill_ms = (time.perf_counter() - start) * 1000.0 / prefill_repeats
     signpost(header="PERF_MULTI_PREFILL_END")
 
+    multichip.prepare_decode()
     signpost(header="PERF_MULTI_DECODE")
     multi_decode_ms, multi_output = _trace_latency(
         mesh_device,
         lambda: multichip.decode_forward(mesh_decode, mesh_key, mesh_value, current_pos=seq_len),
         trace_replays,
+        replay_signpost="PERF_MULTI_DECODE_REPLAY",
     )
     signpost(header="PERF_MULTI_DECODE_END")
     _assert_pcc(reference["output"], _replicated_host(multi_output), 0.99, f"perf {variant} output")

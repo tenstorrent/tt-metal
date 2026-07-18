@@ -249,8 +249,6 @@ class OptimizedDecoder(FunctionalDecoder):
             raise ValueError("advisor_exact_residual_chain requires decode_matmul_strategy='advisor_1d'")
         if 5 % optimization_config.advisor_gate_up_out_subblock_w:
             raise ValueError("advisor_gate_up_out_subblock_w must divide per_core_N=5")
-        if self.use_advisor_1d and optimization_config.packed_gate_up:
-            raise ValueError("The advisor_1d capture describes separate gate/up projections")
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         padded_rows = TILE_SIZE * math.ceil(self.batch / TILE_SIZE)
 
@@ -299,10 +297,11 @@ class OptimizedDecoder(FunctionalDecoder):
             self.output_decode_program_config = _advisor_matmul_program_config(
                 grid=(11, 6), in0_block_w=8, per_core_n=2, out_subblock_w=2
             )
+            gate_up_per_core_n = 10 if optimization_config.packed_gate_up else 5
             self.gate_up_decode_program_config = _advisor_matmul_program_config(
                 grid=(11, 9),
                 in0_block_w=2,
-                per_core_n=5,
+                per_core_n=gate_up_per_core_n,
                 out_subblock_w=optimization_config.advisor_gate_up_out_subblock_w,
             )
             self.down_decode_program_config = _advisor_matmul_program_config(
@@ -312,11 +311,16 @@ class OptimizedDecoder(FunctionalDecoder):
                 rows=padded_rows, width=6144, cores=96, grid=(11, 9)
             )
             self.advisor_gate_up_output_mem_config = _advisor_width_sharded_l1(
-                rows=padded_rows, width=self.intermediate_size, cores=90, grid=(11, 9)
+                rows=padded_rows,
+                width=self.intermediate_size * (2 if optimization_config.packed_gate_up else 1),
+                cores=90,
+                grid=(11, 9),
             )
             self.advisor_residual_output_mem_config = _advisor_width_sharded_l1(
                 rows=padded_rows, width=self.hidden_size, cores=64, grid=(11, 6)
             )
+            self.advisor_output_projection_mem_config = self.advisor_residual_output_mem_config
+            self.advisor_down_output_mem_config = self.advisor_residual_output_mem_config
             self.advisor_input_norm_mem_config = _advisor_block_sharded_l1(
                 rows=padded_rows, width=self.hidden_size, cores=11, grid=(11, 1)
             )
@@ -652,8 +656,13 @@ class OptimizedDecoder(FunctionalDecoder):
         )
 
     def _mlp_decode(self, hidden_states):
+        gate_weight = getattr(self, "decode_gate_weight", self.gate_weight)
+        up_weight = getattr(self, "decode_up_weight", self.up_weight)
+        down_weight = getattr(self, "decode_down_weight", self.down_weight)
         if self.use_advisor_exact_chain:
-            mlp_input_mem_config = self.advisor_post_norm_mem_config
+            # The advisor keeps the norm output width-sharded, then explicitly
+            # reshards it to L1 interleaved for both gate/up matmuls.
+            mlp_input_mem_config = ttnn.L1_MEMORY_CONFIG
         elif self.use_advisor_1d:
             mlp_input_mem_config = ttnn.L1_MEMORY_CONFIG
         else:
@@ -665,7 +674,7 @@ class OptimizedDecoder(FunctionalDecoder):
         if self.optimization_config.packed_gate_up:
             gate_up = ttnn.linear(
                 mlp_input,
-                self.gate_weight,
+                gate_weight,
                 dtype=ttnn.bfloat16,
                 memory_config=projection_output_mem_config,
                 program_config=self.gate_up_decode_program_config,
@@ -686,12 +695,13 @@ class OptimizedDecoder(FunctionalDecoder):
                 [1, 1, 1, 1],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            gate = ttnn.to_memory_config(gate, self.down_input_mem_config)
-            up = ttnn.to_memory_config(up, self.down_input_mem_config)
+            if not self.use_advisor_1d:
+                gate = ttnn.to_memory_config(gate, self.down_input_mem_config)
+                up = ttnn.to_memory_config(up, self.down_input_mem_config)
         else:
             gate = ttnn.linear(
                 mlp_input,
-                self.gate_weight,
+                gate_weight,
                 dtype=ttnn.bfloat16,
                 memory_config=projection_output_mem_config,
                 program_config=self.gate_up_decode_program_config,
@@ -699,7 +709,7 @@ class OptimizedDecoder(FunctionalDecoder):
             )
             up = ttnn.linear(
                 mlp_input,
-                self.up_weight,
+                up_weight,
                 dtype=ttnn.bfloat16,
                 memory_config=projection_output_mem_config,
                 program_config=self.gate_up_decode_program_config,
@@ -710,10 +720,17 @@ class OptimizedDecoder(FunctionalDecoder):
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
-            memory_config=projection_output_mem_config,
+            memory_config=(
+                ttnn.L1_MEMORY_CONFIG
+                if self.use_advisor_1d and self.optimization_config.packed_gate_up
+                else projection_output_mem_config
+            ),
         )
         if self.use_advisor_exact_chain:
-            gated_mem_config = self.advisor_down_input_mem_config
+            # Likewise, the gated activation is interleaved before the advised
+            # 1-D down projection; its 56-way output shard is not a legal K
+            # shard for in0_block_w=8.
+            gated_mem_config = ttnn.L1_MEMORY_CONFIG
         elif self.use_advisor_1d:
             gated_mem_config = ttnn.L1_MEMORY_CONFIG
         else:
@@ -721,10 +738,10 @@ class OptimizedDecoder(FunctionalDecoder):
         gated = ttnn.to_memory_config(gated, gated_mem_config)
         down = ttnn.linear(
             gated,
-            self.down_weight,
+            down_weight,
             dtype=ttnn.bfloat16,
             memory_config=(
-                self.advisor_residual_output_mem_config if self.use_advisor_1d else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+                self.advisor_down_output_mem_config if self.use_advisor_1d else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
             ),
             program_config=self.down_decode_program_config,
             compute_kernel_config=self.down_compute_kernel,
@@ -893,7 +910,7 @@ class OptimizedDecoder(FunctionalDecoder):
         normed = ttnn.to_memory_config(normed, qkv_input_mem_config)
         fused_qkv = ttnn.linear(
             normed,
-            self.qkv_weight,
+            getattr(self, "decode_qkv_weight", self.qkv_weight),
             dtype=ttnn.bfloat16,
             memory_config=(
                 self.advisor_qkv_output_mem_config if self.use_advisor_1d else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
@@ -992,10 +1009,12 @@ class OptimizedDecoder(FunctionalDecoder):
         )
         attention = ttnn.linear(
             attention,
-            self.output_weight,
+            getattr(self, "decode_output_weight", self.output_weight),
             dtype=ttnn.bfloat16,
             memory_config=(
-                self.advisor_residual_output_mem_config if self.use_advisor_1d else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+                self.advisor_output_projection_mem_config
+                if self.use_advisor_1d
+                else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
             ),
             program_config=self.output_decode_program_config,
             compute_kernel_config=self.attention_compute_kernel,

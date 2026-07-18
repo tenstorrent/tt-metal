@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="2" time="10.436" timestamp="2026-07-18T13:35:14.098512+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_multichip_decoder" name="test_single_chip_warmed_perf_reference[blackhole-blackhole-single-chip-reference]" time="4.327"><properties><property name="start_timestamp" value="2026-07-18T13:35:14" /><property name="end_timestamp" value="2026-07-18T13:35:19" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+SINGLE_CHIP_PERF_REFERENCE variant=default batch=1 seq=18 single_prefill_ms=1.242665 single_decode_ms=0.580907 prefill_repeats=100 trace_replays=1000
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 13:35:15.675 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 13:35:15.675 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 13:35:16.343 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-18 13:35:18.099 | INFO     | tracy:signpost:49 - PERF_SINGLE_PREFILL
+2026-07-18 13:35:18.224 | INFO     | tracy:signpost:49 - PERF_SINGLE_PREFILL_END
+2026-07-18 13:35:18.224 | INFO     | tracy:signpost:49 - PERF_SINGLE_DECODE
+2026-07-18 13:35:18.835 | INFO     | tracy:signpost:49 - PERF_SINGLE_DECODE_END
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_multichip_decoder" name="test_single_and_multichip_warmed_perf[blackhole-p300-1x4-ring]" time="5.341"><properties><property name="start_timestamp" value="2026-07-18T13:35:19" /><property name="end_timestamp" value="2026-07-18T13:35:24" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+perf default output: 0.9999998069059012
+MULTICHIP_PERF_RESULT variant=default batch=1 seq=18 single_prefill_ms=1.242665 multi_prefill_ms=0.804061 prefill_speedup=1.545485 prefill_efficiency=0.386371 single_decode_ms=0.580907 multi_decode_ms=0.247560 decode_speedup=2.346530 decode_efficiency=0.586633 prefill_repeats=100 trace_replays=1000
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-18 13:35:19.398 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-18 13:35:19.398 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-18 13:35:20.112 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-18 13:35:22.097 | INFO     | tracy:signpost:49 - PERF_MULTI_PREFILL
+2026-07-18 13:35:22.178 | INFO     | tracy:signpost:49 - PERF_MULTI_PREFILL_END
+2026-07-18 13:35:23.887 | INFO     | tracy:signpost:49 - PERF_MULTI_DECODE
+2026-07-18 13:35:24.170 | INFO     | tracy:signpost:49 - PERF_MULTI_DECODE_END
+
+</system-err></testcase></testsuite></testsuites>
