@@ -31,7 +31,6 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
 
     auto ashape_arr = a_shape.to_array_4D();
     [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
-    assert((N == 1));  // one sequence per batch
 
     // one gain parameter per channel
     assert((gamma->get_value().logical_shape().to_array_4D() == std::array<uint32_t, 4>{1, 1, 1, C}));
