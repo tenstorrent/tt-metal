@@ -103,7 +103,7 @@ def test_quasar_global_avgpool(mesh_device, channels, cid):
         output_layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         compute_kernel_config=ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4  # [DIAG A/B] was LoFi; testing GAPOOL gain vs fidelity
         ),
     )
     ttnn.synchronize_device(device)
@@ -208,7 +208,7 @@ def test_quasar_avgpool_bias_probe(mesh_device, fill):
         output_layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         compute_kernel_config=ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4  # [DIAG A/B] was LoFi; testing GAPOOL gain vs fidelity
         ),
     )
     ttnn.synchronize_device(device)

@@ -10,7 +10,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [DIAG avgpool x1.15] remove after
+#include "api/debug/dprint.h"        // [DIAG avgpool x1.15] remove after
+#include "api/debug/dprint_pages.h"  // [DIAG avgpool x1.15] print_full_tile — remove after
 
 void kernel_main() {
     uint32_t Ht = get_arg(args::Ht);
@@ -29,18 +30,6 @@ void kernel_main() {
 #endif
 
     compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
-
-    // [DIAG avgpool x1.15 -- remove after] The DECISIVE read: what scaler value did the reader actually
-    // pack into the GAPOOL SrcB CB? bf16 1.0 = 16256 (0x3f80) => the scaler=1.0 workaround reached GAPOOL
-    // (so a x1.1504 gain would be a GAPOOL-HW issue even at SrcB=1.0 -> LLK/HW ticket). bf16 1/49 = 15527
-    // (0x3ca7) => the workaround did NOT propagate; GAPOOL sees the fractional scaler and quantizes it to
-    // 3/128 (=x1.1504) -> the fix is app-side (make the reduce truly use 1.0 + external post-mul).
-    {
-        DataflowBuffer scaler_cb(dfb::scaler);
-        scaler_cb.wait_front(1);
-        volatile tt_l1_ptr uint16_t* sp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scaler_cb.get_read_ptr());
-        UNPACK(DPRINT("SCALER_CB s0={} s1={} s16={}\n", (uint32_t)sp[0], (uint32_t)sp[1], (uint32_t)sp[16]));
-    }
 
     compute_kernel_lib::reduce<
         REDUCE_OP,
@@ -63,6 +52,18 @@ void kernel_main() {
         compute_kernel_lib::NoOp{}
 #endif
     );
+
+    // [DIAG avgpool x1.15 -- remove after] Dump the ACTUAL GAPOOL SrcB scaler tile the reduce just
+    // consumed (proper untilized readout; no wait_front, the reduce already has it front-valid -> no hang).
+    // The scaler lives in row 0 of each face. If those read ~1.0 => GAPOOL saw scaler=1.0 and the x1.1504
+    // is a GAPOOL-HW gain (mechanism B, LLK/HW). If ~0.0204 (1/49) => GAPOOL saw the fractional scaler and
+    // quantized it to 3/128 (mechanism A). Also dumps the reduced output tile for context.
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+    PACK(DPRINT("SCALER_TILE (GAPOOL SrcB):\n"));
+    PACK(tt::compute::common::print_full_tile(dfb::scaler, 0, true));
+    PACK(DPRINT("OUT_TILE (reduced result):\n"));
+    PACK(tt::compute::common::print_full_tile(dfb::out, 0, true));
+#endif
 
     // The reduce helper waits on the scaler DFB but never pops it (the single scaler tile is reused for
     // the whole reduction). Pop it here so the DFB is left balanced.
