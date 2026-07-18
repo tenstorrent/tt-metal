@@ -30,9 +30,11 @@ struct InterleavedToShardedPartialDeviceOperation {
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 
     // slice_index feeds only the runtime read-offset starting_idx_h and is excluded from the program
-    // hash, so it must be re-applied on every cache hit (the reader/writer args baked at build time
-    // otherwise stay frozen at the first slice, reading the wrong slice of the input).
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // hash, so cache hits for a different slice must re-derive the per-dispatch args (otherwise the
+    // reader/writer args baked at first miss stay frozen at the first slice). Re-run create_descriptor
+    // (single source of truth) and re-apply its per-core args + tensor-backed CB addresses.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const Tensor& input_tensor,
         tensor_return_value_t& output,
