@@ -407,17 +407,20 @@ _1X1_CASES = [
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("case", _1X1_CASES, ids=[c["cid"] for c in _1X1_CASES])
-def test_quasar_gap_1x1_matmul_conv(mesh_device, case):
-    """GAP 4 — 1x1 conv on the plain mm_conv/matmul path (the model's bottleneck 1x1s), with bias+relu.
+@pytest.mark.parametrize("with_bias_relu", [False, True], ids=["pure", "bias_relu"])
+def test_quasar_gap_1x1_matmul_conv(mesh_device, case, with_bias_relu):
+    """GAP 4 — 1x1 conv on the plain mm_conv/matmul path (the model's bottleneck 1x1s).
 
     De-risks the model run: 1x1 convs bypass the split and go straight to the Quasar matmul (tilize activation
-    + linear). If the Quasar matmul-conv path (or its tilize / fused bias) fails here, the model can't run even
-    with all 3x3 gaps closed. FIX DIRECTION (if it fails): whichever sub-path breaks — the mm_conv tilize 0x19,
-    the matmul, or the fused bias.
+    + linear). Parametrized pure vs bias_relu to ISOLATE: on Quasar, in256_out128_reduce HANGS with bias in the
+    matmul fused-bias MCAST (sender reaches 'SEND bias acked' then stalls in the bias data/VALID multicast;
+    receiver never gets bias VALID), while in64_out256_expand + bias passes -- likely the same timing-marginal
+    fused-bias mcast as the earlier wide-N case. If pure passes and bias hangs, the fix is the sender's bias
+    multicast in reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp (data or VALID broadcast).
     """
     _run(
         mesh_device,
-        with_bias_relu=True,
+        with_bias_relu=with_bias_relu,
         in_channels=case["in_channels"],
         out_channels=case["out_channels"],
         kernel_size=(1, 1),
