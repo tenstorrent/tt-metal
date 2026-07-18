@@ -351,6 +351,42 @@ class DistributedCollectivePlan:
     rhs_shard_dim: int | None = None
 
 
+@dataclasses.dataclass
+class WeightPlacement:
+    """Result of ``place_weight``: a device-placed weight plus the distribution
+    decision the module made and the measured evidence behind it.
+
+    ``tensor`` is the placed ``ttnn.Tensor`` ready to hand to ``ttnn.matmul`` /
+    ``ttnn.linear``.  ``strategy`` is the placement that was carried out
+    (``"replicate"`` or ``"shard_k"``).  ``output_is_sharded`` is True when the
+    chosen placement produces a reduce-scattered (row-parallel) output rather
+    than a full output on every device, so the caller knows the result layout.
+    ``verified`` records whether the chosen placement was checked against a torch
+    ground-truth reference on-device."""
+
+    tensor: Any
+    strategy: str
+    shard_dim: int | None = None
+    cluster_axis: int | None = None
+    mesh_shape: tuple[int, ...] = ()
+    output_is_sharded: bool = False
+    verified: bool = False
+    candidate_timings: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    recommendations: list[str] = dataclasses.field(default_factory=list)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "strategy": self.strategy,
+            "shard_dim": self.shard_dim,
+            "cluster_axis": self.cluster_axis,
+            "mesh_shape": list(self.mesh_shape),
+            "output_is_sharded": self.output_is_sharded,
+            "verified": self.verified,
+            "candidate_timings": list(self.candidate_timings),
+            "recommendations": list(self.recommendations),
+        }
+
+
 def _get_default_version() -> str:
     override = os.environ.get("TTNN_AUTO_MATMUL_VERSION")
     if override:
@@ -944,6 +980,25 @@ def _infer_distributed_plan(signature: AutoMatmulSignature) -> DistributedCollec
     rhs_k_dim = len(rhs_shape) - 1 if signature.transpose_b else len(rhs_shape) - 2
     lhs_shard_axis = _topology_shard_axis_for_dim(lhs_topology, lhs_k_dim)
     rhs_shard_axis = _topology_shard_axis_for_dim(rhs_topology, rhs_k_dim)
+
+    # Both operands sharded along their contraction dim on the same mesh axis:
+    # device i holds X[..., k_i] and W[k_i, ...], so the local matmul yields a
+    # partial sum that must be reduce-scattered across devices (row-parallel /
+    # tensor-parallel).  This is detected before the lhs-only all-gather case,
+    # which would otherwise gather X to full K and multiply it against a
+    # K-sharded W — a silent shape/semantic error.  This is the topology
+    # ``place_weight`` produces when it shards a host weight on K to match a
+    # K-sharded activation.
+    if lhs_shard_axis is not None and rhs_shard_axis is not None and lhs_shard_axis == rhs_shard_axis:
+        output_rank = len(_extract_output_shape(lhs_shape, rhs_shape, signature.transpose_a, signature.transpose_b))
+        return DistributedCollectivePlan(
+            kind="matmul_before_reduce_scatter",
+            collective_dim=output_rank - 1,
+            cluster_axis=rhs_shard_axis,
+            distribution_factor=_topology_distribution_factor(rhs_topology, rhs_shard_axis),
+            lhs_shard_dim=lhs_k_dim,
+            rhs_shard_dim=rhs_k_dim,
+        )
 
     if lhs_shard_axis is not None:
         return DistributedCollectivePlan(
@@ -2218,6 +2273,457 @@ def _run_base_operation(
     if is_linear:
         return base_operation(input_tensor_a, input_tensor_b, bias=bias, **forwarded)
     return base_operation(input_tensor_a, input_tensor_b, **forwarded)
+
+
+def _device_mesh_shape(device: Any) -> tuple[int, ...]:
+    shape_obj = getattr(device, "shape", (1,))
+    if hasattr(shape_obj, "dims"):
+        return tuple(int(shape_obj[i]) for i in range(shape_obj.dims()))
+    try:
+        return tuple(int(dim) for dim in shape_obj)
+    except TypeError:
+        return (1,)
+
+
+def _device_num_devices(device: Any) -> int:
+    return int(getattr(device, "get_num_devices", lambda: 1)())
+
+
+def _resolve_placement_device(activation: Any, mesh_device: Any) -> Any:
+    if mesh_device is not None:
+        return mesh_device
+    ttnn = _ttnn()
+    if isinstance(activation, ttnn.Tensor):
+        return activation.device()
+    raise ValueError("place_weight requires either `activation` (a ttnn.Tensor on device) or `mesh_device`.")
+
+
+def _activation_k_shard(activation: Any, transpose_a: bool) -> tuple[int | None, int, int | None]:
+    """Describe how the activation is sharded along its contraction (K) dim.
+
+    Returns ``(cluster_axis, distribution_factor, normalized_k_dim)``.  The
+    cluster axis is None when the activation is not sharded on K."""
+    ttnn = _ttnn()
+    if not isinstance(activation, ttnn.Tensor):
+        return None, 1, None
+    rank = len(_shape_to_tuple(getattr(activation, "shape", ())))
+    if rank < 2:
+        return None, 1, None
+    k_dim = rank - 2 if transpose_a else rank - 1
+    normalized_k = _normalize_dim(k_dim, rank)
+    topology = _serialize_topology(activation)
+    axis = _topology_shard_axis_for_dim(topology, normalized_k)
+    if axis is None:
+        return None, 1, normalized_k
+    return axis, _topology_distribution_factor(topology, axis), normalized_k
+
+
+def _weight_contraction_dim(weight_shape: tuple[int, ...], transpose_b: bool) -> int:
+    rank = len(weight_shape)
+    return rank - 1 if transpose_b else rank - 2
+
+
+def _resolve_weight_dtype(dtype: Any, activation: Any) -> Any:
+    if dtype is not None:
+        return dtype
+    act_dtype = getattr(activation, "dtype", None)
+    if act_dtype is not None:
+        return act_dtype
+    return _ttnn().bfloat16
+
+
+def _make_shard_to_mesh_mapper(
+    device: Any, *, weight_k_dim: int, cluster_axis: int | None, mesh_shape: tuple[int, ...]
+) -> Any:
+    ttnn = _ttnn()
+    non_unit_axes = [index for index, dim in enumerate(mesh_shape) if int(dim) > 1]
+    if len(mesh_shape) <= 1 or len(non_unit_axes) <= 1 or cluster_axis is None:
+        return ttnn.ShardTensorToMesh(device, dim=weight_k_dim)
+    dims: list[int | None] = [None, None]
+    dims[cluster_axis] = weight_k_dim
+    return ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(int(dim) for dim in mesh_shape), dims=tuple(dims))
+
+
+def _stage_weight(
+    weight: Any, device: Any, *, role: str, dtype: Any, layout: Any, memory_config: Any, mesh_mapper: Any
+) -> Any:
+    ttnn = _ttnn()
+    return ttnn.as_tensor(
+        weight,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        mesh_mapper=mesh_mapper,
+        memory_config=memory_config,
+        cache_file_name=_host_tensor_cache_name(role, weight, dtype),
+    )
+
+
+def _placement_reference_output(
+    activation: Any,
+    weight_host: Any,
+    *,
+    transpose_a: bool,
+    transpose_b: bool,
+    k_shard_axis: int | None,
+    k_dim: int | None,
+) -> Any:
+    """Trusted torch ground-truth ``activation @ weight`` (flattened float32).
+
+    The host weight makes an independent reference possible even though the
+    distributed recipes are not internally correctness-gated.  Returns None if a
+    reference cannot be built, in which case sharded placements are not trusted."""
+    try:
+        import torch
+    except Exception:
+        return None
+    ttnn = _ttnn()
+    try:
+        if k_shard_axis is not None and k_dim is not None:
+            act_host = ttnn.to_torch(activation, mesh_composer=ttnn.ConcatMeshToTensor(activation.device(), dim=k_dim))
+        else:
+            shards = ttnn.get_device_tensors(activation)
+            act_host = ttnn.to_torch(shards[0] if shards else activation)
+        act_host = act_host.detach().to(torch.float32)
+        weight = (
+            weight_host.detach().to(torch.float32)
+            if torch.is_tensor(weight_host)
+            else torch.as_tensor(weight_host, dtype=torch.float32)
+        )
+        lhs = act_host.transpose(-1, -2) if transpose_a else act_host
+        rhs = weight.transpose(-1, -2) if transpose_b else weight
+        return (lhs @ rhs).flatten()
+    except Exception:
+        return None
+
+
+def _placed_output_to_host_flat(result: Any, device: Any, output_shard_dim: int | None) -> Any:
+    try:
+        import torch
+    except Exception:
+        return None
+    ttnn = _ttnn()
+    if isinstance(result, (list, tuple)):
+        result = result[0] if result else None
+    if result is None:
+        return None
+    try:
+        if output_shard_dim is not None:
+            host = ttnn.to_torch(result, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=output_shard_dim))
+        else:
+            shards = ttnn.get_device_tensors(result)
+            host = ttnn.to_torch(shards[0] if shards else result)
+        return host.detach().to(torch.float32).flatten()
+    except Exception:
+        return None
+
+
+def _winner_avg_us(selection: dict[str, Any]) -> float | None:
+    winner = selection.get("winner")
+    best: float | None = None
+    for entry in selection.get("candidate_timings_us", []):
+        if entry.get("status") != "ok":
+            continue
+        average_us = entry.get("average_us")
+        if average_us is None:
+            continue
+        if entry.get("descriptor") == winner and best is None:
+            best = average_us
+        if best is None or average_us < best:
+            best = average_us
+    return best
+
+
+def _measure_weight_placement(
+    activation: Any,
+    staged_weight: Any,
+    *,
+    transpose_a: bool,
+    transpose_b: bool,
+    is_linear: bool,
+    base_operation: Any,
+    reference_flat: Any,
+) -> dict[str, Any]:
+    """Run the measured selector for one staged weight placement and verify the
+    winner against the torch ground-truth reference."""
+    kwargs = {
+        "transpose_a": transpose_a,
+        "transpose_b": transpose_b,
+        "memory_config": None,
+        "dtype": None,
+        "activation": None,
+    }
+    signature = _build_signature(
+        activation,
+        staged_weight,
+        bias=None,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=None,
+        dtype=None,
+        activation=None,
+        is_linear=is_linear,
+    )
+    plan = _infer_distributed_plan(signature)
+    prepared = PreparedMatmulInputs(input_tensor_a=activation, input_tensor_b=staged_weight, bias=None)
+    selection = _select_candidate(signature, prepared, kwargs, base_operation=base_operation, allow_tuning=True)
+    output_is_sharded = plan.kind == "matmul_before_reduce_scatter"
+    verified = _verify_placement_output(
+        selection.get("candidate"),
+        activation.device(),
+        reference_flat,
+        output_shard_dim=plan.collective_dim if output_is_sharded else None,
+    )
+    return {
+        "avg_us": _winner_avg_us(selection),
+        "winner": selection.get("winner"),
+        "verified": verified,
+        "output_is_sharded": output_is_sharded,
+    }
+
+
+def _verify_placement_output(candidate: Any, device: Any, reference_flat: Any, *, output_shard_dim: int | None) -> bool:
+    if candidate is None or reference_flat is None:
+        return False
+    try:
+        _sync_device(device)
+        output = candidate.run()
+        _sync_device(device)
+    except Exception:
+        return False
+    try:
+        host = _placed_output_to_host_flat(output, device, output_shard_dim)
+    finally:
+        _deallocate_result(output)
+    return _outputs_match(reference_flat, host)
+
+
+def place_weight(
+    weight: Any,
+    *,
+    activation: Any = None,
+    mesh_device: Any = None,
+    transpose_a: bool = False,
+    transpose_b: bool = False,
+    is_linear: bool = False,
+    dtype: Any = None,
+    memory_config: Any = None,
+    layout: Any = None,
+    strategy: str = "auto",
+    measure: bool | None = None,
+) -> WeightPlacement:
+    """Place a host weight on the target device, choosing (and carrying out) the
+    distribution the module considers best for it.
+
+    The reviewer ask this answers: a user should not need to know how to shard a
+    weight across a mesh.  Hand ``place_weight`` a host ``torch.Tensor`` (plus the
+    activation it will multiply, or a ``mesh_device``) and it returns a placed
+    ``ttnn.Tensor`` ready for ``ttnn.matmul`` / ``ttnn.linear``.
+
+    On a single device the weight is replicated.  On a multi-device mesh, when the
+    activation is sharded along its contraction (K) dimension, ``place_weight``
+    measures both a replicated placement (all-gather recipe) and a K-sharded
+    placement (reduce-scatter / row-parallel recipe), verifies each against a
+    torch ground-truth reference, and returns the fastest *verified* one.  A
+    placement is never returned unless it was proven numerically correct, so the
+    worst case is a correct replicated weight.
+
+    Args:
+        weight: host ``torch.Tensor`` (or an already-placed ``ttnn.Tensor``).
+
+    Keyword Args:
+        activation: the ``ttnn.Tensor`` this weight will multiply.  Used to infer
+            the target device, K-sharding, and to build the correctness reference.
+        mesh_device: target device/mesh; required if ``activation`` is not given.
+        transpose_a / transpose_b: matches the eventual matmul/linear call.
+        is_linear: build linear (vs matmul) candidate recipes when measuring.
+        dtype / memory_config / layout: staging controls (sensible defaults).
+        strategy: ``"auto"`` (default), ``"replicate"``, or ``"shard_k"``.
+        measure: force measurement on/off.  Defaults to measuring on a
+            multi-device mesh when more than one placement is viable.
+
+    Returns:
+        WeightPlacement: the placed tensor plus the recorded decision.
+    """
+    ttnn = _ttnn()
+    device = _resolve_placement_device(activation, mesh_device)
+    num_devices = _device_num_devices(device)
+    mesh_shape = _device_mesh_shape(device)
+    layout = layout if layout is not None else ttnn.TILE_LAYOUT
+    memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    recommendations: list[str] = []
+
+    # An already-placed ttnn weight is respected as-is; place_weight only decides
+    # placement for host tensors it stages itself.
+    if isinstance(weight, ttnn.Tensor):
+        return WeightPlacement(
+            tensor=weight,
+            strategy="preplaced",
+            mesh_shape=mesh_shape,
+            recommendations=["Weight was already a device tensor; placement left unchanged."],
+        )
+
+    target_dtype = _resolve_weight_dtype(dtype, activation)
+
+    # Single device (or degenerate mesh): replication is the only placement.
+    if num_devices <= 1:
+        staged = _stage_weight(
+            weight,
+            device,
+            role="weight_replicate",
+            dtype=target_dtype,
+            layout=layout,
+            memory_config=memory_config,
+            mesh_mapper=None,
+        )
+        return WeightPlacement(tensor=staged, strategy="replicate", mesh_shape=mesh_shape)
+
+    k_shard_axis, _factor, k_dim = _activation_k_shard(activation, transpose_a)
+    weight_shape = _shape_to_tuple(getattr(weight, "shape", ()))
+    weight_k_dim = _weight_contraction_dim(weight_shape, transpose_b)
+
+    # Decide which placements are viable for this context.
+    want_replicate = strategy in ("auto", "replicate")
+    want_shard_k = strategy in ("auto", "shard_k")
+
+    shard_k_viable = False
+    if want_shard_k:
+        if k_shard_axis is None:
+            recommendations.append(
+                "Activation is not sharded along its contraction (K) dimension, so only a replicated "
+                "weight produces a full result with the v1 recipes. Shard the activation on K "
+                "(row-parallel) to let place_weight measure a reduce-scatter tensor-parallel placement."
+            )
+        elif len(weight_shape) < 2 or weight_shape[weight_k_dim] % max(1, int(mesh_shape[k_shard_axis])) != 0:
+            recommendations.append(
+                "Weight K dimension is not divisible by the mesh shard count; K-sharded placement skipped."
+            )
+        else:
+            shard_k_viable = True
+
+    # Build the placement staging plan.
+    placements: list[dict[str, Any]] = []
+    if want_replicate:
+        placements.append({"strategy": "replicate", "shard_dim": None, "mapper": ttnn.ReplicateTensorToMesh(device)})
+    if shard_k_viable:
+        placements.append(
+            {
+                "strategy": "shard_k",
+                "shard_dim": weight_k_dim,
+                "mapper": _make_shard_to_mesh_mapper(
+                    device, weight_k_dim=weight_k_dim, cluster_axis=k_shard_axis, mesh_shape=mesh_shape
+                ),
+            }
+        )
+    if not placements:
+        # strategy="shard_k" requested but not viable -> fall back to replicate.
+        placements.append({"strategy": "replicate", "shard_dim": None, "mapper": ttnn.ReplicateTensorToMesh(device)})
+
+    should_measure = measure if measure is not None else (isinstance(activation, ttnn.Tensor) and len(placements) > 1)
+
+    # Without measurement (or a single placement) just stage the first choice.
+    if not should_measure or len(placements) == 1:
+        choice = placements[0]
+        staged = _stage_weight(
+            weight,
+            device,
+            role=f"weight_{choice['strategy']}",
+            dtype=target_dtype,
+            layout=layout,
+            memory_config=memory_config,
+            mesh_mapper=choice["mapper"],
+        )
+        return WeightPlacement(
+            tensor=staged,
+            strategy=choice["strategy"],
+            shard_dim=choice["shard_dim"],
+            cluster_axis=k_shard_axis if choice["strategy"] == "shard_k" else None,
+            mesh_shape=mesh_shape,
+            output_is_sharded=choice["strategy"] == "shard_k",
+            recommendations=recommendations,
+        )
+
+    # Measured pick: stage each placement, measure + verify, keep the fastest
+    # verified one and deallocate the losers.
+    base_operation = _get_cpp_base_operation(is_linear)
+    reference_flat = _placement_reference_output(
+        activation,
+        weight,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        k_shard_axis=k_shard_axis,
+        k_dim=k_dim,
+    )
+    if reference_flat is None:
+        recommendations.append(
+            "Could not build a ground-truth reference; falling back to the replicated placement without measuring."
+        )
+
+    candidate_timings: list[dict[str, Any]] = []
+    staged_by_strategy: dict[str, Any] = {}
+    best: dict[str, Any] | None = None
+    for choice in placements:
+        staged = _stage_weight(
+            weight,
+            device,
+            role=f"weight_{choice['strategy']}",
+            dtype=target_dtype,
+            layout=layout,
+            memory_config=memory_config,
+            mesh_mapper=choice["mapper"],
+        )
+        staged_by_strategy[choice["strategy"]] = staged
+        measurement = (
+            {"avg_us": None, "winner": None, "verified": False, "output_is_sharded": choice["strategy"] == "shard_k"}
+            if reference_flat is None and choice["strategy"] != "replicate"
+            else _measure_weight_placement(
+                activation,
+                staged,
+                transpose_a=transpose_a,
+                transpose_b=transpose_b,
+                is_linear=is_linear,
+                base_operation=base_operation,
+                reference_flat=reference_flat,
+            )
+        )
+        candidate_timings.append(
+            {
+                "strategy": choice["strategy"],
+                "shard_dim": choice["shard_dim"],
+                "avg_us": measurement["avg_us"],
+                "verified": measurement["verified"],
+                "output_is_sharded": measurement["output_is_sharded"],
+                "winner": measurement["winner"],
+            }
+        )
+        eligible = measurement["verified"] and measurement["avg_us"] is not None
+        if eligible and (best is None or measurement["avg_us"] < best["avg_us"]):
+            best = {"choice": choice, **measurement}
+
+    if best is None:
+        # Nothing verified faster; the replicated placement is the safe default.
+        recommendations.append("No sharded placement verified faster; using the replicated placement.")
+        winner_strategy = "replicate" if "replicate" in staged_by_strategy else placements[0]["strategy"]
+    else:
+        winner_strategy = best["choice"]["strategy"]
+
+    winner_tensor = staged_by_strategy.get(winner_strategy)
+    for strategy_name, staged in staged_by_strategy.items():
+        if strategy_name != winner_strategy:
+            _deallocate_result(staged)
+
+    winner_choice = next(choice for choice in placements if choice["strategy"] == winner_strategy)
+    return WeightPlacement(
+        tensor=winner_tensor,
+        strategy=winner_strategy,
+        shard_dim=winner_choice["shard_dim"],
+        cluster_axis=k_shard_axis if winner_strategy == "shard_k" else None,
+        mesh_shape=mesh_shape,
+        output_is_sharded=winner_strategy == "shard_k",
+        verified=bool(best is not None),
+        candidate_timings=candidate_timings,
+        recommendations=recommendations,
+    )
 
 
 def dispatch_matmul(

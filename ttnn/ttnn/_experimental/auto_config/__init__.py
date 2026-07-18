@@ -3,8 +3,10 @@
 
 """Measured auto-configuration helpers exposed as ``ttnn.experimental.auto_config``."""
 
-from .matmul import explain_matmul
+from .matmul import WeightPlacement, explain_matmul, place_weight
 
 __all__ = [
+    "WeightPlacement",
     "explain_matmul",
+    "place_weight",
 ]

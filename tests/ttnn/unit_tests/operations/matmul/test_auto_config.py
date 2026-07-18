@@ -157,3 +157,38 @@ def test_explain_matmul_force_retune_picks_fastest_candidate_and_reuses_cache(mo
 
     assert cached["cache_hit"] is True
     assert cached["winner"] == tuned["winner"]
+
+
+def test_place_weight_single_device_places_host_weight_and_matmul_is_correct(device):
+    # The reviewer ask: hand the module a host torch weight and let it place the
+    # weight on device.  On a single device that is a replicated placement, and
+    # the returned tensor must be a correct drop-in for ttnn.linear.
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch_random((1, 1, 32, 64), -0.1, 0.1, dtype=torch.float32)
+    torch_weight = torch_random((64, 128), -0.1, 0.1, dtype=torch.float32)
+    torch_output_tensor = torch_input_tensor_a @ torch_weight
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    placement = ttnn.experimental.auto_config.place_weight(torch_weight, activation=input_tensor_a)
+
+    assert placement.strategy == "replicate"
+    assert placement.output_is_sharded is False
+    assert isinstance(placement.tensor, ttnn.Tensor)
+
+    output_tensor = ttnn.to_torch(ttnn.matmul(input_tensor_a, placement.tensor))
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.001 * 64,
+        rtol=0.016 * 64,
+        frobenius_threshold=0.001 * 64,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
