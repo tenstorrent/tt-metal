@@ -37,11 +37,10 @@ struct RollDeviceOperation {
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 
-    // DRAM sharded roll bakes per-shard buffer addresses (base + shard offset) into the reader runtime
-    // args; those change every dispatch and cannot be plain Buffer* bindings, so they are re-emitted on
-    // every cache hit here (defined in roll_program_factory.cpp, reusing the shared plan builder so the
-    // emitted values and indices match create_descriptor exactly).
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Cache-hit fast path: re-derive per-dispatch state from create_descriptor for the current tensors
+    // and re-apply to the cached program via apply_descriptor_runtime_args -- no rebuild.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&,

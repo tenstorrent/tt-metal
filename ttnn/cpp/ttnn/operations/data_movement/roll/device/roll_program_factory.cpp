@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 // Why ROW_MAJOR sharded roll needs a dedicated kernel instead of the slice + concat composite
 // used for interleaved roll:
@@ -56,7 +57,7 @@ struct ColPiece {
     uint32_t len;
 };
 
-// Everything create_descriptor() and get_dynamic_runtime_args() need, computed once from the
+// Everything create_descriptor() and override_runtime_arguments() need, computed once from the
 // (hashed) shape/shift/dim/memory-config so the two paths can never disagree on layout or indices.
 struct RollPlan {
     bool is_dram = false;
@@ -73,12 +74,9 @@ struct RollPlan {
     uint32_t scratch_size = 0;
 
     std::vector<uint32_t> compile_time_args;
+    // Fully-resolved per-core reader args (DRAM modes bake base+offset addresses from the current
+    // buffers). override_runtime_arguments re-applies these + re-points the tensor-backed CBs on hit.
     std::vector<std::pair<CoreCoord, KernelDescriptor::CoreRuntimeArgs>> per_core_args;
-
-    // Per-dispatch buffer-address runtime args (DRAM modes bake base+offset addresses into the reader
-    // args; the L1 mode instead carries one hash-stable placeholder to trip the fast path so its
-    // .buffer-bound CB addresses get re-patched). Re-applied on every cache hit.
-    std::vector<tt::tt_metal::DynamicRuntimeArg> address_dynamic_args;
 };
 
 RollPlan compute_roll_plan(
@@ -377,11 +375,9 @@ RollPlan compute_roll_plan(
     plan.compile_time_args = std::move(compile_time_args);
 
     // --- Per-core runtime args ---
-    // The three builders emit args in a fixed layout the reader kernel reads positionally.  Every
-    // computed buffer-address slot (input/output base + shard offset) is recorded, at the exact index
-    // it is written, into plan.address_dynamic_args so get_dynamic_runtime_args re-emits the identical
-    // value at the identical index on every cache hit — the address is the only per-dispatch input, so
-    // recording it inline guarantees the two paths can never drift.
+    // The three builders emit args in a fixed layout the reader kernel reads positionally.  DRAM modes
+    // bake the buffer base+offset addresses straight into the args from the CURRENT buffers, so
+    // override_runtime_arguments re-derives the identical values by re-running this builder on a hit.
     auto build_runtime_args_l1 = [&](const std::vector<RollTransferDesc>& descs) {
         KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(1 + descs.size() * 9);
@@ -400,28 +396,17 @@ RollPlan compute_roll_plan(
         return args;
     };
 
-    auto build_runtime_args_dram = [&](uint32_t dst_core_idx,
-                                       const CoreCoord& logical,
-                                       const std::vector<RollTransferDesc>& descs,
-                                       std::vector<tt::tt_metal::DynamicRuntimeArg>& addr_slots) {
+    auto build_runtime_args_dram = [&](uint32_t dst_core_idx, const std::vector<RollTransferDesc>& descs) {
         KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(3 + descs.size() * 7);
         args.push_back(dram_bank_id(dst_core_idx));
-        // dst bank base = output buffer address + shard offset (computed) — re-emitted per hit.
-        addr_slots.push_back(tt::tt_metal::DynamicRuntimeArg{
-            0, logical, static_cast<uint32_t>(args.size()), dram_bank_base(plan.output_buffer, dst_core_idx)});
+        // dst bank base = output buffer address + shard offset, from the current buffer.
         args.push_back(dram_bank_base(plan.output_buffer, dst_core_idx));
         args.push_back(static_cast<uint32_t>(descs.size()));
         for (const auto& td : descs) {
             // src_bank_id, src_bank_addr (= bank_base + intra_shard_offset), dst_offset,
             // copy_size, src_stride, dst_stride, num_rows
             args.push_back(dram_bank_id(td.src_dram_shard_idx));
-            // src bank base + intra-shard offset (computed) — re-emitted per hit.
-            addr_slots.push_back(tt::tt_metal::DynamicRuntimeArg{
-                0,
-                logical,
-                static_cast<uint32_t>(args.size()),
-                dram_bank_base(plan.input_buffer, td.src_dram_shard_idx) + td.src_l1_offset});
             args.push_back(dram_bank_base(plan.input_buffer, td.src_dram_shard_idx) + td.src_l1_offset);
             args.push_back(td.dst_offset);
             args.push_back(td.copy_size);
@@ -435,10 +420,7 @@ RollPlan compute_roll_plan(
     // DRAM RM mode: full-shard L1 staging.
     // Per core: [dst_bank_id, dst_bank_base, num_src, (src0_bank_id, src0_addr)..., num_xfers,
     //            (src_slot, src_off, dst_off, copy_size, src_stride, dst_stride, num_rows) x N]
-    auto build_runtime_args_dram_rm = [&](uint32_t dst_core_idx,
-                                          const CoreCoord& logical,
-                                          const std::vector<RollTransferDesc>& descs,
-                                          std::vector<tt::tt_metal::DynamicRuntimeArg>& addr_slots) {
+    auto build_runtime_args_dram_rm = [&](uint32_t dst_core_idx, const std::vector<RollTransferDesc>& descs) {
         // Collect unique source shards (at most 2) and assign them to staging slots 0/1.
         std::vector<uint32_t> src_shards;
         std::unordered_map<uint32_t, uint32_t> src_to_slot;
@@ -450,16 +432,11 @@ RollPlan compute_roll_plan(
         }
         KernelDescriptor::CoreRuntimeArgs args;
         args.push_back(dram_bank_id(dst_core_idx));
-        // dst bank base = output buffer address + shard offset (computed) — re-emitted per hit.
-        addr_slots.push_back(tt::tt_metal::DynamicRuntimeArg{
-            0, logical, static_cast<uint32_t>(args.size()), dram_bank_base(plan.output_buffer, dst_core_idx)});
+        // dst bank base = output buffer address + shard offset, from the current buffer.
         args.push_back(dram_bank_base(plan.output_buffer, dst_core_idx));
         args.push_back(static_cast<uint32_t>(src_shards.size()));
         for (uint32_t s : src_shards) {
             args.push_back(dram_bank_id(s));
-            // src shard bank base (computed) — re-emitted per hit.
-            addr_slots.push_back(tt::tt_metal::DynamicRuntimeArg{
-                0, logical, static_cast<uint32_t>(args.size()), dram_bank_base(plan.input_buffer, s)});
             args.push_back(dram_bank_base(plan.input_buffer, s));
         }
         args.push_back(static_cast<uint32_t>(descs.size()));
@@ -480,18 +457,13 @@ RollPlan compute_roll_plan(
         CoreCoord logical(grid_range.start_coord.x + c % grid_cols, grid_range.start_coord.y + c / grid_cols);
         KernelDescriptor::CoreRuntimeArgs args;
         if (is_dram_rm) {
-            args = build_runtime_args_dram_rm(c, logical, all_transfers[c], plan.address_dynamic_args);
+            args = build_runtime_args_dram_rm(c, all_transfers[c]);
         } else if (is_dram) {
-            args = build_runtime_args_dram(c, logical, all_transfers[c], plan.address_dynamic_args);
+            args = build_runtime_args_dram(c, all_transfers[c]);
         } else {
+            // L1 mode: data rides on the input/output .buffer-bound CBs; override_runtime_arguments
+            // re-points those CB addresses on every cache hit (no placeholder rt-arg needed).
             args = build_runtime_args_l1(all_transfers[c]);
-            // L1 mode carries no smuggled address (data rides on the input/output .buffer-bound CBs).
-            // But the ProgramDescriptor fast path only re-patches those CB addresses on a cache hit when
-            // at least one dynamic arg (or rt-arg binding) is present, so re-emit reader arg 0 on core 0
-            // — a hash-stable value — to trip the fast path instead of forcing a full descriptor rebuild.
-            if (c == 0 && !args.empty()) {
-                plan.address_dynamic_args.push_back(tt::tt_metal::DynamicRuntimeArg{0, logical, 0, args[0]});
-            }
         }
         plan.per_core_args.emplace_back(logical, std::move(args));
     }
@@ -587,19 +559,16 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> RollDeviceOperation::get_dynamic_runtime_args(
+void RollDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // The DRAM reader args bake per-shard buffer addresses (base + shard offset), which change every
-    // dispatch and cannot be plain Buffer* bindings (they are base+offset, not a bare base). Re-emit
-    // them — at the exact indices create_descriptor wrote them — via the same shared plan, so the fast
-    // path patches addresses instead of rebuilding. (For L1 mode this is one hash-stable placeholder
-    // that trips the fast path so the .buffer-bound CB addresses get re-patched.) The active-core set
-    // and arg layout derive only from hashed shape/shift/dim/memory-config, so both are identical on
-    // every cache hit — no freeze from a growing core set.
-    return compute_roll_plan(operation_attributes, tensor_args, tensor_return_value).address_dynamic_args;
+    // Re-derive all per-dispatch state from the single source of truth (create_descriptor) for the
+    // current tensors and re-apply to the cached program -- no rebuild, still a cache hit.
+    auto desc = RollShardedProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim
