@@ -132,6 +132,7 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
         for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+                DeviceZoneScopedN("DOWN-MATMUL");
                 tile_regs_acquire();
 
                 uint32_t dst_index = 0;
@@ -321,6 +322,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
+        DeviceZoneScopedN("GATE-UP-MATMUL");
         for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
@@ -422,29 +424,32 @@ FORCE_INLINE void matmul_phase_fused_gu(
     //     overlapping with the next subblock's UNPACK rather than gating the
     //     pack pipeline as apply_activation_from_pack would.
     //   * pack dst → gate_intermed without per-tile SFPU.
-    pack_reconfig_data_format(gate_intermed_cb_id);
-    // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
-    // to partials_gu so copy_tile reads the accumulator.
-    copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
-    for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
-        tile_regs_acquire();
-        partials_gu_cb.wait_front(out_subblock_num_tiles);
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            copy_tile(partials_gu_cb_id, i, i);
+    {
+        DeviceZoneScopedN("SILU");
+        pack_reconfig_data_format(gate_intermed_cb_id);
+        // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
+        // to partials_gu so copy_tile reads the accumulator.
+        copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
+        for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
+            tile_regs_acquire();
+            partials_gu_cb.wait_front(out_subblock_num_tiles);
+            for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                copy_tile(partials_gu_cb_id, i, i);
+            }
+            partials_gu_cb.pop_front(out_subblock_num_tiles);
+            // MATH-thread SFPU pass: apply silu to each dst tile before pack.
+            for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                silu_tile(i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            gate_intermed_cb.reserve_back(out_subblock_num_tiles);
+            for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                pack_tile(i, gate_intermed_cb_id);
+            }
+            gate_intermed_cb.push_back(out_subblock_num_tiles);
+            tile_regs_release();
         }
-        partials_gu_cb.pop_front(out_subblock_num_tiles);
-        // MATH-thread SFPU pass: apply silu to each dst tile before pack.
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            silu_tile(i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        gate_intermed_cb.reserve_back(out_subblock_num_tiles);
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            pack_tile(i, gate_intermed_cb_id);
-        }
-        gate_intermed_cb.push_back(out_subblock_num_tiles);
-        tile_regs_release();
     }
 
     // Up partials are NOT copied to a separate cb_up_intermed: the multiply
@@ -541,6 +546,7 @@ FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_
     gate_cb.wait_front(out_block_num_tiles);
     up_cb.wait_front(out_block_num_tiles);
 
+    DeviceZoneScopedN("MULTIPLY");
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
     // SrcA was configured for partials_gu but SrcB still points at the

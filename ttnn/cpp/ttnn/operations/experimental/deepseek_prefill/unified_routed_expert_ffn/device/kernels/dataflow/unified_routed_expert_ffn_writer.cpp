@@ -194,6 +194,7 @@ void kernel_main() {
                     ++up_seq;
                     up_go_sem.wait_min(up_seq);
                     uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                    DeviceZoneScopedN("UP-READ");
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                         for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                             const uint32_t row = kb * in0_block_w_gu + k;
@@ -224,6 +225,7 @@ void kernel_main() {
         for (uint32_t sb_m = 0; sb_m < d_in1_num_subblocks_M; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
                 cb_out_buf.wait_front(d_out_subblock_num_tiles);
+                DeviceZoneScopedN("OUTPUT-WRITE");
                 uint32_t subblock_tile_offset = 0;
                 for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
                     for (uint32_t j = 0; j < d_out_subblock_w; ++j) {

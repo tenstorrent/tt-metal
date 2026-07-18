@@ -38,6 +38,7 @@ SINGLE_CHIP_MESH_PARAMS = [
 # Token-count sweep for the single-expert profiling test, applied per model with that model's
 # (emb_dim, hidden_dim). The (num_tokens, id) pairs are model-independent.
 _TOKEN_SWEEP = [
+    (640, "640"),
     (1024, "1k"),
     (25600, "25k"),
 ]
@@ -226,6 +227,7 @@ def test_single_routed_expert_models(
 # (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per
 # model with that model's (emb_dim, hidden_dim). The alloc/active pairs are model-independent.
 _FAKED_SWEEP = [
+    (640, 128, "640-alloc-128-active"),
     (1024, 0, "1k-alloc-0k-active"),
     (25600, 4096, "25k-alloc-4k-active"),
 ]
