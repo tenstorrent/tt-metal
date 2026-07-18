@@ -256,12 +256,12 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
     channels { count: 8 policy: RELAXED }
-    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 33 } }
     channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 33 } }
