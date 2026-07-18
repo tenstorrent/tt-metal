@@ -59,12 +59,12 @@ If you nonetheless hit one of these mid-port — a multi-reader borrowed CB, an 
 **Crossing the boundary in kernel code.** Some kernel call sites in the ported kernels invoke functions whose source lives outside the op directory — kernel-lib helpers (`dataflow_kernel_lib::*`, `compute_kernel_lib::*`), LLKs (`reduce_init`, `pack_tile`, `cb_wait_front`, etc.). These callees take `uint32_t` CB ids today.
 
 - **`dfb::name` crosses freely.** Pass `dfb::name` directly at the call site. The `DFBAccessor::operator uint32_t()` implicit conversion bridges the named handle to the legacy `uint32_t` signature without `.id` extraction, temporary wrappers, or typed shims. See [Pattern: Pass DFB handles directly to LLKs and kernel-lib helpers](metal2_port_patterns.md#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers).
-- **`sem::name` and `ta::name` do NOT cross — assumption.** Unlike `dfb::name`, the semaphore and tensor-accessor handles have no implicit conversion to `uint32_t` today. **The recipe assumes that no out-of-op call site requires passing one** — semaphores and tensor accessors are consumed inside the op's own kernels. If you encounter a call site whose callee lives outside the op directory and that requires a operand that is structurally unavailable to the Metal 2.0-converted code, this is an **assumption violation**. These are supposed to have been already prepared for Metal 2.0 migration. Do not write the call. Do not preemptively wrap, refactor, or extract — the fix is upstream of the porter's scope. Stop and record the site in [`METAL2_PORT_REPORT.md` — Handoff points](#capture-the-port-report) so the kernel-lib / API owners can address it.
+- **`sem::name` and `tensor::name` do NOT cross — assumption.** Unlike `dfb::name`, the semaphore and tensor-accessor handles have no implicit conversion to `uint32_t` today. **The recipe assumes that no out-of-op call site requires passing one** — semaphores and tensor accessors are consumed inside the op's own kernels. If you encounter a call site whose callee lives outside the op directory and that requires a operand that is structurally unavailable to the Metal 2.0-converted code, this is an **assumption violation**. These are supposed to have been already prepared for Metal 2.0 migration. Do not write the call. Do not preemptively wrap, refactor, or extract — the fix is upstream of the porter's scope. Stop and record the site in [`METAL2_PORT_REPORT.md` — Handoff points](#capture-the-port-report) so the kernel-lib / API owners can address it.
 
 **Two exceptions to the boundary rule** — these are not "out-of-op" call graphs:
 
 - **Cross-op kernel files** — some ops share dataflow kernels that live in another op's directory (e.g., `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` reused by many ops). The legacy inventory step flags these; modifying them is porter-touchable with caution per [Caution: Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel). These are *peer ops*, not framework callees. Document the changes you found necessary in the `METAL2_PORT_REPORT.md`.
-- **Framework primitives the porter uses directly** — `noc.async_read(...)`, `dfb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(ta::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
+- **Framework primitives the porter uses directly** — `noc.async_read(...)`, `dfb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(tensor::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
 
 **Generated docs in the op directory.** Four `METAL2_*.md` files live in the op's directory alongside the program factory `.cpp` files — two written by the audit (your inputs), two you write during the port:
 
@@ -317,7 +317,7 @@ This change is wrong in context: INT32 support is Quasar-only, and this op doesn
 
 ### Kernel-side whitelist
 
-The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. The single `#include` a porter adds to a kernel is `experimental/kernel_args.h` (which pulls in `get_arg`, `args::`, `dfb::`, `sem::`, `ta::`); the generated headers are auto-included by the build system — do not `#include` them yourself.
+The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. The single `#include` a porter adds to a kernel is `experimental/kernel_args.h` (which pulls in `get_arg`, `args::`, `dfb::`, `sem::`, `tensor::`); the generated headers are auto-included by the build system — do not `#include` them yourself.
 
 **1. CircularBuffer → DataflowBuffer.** The object-type swap. The canonical FIFO methods (`reserve_back` / `push_back` / `wait_front` / `pop_front`) map **1:1**, names unchanged. Variable-name updates are limited to following the API rename (`cb_*` → `dfb_*`), to keep the kernel readable — don't rename for any other reason.
 
@@ -371,7 +371,7 @@ pack_tile(0, dfb::out);
 
 ```cpp
 DataflowBuffer  dfb_in(dfb::in);
-TensorAccessor  input(ta::input);
+TensorAccessor  input(tensor::input);
 Semaphore       done(sem::done);
 ```
 
@@ -387,13 +387,13 @@ auto input = TensorAccessor(input_args, input_addr);
 auto index = TensorAccessor(index_args, index_addr);
 
 // Metal 2.0:
-auto input = TensorAccessor(ta::input);
-auto index = TensorAccessor(ta::index);
+auto input = TensorAccessor(tensor::input);
+auto index = TensorAccessor(tensor::index);
 ```
 
 If positional RTAs survive after the buffer-address RTA goes away (uncommon — most ports also convert all RTAs to named per rule 4), re-index them.
 
-> *Boundary note:* `dfb::name` implicitly converts to `uint32_t`; `sem::name` and `ta::name` do not. The recipe assumes no out-of-op call site requires passing a `sem::` or `ta::` handle — see [§Read this first](#read-this-first). If you encounter one, that's an assumption violation; stop and document per the off-ramp below.
+> *Boundary note:* `dfb::name` implicitly converts to `uint32_t`; `sem::name` and `tensor::name` do not. The recipe assumes no out-of-op call site requires passing a `sem::` or `tensor::` handle — see [§Read this first](#read-this-first). If you encounter one, that's an assumption violation; stop and document per the off-ramp below.
 
 **4. Named arguments throughout.** Compile-time, runtime, and common runtime arguments all become named via `get_arg(args::<name>)`. The CTA / RTA / CRTA distinction is a host-only concern; the kernel uses one uniform retrieval syntax. Pick names that match the variables they were going to be assigned to.
 
@@ -421,7 +421,7 @@ uint32_t input_addr = get_arg_val<uint32_t>(0);
 // ... explicit address arithmetic on input_addr ...
 
 // Metal 2.0:
-auto input = TensorAccessor(ta::input);
+auto input = TensorAccessor(tensor::input);
 uint32_t input_addr = input.get_bank_base_address(bank_id);  // when truly needed
 ```
 
@@ -629,7 +629,7 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 
 - [ ] **No `tensor.buffer()->address()` survived.** Search the factory `.cpp` for this string; if present, the corresponding tensor needs a `TensorBinding` instead.
 - [ ] **No magic-number CB indices in CTAs.** Search `compile_time_args` for values that are CB indices (typically small integers or `CBIndex::c_*`); if found, the value should come from a `DFBBinding` instead.
-- [ ] **No `TensorAccessorArgs<N>()` survived in any ported kernel.** Search for this; if present, the kernel needs `TensorAccessor(ta::name)` instead.
+- [ ] **No `TensorAccessorArgs<N>()` survived in any ported kernel.** Search for this; if present, the kernel needs `TensorAccessor(tensor::name)` instead.
 - [ ] **Conditional DFB bindings follow [Pattern: Conditional / optional DFB bindings](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings).** For each conditionally-used DFB: the host conditionally binds it; `KernelSpec::defines` carries the matching preprocessor flag; the kernel `#ifdef`-gates both the constexpr alias of the DFB name and every expression referencing it. No unconditional bindings introduced as a workaround.
 - [ ] **No `.id` extraction at LLK call sites.** Search for `.id` on `dfb::` handles; if present, pass `dfb::name` directly.
 - [ ] **No CTA→RTA demotion in compute kernels.** If a per-group dimension was moved from CTA to RTA in the port, the structural decision is wrong; revisit planning.
@@ -675,7 +675,7 @@ Escalations to teams outside the porter's scope. Each entry is something the por
 
 Includes (not exhaustive):
 
-- **Boundary-rule assumption violations.** A call site outside the op directory that required `sem::name` or `ta::name` (per the [scope boundary](#read-this-first)). Cite the file:line, the callee, and the named handle that the call site demands. Tagged "API: requires implicit conversion / refactor."
+- **Boundary-rule assumption violations.** A call site outside the op directory that required `sem::name` or `tensor::name` (per the [scope boundary](#read-this-first)). Cite the file:line, the callee, and the named handle that the call site demands. Tagged "API: requires implicit conversion / refactor."
 - **Kernel-lib gaps.** Cases where a shared kernel-lib helper or LLK is incompatible with Metal 2.0 binding semantics in a way the porter cannot work around. Cite the helper, the call site, the specific incompatibility.
 - **Framework gaps.** Audit-time entries that were YELLOW or UNSUPPORTED and that bit during the port. Cite the audit entry, what the port needed, and the workaround (if any) you adopted.
 - **Removed pybind surface.** Any pybind line(s) deleted because the port made a legacy factory entry point (e.g., `create_program_descriptor`) vanish. Cite the pybind file path, the function name(s) removed, and a one-line description of what the function was for. Tagged "API surface: removed entry point." This is a *user-visible* surface change — downstream Python consumers (tests, notebooks, internal tooling) need to find this entry to update their callers. See [Pattern: Removing pybound legacy factory entry points](metal2_port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points).
