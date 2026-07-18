@@ -37,6 +37,11 @@ namespace ttnn::transformer {
 //
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
 // valid key, and all non-sentinel indices are < T.
+//
+// Scaled FP8 cache: pass one byte-addressed fp8_e4m3 tensor with each token row packed as
+// [v_dim FP8 latent bytes | v_dim/128 FP32 scales | K_DIM-v_dim BF16 RoPE values]. For the DSA 512+64
+// geometry this is 656 logical bytes. Sparse gather writes each selected packed row once into a shared L1
+// allocation; compute reads aliased FP8-latent and BF16-RoPE views and applies the scales while tilizing.
 ttnn::Tensor sparse_sdpa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& kv,
