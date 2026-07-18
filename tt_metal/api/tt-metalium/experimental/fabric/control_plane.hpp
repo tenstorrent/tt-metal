@@ -275,12 +275,6 @@ public:
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
 
-    // Merge inter-mesh exit FabricNodeId sets from all hosts so local queries see every mesh pair.
-    void collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
-
-    // Merge inter-mesh exit/peer FabricNodeId pair lists from all hosts (each host only fills edges from its mesh).
-    void collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
-
     // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
 
@@ -482,6 +476,11 @@ private:
     // Once this function returns, Inter Mesh Connectivity will be specified in the Mesh Graph
     // and Routing Table Generator.
     void generate_intermesh_connectivity();
+
+    // Rebuild the inter-mesh exit/peer maps (intermesh_exit_peer_fabric_node_id_pairs_ and
+    // intermesh_exit_fabric_node_ids_) purely from the shared, broadcast-identical intermesh_connections.
+    // See the definition for why this replaces the old per-rank push + cross-host merge (Finding A fix).
+    void rebuild_intermesh_exit_maps_from_connections(const AnnotatedIntermeshConnections& intermesh_connections);
 
     // Gather physical inter-mesh cables toward one neighbor host (no port/direction assignment; that
     // is deferred to rank-0 pairing which sees both endpoints of every cable).

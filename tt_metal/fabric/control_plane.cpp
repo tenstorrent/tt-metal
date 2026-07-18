@@ -1236,6 +1236,79 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
 
     this->collect_and_merge_router_port_directions_from_all_hosts();
 
+    // PARITY PROBE (temp, remove before merge): cross-rank uniformity of the two physically-derived maps the user
+    // asked about. There is no logical-only source to diff against (these come from physical eth cores + all_gather),
+    // so the meaningful question is whether every rank already agrees after the merge/all_gather. Order-independent
+    // SUM-fold checksum + element count, all_reduced MIN/MAX; min==max => UNIFORM.
+    {
+        const auto& ctx = this->distributed_context_.get();
+        auto fold = [](uint64_t h, uint64_t v) {
+            h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+            return h;
+        };
+        auto probe = [&](const std::string& name, uint64_t count, uint64_t cksum) {
+            uint64_t in_min[2] = {count, cksum};
+            uint64_t in_max[2] = {count, cksum};
+            uint64_t out_min[2] = {0, 0};
+            uint64_t out_max[2] = {0, 0};
+            ctx.all_reduce(
+                ttsl::Span<uint64_t>(in_min, 2),
+                ttsl::Span<uint64_t>(out_min, 2),
+                tt::tt_metal::distributed::multihost::ReduceOp::MIN);
+            ctx.all_reduce(
+                ttsl::Span<uint64_t>(in_max, 2),
+                ttsl::Span<uint64_t>(out_max, 2),
+                tt::tt_metal::distributed::multihost::ReduceOp::MAX);
+            if (*ctx.rank() == 0) {
+                const bool uniform = (out_min[0] == out_max[0]) && (out_min[1] == out_max[1]);
+                log_warning(
+                    tt::LogFabric,
+                    "[parity] {}: count[min={},max={}] cksum[min={},max={}] -> {}",
+                    name,
+                    out_min[0],
+                    out_max[0],
+                    out_min[1],
+                    out_max[1],
+                    uniform ? "UNIFORM" : "DIVERGENT");
+            }
+        };
+        {
+            uint64_t cks = 0, count = 0;
+            for (const auto& [fn, dir_map] : router_port_directions_to_physical_eth_chan_map_) {
+                for (const auto& [dir, chans] : dir_map) {
+                    std::vector sorted_chans(chans.begin(), chans.end());
+                    std::sort(sorted_chans.begin(), sorted_chans.end());
+                    uint64_t h = 0;
+                    h = fold(h, *fn.mesh_id);
+                    h = fold(h, fn.chip_id);
+                    h = fold(h, static_cast<uint64_t>(dir));
+                    h = fold(h, sorted_chans.size());
+                    for (const auto ch : sorted_chans) {
+                        h = fold(h, static_cast<uint64_t>(ch));
+                    }
+                    cks += h;
+                    count++;
+                }
+            }
+            probe("router_port_directions", count, cks);
+        }
+        {
+            uint64_t cks = 0, count = 0;
+            for (const auto& [fn, dir_map] : router_port_directions_to_num_routing_planes_map_) {
+                for (const auto& [dir, n] : dir_map) {
+                    uint64_t h = 0;
+                    h = fold(h, *fn.mesh_id);
+                    h = fold(h, fn.chip_id);
+                    h = fold(h, static_cast<uint64_t>(dir));
+                    h = fold(h, static_cast<uint64_t>(n));
+                    cks += h;
+                    count++;
+                }
+            }
+            probe("num_routing_planes", count, cks);
+        }
+    }
+
     this->convert_fabric_routing_table_to_chip_routing_table();
     // After this, router_port_directions_to_physical_eth_chan_map_, intra_mesh_routing_tables_,
     // inter_mesh_routing_tables_ should be populated for all hosts in BigMesh
@@ -2360,7 +2433,10 @@ void sort_intermesh_exit_peer_fabric_node_id_pairs(
     for (auto& src_entry : m) {
         for (auto& dst_entry : src_entry.second) {
             auto& pairs = dst_entry.second;
-            std::sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            // Sort on the full (exit, peer) pair, not just .first: an exit chip with multiple peers would
+            // otherwise be left in unspecified (unordered_map-merge-dependent) order, giving host-/run-dependent
+            // peer assignments downstream.
+            std::sort(pairs.begin(), pairs.end());
         }
     }
 }
@@ -2672,9 +2748,40 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 
 // Intermesh Connectivity Generation Functions
 
-void ControlPlane::generate_intermesh_connectivity() {
-    intermesh_exit_fabric_node_ids_.clear();
+void ControlPlane::rebuild_intermesh_exit_maps_from_connections(
+    const AnnotatedIntermeshConnections& intermesh_connections) {
+    // Finding A fix (intermesh_dual_galaxy_asymmetry_findings.md): derive both inter-mesh exit maps directly from
+    // intermesh_connections instead of from per-rank apply pushes + a bespoke cross-host merge. intermesh_connections
+    // is produced on rank 0 and broadcast verbatim to every rank (multi-host) or generated wholesale on the single
+    // host, so it is IDENTICAL on every rank; deriving from it yields the same set on every rank (no merge, no dedup
+    // ambiguity). The old path pushed one pair per channel locally then merged across hosts with dedup applied only to
+    // remote contributions, so a boundary split across hosts resolved e.g. 3 on some ranks and 4 on others -- strict
+    // validation then threw on a subset of ranks and deadlocked MPI. Parity verified across the drop-heavy tests
+    // (Dual4x16 relaxed, Z-fallback, SC20 relaxed): the derived sets equal the old cross-host merge on every rank.
     intermesh_exit_peer_fabric_node_id_pairs_.clear();
+    intermesh_exit_fabric_node_ids_.clear();
+
+    const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
+    auto to_fabric_node_id = [&](std::uint32_t mesh_raw, const auto& port_id) {
+        return FabricNodeId(MeshId{mesh_raw}, mesh_edge_ports_to_chip_id.at(mesh_raw).at(port_id));
+    };
+
+    for (const auto& connection : intermesh_connections) {
+        const auto& [exit_mesh_raw, exit_port_id] = std::get<0>(connection);
+        const auto& [peer_mesh_raw, peer_port_id] = std::get<1>(connection);
+        const MeshId exit_mesh{exit_mesh_raw};
+        const MeshId peer_mesh{peer_mesh_raw};
+        const FabricNodeId exit_fn = to_fabric_node_id(exit_mesh_raw, exit_port_id);
+        intermesh_exit_peer_fabric_node_id_pairs_[exit_mesh][peer_mesh].emplace_back(
+            exit_fn, to_fabric_node_id(peer_mesh_raw, peer_port_id));
+        intermesh_exit_fabric_node_ids_[exit_mesh][peer_mesh].insert(exit_fn);
+    }
+    sort_intermesh_exit_peer_fabric_node_id_pairs(intermesh_exit_peer_fabric_node_id_pairs_);
+}
+
+void ControlPlane::generate_intermesh_connectivity() {
+    // The exit maps (intermesh_exit_fabric_node_ids_, intermesh_exit_peer_fabric_node_id_pairs_) are cleared and
+    // rebuilt from intermesh_connections in rebuild_intermesh_exit_maps_from_connections() below.
     intermesh_chan_to_peer_.clear();  // Repopulated from PSD in both single- and multi-host paths.
     AnnotatedIntermeshConnections intermesh_connections;
 
@@ -2712,229 +2819,27 @@ void ControlPlane::generate_intermesh_connectivity() {
         get_num_requested_intermesh_connections());
 
     this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
-    this->collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
-    this->collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
-    sort_intermesh_exit_peer_fabric_node_id_pairs(intermesh_exit_peer_fabric_node_id_pairs_);
+    this->rebuild_intermesh_exit_maps_from_connections(intermesh_connections);
+
+    if (std::getenv("TT_INTERMESH_DEBUG") != nullptr && *(this->distributed_context_.get().rank()) == 0) {
+        for (const auto& [src_mesh, dst_map] : intermesh_exit_peer_fabric_node_id_pairs_) {
+            for (const auto& [dst_mesh, pairs] : dst_map) {
+                std::string s;
+                for (const auto& pr : pairs) {
+                    s += " (" + std::to_string(pr.first.chip_id) + "->" + std::to_string(pr.second.chip_id) + ")";
+                }
+                log_warning(
+                    tt::LogFabric,
+                    "[resolved-dbg] M{}->M{}: {} unique exit-peer chip pair(s):{}",
+                    *src_mesh,
+                    *dst_mesh,
+                    pairs.size(),
+                    s);
+            }
+        }
+    }
 
     this->validate_requested_intermesh_connections();
-}
-
-void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts() {
-    const auto& distributed_context = this->distributed_context_.get();
-    if (*distributed_context.size() == 1) {
-        return;
-    }
-
-    auto serialize_local_map =
-        [](const std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>& m) {
-            std::vector<uint8_t> buf;
-            auto append_u32 = [&buf](uint32_t v) {
-                buf.insert(buf.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
-            };
-            append_u32(static_cast<uint32_t>(m.size()));
-            for (const auto& [src_mesh, inner] : m) {
-                append_u32(*src_mesh);
-                append_u32(static_cast<uint32_t>(inner.size()));
-                for (const auto& [dst_mesh, fn_set] : inner) {
-                    append_u32(*dst_mesh);
-                    append_u32(static_cast<uint32_t>(fn_set.size()));
-                    for (const auto& fn : fn_set) {
-                        append_u32(*fn.mesh_id);
-                        append_u32(fn.chip_id);
-                    }
-                }
-            }
-            return buf;
-        };
-
-    auto merge_from_serialized =
-        [](std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>& into,
-           const std::vector<uint8_t>& data) {
-            std::size_t off = 0;
-            auto read_u32 = [&data, &off](uint32_t& out) {
-                TT_FATAL(off + 4 <= data.size(), "collect_intermesh_exit_fab: truncated");
-                std::memcpy(&out, data.data() + off, sizeof(uint32_t));
-                off += sizeof(uint32_t);
-            };
-            uint32_t n_src = 0;
-            read_u32(n_src);
-            for (uint32_t si = 0; si < n_src; si++) {
-                uint32_t src_raw = 0;
-                uint32_t n_dst = 0;
-                read_u32(src_raw);
-                read_u32(n_dst);
-                MeshId src_mesh{src_raw};
-                for (uint32_t di = 0; di < n_dst; di++) {
-                    uint32_t dst_raw = 0;
-                    uint32_t n_fn = 0;
-                    read_u32(dst_raw);
-                    read_u32(n_fn);
-                    MeshId dst_mesh{dst_raw};
-                    auto& into_set = into[src_mesh][dst_mesh];
-                    for (uint32_t fi = 0; fi < n_fn; fi++) {
-                        uint32_t mesh_raw = 0;
-                        uint32_t chip_id = 0;
-                        read_u32(mesh_raw);
-                        read_u32(chip_id);
-                        into_set.insert(FabricNodeId(MeshId{mesh_raw}, chip_id));
-                    }
-                }
-            }
-            TT_FATAL(off == data.size(), "collect_intermesh_exit_fab: size mismatch");
-        };
-
-    std::vector<uint8_t> serialized_local = serialize_local_map(intermesh_exit_fabric_node_ids_);
-    std::vector<uint8_t> serialized_remote;
-    auto my_rank = *(distributed_context.rank());
-
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
-        if (my_rank == static_cast<int>(bcast_root)) {
-            int local_data_size_bytes = static_cast<int>(serialized_local.size());
-            distributed_context.broadcast(
-                ttsl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
-                distributed_context.rank());
-
-            distributed_context.broadcast(
-                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
-                distributed_context.rank());
-        } else {
-            int remote_data_size_bytes = 0;
-            distributed_context.broadcast(
-                ttsl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-            serialized_remote.clear();
-            serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
-            distributed_context.broadcast(
-                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-
-            merge_from_serialized(intermesh_exit_fabric_node_ids_, serialized_remote);
-        }
-        distributed_context.barrier();
-    }
-}
-
-void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts() {
-    const auto& distributed_context = this->distributed_context_.get();
-    if (*distributed_context.size() == 1) {
-        return;
-    }
-
-    auto serialize_local_pair_map =
-        [](const std::unordered_map<
-            MeshId,
-            std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>& m) {
-            std::vector<uint8_t> buf;
-            auto append_u32 = [&buf](uint32_t v) {
-                buf.insert(buf.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
-            };
-            append_u32(static_cast<uint32_t>(m.size()));
-            for (const auto& [src_mesh, inner] : m) {
-                append_u32(*src_mesh);
-                append_u32(static_cast<uint32_t>(inner.size()));
-                for (const auto& [dst_mesh, pairs] : inner) {
-                    append_u32(*dst_mesh);
-                    append_u32(static_cast<uint32_t>(pairs.size()));
-                    for (const auto& pr : pairs) {
-                        append_u32(*pr.first.mesh_id);
-                        append_u32(pr.first.chip_id);
-                        append_u32(*pr.second.mesh_id);
-                        append_u32(pr.second.chip_id);
-                    }
-                }
-            }
-            return buf;
-        };
-
-    auto merge_pair_vectors = [](std::vector<std::pair<FabricNodeId, FabricNodeId>>& into,
-                                 const std::vector<std::pair<FabricNodeId, FabricNodeId>>& from) {
-        into.reserve(into.size() + from.size());
-        for (const auto& p : from) {
-            if (std::find(into.begin(), into.end(), p) == into.end()) {
-                into.push_back(p);
-            }
-        }
-    };
-
-    auto merge_from_serialized =
-        [&merge_pair_vectors](
-            std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>&
-                into,
-            const std::vector<uint8_t>& data) {
-            std::size_t off = 0;
-            auto read_u32 = [&data, &off](uint32_t& out) {
-                TT_FATAL(off + 4 <= data.size(), "collect_intermesh_exit_peer_pairs: truncated");
-                std::memcpy(&out, data.data() + off, sizeof(uint32_t));
-                off += sizeof(uint32_t);
-            };
-            uint32_t n_src = 0;
-            read_u32(n_src);
-            for (uint32_t si = 0; si < n_src; si++) {
-                uint32_t src_raw = 0;
-                uint32_t n_dst = 0;
-                read_u32(src_raw);
-                read_u32(n_dst);
-                MeshId src_mesh{src_raw};
-                for (uint32_t di = 0; di < n_dst; di++) {
-                    uint32_t dst_raw = 0;
-                    uint32_t n_pr = 0;
-                    read_u32(dst_raw);
-                    read_u32(n_pr);
-                    MeshId dst_mesh{dst_raw};
-                    std::vector<std::pair<FabricNodeId, FabricNodeId>> remote_pairs;
-                    remote_pairs.reserve(n_pr);
-                    for (uint32_t pi = 0; pi < n_pr; pi++) {
-                        uint32_t a_m = 0, a_c = 0, b_m = 0, b_c = 0;
-                        read_u32(a_m);
-                        read_u32(a_c);
-                        read_u32(b_m);
-                        read_u32(b_c);
-                        remote_pairs.emplace_back(FabricNodeId(MeshId{a_m}, a_c), FabricNodeId(MeshId{b_m}, b_c));
-                    }
-                    auto& into_vec = into[src_mesh][dst_mesh];
-                    if (into_vec.empty()) {
-                        into_vec = std::move(remote_pairs);
-                    } else {
-                        merge_pair_vectors(into_vec, remote_pairs);
-                    }
-                }
-            }
-            TT_FATAL(off == data.size(), "collect_intermesh_exit_peer_pairs: size mismatch");
-        };
-
-    std::vector<uint8_t> serialized_local = serialize_local_pair_map(intermesh_exit_peer_fabric_node_id_pairs_);
-    std::vector<uint8_t> serialized_remote;
-    auto my_rank = *(distributed_context.rank());
-
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
-        if (my_rank == static_cast<int>(bcast_root)) {
-            int local_data_size_bytes = static_cast<int>(serialized_local.size());
-            distributed_context.broadcast(
-                ttsl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
-                distributed_context.rank());
-
-            distributed_context.broadcast(
-                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
-                distributed_context.rank());
-        } else {
-            int remote_data_size_bytes = 0;
-            distributed_context.broadcast(
-                ttsl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-            serialized_remote.clear();
-            serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
-            distributed_context.broadcast(
-                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-
-            merge_from_serialized(intermesh_exit_peer_fabric_node_id_pairs_, serialized_remote);
-        }
-        distributed_context.barrier();
-    }
 }
 
 // Propose PortDescriptors for neighbor cables (rank 0 pairs). One RoutingDirection per physical link; Z/NESW order from
@@ -3414,6 +3319,17 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 link.connection_hashes[k]);
         }
         link.placed = true;
+        if (intermesh_debug) {
+            log_warning(
+                tt::LogFabric,
+                "[place-dbg] src {} (dir {}) <-> dst {} (dir {}) nch={} hash0={}",
+                link.src_node,
+                static_cast<int>(src_dir),
+                link.dst_node,
+                static_cast<int>(dst_dir),
+                need,
+                link.connection_hashes.front());
+        }
         return true;
     };
 
@@ -3717,6 +3633,9 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
 // Multi-host: apply rank-0 intermesh broadcast, then bind ports to PSD cables via connection_hash.
 AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
+    // TODO(#50162): temporary apply-path diagnostics for the multi-host exit-peer asymmetry investigation.
+    const bool intermesh_debug = std::getenv("TT_INTERMESH_DEBUG") != nullptr;
+    std::map<std::pair<uint32_t, uint32_t>, std::size_t> dbg_applied, dbg_skipped_nocable, dbg_skipped_hash;
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
 
@@ -3783,6 +3702,25 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
                 create_port_tag(new_port_id),
                 *peer_mesh_id,
                 create_port_tag(peer_side.second));
+            if (intermesh_debug) {
+                dbg_skipped_nocable[{*my_mesh_id, *peer_mesh_id}]++;
+                std::string have;
+                for (const auto& [fn, _cables] : cable_lookup) {
+                    if (fn.mesh_id == my_mesh_id) {
+                        have += " D" + std::to_string(fn.chip_id);
+                    }
+                }
+                log_warning(
+                    tt::LogFabric,
+                    "[apply-dbg] rank{} SKIP_NOCABLE M{}->M{}: allocator put port on {} (hash={}), but this rank's "
+                    "PSD exit chips toward the peer are:{}",
+                    my_rank,
+                    *my_mesh_id,
+                    *peer_mesh_id,
+                    my_fn,
+                    conn_hash,
+                    have.empty() ? " (none)" : have);
+            }
             continue;
         }
         auto cable_it = chip_it->second.find(conn_hash);
@@ -3795,6 +3733,9 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
                 my_chip,
                 create_port_tag(new_port_id),
                 conn_hash);
+            if (intermesh_debug) {
+                dbg_skipped_hash[{*my_mesh_id, *peer_mesh_id}]++;
+            }
             continue;
         }
         const auto& info = cable_it->second;
@@ -3813,12 +3754,45 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
             continue;
         }
 
-        // Committed inter-mesh state for this host: direction per physical chan, per-chan peer, exit-node bookkeeping.
+        // Committed inter-mesh state for this host: direction per physical chan, per-chan peer.
         exit_node_directions_[my_fn][info.my_chan] = new_port_id.first;
         intermesh_chan_to_peer_[my_fn].insert_or_assign(info.my_chan, std::make_pair(info.peer_fn, info.peer_chan));
-        intermesh_exit_fabric_node_ids_[my_mesh_id][peer_mesh_id].insert(my_fn);
-        intermesh_exit_peer_fabric_node_id_pairs_[my_mesh_id][peer_mesh_id].emplace_back(my_fn, info.peer_fn);
-        intermesh_exit_peer_fabric_node_id_pairs_[peer_mesh_id][my_mesh_id].emplace_back(info.peer_fn, my_fn);
+        if (intermesh_debug) {
+            dbg_applied[{*my_mesh_id, *peer_mesh_id}]++;
+            log_warning(
+                tt::LogFabric,
+                "[apply-dbg] rank{} BIND M{}->M{}: my_fn {} <-> peer_fn {} (hash={})",
+                my_rank,
+                *my_mesh_id,
+                *peer_mesh_id,
+                my_fn,
+                info.peer_fn,
+                conn_hash);
+        }
+    }
+
+    if (intermesh_debug) {
+        std::set<std::pair<uint32_t, uint32_t>> keys;
+        for (const auto& [b, _n] : dbg_applied) {
+            keys.insert(b);
+        }
+        for (const auto& [b, _n] : dbg_skipped_nocable) {
+            keys.insert(b);
+        }
+        for (const auto& [b, _n] : dbg_skipped_hash) {
+            keys.insert(b);
+        }
+        for (const auto& b : keys) {
+            log_warning(
+                tt::LogFabric,
+                "[apply-dbg] rank{} M{}->M{}: applied={} skip_nocable={} skip_hash={}",
+                my_rank,
+                b.first,
+                b.second,
+                dbg_applied.count(b) ? dbg_applied.at(b) : 0,
+                dbg_skipped_nocable.count(b) ? dbg_skipped_nocable.at(b) : 0,
+                dbg_skipped_hash.count(b) ? dbg_skipped_hash.at(b) : 0);
+        }
     }
 
     return intermesh_connections;
@@ -4005,15 +3979,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                         // Update exit node directions
                         exit_node_directions_[node][current_eth_conn.src_chan] = local_port_id.first;
                         exit_node_directions_[neighbor_node][current_eth_conn.dst_chan] = neighbor_port_id.first;
-                        intermesh_exit_fabric_node_ids_[local_mesh_id][neighbor_node.mesh_id].insert(node);
                         const FabricNodeId peer_fabric_node_id =
                             this->topology_mapper_->get_fabric_node_id_from_asic_id(
                                 this->topology_mapper_->get_asic_id_from_fabric_node_id(
                                     FabricNodeId(neighbor_node.mesh_id, static_cast<std::uint32_t>(neighbor_chip_id))));
-                        intermesh_exit_peer_fabric_node_id_pairs_[local_mesh_id][neighbor_node.mesh_id].emplace_back(
-                            node, peer_fabric_node_id);
-                        intermesh_exit_peer_fabric_node_id_pairs_[neighbor_node.mesh_id][local_mesh_id].emplace_back(
-                            peer_fabric_node_id, node);
 
                         // Per-channel peer info, recorded for both directions of the cable.
                         // Used by get_connected_mesh_chip_chan_ids without going through the

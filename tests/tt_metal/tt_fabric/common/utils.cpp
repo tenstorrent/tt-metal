@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -575,7 +576,34 @@ void check_intermesh_port_assignment_against_golden(const std::string& golden_na
     }
 
     // Merge every per-rank file into one all-mesh map, covering both the inter-mesh port assignment and (if
-    // present) the intra-mesh channel assignment. Each rank owns a distinct local mesh, so keys never collide.
+    // present) the intra-mesh channel assignment. A single mesh can span multiple host ranks, and each such rank
+    // writes the same "M{a}->M{b}" key holding only its own chips' ports. Overwriting on collision would keep just
+    // the last file read and silently drop every other rank's ports, so concatenate the inner sequences instead,
+    // then sort + dedup for a deterministic result independent of file-read order.
+    auto merge_seq_into = [](YAML::Node& dst_map, const std::string& key, const YAML::Node& src_seq) {
+        if (!src_seq.IsSequence()) {
+            return;
+        }
+        std::vector<std::string> entries;
+        if (YAML::Node existing = dst_map[key]; existing && existing.IsSequence()) {
+            for (const auto& e : existing) {
+                entries.push_back(e.as<std::string>());
+            }
+        }
+        for (const auto& e : src_seq) {
+            entries.push_back(e.as<std::string>());
+        }
+        std::sort(entries.begin(), entries.end());
+        entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+        YAML::Node merged(YAML::NodeType::Sequence);
+        // Match the per-rank writer's flow style so the merged/regoldened file stays byte-stable.
+        merged.SetStyle(YAML::EmitterStyle::Flow);
+        for (const auto& e : entries) {
+            merged.push_back(e);
+        }
+        dst_map[key] = merged;
+    };
+
     YAML::Node merged_intermesh(YAML::NodeType::Map);
     YAML::Node merged_intramesh(YAML::NodeType::Map);
     for (int r = 1; r <= world_size; ++r) {
@@ -587,12 +615,12 @@ void check_intermesh_port_assignment_against_golden(const std::string& golden_na
         YAML::Node doc = YAML::LoadFile(f.string());
         if (YAML::Node inter = doc["intermesh_port_assignment"]; inter && inter.IsMap()) {
             for (auto it = inter.begin(); it != inter.end(); ++it) {
-                merged_intermesh[it->first.as<std::string>()] = it->second;
+                merge_seq_into(merged_intermesh, it->first.as<std::string>(), it->second);
             }
         }
         if (YAML::Node intra = doc["intramesh_channel_assignment"]; intra && intra.IsMap()) {
             for (auto it = intra.begin(); it != intra.end(); ++it) {
-                merged_intramesh[it->first.as<std::string>()] = it->second;
+                merge_seq_into(merged_intramesh, it->first.as<std::string>(), it->second);
             }
         }
     }
