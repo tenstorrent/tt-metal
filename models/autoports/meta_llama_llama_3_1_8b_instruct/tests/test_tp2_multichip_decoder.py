@@ -14,7 +14,7 @@ import pytest
 import torch
 from tracy import signpost
 
-import models.autoports.meta_llama_llama_3_1_8b_instruct.tt.multichip_decoder as multichip_decoder_module
+import models.autoports.meta_llama_llama_3_1_8b_instruct.tt.tp2_multichip_decoder as tp2_multichip_decoder_module
 import models.common.modules.tt_ccl as tt_ccl_module
 import ttnn
 from models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_functional_decoder import (
@@ -22,7 +22,7 @@ from models.autoports.meta_llama_llama_3_1_8b_instruct.tests.test_functional_dec
     _assert_pcc,
     _config,
 )
-from models.autoports.meta_llama_llama_3_1_8b_instruct.tt.multichip_decoder import (
+from models.autoports.meta_llama_llama_3_1_8b_instruct.tt.tp2_multichip_decoder import (
     PAGED_BLOCK_SIZE,
     TARGET_MESH_SHAPE,
     TARGET_TP_DEGREE,
@@ -276,7 +276,7 @@ def test_multichip_context_capacity_contract():
     assert evidence["bf16_plan_total_bytes"] < evidence["device_allocator_dram_bytes"]
 
 
-def test_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
+def test_tp2_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
     """A 32-layer stack must share one persistent semaphore owner per mesh."""
 
     class Grid:
@@ -340,9 +340,9 @@ def test_multichip_decoder_stack_shares_one_ccl_owner(monkeypatch):
             return tt_ccl_module.get_tt_ccl(candidate_mesh)
 
         monkeypatch.setattr(OptimizedDecoder, "__init__", fake_optimized_init)
-        monkeypatch.setattr(multichip_decoder_module, "_width_sharded_l1", lambda **kwargs: object())
-        monkeypatch.setattr(multichip_decoder_module, "_dram_matmul_program_config", lambda **kwargs: object())
-        monkeypatch.setattr(multichip_decoder_module, "get_tt_ccl", resolve_tt_ccl)
+        monkeypatch.setattr(tp2_multichip_decoder_module, "_width_sharded_l1", lambda **kwargs: object())
+        monkeypatch.setattr(tp2_multichip_decoder_module, "_dram_matmul_program_config", lambda **kwargs: object())
+        monkeypatch.setattr(tp2_multichip_decoder_module, "get_tt_ccl", resolve_tt_ccl)
 
         constructor_kwargs = dict(
             multichip_config=_selected_policy(),
