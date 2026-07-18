@@ -1,40 +1,73 @@
 {
   "hf_model": "tiiuae/Falcon3-7B-Base",
   "hf_advertised_context": 32768,
-  "current_supported_context": 128,
-  "limiting_reason": "device_dram_capacity",
+  "current_supported_context": 32768,
+  "supported_context_batch": 1,
+  "limiting_reason": null,
   "capacity_evidence": {
-    "workload_batch": 32,
-    "single_device_dense_mlp_gate_bytes_at_hf_context_bf16": 48318382080,
-    "single_device_dense_mlp_three_live_buffers_bytes_at_hf_context_bf16": 144955146240,
-    "explanation": "At the preserved batch of 32, one [batch,32768,23040] bf16 MLP buffer is 45 GiB; gate, up, and product buffers alone require 135 GiB before residuals, weights, and allocator overhead. The supplied compiler graph therefore captures a 128-token cache for this single-device functional baseline."
+    "target_mesh": [
+      1,
+      4
+    ],
+    "workload_batch": 1,
+    "max_context_full_prefill_executed": true,
+    "last_decode_position_executed": 32767,
+    "prefill_internal_row_chunks": 32,
+    "local_kv_heads_per_device": 1,
+    "local_paged_cache_shape_each_k_or_v": [
+      1024,
+      1,
+      32,
+      256
+    ],
+    "bfloat8_tile_bytes": 1088,
+    "tiles_per_layer_per_device_each_k_or_v_cache": 8192,
+    "all_layers_both_kv_caches_bytes_per_device": 499122176,
+    "bf16_residual_bytes_per_device": 201326592,
+    "bf16_rotary_cache_bytes_per_device": 33554432,
+    "all_layers_two_phase_projection_and_norm_bytes_per_device": 1926414336,
+    "decode_mlp_padding_bytes_per_device": 55738368,
+    "trace_region_reserve_bytes_per_device": 100000000,
+    "prefill_chunk_rows": 1024,
+    "calculated_live_chunk_activation_bytes_per_device": 63176704,
+    "reserved_transient_activation_bytes_per_device": 100663296,
+    "calculated_batch1_resident_plus_reserved_bytes_per_device": 2861080832,
+    "sampled_key_cache_pcc_vs_hf": 0.9964410657318681,
+    "sampled_value_cache_pcc_vs_hf": 0.9953481660889436,
+    "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/multichip_decoder/results/max_context_batch1.json",
+    "explanation": "TP4 stores one of four KV heads per device, and the decoder chunks dense prefill rows internally. BFP8 cache accounting uses the physical 1,088-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer. The 63,176,704-byte calculated live-chunk activation set includes three local MLP buffers, two full-hidden collective buffers, local QKV, and two norm/full-hidden buffers; the contract reserves 96 MiB for these buffers and allocator headroom. A full 32,768-token paged prefill plus decode at position 32,767 completed on the target 1x4 Blackhole mesh."
   },
-  "notes": "The optimized decoder preserves the IR-translated 128-token contract; this is not a reduced Falcon3 architecture limit. BFP8 KV storage and internally chunked dense MLP execution reduce memory. The selected DRAM-sharded decode path persistently owns width-sharded decode copies of QKV/O/gate/up/down in addition to interleaved prefill weights; max-length 128 prefill was rerun after that selection and remains valid, so this stage neither extends nor reduces advertised capacity.",
+  "notes": "The multichip decoder restores the full Hugging Face advertised 32,768-token context; batch 1 is the fully executed capacity gate. BFP8 rank-local KV storage, TP4 projection weights, and internally chunked dense MLP execution make it physical on the target mesh. The calculated batch-1 resident plus trace/transient reserve is 2,861,080,832 bytes per device. Batch 32 remains validated for the compiler-derived short workload and heterogeneous decode positions, but full-context batch 32 is not claimed by this decoder-only stage because it was not executed: its all-layer local KV caches and BF16 residual would consume 15,971,909,632 and 6,442,450,944 bytes per device, respectively, and the resident lower bound including weights, rotary cache, and trace reserve is 24,474,329,344 bytes before full-prefill concatenation and attention temporaries.",
   "paths": {
     "prefill": {
-      "status": "optimized_and_validated",
+      "status": "multichip_validated",
       "emitted_batch": 32,
       "emitted_sequence_length": 17,
       "validated_sequence_lengths": [
         17,
         31,
-        128
+        128,
+        1025,
+        32768
       ],
-      "cache_length": 128,
+      "cache_length": 32768,
+      "max_context_validated_batch": 1,
       "kv_cache_dtype": "bfloat8_b",
-      "classification": "compiler g0: fill_cache=1792, paged_update_cache=0, decode_sdpa=0"
+      "classification": "TP4: rank-local fill_cache and paged cache with one KV head per device; row-chunked dense MLP"
     },
     "decode": {
-      "status": "optimized_and_validated",
+      "status": "multichip_validated",
       "emitted_batch": 32,
       "validated_positions": [
         17,
         31,
-        32
+        32,
+        32767
       ],
-      "cache_length": 128,
+      "cache_length": 32768,
+      "max_context_validated_batch": 1,
       "kv_cache_dtype": "bfloat8_b",
-      "classification": "compiler g1: fill_cache=0, paged_update_cache=56, decode_sdpa=28"
+      "classification": "TP4: rank-local paged_update_cache and decode SDPA with replicated logical positions/page tables"
     }
   },
   "ir_provenance": {
@@ -43,7 +76,7 @@
       4
     ],
     "tp_degree": 4,
-    "collapsed_to_single_device_dense": true,
+    "collapsed_to_single_device_dense": false,
     "representative_layer": 14
   }
 }

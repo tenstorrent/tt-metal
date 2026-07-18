@@ -1,0 +1,41 @@
+{
+  "batch": 1,
+  "ccl_dtype": "bf16",
+  "down_target_cores": 24,
+  "effective_ccl_topology": "Ring",
+  "gate_up_target_cores": 24,
+  "generated_at_utc": "2026-07-18T05:44:39.108390+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "2393f5ff856ea38e1b8c88440ee745f9872c8476f094e1b7c618b6036aa98272",
+  "iterations_per_sample": 100,
+  "multichip_prefill_ms": 0.8526458404958248,
+  "multichip_trace_ms": 0.3602651599794626,
+  "num_links": 1,
+  "o_target_cores": 8,
+  "parallel_efficiency": 0.4469254457822841,
+  "prefill_parallel_efficiency": null,
+  "prefill_samples": [
+    1.1413670144975185,
+    0.879989005625248,
+    0.8526458404958248,
+    0.7725539617240429,
+    0.8323783986270428
+  ],
+  "prefill_speedup": null,
+  "qkv_target_cores": 8,
+  "repo_head": "b35b3c1cbf7610b87f2813448f6d11f6df502b0c",
+  "samples": [
+    0.3602651599794626,
+    0.36043269094079733,
+    0.3601766936480999,
+    0.3602925082668662,
+    0.36013381090015173
+  ],
+  "sequence_length": 17,
+  "single_chip_baseline_ms": 0.644046668894589,
+  "single_chip_prefill_ms": null,
+  "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch1.json",
+  "speedup": 1.7877017831291364,
+  "test_sha256": "d658fa7740b004644c9add7023e6f7ce577349c685083c907d6b52448d729433",
+  "weights": "real_layer_14"
+}

@@ -1,0 +1,31 @@
+{
+  "generated_at_utc": "2026-07-18T06:57:24Z",
+  "repo_head": "b35b3c1cbf7610b87f2813448f6d11f6df502b0c",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "command": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 python -m pytest -q -s models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace",
+  "result": "passed",
+  "test_duration_seconds": 7.95,
+  "attached_devices": 4,
+  "detached_devices": 4,
+  "watcher_error_matches": 0,
+  "watcher_log": "watcher.log",
+  "watcher_log_sha256": "a37548e26e05a6ee993e546355fe6d6659416696cd7b71d5a89568d70320d36d",
+  "pytest_stdout": "pytest_stdout.log",
+  "pytest_stdout_sha256": "0f7ad0b28acbc2155b9a84ea56b026d0e8ff91058e486b1fb66e3399a09baf7c",
+  "implementation_sha256": "b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573",
+  "test_sha256": "b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557",
+  "enabled_checks": [
+    "assert",
+    "pause",
+    "ring_buffer",
+    "stack_usage",
+    "noc_sanitize",
+    "read_only_l1_sanitize",
+    "write_only_l1_sanitize",
+    "waypoint",
+    "dispatch",
+    "circular_buffer_sanitize"
+  ],
+  "disabled_check": "active Ethernet firmware instrumentation only",
+  "disabled_check_reason": "With Ethernet Watcher injection enabled, FABRIC_1D_RING fails before device initialization because the instrumented fabric router program is 27,920 bytes but Blackhole ACTIVE_ETH has a 25,600-byte kernel-config buffer. The same startup-only failure reproduced with default Watcher, DUMP_ALL, and stack-usage-only-disabled variants. The accepted run kept the fabric and both CCL all-reduces active while Watcher covered all worker and dispatch cores."
+}

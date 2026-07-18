@@ -1,0 +1,70 @@
+{
+  "batch": 1,
+  "ccl_dtype": "bf16",
+  "down_target_cores": 8,
+  "effective_ccl_topology": "Ring",
+  "gate_up_target_cores": 8,
+  "generated_at_utc": "2026-07-18T06:22:01.951947+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "2393f5ff856ea38e1b8c88440ee745f9872c8476f094e1b7c618b6036aa98272",
+  "iterations_per_sample": 100,
+  "multichip_prefill_ms": 0.8072401396930218,
+  "multichip_trace_ms": 0.3682948602363467,
+  "num_links": 2,
+  "o_target_cores": 8,
+  "parallel_efficiency": 0.43718141252452136,
+  "physical_decode_geometry": {
+    "down_grid": [
+      8,
+      1
+    ],
+    "down_grid_cores": 8,
+    "gate_up_grid": [
+      8,
+      1
+    ],
+    "gate_up_grid_cores": 8,
+    "mlp_local_width": 5760,
+    "mlp_padded_width": 5888,
+    "mlp_padding": 128,
+    "o_grid": [
+      8,
+      1
+    ],
+    "o_grid_cores": 8,
+    "o_local_input_width": 768,
+    "qkv_grid": [
+      8,
+      1
+    ],
+    "qkv_grid_cores": 8,
+    "qkv_local_width": 1280,
+    "qkv_padded_width": 1280,
+    "qkv_padding": 0
+  },
+  "prefill_parallel_efficiency": null,
+  "prefill_samples": [
+    1.050995197147131,
+    0.8072401396930218,
+    0.7479372434318066,
+    0.8218367584049702,
+    0.7253428921103477
+  ],
+  "prefill_speedup": null,
+  "qkv_target_cores": 8,
+  "repo_head": "b35b3c1cbf7610b87f2813448f6d11f6df502b0c",
+  "samples": [
+    0.3682948602363467,
+    0.3682054812088609,
+    0.36831239238381386,
+    0.3682742081582546,
+    0.36832140758633614
+  ],
+  "sequence_length": 17,
+  "single_chip_baseline_ms": 0.644046668894589,
+  "single_chip_prefill_ms": null,
+  "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch1.json",
+  "speedup": 1.7487256500980854,
+  "test_sha256": "97f2dfea6fcba843076d246cbe5c76c750c0555db817552bd76ee65b5a559ee0",
+  "weights": "real_layer_14"
+}

@@ -1,0 +1,43 @@
+Falcon3-7B TP4 selected decode — tt-perf-report 2.1
+===================================================
+
+Source signposts: MULTICHIP_DECODE .. MULTICHIP_DECODE_END
+Target: 4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING, 110 worker cores/chip
+Workload: real layer 14, batch 1, three warmed trace replays
+Report merge: four devices; 150 device ops; 0 host ops
+
+Three-replay summary
+--------------------
+Device time:     1,020 us total (340 us/replay)
+Op-to-op gaps:     151 us total (50 us/replay; merged-device profiler view)
+Overall DRAM:       93 GB/s (18.1%)
+Warmed wall time: 0.356696 ms/replay (100 trace replays/sample, median of five)
+
+Representative operation times
+------------------------------
+Operation                         Device time  DRAM BW   DRAM util  FLOPs       Compute util
+QKV  [32 x 3072 x 1280]                10 us   189 GB/s      36.9%  24.2 TF/s          36.5%
+paged KV update (each)                   3 us          -          -          -              -
+SDPA decode                              9 us          -          -          -              -
+O    [32 x 768 x 3072]                   9 us   132 GB/s      25.7%  16.9 TF/s          25.4%
+gate/up [32 x 3072 x 6144]              41 us   231 GB/s      45.1%  29.6 TF/s          44.5%
+gated multiply                          14 us          -          -          -              -
+down [32 x 6144 x 3072]                 37 us   258 GB/s      50.4%  33.0 TF/s          49.8%
+attention reduce-scatter                24 us          -          -          -              -
+attention all-gather                    14 us          -          -          -              -
+MLP reduce-scatter                      23 us          -          -          -              -
+MLP all-gather                          14 us          -          -          -              -
+
+Interpretation
+--------------
+The two all-reduces lower to roughly 24/23-us reduce-scatter plus 14-us
+all-gather pairs, about 75 us per layer replay. Gate/up reaches roughly 45% of
+the DRAM and compute ceilings, while the selected 8-core down projection reaches
+roughly 50%; smaller attention projections are less efficient. This explains
+the measured 1.806x TP4 decode speedup and is the remaining optimization
+boundary. A complete fractured-residual experiment through distributed RMSNorm
+and the next QKV was 1.127x slower than the replicated boundary. The repository
+also rejects fused matmul+reduce-scatter on Blackhole because its implementation
+has a nondeterministic synchronization race (issue #46181).
+
+Exact reproduction command and source hashes are in profile_provenance.json.
