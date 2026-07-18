@@ -382,5 +382,12 @@ Round 2 returned `clean-pass` with no required work; see
 full-Ethernet watcher result, capture-static page-table contract, remaining
 prefill slowdown, and fixed batch-one/1x4 scope as documented residual risks.
 
-Local stage-owned checkpoint SHAs are appended after checkpoint creation. No
-push will be performed.
+Local stage-owned checkpoints:
+
+- implementation, tests, and context contract:
+  `6e221804917abc87b5c737172e58e6f8dfbfbaf4`;
+- documentation, profiler/watcher evidence, and clean-pass review:
+  `1bb000d5d0266e4c6b1b476dfabc80c34caabaae`.
+
+The metadata-only checkpoint containing this SHA record is the current HEAD
+reported at handoff. No push was performed.
