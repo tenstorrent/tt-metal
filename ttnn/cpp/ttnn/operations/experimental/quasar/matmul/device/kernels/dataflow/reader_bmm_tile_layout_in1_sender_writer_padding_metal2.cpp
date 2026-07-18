@@ -317,9 +317,14 @@ void kernel_main() {
                              .addr = static_cast<uint32_t>(in1_start_address)},
                             true);
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+                        // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
+                        // barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
+                        // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
+                        // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
+                        // receiver never sees bias VALID. Matches the BH ordering requirement.
                         noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
                         // We should also multicast the flag to destinations
                         receiver_sem.set_multicast(
@@ -388,9 +393,14 @@ void kernel_main() {
                              .noc_y_end = in1_mcast_dest_noc_end_y,
                              .addr = static_cast<uint32_t>(in3_start_address)},
                             true);
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+                        // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
+                        // barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
+                        // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
+                        // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
+                        // receiver never sees bias VALID. Matches the BH ordering requirement.
                         noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
                         receiver_sem.set_multicast(
                             noc,
