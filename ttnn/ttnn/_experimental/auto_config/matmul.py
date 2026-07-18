@@ -30,6 +30,11 @@ _BENCHMARK_ITERS = 3
 # minutes to a CI run.  We sample evenly from the sorted candidate list to
 # keep the sweep bounded while still covering diverse block-size regimes.
 _MAX_MINIMAL_CANDIDATES = 4
+# Maximum number of classic MatmulProgramConfig candidates (2D mcast, 1D mcast
+# in0/in1) benchmarked per signature.  Each candidate is a distinct matmul
+# execution mode; invalid ones for a given shape self-eliminate during the
+# on-device benchmark loop, so we generate broadly and let measured latency pick.
+_MAX_PROGRAM_CONFIG_CANDIDATES = 6
 _CACHE_FILE_SUFFIX = ".json"
 _DEFAULT_CCL_CHUNKS_PER_SYNC = 10
 _DEFAULT_CCL_NUM_WORKERS_PER_LINK = 2
@@ -964,6 +969,216 @@ def _build_local_minimal_candidates(
     ]
 
 
+def _find_largest_divisor(value: int, max_divisor: int = 8) -> int:
+    for divisor in range(max_divisor, 0, -1):
+        if value % divisor == 0:
+            return divisor
+    return 1
+
+
+def _pick_out_subblock_w(per_core_n: int, out_subblock_h: int) -> int:
+    # out_subblock_h * out_subblock_w must fit the compute engine (<= 4 here, the
+    # conservative bound used across the model configs) and evenly divide per_core_N.
+    out_subblock_w = 4
+    while out_subblock_w > 1:
+        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
+            break
+        out_subblock_w -= 1
+    return out_subblock_w
+
+
+def _pick_out_subblock_h(per_core_m: int, out_subblock_w: int) -> int:
+    return max([i for i in range(1, 4 + 1) if per_core_m % i == 0 and i * out_subblock_w <= 4] or [1])
+
+
+def _supports_program_config_sweep(signature: AutoMatmulSignature) -> bool:
+    """Eligibility for the classic 2D/1D mcast program-config sweep.
+
+    Restricted to the plain (non-transposed, non-batched) M×K · K×N case in TILE
+    layout — the regime the 2D/1D multicast factories are parameterized for here.
+    Transposed/batched shapes are left to the default heuristic candidate.
+    """
+    ttnn = _ttnn()
+    if signature.transpose_a or signature.transpose_b:
+        return False
+    if signature.input_tensor_a.get("layout") != str(ttnn.TILE_LAYOUT):
+        return False
+    if signature.input_tensor_b.get("layout") != str(ttnn.TILE_LAYOUT):
+        return False
+    if not _uses_standard_tile_shape(signature.input_tensor_a):
+        return False
+    if not _uses_standard_tile_shape(signature.input_tensor_b):
+        return False
+    lhs_shape = signature.input_tensor_a.get("shape", ())
+    rhs_shape = signature.input_tensor_b.get("shape", ())
+    if len(lhs_shape) < 2 or len(rhs_shape) < 2:
+        return False
+    # No batch dims on either operand (leading dims must collapse to 1).
+    if any(int(dim) != 1 for dim in lhs_shape[:-2]):
+        return False
+    if any(int(dim) != 1 for dim in rhs_shape[:-2]):
+        return False
+    return True
+
+
+def _make_program_config(descriptor: dict[str, Any]) -> Any:
+    ttnn = _ttnn()
+    grid = (int(descriptor["grid"][0]), int(descriptor["grid"][1]))
+    if descriptor["mode"] == "2d_mcast":
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=descriptor["in0_block_w"],
+            out_subblock_h=descriptor["out_subblock_h"],
+            out_subblock_w=descriptor["out_subblock_w"],
+            per_core_M=descriptor["per_core_M"],
+            per_core_N=descriptor["per_core_N"],
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=descriptor["in0_block_w"],
+        out_subblock_h=descriptor["out_subblock_h"],
+        out_subblock_w=descriptor["out_subblock_w"],
+        per_core_M=descriptor["per_core_M"],
+        per_core_N=descriptor["per_core_N"],
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=(descriptor["mode"] == "1d_mcast_in0"),
+    )
+
+
+def _run_program_config_matmul(
+    base_operation: Any,
+    signature: AutoMatmulSignature,
+    prepared: PreparedMatmulInputs,
+    kwargs: dict[str, Any],
+    *,
+    descriptor: dict[str, Any],
+) -> Any:
+    # Activation (if any) flows through kwargs so the C++ op fuses it; we leave
+    # fused_activation=None on the program config to avoid double application.
+    call_kwargs = dict(kwargs)
+    call_kwargs["program_config"] = _make_program_config(descriptor)
+    if signature.is_linear:
+        call_kwargs["bias"] = prepared.bias
+    return base_operation(prepared.input_tensor_a, prepared.input_tensor_b, **call_kwargs)
+
+
+def _build_program_config_candidates(
+    signature: AutoMatmulSignature,
+    prepared: PreparedMatmulInputs,
+    kwargs: dict[str, Any],
+    *,
+    base_operation: Any,
+) -> list[Candidate]:
+    """Generate candidates spanning the distinct ttnn.matmul execution modes.
+
+    ttnn.matmul dispatches to several MatmulProgramConfig variants (2D systolic
+    multicast, 1D multicast gathering in0 or in1, ...).  Rather than trusting a
+    single heuristic, this builds a representative config for each mode from the
+    M/K/N tile counts and the device grid, then lets the on-device benchmark loop
+    measure them and keep the fastest.  Configs that are invalid for the shape
+    throw during benchmarking and are discarded there.
+    """
+    if _is_distributed(signature):
+        return []
+    if not _supports_program_config_sweep(signature):
+        return []
+    device = prepared.input_tensor_a.device()
+    if device is None:
+        return []
+
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    num_cores = max(1, grid_x * grid_y)
+    m_tiles, k_tiles, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+
+    descriptors: list[dict[str, Any]] = []
+
+    # 2D systolic multicast: M distributed over grid rows, N over grid columns.
+    per_core_m_2d = max(1, math.ceil(m_tiles / grid_y))
+    per_core_n_2d = max(1, math.ceil(n_tiles / grid_x))
+    subblock_w_2d = _pick_out_subblock_w(per_core_n_2d, 1)
+    descriptors.append(
+        {
+            "kind": "program_config",
+            "mode": "2d_mcast",
+            "grid": [grid_x, grid_y],
+            "in0_block_w": _find_largest_divisor(max(1, k_tiles // grid_y)),
+            "per_core_M": per_core_m_2d,
+            "per_core_N": per_core_n_2d,
+            "out_subblock_h": 1,
+            "out_subblock_w": subblock_w_2d,
+        }
+    )
+
+    in0_block_w_1d = _find_largest_divisor(max(1, k_tiles // num_cores))
+
+    # 1D multicast gathering in0: all cores split N (best when M is small).
+    per_core_m_in0 = m_tiles
+    per_core_n_in0 = max(1, math.ceil(n_tiles / num_cores))
+    subblock_w_in0 = _pick_out_subblock_w(per_core_n_in0, 1)
+    descriptors.append(
+        {
+            "kind": "program_config",
+            "mode": "1d_mcast_in0",
+            "grid": [grid_x, grid_y],
+            "in0_block_w": in0_block_w_1d,
+            "per_core_M": per_core_m_in0,
+            "per_core_N": per_core_n_in0,
+            "out_subblock_h": _pick_out_subblock_h(per_core_m_in0, subblock_w_in0),
+            "out_subblock_w": subblock_w_in0,
+        }
+    )
+
+    # 1D multicast gathering in1: all cores split M (best when N is small).
+    per_core_m_in1 = max(1, math.ceil(m_tiles / num_cores))
+    per_core_n_in1 = n_tiles
+    subblock_w_in1 = _pick_out_subblock_w(per_core_n_in1, 1)
+    descriptors.append(
+        {
+            "kind": "program_config",
+            "mode": "1d_mcast_in1",
+            "grid": [grid_x, grid_y],
+            "in0_block_w": in0_block_w_1d,
+            "per_core_M": per_core_m_in1,
+            "per_core_N": per_core_n_in1,
+            "out_subblock_h": _pick_out_subblock_h(per_core_m_in1, subblock_w_in1),
+            "out_subblock_w": subblock_w_in1,
+        }
+    )
+
+    # Drop configs whose per-core working set clearly exceeds L1, de-duplicate,
+    # and cap the sweep so CI stays bounded.
+    seen: set[str] = set()
+    candidates: list[Candidate] = []
+    for descriptor in descriptors:
+        if (
+            _estimate_l1_kb(
+                descriptor["per_core_M"], descriptor["in0_block_w"], descriptor["per_core_N"], prepared.bias
+            )
+            > _L1_BUDGET_KB
+        ):
+            continue
+        key = json.dumps(descriptor, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(
+            Candidate(
+                descriptor=descriptor,
+                run=lambda descriptor=descriptor: _run_program_config_matmul(
+                    base_operation, signature, prepared, kwargs, descriptor=descriptor
+                ),
+            )
+        )
+        if len(candidates) >= _MAX_PROGRAM_CONFIG_CANDIDATES:
+            break
+    return candidates
+
+
 def _build_default_candidate(
     *,
     base_operation: Any,
@@ -1451,6 +1666,10 @@ def _build_candidate_from_descriptor(
         for candidate in _build_local_minimal_candidates(signature, prepared, kwargs):
             if candidate.descriptor == descriptor:
                 return candidate
+    if kind == "program_config":
+        for candidate in _build_program_config_candidates(signature, prepared, kwargs, base_operation=base_operation):
+            if candidate.descriptor == descriptor:
+                return candidate
     if kind in {"all_gather_then_matmul", "all_gather_then_linear"}:
         candidate = _build_all_gather_then_matmul_candidate(
             signature, prepared, kwargs, plan, base_operation=base_operation
@@ -1523,6 +1742,7 @@ def _build_candidates(
                 signature=signature,
             )
         )
+        candidates.extend(_build_program_config_candidates(signature, prepared, kwargs, base_operation=base_operation))
         candidates.extend(_build_local_minimal_candidates(signature, prepared, kwargs))
 
     return candidates
