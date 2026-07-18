@@ -6,7 +6,8 @@ all four devices. Full-model assembly and vLLM are intentionally outside scope.
 
 Status: implementation and hardware gates complete; the initial review and
 first rereview findings are fixed, and final independent `$stage-review`
-returned `clean-pass`. The local checkpoint commit is pending.
+returned `clean-pass`. Stage-owned implementation and evidence are checkpointed
+at `f6f3f0a11ef6bf6cfab2de9379a3a82b35c729cd`; nothing was pushed.
 
 ## Result
 

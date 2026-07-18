@@ -5,6 +5,7 @@
   "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
   "stage_start_head": "3c69719127e668656ec77396bb042b024ff37659",
   "input_stage_checkpoint": "64e3199158e765e2558115bbfcc1ed2e4edcd68a",
+  "stage_checkpoint": "f6f3f0a11ef6bf6cfab2de9379a3a82b35c729cd",
   "final_source": {
     "implementation_sha256": "52d49bcf238ccd76ab2e763d9b5cd3c028ac12d40764eed84272aff5813f90ea",
     "test_sha256": "d0f4bed85fc6b33a922184f3b2a0a374258ba99634f4058b97e7f9e6896b8642",

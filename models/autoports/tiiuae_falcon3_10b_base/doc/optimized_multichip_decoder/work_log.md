@@ -315,8 +315,7 @@ The initial independent `$stage-review` and first rereview returned
 `more-work-needed`; their findings and remediations are recorded in
 `stage_review_initial.md`, `stage_review_second.md`, and the sections below.
 Final independent rereview returned `clean-pass`; its evidence is recorded in
-`stage_review_final.md`. The local checkpoint commit is pending. No push will
-be performed. The stage-owned checkpoint SHA will be appended below.
+`stage_review_final.md`. No push was performed.
 
 ## 2026-07-18: initial review remediation
 
@@ -432,3 +431,10 @@ It verified the corrected RoPE capture/IR, complete coherent advisor-family
 measurement, current-hash default artifacts, same-run profiler accounting,
 context, fallback, watcher, health, and the absence of deferred optimization
 items. The full verdict is `stage_review_final.md`.
+
+## Local checkpoint
+
+- Implementation and evidence: `f6f3f0a11ef6bf6cfab2de9379a3a82b35c729cd`
+- The large-file hook was skipped only for the two required 33 MB compiler
+  advisor decision traces; all other configured commit hooks passed.
+- The commit is local and was not pushed.
