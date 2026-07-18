@@ -23,9 +23,9 @@ void kernel_main() {
     // stale/wrong (hash/cache). If RPM_ON with correct bits but output is still x1.15, the bug is in
     // the reduce/GAPOOL sum, not the post-mul.
 #ifdef REDUCE_POST_MUL
-    UNPACK(DPRINT("RPM_ON post_mul_bits=" << HEX() << (uint32_t)get_arg(args::post_mul_scaler_bits) << ENDL()));
+    UNPACK(DPRINT("RPM_ON post_mul_bits={}\n", (uint32_t)get_arg(args::post_mul_scaler_bits)));
 #else
-    UNPACK(DPRINT("RPM_OFF" << ENDL()));
+    UNPACK(DPRINT("RPM_OFF\n"));
 #endif
 
     compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
