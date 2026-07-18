@@ -379,6 +379,15 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         //   2D: every chip in the mesh outside me is covered by exactly one of the 4 mcast packets.
         // Both equal num_devices - 1.
         uint32_t barrier_wait_value = num_devices - 1;
+        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+        auto physical_direction = [&](const std::optional<MeshCoordinate>& coord) {
+            if (!coord.has_value()) {
+                return 0u;
+            }
+            return static_cast<uint32_t>(tt::tt_fabric::get_eth_forwarding_direction(
+                                             sender_fabric_node_id, mesh_device->get_fabric_node_id(*coord))
+                                             .value());
+        };
 
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),   // input tensor address
@@ -403,8 +412,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
             ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
             ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
+            physical_direction(e_coord),        // physical direction of the E line
+            physical_direction(e_coord),        // physical direction of the E rectangle edge
+            physical_direction(w_coord),        // physical direction of the W rectangle edge
+            physical_direction(s_coord),        // physical direction of the S rectangle spine
         };
-        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
         if (e_hops > 0 && e_coord.has_value()) {
@@ -444,6 +456,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
             ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
             ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
+            physical_direction(w_coord),        // physical direction of the W line
+            physical_direction(e_coord),        // physical direction of the E rectangle edge
+            physical_direction(w_coord),        // physical direction of the W rectangle edge
+            physical_direction(n_coord),        // physical direction of the N rectangle spine
         };
 
         // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
