@@ -37,9 +37,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 SPARSE_OUTPUT_PCC = 0.98
 SPARSE_KVPE_PCC = 0.99
-# Matches the production GLM adapters: enough room for all_gather's global semaphores without reducing
-# the static-CB headroom required by the dense MLA path.
-L1_SMALL_SIZE = 512
+# Native all_gather retains one 16-B-per-bank barrier semaphore for every distinct cached program.
+# Sparse MLA's indexer adds several shape-specialized gathers, so reserve 64 slots while keeping the
+# semaphores isolated from the main-L1/static-CB allocation range.
+L1_SMALL_SIZE = 1024
 # Indexer key cache is stored bf8 on device vs the bf16 CPU reference, so it carries block-float
 # quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.

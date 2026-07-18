@@ -292,8 +292,8 @@ class TtIndexer:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
-    # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
-    # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
+    # Inlined TP/SP collectives. Reduce-scatter uses the shared tt_ccl semaphore pool; all-gather uses
+    # the native multicast implementation directly.
     def _tp_rs_ag(self, t, rs_only=False):
         """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
         if self.tp_factor == 1:
@@ -311,14 +311,10 @@ class TtIndexer:
         )
         if rs_only:
             return t
-        return ttnn.experimental.all_gather_async(
+        return ttnn.all_gather(
             t,
             dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
@@ -326,14 +322,10 @@ class TtIndexer:
         """All-gather across the SP axis (sequence) → full-S replicated on SP. sp=1: no-op."""
         if self.sp_factor == 1:
             return t
-        return ttnn.experimental.all_gather_async(
+        return ttnn.all_gather(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
-            num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
             cluster_axis=self.sp_axis,
         )
 
@@ -343,14 +335,10 @@ class TtIndexer:
         indices that were computed on TP-seq-sharded query rows back to the [1,1,S/sp,k] contract.)"""
         if self.tp_factor == 1:
             return t
-        return ttnn.experimental.all_gather_async(
+        return ttnn.all_gather(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
