@@ -111,11 +111,11 @@ void kernel_main() {
         }
 
         readable = source_page_size_bytes;
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // Write to dest
         while (readable > 0) {
-            noc_async_write_barrier();
+            noc.async_write_barrier();
             if (readable < writable) {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
@@ -127,7 +127,7 @@ void kernel_main() {
                     if (i == read_end_page - 1) {
                         tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                             noc, dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
-                        noc_async_write_barrier();
+                        noc.async_write_barrier();
                         return;
                     }
                     write_offset = write_offset + readable;
@@ -151,7 +151,7 @@ void kernel_main() {
                 writable = dest_page_size_bytes;
                 readable = 0;
                 if (i == read_end_page - 1) {
-                    noc_async_write_barrier();
+                    noc.async_write_barrier();
                     return;
                 }
                 write_page++;
@@ -186,6 +186,6 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     return;
 }
