@@ -151,9 +151,10 @@ _CONFIG_BUILDERS = {"deepseek_v32": deepseek_v32_hf_config, "glm_5_1": glm_hf_co
 # FABRIC_1D exhibited the multi-hop line-broadcast hang). FABRIC_2D + fabric_router_config leaves the
 # fabric-tensix datamover off, so the realtime profiler stays eligible (see PR #49840 CCL benchmarks).
 PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
-# Matches the production GLM adapters: enough room for all_gather's global semaphores without reducing
-# the static-CB headroom required by the dense MLA path.
-L1_SMALL_SIZE = 512
+# Native all_gather retains one 16-B-per-bank barrier semaphore for every distinct cached program.
+# Sparse MLA's indexer adds several shape-specialized gathers, so reserve 64 slots while keeping the
+# semaphores isolated from the main-L1/static-CB allocation range.
+L1_SMALL_SIZE = 1024
 
 # Realtime-profiler record drain ceiling. The receiver thread delivers records asynchronously; the
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
