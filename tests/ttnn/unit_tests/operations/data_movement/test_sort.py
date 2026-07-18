@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+
 import pytest
 import torch
 import ttnn
@@ -673,6 +675,77 @@ def test_width_sharded(layout, device):
     ), f"values mismatch max_diff={(out - ref_vals.float()).abs().max():.4f}"
     gathered = torch.gather(t, -1, ttnn.to_torch(i).to(torch.int64))
     assert torch.allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2), "index gather mismatch"
+
+
+def _next_pow2(n):
+    p = 1
+    while p < n:
+        p <<= 1
+    return p
+
+
+@pytest.mark.timeout(600, method="thread")
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_multi_row_multi_core_no_deadlock(descending, device):
+    """
+    Guard for the DRAM multi-core sort path (SortProgramFactorySingleRowMultiCore).
+
+    The coordinator core used to collect two logically different worker signals --
+    the reader's per-row "ready" and the writer's per-pair "done" confirmations --
+    on a single cores->coordinator semaphore, consumed with an exact-match wait().
+    At a tile-row boundary (Ht >= 2) a fast reader's next-row readiness increment
+    could push that shared counter past the exact confirmation target so the wait
+    never matched -> deadlock.  The fix splits the channel into two semaphores
+    (ready + done), one producer signal each.
+
+    That race is latent (the exact-match poll normally out-races the NoC atomics, so
+    it needs timing pressure to surface), so this test does not deterministically
+    reproduce the hang.  What it *does* guarantee is that the multi-core Ht >= 2 path
+    -- otherwise only exercised at Ht == 1 -- runs to completion with correct output,
+    and, via the worker-thread watchdog + pytest-timeout, that a regression which
+    makes it deadlock FAILS with an assertion instead of hanging the test session.
+
+    The multi-core factory is only selected when the (power-of-two padded) tile width
+    exceeds total_cores * 128, so the width is sized from the device grid.
+    """
+    torch.manual_seed(0)
+
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+    wt = _next_pow2(total_cores * 128 + 1)  # smallest pow2 Wt on the DRAM multi-core path
+    shape = [1, 1, 2 * TILE_HEIGHT, wt * TILE_WIDTH]  # Ht = 2
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    result = {}
+
+    def _run():
+        try:
+            values, indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+            ttnn.synchronize_device(device)
+            result["values"] = values
+            result["indices"] = indices
+        except Exception as exc:  # surface device/compile errors to the main thread
+            result["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=300.0)
+
+    assert not worker.is_alive(), (
+        "ttnn.sort did not complete on the DRAM multi-core path (Ht=2): the coordinator's "
+        "cores->coordinator wait was starved -- likely a regression of the ready/done "
+        "semaphore split."
+    )
+    if "error" in result:
+        raise result["error"]
+
+    torch_values, _ = torch.sort(input_t, dim=-1, descending=descending)
+    assert list(result["values"].shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(result["values"]))
+    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(result["indices"]).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
