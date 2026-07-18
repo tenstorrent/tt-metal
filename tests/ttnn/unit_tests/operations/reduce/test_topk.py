@@ -378,3 +378,36 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
+
+
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_multicore_local_write_correctness(largest, device):
+    """
+    Guards the multi-core topk local-writer path (input width >= multi_core_min_width=8192,
+    so it routes to TopKMultiCoreProgramFactory + writer_local_topk).
+
+    writer_local_topk NoC-writes each local-topk tile from its CB slot to the final core, then
+    cb_pop_front releases that slot to the compute producer.  Without a write barrier before the
+    pop, the producer's next pack_tile can overwrite the slot while the NoC write's source-read is
+    still in flight (WAR), corrupting the values landed at the final core.  This checks the
+    multi-core aggregation produces correct top-k values.
+
+    The race is latent (masked by the compute-pack latency), so this does not fail deterministically
+    on the pre-fix code; it is a fast correctness guard for the multi-core write path (a
+    forced-corruption reproducer that clobbers the source slot before the flush is documented in the PR).
+    """
+    torch.manual_seed(2005)
+    W, k = 8192, 32  # W >= 8192 -> multi-core path; k=32 -> Kt=1
+    t = torch.randn((1, 1, 32, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True)
+    ttnn.synchronize_device(device)
+
+    got = ttnn.to_torch(v).float()
+    ref, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+    # Compare the (order-insensitive) set of top-k values per row.
+    got_s = got.sort(dim=-1, descending=True).values
+    ref_s = ref.sort(dim=-1, descending=True).values
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"multi-core topk values mismatch (WAR regression?): max_diff={(got_s - ref_s).abs().max():.4f}"
