@@ -94,7 +94,7 @@ L1 spills and advised a 40-core QKV output, 90-core residual/O/router/expert
 layouts, and 10-core norms.  Its closest legal QKV geometry (`30,3,1,1`, since
 the nominal 23-core input did not divide 90 K tiles) measured 22.62038 / 0.60963
 ms and was rejected.  The retained report and final IR have SHA256
-`e7a72adffe59ebcad22af4121ca83800226ed1e4dbc399557da7cae9c41e7886`
+`2889d24e263e0f05d75f5ee19e39a0a4867e1f27834a50e0a46840bb7f0a13cf`
 and `77aa7643fefa1f24a742c9f9a72cc334385f0c4336ce304b35ef73433a8b1d61`.
 
 ## Profiler evidence and advice disposition
