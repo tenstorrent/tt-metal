@@ -948,13 +948,14 @@ def _run_device_proc(
       BUILD   discover (stall-detector on no CPU progress)      -> PERF_MCP_DISCOVER_STALL_SEC (1200s), backstop PERF_MCP_DISCOVER_TIMEOUT (10800s)
       MEASURE gate / coverage / full-pipeline device runs       -> PERF_MCP_MEASURE_TIMEOUT  (1200s)
       ROUND   agent round (stall-detector on no-progress)       -> PERF_MCP_ROUND_STALL_SEC  (600s)"""
+    _piped = bool(capture or stall_s)
     proc = subprocess.Popen(
         list(cmd),
         cwd=str(cwd),
         env=env,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.STDOUT if capture else None,
-        text=True if capture else None,
+        stdout=subprocess.PIPE if _piped else None,
+        stderr=subprocess.STDOUT if _piped else None,
+        text=True if _piped else None,
         start_new_session=True,
     )
     rc, out = None, ""
@@ -964,24 +965,44 @@ def _run_device_proc(
             out = out or ""
             rc = proc.returncode
         elif stall_s:
+            import sys as _sys
+            import threading as _th
+
+            _act = [time.monotonic()]
+
+            def _pump():
+                try:
+                    for _ln in proc.stdout:
+                        _sys.stdout.write(_ln)
+                        _sys.stdout.flush()
+                        _act[0] = time.monotonic()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            _th.Thread(target=_pump, daemon=True).start()
             pgid = proc.pid
             start = time.monotonic()
             last_progress = start
             last_cpu = _pg_cpu_jiffies(pgid)
+            max_gap = 0.0
             while proc.poll() is None:
-                time.sleep(15)
+                time.sleep(5)
                 now = time.monotonic()
                 cpu = _pg_cpu_jiffies(pgid)
-                if cpu > last_cpu + 10:
-                    last_progress = now
+                moved = cpu > last_cpu + 10 or _act[0] > last_progress
                 last_cpu = cpu
-                if now - last_progress >= stall_s:
+                if moved:
+                    max_gap = max(max_gap, now - last_progress)
+                    last_progress = now
+                limit = max(stall_s, int(3 * max_gap))
+                idle = now - last_progress
+                if idle >= limit:
                     print(
-                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no CPU progress for "
-                        f"{stall_s}s) -- treating as wedge",
+                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no output/CPU for "
+                        f"{int(idle)}s > adaptive limit {limit}s) -- treating as wedge",
                         flush=True,
                     )
-                    raise subprocess.TimeoutExpired(cmd, stall_s)
+                    raise subprocess.TimeoutExpired(cmd, limit)
                 if now - start >= timeout_s:
                     raise subprocess.TimeoutExpired(cmd, timeout_s)
             rc = proc.returncode
