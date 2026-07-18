@@ -15,4 +15,5 @@ fused MM+RS: rejected; exact O/down BFP4/LoFi candidates 26.6342%/14.5637% slowe
 profiler: current-source 09:34 capture; TP4 decode matmul 36.20%, RS 20.76%, AG 12.67%, explicit DM+TM about 14.46%, modeled DRAM 15.5% (119 GB/s); SLOW/subblock warning source-audited; 8-way DRAM and interleaved 1-D candidates slower
 context: 131072 retained; BF16 full-stack per-device plan 13,866,369,024 B < 34,178,731,008 B
 review: clean-pass; no required work; stage_review.md
-commit: scoped implementation/evidence SHA recorded by follow-up docs commit
+implementation/evidence commit: 164cd8dff60a892176dcaddc94edad87217108c4
+bookkeeping commit: reported at final handoff; no push

@@ -152,13 +152,16 @@ efficiency).  Output PCC was `0.9999998071`.  See `logs/perf_final.log`.
 ## Profiling and finalization
 
 The exact Tracy capture and `tt-perf-report` commands, canonical losslessly
-compressed raw op CSV, four filtered CSVs, four summary CSVs, four provenance logs, and four
-human-readable tables are indexed in `tracy/README.md`. The final live-source
+compressed raw op CSV, four filtered CSVs, four summary CSVs, four provenance
+logs, and four human-readable tables are indexed in `tracy/README.md`. The final live-source
 capture is `2026_07_18_09_34_42`. The TP4 decode report attributes 36.20% to
 matmul, 20.76% to reduce-scatter, 12.67% to all-gather, and about 14.46% to
 explicit DM plus TM. It is communication-sensitive rather
 than DRAM-saturated.
 
 Independent `$stage-review` verdict: `clean-pass`, with no required work. See
-`stage_review.md`. The final scoped implementation/evidence commit SHA is
-recorded by the docs-only bookkeeping commit that follows it.
+`stage_review.md`.
+
+Scoped implementation/evidence commit: `164cd8dff60a892176dcaddc94edad87217108c4`.
+The final docs-only bookkeeping commit is reported at handoff because a commit
+cannot contain its own SHA. Nothing was pushed.
