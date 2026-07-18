@@ -14,6 +14,7 @@ Stages (each prints a banner to stderr and appends to runs/<id>/events.jsonl):
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
@@ -356,6 +357,9 @@ def before_loop(
             break
         except Exception as exc:  # noqa: BLE001 — glob/max-turns/transient: retry a fresh discover
             _last_exc = exc
+            if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+                print("      OUT OF DISK — free space and rerun", file=sys.stderr, flush=True)
+                raise
             print(
                 f"      discover attempt {_attempt + 1}/3 failed ({str(exc)[:120]}); retrying",
                 file=sys.stderr,
@@ -735,6 +739,9 @@ def main(argv: list[str] | None = None) -> int:
 
         result = before_loop(config, env_probe, model_runner, factory, preflight, review, collect)
     except Exception as exc:
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
+            print("\n  ✗ OUT OF DISK — free space and rerun", file=sys.stderr)
+            return 1
         print(f"\n  ✗ discovery failed ({type(exc).__name__}):", file=sys.stderr)
         for _ln in str(exc).splitlines():
             print(f"      {_ln}", file=sys.stderr)

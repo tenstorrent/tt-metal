@@ -17,8 +17,10 @@ Config via env (set in .mcp.json):
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import signal
 import statistics
 import sys
 import tempfile
@@ -408,7 +410,9 @@ class _Ctx:
 
     def __init__(self):
         self.manifest = _MANIFEST
-        self.run = _Run(tempfile.mkdtemp(prefix="perf_mcp_"))
+        _d = tempfile.mkdtemp(prefix="perf_mcp_")
+        _TMP_DIRS.add(_d)
+        self.run = _Run(_d)
         self.deps = {}
 
     def model_root(self):
@@ -423,6 +427,24 @@ def _reap_measurement_dir(path) -> bool:
         return False
     _shutil.rmtree(p, ignore_errors=True)
     return True
+
+
+_TMP_DIRS = set()
+
+
+def _reap_tracked_tmp():
+    for _d in list(_TMP_DIRS):
+        try:
+            _reap_measurement_dir(_d)
+        except Exception:
+            pass
+
+
+atexit.register(_reap_tracked_tmp)
+try:
+    signal.signal(signal.SIGTERM, lambda *_a: (_reap_tracked_tmp(), os._exit(143)))
+except Exception:
+    pass
 
 
 _STABLE_ARTIFACT_DIR = Path(tempfile.gettempdir()) / "perf_mcp_last_profile"
@@ -1241,13 +1263,17 @@ def record_kernel_attempt(
         "warning": (
             "tt-lang toolchain (ttl) not installed — kernel cannot run or be measured; attempt NOT credited."
             if ttl_absent
-            else None
-            if detected
-            else "TP attempt needs BOTH a ShardTensorToMesh AND a CCL (all_gather/reduce_scatter) in model "
-            "source — not found; attempt UNSUPPORTED and will NOT clear the op."
-            if is_tp
-            else "NO kernel markers (generic_op/@ttl/.cpp/ProgramDescriptor) found in model source — this "
-            "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first."
+            else (
+                None
+                if detected
+                else (
+                    "TP attempt needs BOTH a ShardTensorToMesh AND a CCL (all_gather/reduce_scatter) in model "
+                    "source — not found; attempt UNSUPPORTED and will NOT clear the op."
+                    if is_tp
+                    else "NO kernel markers (generic_op/@ttl/.cpp/ProgramDescriptor) found in model source — this "
+                    "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first."
+                )
+            )
         ),
     }
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 PERF_DIR = "models/experimental/perf_automation"
@@ -308,7 +312,60 @@ def _derive_topology_env(args, model_dir):
     print(f"  topology : {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows}) [{tag}]")
 
 
+_MIN_FREE_BYTES = 20 * 1024**3
+_STALE_TMP_AGE = 3600
+
+
+def _lowest_free_bytes():
+    paths = {tempfile.gettempdir()}
+    try:
+        paths.add(str(_repo_root()))
+    except Exception:
+        pass
+    low = None
+    culprits = []
+    for p in paths:
+        try:
+            free = shutil.disk_usage(p).free
+        except Exception:
+            continue
+        culprits.append((p, free))
+        low = free if low is None else min(low, free)
+    return low, culprits
+
+
+def _disk_gate():
+    low, culprits = _lowest_free_bytes()
+    if low is None:
+        return True, low, culprits
+    return low >= _MIN_FREE_BYTES, low, culprits
+
+
+def _sweep_stale_perf_mcp():
+    now = time.time()
+    for d in glob.glob(os.path.join(tempfile.gettempdir(), "perf_mcp_*")):
+        try:
+            if os.path.isdir(d) and now - os.path.getmtime(d) > _STALE_TMP_AGE:
+                shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _out_of_disk_msg(low):
+    gb = (low or 0) / (1024**3)
+    return (
+        f"  [optimize] OUT OF DISK — only {gb:.1f} GB free (need >= {_MIN_FREE_BYTES // 1024 ** 3} GB). "
+        "Free space and rerun; clear stale /tmp/perf_mcp_* dirs and old worktrees."
+    )
+
+
 def cmd_optimize(args) -> int:
+    if os.environ.get("PERF_MCP_SUPERVISED") != "1":
+        _sweep_stale_perf_mcp()
+    _ok, _low, _cul = _disk_gate()
+    if not _ok:
+        print(_out_of_disk_msg(_low))
+        return 1
     # AUTO-RESTART SUPERVISOR: an orchestrator SIGSEGV / native tt-metal crash kills the whole Python
     # process, which no in-process recovery can catch. Run the real work in a supervised CHILD and, on
     # abnormal exit, reset the device and relaunch it -- the per-op ladder + attempt log persist on disk,
@@ -324,6 +381,11 @@ def cmd_optimize(args) -> int:
                 [_sys.executable, "-m", "scripts.tt_hw_planner", *_sys.argv[1:]],
                 env={**_os.environ, "PERF_MCP_SUPERVISED": "1"},
             ).returncode
+            if _rc != 0:
+                _dok, _dlow, _ = _disk_gate()
+                if not _dok:
+                    print(_out_of_disk_msg(_dlow), flush=True)
+                    return _rc
             if _rc == 0 or _n >= _max:
                 if _rc != 0:
                     print(f"  [optimize/supervisor] child exited rc={_rc}; {_max} restart(s) exhausted.", flush=True)
