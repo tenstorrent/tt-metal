@@ -28,28 +28,21 @@ void kernel_main() {
     constexpr uint32_t dst_addr = get_arg(args::dst_addr);
 
     reset_cmdbuf_0();
-    DEVICE_PRINT("HERE \n");
 
     /* CMD Misc register, only difference to NOC*/
     idma_setup_as_copy_cmdbuf_0(false);
-    DEVICE_PRINT("HERE 2\n");
     /* Vcs = IDMA channel*/
     setup_vcs_cmdbuf_0(false);
-    DEVICE_PRINT("HERE 3\n");
 
     set_src_cmdbuf_0(src_addr);
-    DEVICE_PRINT("HERE 4\n");
     set_dest_cmdbuf_0(dst_addr);
-    DEVICE_PRINT("HERE 5\n");
     set_len_cmdbuf_0(total_bytes);
-    DEVICE_PRINT("HERE 6\n");
 
     issue_cmdbuf_0();
-    DEVICE_PRINT("HERE 7\n");
 
     /* wait on IDMA to finish */
     while (!idma_acked_cmdbuf_0()) {
     }
 
-    DEVICE_PRINT("IDMA 1D strided done: {} elements", num_elements);
+    DEVICE_PRINT("IDMA 1D strided done: {} elements, total_bytes: {} \n", num_elements, total_bytes);
 }

@@ -64,6 +64,5 @@ void kernel_main() {
     while (!idma_acked_cmdbuf_0()) {
     }
 
-    // DPRINT << "IDMA 1D strided done: " << DEC() << num_elements << " elements, src_stride=" << src_stride << ENDL();
-    DEVICE_PRINT("IDMA 1D strided done: {} elements, src_stride = {}", num_elements, src_stride);
+    DEVICE_PRINT("IDMA 1D strided done: {} elements, src_stride: {} \n", num_elements, src_stride);
 }
