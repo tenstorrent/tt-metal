@@ -242,12 +242,21 @@ _DEVICE_DISRUPTION_RE = re.compile(
 )
 
 
+_TRACE_RAN_MARKERS = ("[perf_test_gen] WEDGE", "FORWARD_WALL_MS=", "TRACE_PER_TOKEN_MS=")
+
+
 def _is_device_disruption(rc, out: str) -> bool:
-    """A board-level disruption (device open / PCIe enumeration / clock / stale sysmem) rather than a
-    test-code bug: the test file is fine, the DEVICE is wedged, so regenerating the test cannot help —
-    the self-heal path (reset + cooldown + retry the SAME test) must run instead. Kept narrow so an
-    ordinary assertion / import error in a generated test still flows to the correction loop."""
+    """A board-level disruption that happens BEFORE the test body runs (device open / PCIe enumeration /
+    clock / stale sysmem) — the test file is fine, the DEVICE is wedged, so reset + cooldown + retry the
+    SAME test is the right response. Kept narrow so (a) an ordinary assertion / import error still flows
+    to the correction loop, and (b) a TRACE HANG is NOT retried here: if the test already RAN (it emitted
+    a wall-time marker, or the tracy hang marker), the trace capture wedged mid-test — that already got
+    one reset and must return to the caller as a WEDGE (-> eager fallback), NOT loop reset+retry (which
+    just re-hangs). The post-hang reset re-init prints 'AICLK failed to settle', which would otherwise
+    look like a fresh board disruption — this guard prevents that misclassification."""
     if not out:
+        return False
+    if any(m in out for m in _TRACE_RAN_MARKERS):
         return False
     if _DEVICE_DISRUPTION_RE.search(out):
         return True
