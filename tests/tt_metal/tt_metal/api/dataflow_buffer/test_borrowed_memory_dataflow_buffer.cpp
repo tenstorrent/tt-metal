@@ -272,7 +272,7 @@ void run_borrowed_memory_dfb_program(
     // stays PINNED across a size override (no reallocation).
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor.address()));
+        static_cast<uint32_t>(ring_tensor.mesh_buffer().address()));
 
     if (cfg.num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *cfg.num_entries_override)

@@ -156,8 +156,6 @@ public:
     const std::optional<ShardSpec>& shard_spec() const;
     const std::optional<NdShardSpec>& nd_shard_spec() const;
 
-    DeviceAddr address() const;
-
     // Utils:
 
     /**

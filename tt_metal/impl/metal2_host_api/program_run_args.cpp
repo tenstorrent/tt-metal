@@ -353,7 +353,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 // here, so it must not be forwarded/moved-from.
 template <typename Emit>
 void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& tensor, const Emit& emit) {
-    const auto address = tensor.address();
+    const auto address = tensor.mesh_buffer().address();
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
         "Tensor argument for TensorParameter '{}' base address {} exceeds uint32_t max",
