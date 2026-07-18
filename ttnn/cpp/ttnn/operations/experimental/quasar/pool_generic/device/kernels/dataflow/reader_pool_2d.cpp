@@ -183,39 +183,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
-#ifdef ARCH_QUASAR
-                                // QSR avg_pool coherency fix. This clear runs right before the PARTIAL last
-                                // reduction chunk (window 49 = 32 + 17): the padding rows [remaining, TILE_HEIGHT)
-                                // of the just-reserved in_cb entry are never written by the gather, so for AVG
-                                // they must be 0 (the sum's additive identity) or the reduce sums stale L1 into
-                                // the average (observed: per-channel avg biased +~0.075 == 15 stale rows / 49).
-                                // BOTH NoC clears drop on the Quasar sim: clear_out_tiles (self-loopback read)
-                                // AND noc.async_write_zeros (the earlier attempted fix -- it left the numbers
-                                // byte-identical, proving the NoC write-zeros also drops). The window gather
-                                // above (lines ~140-152) already uses a DIRECT RISC copy + L2 write-back for
-                                // exactly this reason, so zero the entry the same way: a CPU store loop + flush.
-                                {
-                                    volatile tt_l1_ptr uint32_t* zp =
-                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr());
-                                    const uint32_t z_nwords = in_cb.get_entry_size() >> 2;
-                                    for (uint32_t zi = 0; zi < z_nwords; ++zi) {
-                                        zp[zi] = 0;
-                                    }
-                                    flush_l2_cache_range(
-                                        reinterpret_cast<uintptr_t>(zp), static_cast<size_t>(in_cb.get_entry_size()));
-                                }
-                                // [DIAG avg clear] confirm this branch RUNS and where. Fires once per output stick
-                                // (global pool: once/core), so no flood. If AVGCLR never prints, the clear branch
-                                // is not entered (fix the condition); if it prints but the +0.075 bias persists,
-                                // the stale is elsewhere, not the partial-chunk padding.
-                                DPRINT(
-                                    "AVGCLR proc={} rem={} esz={}\n",
-                                    (uint32_t)processed_sticks,
-                                    (uint32_t)(total_elems_to_reduce - processed_sticks),
-                                    (uint32_t)in_cb.get_entry_size());
-#else
                                 clear_out_tiles<clear_value_cb_id>(noc, in_cb, clear_cb, in_cb_ntiles);
-#endif
                             }
                         }
                     }

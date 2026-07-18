@@ -159,7 +159,19 @@ Tensor reduce(
     // scalar after reduction via post-multiplication. See issue #40498. The flag also
     // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
     // min through reduce_min before reaching here.
-    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    //
+    // Quasar-specific: the SUM/AVG pool path (GAPOOL) on Quasar also fails to apply the
+    // full-precision scaler from the scaler CB — it loses scaler-mantissa precision (a
+    // coarse unit-mantissa rounding: e.g. avg_pool2d's 1/49, bf16 1.3047*2^-6, is applied
+    // as ~1.5*2^-6 = 3/128, a fixed ~1.15x inflation independent of the input value).
+    // WH/BH GAPOOL applies the full scaler correctly (they pass), so restrict the SUM/AVG
+    // post-multiplication to Quasar. As with MAX/MIN we reduce with scaler=1.0 (bf16-exact,
+    // so GAPOOL sums with no scaler-precision loss) and apply the user scalar afterwards via
+    // SFPU post-multiplication (mul_unary_tile, full precision).
+    const bool is_quasar = arch == tt::ARCH::QUASAR;
+    const bool use_post_mul = (scaler != 1.0f) && ((reduce_math == tt::tt_metal::ReduceOpMath::MAX) ||
+                                                   (is_quasar && (reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
+                                                                  reduce_math == tt::tt_metal::ReduceOpMath::AVG)));
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
