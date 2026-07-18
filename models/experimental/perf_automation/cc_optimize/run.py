@@ -469,7 +469,14 @@ def _coverage_cache_put(repo_root: Path, node, case, k: int) -> None:
 
 
 def _coverage_layers(
-    repo_root: Path, mcp_env: dict, devices: str, node, case, n_layers: int = 52, model_name: str = ""
+    repo_root: Path,
+    mcp_env: dict,
+    devices: str,
+    node,
+    case,
+    n_layers: int = 52,
+    model_name: str = "",
+    config_ref: str = "",
 ):
     """MODEL-AGNOSTIC profiling-window sizing = the smallest layer depth that still covers EVERY distinct
     layer kind, so the profiled slice is representative and a fix to a shared per-kind block reaches all
@@ -484,7 +491,7 @@ def _coverage_layers(
     if cached is not None:
         print(f"  [optimize/cc] coverage (cached): TT_PERF_LAYERS={cached}")
         return cached, facts
-    k, n_kinds = _config_layer_kinds(model_name)
+    k, n_kinds = _config_layer_kinds(config_ref or model_name)
     if k is not None:
         print(
             f"  [optimize/cc] coverage (config pattern): {n_kinds} distinct layer kind(s), deepest first "
@@ -1064,6 +1071,7 @@ def optimize_pipeline(
     model_name: str,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     hitl: bool = False,
+    config_ref: str = "",
 ) -> dict:
     """Drive one pipeline: claude -p re-invoked until the gate's can_stop, bounded by max_rounds.
     hitl=True runs the human-in-the-loop gate: the agent proposes one lever at a time via hitl_gate and
@@ -1078,7 +1086,13 @@ def optimize_pipeline(
     cfg = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)
     _cov_env = cfg["mcpServers"]["perf-mcp"]["env"]
     _cov, _cov_facts = _coverage_layers(
-        repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), model_name=model_name
+        repo_root,
+        _cov_env,
+        devices,
+        pipe.get("perf_test"),
+        pipe.get("case"),
+        model_name=model_name,
+        config_ref=config_ref,
     )
     if _cov:
         _cov_env["TT_PERF_LAYERS"] = str(_cov)
@@ -1517,6 +1531,7 @@ def run_cc_optimize(
     _decide_parallelism_route(demo_dir, manifest, repo_root, metric, devices, model_id_hint)
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
+    _cfg_ref = _resolve_model_id(demo_dir, model_id_hint) or str(demo_dir)
     pipes = pipelines_from_manifest(manifest, model_rel)
     is_mm = manifest.get("pathmap", {}).get("is_multimodal")
     print(f"  [optimize/cc] discovered pipelines: {[p['task'] for p in pipes]} (multimodal={is_mm})")
@@ -1536,7 +1551,17 @@ def run_cc_optimize(
         print(f"  [optimize/cc] === optimizing pipeline: {pipe['task']} ===")
         try:
             results.append(
-                optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds, hitl=hitl)
+                optimize_pipeline(
+                    repo_root,
+                    manifest_path,
+                    pipe,
+                    devices,
+                    metric,
+                    model_name,
+                    max_rounds,
+                    hitl=hitl,
+                    config_ref=_cfg_ref,
+                )
             )
         except Exception as exc:  # noqa: BLE001 — never let one pipeline's crash kill the whole run silently
             _print_optimize_stop(pipe, exc)
