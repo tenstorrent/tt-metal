@@ -25,6 +25,7 @@
 
 namespace tt::tt_metal {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 
 // Deterministic ramp for test data
@@ -42,9 +43,11 @@ bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
                          experimental::per_core_allocation::is_per_core_allocation(b.memory_config());
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
 TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto alignment = tt::tt_metal::Alignment({32, 32});
     auto tile = Tile({16, 16});
@@ -58,7 +61,7 @@ TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
@@ -66,7 +69,7 @@ TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
 
 TEST(HostTensorToDtype, RowMajorToBfpChangesLayoutToTileAndPreservesTile) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto alignment = tt::tt_metal::Alignment({32, 32});
     auto tile = Tile({16, 16});
@@ -81,7 +84,7 @@ TEST(HostTensorToDtype, RowMajorToBfpChangesLayoutToTileAndPreservesTile) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
 
@@ -131,7 +134,7 @@ TEST(HostTensorToDtype, TileBfp8ToFloat32ValueCheck) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::FLOAT32);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
@@ -176,7 +179,7 @@ TEST(HostTensorToDtype, Float32ToTileBfp8ValueCheck) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT8_B);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
@@ -216,7 +219,7 @@ TEST(HostTensorToDtype, TileBfp4ToFloat32ValueCheck) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::FLOAT32);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
@@ -260,7 +263,7 @@ TEST(HostTensorToDtype, Float32ToTileBfp4ValueCheck) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT4_B);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
@@ -274,7 +277,7 @@ TEST(HostTensorToDtype, Float32ToTileBfp4ValueCheck) {
 
 TEST(HostTensorToDtype, Float32ToBfloat16RowMajorValueCheck) {
     const Shape shape{32, 64};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
         TensorMemoryLayout::HEIGHT_SHARDED,
         BufferType::L1,
@@ -288,7 +291,7 @@ TEST(HostTensorToDtype, Float32ToBfloat16RowMajorValueCheck) {
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config));
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
 
@@ -301,7 +304,7 @@ TEST(HostTensorToDtype, Float32ToBfloat16RowMajorValueCheck) {
 
 TEST(HostTensorToDtype, Bfloat16ToFloat32RowMajorValueCheck) {
     const Shape shape{32, 64};
-    auto data = make_ramp<bfloat16>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<bfloat16>(shape.volume());
     auto memory_config = MemoryConfig{
         TensorMemoryLayout::HEIGHT_SHARDED,
         BufferType::L1,
@@ -316,7 +319,7 @@ TEST(HostTensorToDtype, Bfloat16ToFloat32RowMajorValueCheck) {
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::FLOAT32);
     EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
 
@@ -329,7 +332,7 @@ TEST(HostTensorToDtype, Bfloat16ToFloat32RowMajorValueCheck) {
 
 TEST(HostTensorToDtype, PerCoreAllocationPreserved) {
     const Shape shape{32, 64};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
 
     // Sharded MemoryConfig
     auto memory_config = MemoryConfig{
@@ -350,7 +353,7 @@ TEST(HostTensorToDtype, PerCoreAllocationPreserved) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_TRUE(experimental::per_core_allocation::is_per_core_allocation(result.tensor_spec().memory_config()));
 }
 
@@ -360,7 +363,7 @@ TEST(HostTensorToDtype, OversizedBufferToDtype) {
     auto spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
 
     // Create an oversized buffer
-    auto oversized_data = make_ramp<float>(shape.volume() + 100);
+    auto oversized_data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume() + 100);
 
     // Create tensor from buffer (from_buffer accepts oversized buffers if they are large enough)
     auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
@@ -430,8 +433,8 @@ TEST(HostTensorToDtype, MultiShardTopologyPreservation) {
 
     auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 2));
 
-    auto data_0 = make_ramp<float>(volume);
-    auto data_1 = make_ramp<float>(volume);
+    auto data_0 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(volume);
+    auto data_1 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(volume);
     // Make data distinct
     for (auto& v : data_1) {
         v += 10.0f;
@@ -449,7 +452,7 @@ TEST(HostTensorToDtype, MultiShardTopologyPreservation) {
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.tensor_topology(), topology);
 
     const size_t expected_shard_size = expected_spec.compute_packed_buffer_size_bytes();
@@ -477,7 +480,7 @@ TEST(HostTensorToDtype, MultiShardTopologyPreservation) {
 
 TEST(HostTensorToDtype, RowMajorToBfpPhysicalMismatchThrows) {
     const Shape shape{32, 24};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     // Alignment that is NOT a multiple of 16 (tile size)
     auto alignment = tt::tt_metal::Alignment({32, 24});

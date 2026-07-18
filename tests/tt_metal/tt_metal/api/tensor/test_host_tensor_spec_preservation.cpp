@@ -20,6 +20,7 @@
 
 namespace tt::tt_metal {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 template <typename T>
 std::vector<T> make_ramp(size_t count) {
@@ -44,9 +45,11 @@ void expect_packed_sizes(const HostTensor& tensor) {
     }
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
 TEST(HostTensorSpecPreservation, ToLayoutInterleavedRmTileRoundTrip) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     // Interleaved cannot set per_core (requires sharded); exact_spec_match still checks the flag.
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     // Alignment coherent with TILE after initialize_alignment (multiples of tile H/W).
@@ -60,19 +63,19 @@ TEST(HostTensorSpecPreservation, ToLayoutInterleavedRmTileRoundTrip) {
     auto rm = to_layout(tile_source, Layout::ROW_MAJOR);
     auto expected_rm_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
-    EXPECT_TRUE(exact_spec_match(rm.tensor_spec(), expected_rm_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(rm.tensor_spec(), expected_rm_spec));
     EXPECT_EQ(rm.memory_config().buffer_type(), BufferType::DRAM);
     EXPECT_EQ(rm.tensor_topology(), tile_source.tensor_topology());
-    expect_packed_sizes(rm);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(rm);
 
     // RM PageConfig does not carry a non-default tile; restore TILE with explicit tile.
     auto tiled_back = to_tile_layout(rm, tile);
     auto expected_tile_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-    EXPECT_TRUE(exact_spec_match(tiled_back.tensor_spec(), expected_tile_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(tiled_back.tensor_spec(), expected_tile_spec));
     EXPECT_EQ(tiled_back.memory_config().buffer_type(), BufferType::DRAM);
     EXPECT_EQ(tiled_back.tensor_topology(), tile_source.tensor_topology());
-    expect_packed_sizes(tiled_back);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(tiled_back);
 
     auto round_trip = tiled_back.to_vector<float>();
     ASSERT_EQ(round_trip.size(), data.size());
@@ -96,8 +99,8 @@ TEST(HostTensorSpecPreservation, ToLayoutShardedPreservesShardSpecAndPackedSizes
 
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(distributed::MeshShape(1, 2));
     auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 2));
-    auto data_0 = make_ramp<float>(shape.volume());
-    auto data_1 = make_ramp<float>(shape.volume());
+    auto data_0 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    auto data_1 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     for (auto& v : data_1) {
         v += 10.0f;
     }
@@ -111,12 +114,12 @@ TEST(HostTensorSpecPreservation, ToLayoutShardedPreservesShardSpecAndPackedSizes
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
-    EXPECT_TRUE(exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_TRUE(result.memory_config().shard_spec().has_value());
     EXPECT_EQ(result.memory_config().shard_spec(), memory_config.shard_spec());
     EXPECT_TRUE(experimental::per_core_allocation::is_per_core_allocation(result.memory_config()));
     EXPECT_EQ(result.tensor_topology(), topology);
-    expect_packed_sizes(result);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
 
     auto coords = result.buffer().shard_coords();
     EXPECT_EQ(coords.size(), 2);
@@ -126,7 +129,7 @@ TEST(HostTensorSpecPreservation, ToLayoutShardedPreservesShardSpecAndPackedSizes
 
 TEST(HostTensorSpecPreservation, ToLayoutPhysicalMismatchThrows) {
     const Shape shape{32, 24};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     // Width alignment is not a multiple of tile width 16 → TILE initialize_alignment rounds up.
     auto alignment = Alignment({32, 24});
@@ -141,7 +144,7 @@ TEST(HostTensorSpecPreservation, ToLayoutPhysicalMismatchThrows) {
 
 TEST(HostTensorSpecPreservation, ToTileLayoutTileMismatchThrows) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto source_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, Tile({32, 32})), memory_config));
@@ -152,7 +155,7 @@ TEST(HostTensorSpecPreservation, ToTileLayoutTileMismatchThrows) {
 
 TEST(HostTensorSpecPreservation, ToTileLayoutBfpTileMismatchThrows) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto source_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, Tile({32, 32})), memory_config));
@@ -163,7 +166,7 @@ TEST(HostTensorSpecPreservation, ToTileLayoutBfpTileMismatchThrows) {
 
 TEST(HostTensorSpecPreservation, PadUnpadInterleavedPreservesMemoryAndGeometry) {
     const Shape logical{2, 3};
-    auto data = make_ramp<float>(logical.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(logical.volume());
     // pad/unpad reject sharded hosts, so per_core cannot be set true here; exact_spec_match still covers the flag.
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto source_spec =
@@ -177,22 +180,22 @@ TEST(HostTensorSpecPreservation, PadUnpadInterleavedPreservesMemoryAndGeometry) 
         logical,
         TensorLayout::fromPaddedShape(
             DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, logical, padded));
-    EXPECT_TRUE(exact_spec_match(padded_tensor.tensor_spec(), expected_pad_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(padded_tensor.tensor_spec(), expected_pad_spec));
     EXPECT_EQ(padded_tensor.memory_config().buffer_type(), BufferType::DRAM);
     EXPECT_EQ(padded_tensor.padded_shape(), padded);
     EXPECT_EQ(padded_tensor.logical_shape(), logical);
-    expect_packed_sizes(padded_tensor);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded_tensor);
 
     auto unpadded = unpad(padded_tensor, Shape{0, 0}, Shape{2, 3});
     auto expected_unpad_spec = TensorSpec(
         logical,
         TensorLayout::fromPaddedShape(
             DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, logical, logical));
-    EXPECT_TRUE(exact_spec_match(unpadded.tensor_spec(), expected_unpad_spec));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(unpadded.tensor_spec(), expected_unpad_spec));
     EXPECT_EQ(unpadded.memory_config().buffer_type(), BufferType::DRAM);
     EXPECT_EQ(unpadded.logical_shape(), logical);
     EXPECT_EQ(unpadded.padded_shape(), logical);
-    expect_packed_sizes(unpadded);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
 
     auto values = unpadded.to_vector<float>();
     ASSERT_EQ(values.size(), data.size());
@@ -203,7 +206,7 @@ TEST(HostTensorSpecPreservation, PadUnpadInterleavedPreservesMemoryAndGeometry) 
 
 TEST(HostTensorSpecPreservation, PadShardedLegacyThrows) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
         TensorMemoryLayout::HEIGHT_SHARDED,
         BufferType::L1,
@@ -216,7 +219,7 @@ TEST(HostTensorSpecPreservation, PadShardedLegacyThrows) {
 
 TEST(HostTensorSpecPreservation, UnpadShardedLegacyThrows) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
         TensorMemoryLayout::HEIGHT_SHARDED,
         BufferType::L1,
@@ -229,7 +232,7 @@ TEST(HostTensorSpecPreservation, UnpadShardedLegacyThrows) {
 
 TEST(HostTensorSpecPreservation, PadShardedConvertibleNdThrows) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     // Convertible ND: 2D height-sharded via NdShardSpec (auto-fills legacy shard_spec).
     NdShardSpec nd_shard_spec{Shape{32, 32}, CoreRangeSet({CoreRange({0, 0}, {0, 0})}), ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
@@ -243,7 +246,7 @@ TEST(HostTensorSpecPreservation, PadShardedConvertibleNdThrows) {
 
 TEST(HostTensorSpecPreservation, UnpadShardedConvertibleNdThrows) {
     const Shape shape{32, 32};
-    auto data = make_ramp<float>(shape.volume());
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     NdShardSpec nd_shard_spec{Shape{32, 32}, CoreRangeSet({CoreRange({0, 0}, {0, 0})}), ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
     auto source_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
