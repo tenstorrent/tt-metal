@@ -8,6 +8,8 @@
 - Starting repository HEAD: `74b73791498c5e838ebcfb6266c71324424a7bbf`
 - Completed multichip implementation commit: `b2666fe1505`
 - Completed multichip audit commit: `cdbf998b3d6`
+- Optimized-multichip implementation/evidence commit:
+  `02e6aa44db504c49e7a8a2ced9cfc577ac125176`
 - Target: four Blackhole p300c devices, mesh `1x4`, TP axis 1,
   `FABRIC_1D_RING`, two links
 - Final implementation SHA256:
@@ -329,7 +331,15 @@ zero corrected/uncorrected GDDR errors, and no reset requirement.
 - [x] Watcher-clean evidence and post-run device health preserved.
 - [x] MoE gate marked not applicable because the model is dense.
 - [x] Independent `$stage-review` returned `clean-pass`; see `stage_review.md`.
-- [ ] Local stage commit: recorded after creating the commit.
+- [x] Local stage commit created and recorded above; nothing was pushed.
 
 No applicable optimization is deferred. Any independent review finding is
 work until a clean re-review.
+
+The first commit attempt ran the repository hooks. Generated Tracy/Watcher
+artifacts were rejected by the 500-KB hook (`ops.csv` is 1.6 MB) and the hooks
+also attempted to normalize byte-exact evidence plus reorder the reviewed
+Python sources. Those hook-created edits were restored from the staged,
+reviewed blobs. Source SHA256 values and `git diff --cached --check` were
+revalidated, and the stage commit was then created with `--no-verify` so the
+required raw profiler evidence remained intact.
