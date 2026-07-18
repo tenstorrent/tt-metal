@@ -459,7 +459,7 @@ BindDFB(compute, ACC_DFB, "acc", DFBEndpointType::CONSUMER);
 
 **Audit heuristic:** On **Quasar**, before defaulting to Class 4/5 ptr workarounds inside a **compute** kernel, ask: “Is this a PACK-produced / UNPACK-consumed tile stream on one kernel?” If yes → flag `**SELF-LOOP-CANDIDATE`** and plan **compute self-loop** binding. If credits are decoupled from addresses or MATH sits in the handoff → not a candidate; use semaphores or ptr hacks per Class 4/5.
 
-**See also:** [Self-loop DFB binding](metal2_port_patterns.md#pattern-self-loop-dfb-binding); [Sync-free / single-ended → self-loop interim](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround).
+**See also:** [Self-loop DFB binding](metal2_port_patterns.md#pattern-self-loop-dfb-binding); [Sync-free / single-ended → self-loop interim](temp_cb_dfb_reference_info.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround).
 
 ---
 
@@ -503,9 +503,9 @@ Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTe
 | Cross-kernel FIFO hand-off                         | **Ordinary DFB**                                                               |
 
 
-**Porting heuristic:** When classifying a sync-free CB, ask **backing first**: borrowed tensor → **LTA**; private L1 → **scratchpad**. Do not keep a fabricated self-loop or DFB binding once LTA (or scratchpad) can replace it — record interim hacks in the port report for rollback ([metal2_port_patterns.md § Sync-free](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround)).
+**Porting heuristic:** When classifying a sync-free CB, ask **backing first**: borrowed tensor → **LTA**; private L1 → **scratchpad**. Do not keep a fabricated self-loop or DFB binding once LTA (or scratchpad) can replace it — record interim hacks in the port report for rollback ([metal2_port_patterns.md § Sync-free](temp_cb_dfb_reference_info.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround)).
 
-**See also:** [Sync-free classify-it table](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround); [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync) when sync is real but not FIFO-shaped.
+**See also:** [Sync-free classify-it table](temp_cb_dfb_reference_info.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround); [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync) when sync is real but not FIFO-shaped.
 
 ---
 
@@ -555,7 +555,7 @@ Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTe
 
 **Audit report:** Class 2–5 CBs with **1xx `evil_get/set`** → **Portable (workaround)** (GREEN) — Notes: **undesirable but OK hack:** + **Quasar redesign required** + cite [whitelist](cb_dfb_api_whitelist.md). **Scratchpad + sems** Quasar end-state → **Portable** (GREEN). **LTA** end-state → **Portable (prereq: LTA)** (YELLOW).
 
-**See also:** [metal2_port_patterns.md § Sync-free](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround); [metal2_migration_guide.md](../metal2_migration_guide.md) (`ScratchpadSpec`, `SemaphoreSpec`).
+**See also:** [metal2_port_patterns.md § Sync-free](temp_cb_dfb_reference_info.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround); [metal2_migration_guide.md](../metal2_migration_guide.md) (`ScratchpadSpec`, `SemaphoreSpec`).
 
 ---
 
