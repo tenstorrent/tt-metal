@@ -156,5 +156,6 @@ page-aligned.
 
 The final fresh `$stage-review` verdict is `clean-pass`; see
 `stage_review.md` for the repair history and scope.  The stage-owned local
-commit SHA is appended here immediately after the checkpoint is created.
-Nothing is pushed.
+implementation/artifact checkpoint is
+`c79dc6554c32dd279d5de42f600a29f3cd410688`.  A documentation-only follow-up
+records this SHA in the repository history.  Nothing is pushed.

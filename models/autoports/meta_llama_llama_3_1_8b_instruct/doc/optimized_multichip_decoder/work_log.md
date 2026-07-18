@@ -416,5 +416,6 @@ artifacts were preserved; those scratch copies are not recoverable.
 The final fresh independent rereview returned `clean-pass` with no required
 work, other concerns, or hard-check gaps.  Its verdict and the preceding
 repair cycles are summarized in `stage_review.md`.  The stage-owned local
-commit SHA is appended immediately after checkpoint creation.  No push is
-performed.
+implementation/artifact checkpoint is
+`c79dc6554c32dd279d5de42f600a29f3cd410688`; a documentation-only follow-up
+records the checkpoint SHA.  No push is performed.
