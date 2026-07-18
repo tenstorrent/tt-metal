@@ -332,6 +332,13 @@ void kernel_main() {
             if (done[s]) {
                 continue;
             }
+            // On Blackhole the RISC caches L1 reads (write-through cache), so a remote NoC write into
+            // this core's L1 does not invalidate a cached copy. Both *ring_data_avail_ptr[s] and the
+            // route_info slot read below are written REMOTELY by the untilizer, so without a fresh L1
+            // read each iteration we can spin forever on a stale data_avail==0 (deadlock) or read
+            // stale route_info and forward garbage route/dst over the fabric. Mirrors the sibling
+            // reader_combine.cpp poll loop.
+            invalidate_l1_cache();
             if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
                 uint32_t slot = consumed[s] % writer_cb_size;
                 volatile tt_l1_ptr uint32_t* route_info =
