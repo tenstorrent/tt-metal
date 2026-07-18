@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_context.hpp"
+#include <umd/device/pcie/pci_device.hpp>
 
 #include <cerrno>
 #include <chrono>
@@ -33,9 +34,24 @@ void HDSocketDescriptor::populate_from_owner(
     data_offset = 0;
     fifo_size = fifo_size_arg;
     config_buffer_address = config_buffer_address_arg;
-    device_id = static_cast<uint32_t>(mesh_device->get_device(core.device_coord)->id());
+    // Resolve to the *physical* PCIe device number (/dev/tenstorrent/N) rather than
+    // the UMD logical chip id. The logical id is an index into the (possibly
+    // TT_VISIBLE_DEVICES-filtered) device enumeration and is therefore not stable
+    // across processes: an owner that sets TT_VISIBLE_DEVICES and a connector that
+    // does not would disagree on what a given logical id refers to. The physical
+    // device number is identical in every process on the host, so the connector can
+    // translate it back to its own local logical id (see PCIeCoreWriter). This must
+    // match the tt-llm-engine connector's tt-metal, which exports the physical id.
+    uint32_t logical_device_id = static_cast<uint32_t>(mesh_device->get_device(core.device_coord)->id());
+    auto physical_device_num = tt::umd::PCIDevice::get_pci_device_id(static_cast<int>(logical_device_id));
+    TT_FATAL(
+        physical_device_num.has_value(),
+        "Failed to resolve physical PCIe device for logical chip id {} while exporting H2D socket descriptor.",
+        logical_device_id);
+    device_id = static_cast<uint32_t>(physical_device_num.value());
     core_x = core.core_coord.x;
     core_y = core.core_coord.y;
+    mesh_coord.assign(core.device_coord.coords().begin(), core.device_coord.coords().end());
     auto vc = mesh_device->worker_core_from_logical_core(core.core_coord);
     virtual_core_x = vc.x;
     virtual_core_y = vc.y;
@@ -46,6 +62,7 @@ void HDSocketDescriptor::write_to_file(const std::string& path) const {
     flatbuffers::FlatBufferBuilder builder(512);
     auto fb_socket_type = builder.CreateString(socket_type);
     auto fb_shm_name = builder.CreateString(shm_name);
+    auto fb_mesh_coord = builder.CreateVector(mesh_coord);
 
     auto fb_desc = flatbuffer::CreateHDSocketDescriptor(
         builder,
@@ -66,7 +83,8 @@ void HDSocketDescriptor::write_to_file(const std::string& path) const {
         virtual_core_y,
         pcie_alignment,
         bytes_acked_device_offset,
-        connector_state_offset);
+        connector_state_offset,
+        fb_mesh_coord);
     builder.Finish(fb_desc);
 
     std::string tmp_path = path + ".tmp";
@@ -117,6 +135,9 @@ HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
     desc.pcie_alignment = fb->pcie_alignment();
     desc.bytes_acked_device_offset = fb->bytes_acked_device_offset();
     desc.connector_state_offset = fb->connector_state_offset();
+    if (const auto* mc = fb->mesh_coord()) {
+        desc.mesh_coord.assign(mc->begin(), mc->end());
+    }
 
     return desc;
 }
