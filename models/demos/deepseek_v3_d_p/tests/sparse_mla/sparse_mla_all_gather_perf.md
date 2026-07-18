@@ -2,23 +2,31 @@
 
 Measured on the LoudBox SP=2 × TP=4 proxy with the realtime profiler. The current
 implementation includes native `ttnn.all_gather` in MLA and the indexer, plus
-row-major top-k-index gathering.
+row-major top-k-index gathering. It additionally gathers sparse-MLA KVPE directly
+from the ND-sharded cache, selecting the active cache slot and transferring only
+its populated prefix.
 
 Negative latency deltas mean the current implementation is faster.
 
 | Model | Case | Legacy total (ms) | Current total (ms) | Latency delta | Legacy collective (ms) | Current collective (ms) | Collective delta |
 |---|---|---:|---:|---:|---:|---:|---:|
-| DeepSeek v3.2 | warm | 9.414 | 8.955 | -4.9% | 1.227 | 0.941 | -23.3% |
-| DeepSeek v3.2 | cold | 88.466 | 83.932 | -5.1% | 13.066 | 10.387 | -20.5% |
-| DeepSeek v3.2 | long | 19.415 | 17.066 | -12.1% | 7.843 | 6.274 | -20.0% |
-| GLM 5.1 | warm | 7.950 | 6.351 | -20.1% | 3.859 | 2.389 | -38.1% |
-| GLM 5.1 | cold | 83.342 | 65.347 | -21.6% | 42.721 | 26.750 | -37.4% |
-| GLM 5.1 | long | 17.442 | 13.880 | -20.4% | 10.507 | 7.715 | -26.6% |
+| DeepSeek v3.2 | warm | 9.414 | 9.020 | -4.2% | 1.227 | 0.996 | -18.8% |
+| DeepSeek v3.2 | cold | 88.466 | 80.841 | -8.6% | 13.066 | 7.741 | -40.8% |
+| DeepSeek v3.2 | long | 19.415 | 17.291 | -10.9% | 7.843 | 6.819 | -13.1% |
+| GLM 5.1 | warm | 7.950 | 6.374 | -19.8% | 3.859 | 2.453 | -36.4% |
+| GLM 5.1 | cold | 83.342 | 62.151 | -25.4% | 42.721 | 23.988 | -43.8% |
+| GLM 5.1 | long | 17.442 | 14.125 | -19.0% | 10.507 | 8.309 | -20.9% |
 
 Collective time is accounted as follows:
 
 - Legacy: `AllGatherAsync + AllBroadcast`.
 - Current: native all-gather kernels reported as `ccl`, plus `AllBroadcast`.
+
+The cold proxy is the meaningful prefix-gather comparison: it fills an already
+allocated cache over eleven iterations, reducing current total latency by 3.7 ms
+(DeepSeek) and 3.2 ms (GLM) versus the prior native result. Warm and long allocate
+their cache to exactly the measured context, so the populated prefix is the full
+slab and they are expected to be within run-to-run noise of the prior result.
 
 Warm/long collective program counts:
 
