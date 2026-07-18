@@ -148,6 +148,7 @@ void kernel_main() {
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
     constexpr bool sfpu_two_pass = get_named_compile_time_arg_val("sfpu_two_pass") != 0;
+    constexpr bool sfpu_two_pass_l1_replay = get_named_compile_time_arg_val("sfpu_two_pass_l1_replay") != 0;
     constexpr uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
     constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
@@ -314,16 +315,17 @@ void kernel_main() {
             uint32_t curr_xy_coord = block_xy_coord;
 
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                dfb_in0.wait_front(1);
+                const uint32_t stats_input_tile = mt * per_core_N + nt;
+                dfb_in0.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
                 if constexpr (welford_fp32_alias) {
-                    dfb_in0_welford.wait_front(1);
+                    dfb_in0_welford.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
                 }
 #ifdef TILIZE_IN
                 transpose_init(dfb_in_id);
                 transpose_tile(dfb_in_id, 0, input_dst);
 #else
                 transpose_init(dfb_in0_welford_id);
-                transpose_tile(dfb_in0_welford_id, 0, input_dst);
+                transpose_tile(dfb_in0_welford_id, sfpu_two_pass_l1_replay ? stats_input_tile : 0, input_dst);
 #endif
 
                 if constexpr (welford_unpack_fp32_active && !sfpu_two_pass) {
@@ -365,9 +367,11 @@ void kernel_main() {
                         break;
                     }
                 }
-                dfb_in0.pop_front(1);
-                if constexpr (welford_fp32_alias) {
-                    dfb_in0_welford.pop_front(1);
+                if constexpr (!sfpu_two_pass_l1_replay) {
+                    dfb_in0.pop_front(1);
+                    if constexpr (welford_fp32_alias) {
+                        dfb_in0_welford.pop_front(1);
+                    }
                 }
             }
             block_xy_coord += num_channels_per_group;
@@ -401,16 +405,17 @@ void kernel_main() {
                 uint32_t min_group = 0;
                 uint32_t channels_left = num_channels_per_group;
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    dfb_in0.wait_front(1);
+                    const uint32_t stats_input_tile = mt * per_core_N + nt;
+                    dfb_in0.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
                     if constexpr (welford_fp32_alias) {
-                        dfb_in0_welford.wait_front(1);
+                        dfb_in0_welford.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
                     }
 #ifdef TILIZE_IN
                     transpose_init(dfb_in_id);
                     transpose_tile(dfb_in_id, 0, input_dst);
 #else
                     transpose_init(dfb_in0_welford_id);
-                    transpose_tile(dfb_in0_welford_id, 0, input_dst);
+                    transpose_tile(dfb_in0_welford_id, sfpu_two_pass_l1_replay ? stats_input_tile : 0, input_dst);
 #endif
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
@@ -433,9 +438,11 @@ void kernel_main() {
                             break;
                         }
                     }
-                    dfb_in0.pop_front(1);
-                    if constexpr (welford_fp32_alias) {
-                        dfb_in0_welford.pop_front(1);
+                    if constexpr (!sfpu_two_pass_l1_replay) {
+                        dfb_in0.pop_front(1);
+                        if constexpr (welford_fp32_alias) {
+                            dfb_in0_welford.pop_front(1);
+                        }
                     }
                 }
             }

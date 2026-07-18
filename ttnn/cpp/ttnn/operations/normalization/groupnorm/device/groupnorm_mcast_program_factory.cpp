@@ -360,6 +360,31 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             groupnorm_tilized_group_tiles(block_ht_group_1, num_out_blocks, block_wt) * in_single_tile_size;
     }
 
+    // When one core-local batch fits in L1, retain it through both statistics
+    // traversals and final normalization. The cb_in0/cb_in0_welford aliases share
+    // this allocation, so the full FP32 two-pass path then needs one input read
+    // instead of three. Keep a 5% margin for non-CB L1 users.
+    const auto cb_usage_with_input = [&](std::uint32_t input_size) -> std::uint64_t {
+        std::uint64_t total = input_size + out_CB_size_group_1 + in_CB_size_group_1;
+        total += untilize_out ? in_CB_size_group_1 : 0;
+        total += in2_CB_size + in3_CB_size + in2_CB_size;
+        total += gamma.has_value() ? in5_CB_size : 0;
+        total += beta.has_value() ? in6_CB_size : 0;
+        total += input_mask.has_value() ? in_mask_CB_size : 0;
+        total += reader_repack_output ? repack_CB_size : 0;
+        total += x_CB_size_group_1 + xmm_CB_size_group_1 + xmm2_CB_size_group_1 + xmm3_CB_size_group_1;
+        total += ex_partial_CB_size + ex_global_CB_size + ex2pe_CB_size + reciprocal_CB_size;
+        return total;
+    };
+    const std::uint32_t replay_input_tiles_group_1 = block_ht_group_1 * per_core_Nt;
+    const std::uint32_t replay_input_size_group_1 = replay_input_tiles_group_1 * in_single_tile_size;
+    const bool sfpu_two_pass_l1_replay = sfpu_two_pass && std::getenv("TTNN_GROUPNORM_DISABLE_L1_REPLAY") == nullptr &&
+                                         cb_usage_with_input(replay_input_size_group_1) <
+                                             static_cast<std::uint64_t>(device->l1_size_per_core()) * 95 / 100;
+    if (sfpu_two_pass_l1_replay) {
+        in0_CB_size_group_1 = replay_input_size_group_1;
+    }
+
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
     std::set<CoreRange> all_cores_group_1_core_ranges;
@@ -486,6 +511,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
         {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
     };
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
@@ -523,6 +549,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
         {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
     };
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
@@ -703,6 +730,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"padded_hw", pad.padded_hw},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
         {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
         {"sfpu_two_pass_reciprocal",
          std::bit_cast<uint32_t>(
              1.0f / static_cast<float>(
@@ -744,6 +772,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
+        {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(
+                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";

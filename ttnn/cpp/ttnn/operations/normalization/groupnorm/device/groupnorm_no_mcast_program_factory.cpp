@@ -496,6 +496,56 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }
     }
 
+    // Retain one complete core-local batch when the total CB footprint leaves
+    // a conservative 5% L1 margin. This lets the two SFPU statistics traversals
+    // and final normalization all consume the same locally resident input pages.
+    const auto cb_usage_with_input = [&](std::uint32_t input_size,
+                                         std::uint32_t in_size,
+                                         std::uint32_t out_size,
+                                         std::uint32_t x_size,
+                                         std::uint32_t xmm_size,
+                                         std::uint32_t xmm2_size,
+                                         std::uint32_t xmm3_size) -> std::uint64_t {
+        std::uint64_t total = input_size + out_size + in_size;
+        total += untilize_out ? in_size : 0;
+        total += in2_CB_size + in3_CB_size + in2_CB_size;
+        total += gamma.has_value() ? in5_CB_size : 0;
+        total += beta.has_value() ? in6_CB_size : 0;
+        total += input_mask.has_value() ? in_mask_CB_size : 0;
+        total += reader_repack_output ? repack_CB_size : 0;
+        total += x_size + xmm_size + xmm2_size + xmm3_size;
+        total += ex_partial_CB_size + ex_global_CB_size + ex2pe_CB_size + reciprocal_CB_size;
+        return total;
+    };
+    const std::uint32_t replay_input_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
+    const std::uint32_t replay_input_size_group_2 = block_ht_group_2 * per_core_Nt * in_single_tile_size;
+    const std::uint64_t usable_l1_bytes = static_cast<std::uint64_t>(device->l1_size_per_core()) * 95 / 100;
+    const bool l1_replay_enabled = std::getenv("TTNN_GROUPNORM_DISABLE_L1_REPLAY") == nullptr;
+    const bool sfpu_two_pass_l1_replay_group_1 = sfpu_two_pass && l1_replay_enabled &&
+                                                 cb_usage_with_input(
+                                                     replay_input_size_group_1,
+                                                     in_CB_size_group_1,
+                                                     out_CB_size_group_1,
+                                                     x_CB_size_group_1,
+                                                     xmm_CB_size_group_1,
+                                                     xmm2_CB_size_group_1,
+                                                     xmm3_CB_size_group_1) < usable_l1_bytes;
+    const bool sfpu_two_pass_l1_replay_group_2 = sfpu_two_pass && l1_replay_enabled && block_ht_group_2 > 0 &&
+                                                 cb_usage_with_input(
+                                                     replay_input_size_group_2,
+                                                     in_CB_size_group_2,
+                                                     out_CB_size_group_2,
+                                                     x_CB_size_group_2,
+                                                     xmm_CB_size_group_2,
+                                                     xmm2_CB_size_group_2,
+                                                     xmm3_CB_size_group_2) < usable_l1_bytes;
+    if (sfpu_two_pass_l1_replay_group_1) {
+        in0_CB_size_group_1 = replay_input_size_group_1;
+    }
+    if (sfpu_two_pass_l1_replay_group_2) {
+        in0_CB_size_group_2 = replay_input_size_group_2;
+    }
+
     // Application Setup
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
@@ -614,6 +664,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
         {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_1)},
     };
 
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args_group_2 = {
@@ -649,6 +700,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
         {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_2)},
     };
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
@@ -903,6 +955,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
+        {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_1)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(
+                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
     };
 
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args_group_2 = {
@@ -939,6 +997,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
+        {"sfpu_two_pass", static_cast<uint32_t>(sfpu_two_pass)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay_group_2)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(
+                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_2 / tile_width)))},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";

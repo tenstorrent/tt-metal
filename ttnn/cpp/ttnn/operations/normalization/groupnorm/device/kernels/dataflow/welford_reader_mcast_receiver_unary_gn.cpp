@@ -66,6 +66,7 @@ void kernel_main() {
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
     constexpr bool sfpu_two_pass = get_named_compile_time_arg_val("sfpu_two_pass") != 0;
+    constexpr bool sfpu_two_pass_l1_replay = get_named_compile_time_arg_val("sfpu_two_pass_l1_replay") != 0;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
@@ -127,7 +128,7 @@ void kernel_main() {
     uint32_t index_b_offset = 0;
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t mt_offset = 0;
-        constexpr uint32_t num_stats_passes = sfpu_two_pass ? 2 : 1;
+        constexpr uint32_t num_stats_passes = sfpu_two_pass && !sfpu_two_pass_l1_replay ? 2 : 1;
         for (uint32_t stats_pass = 0; stats_pass < num_stats_passes; ++stats_pass) {
             mt_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -214,39 +215,41 @@ void kernel_main() {
         dfb_ex_partial.pop_front(2);
         dfb_ex_global.push_back(2 * num_groups);
 
-        mt_offset = 0;
-        for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual;
-            if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                out_block_h_actual = out_block_h_last;
-            } else {
-                out_block_h_actual = out_block_h_normal;
-            }
-#if !defined(READER_REPACK) or !defined(TILIZE_IN)
-            for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    dfb_in0.reserve_back(1);
-                    const uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-                    noc.async_read(
-                        src_a,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        src0_tile_bytes,
-                        {.page_id = start_id + index_b_offset + mt_offset + nt},
-                        {});
-                    noc.async_read_barrier();
-                    dfb_in0.push_back(1);
-                    if constexpr (welford_fp32_alias) {
-                        // Mirror the dfb_in0 push on the alias. They share SRAM (multi-buffer-index
-                        // alias) so the noc.async_read above already filled both views; this is
-                        // purely bookkeeping so compute's welford section can wait_front
-                        // on dfb_in0_welford independently of dfb_in0.
-                        dfb_in0_welford.reserve_back(1);
-                        dfb_in0_welford.push_back(1);
-                    }
+        if constexpr (!sfpu_two_pass_l1_replay) {
+            mt_offset = 0;
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual;
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                    out_block_h_actual = out_block_h_last;
+                } else {
+                    out_block_h_actual = out_block_h_normal;
                 }
-                mt_offset += num_channels_tiles;
-            }
+#if !defined(READER_REPACK) or !defined(TILIZE_IN)
+                for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+                    for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+                        dfb_in0.reserve_back(1);
+                        const uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+                        noc.async_read(
+                            src_a,
+                            CoreLocalMem<uint32_t>(l1_write_addr),
+                            src0_tile_bytes,
+                            {.page_id = start_id + index_b_offset + mt_offset + nt},
+                            {});
+                        noc.async_read_barrier();
+                        dfb_in0.push_back(1);
+                        if constexpr (welford_fp32_alias) {
+                            // Mirror the dfb_in0 push on the alias. They share SRAM (multi-buffer-index
+                            // alias) so the noc.async_read above already filled both views; this is
+                            // purely bookkeeping so compute's welford section can wait_front
+                            // on dfb_in0_welford independently of dfb_in0.
+                            dfb_in0_welford.reserve_back(1);
+                            dfb_in0_welford.push_back(1);
+                        }
+                    }
+                    mt_offset += num_channels_tiles;
+                }
 #endif
+            }
         }
         index_b_offset += num_tiles_per_batch;
     }
