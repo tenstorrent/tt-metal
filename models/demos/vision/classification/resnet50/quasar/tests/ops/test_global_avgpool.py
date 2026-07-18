@@ -160,3 +160,63 @@ def test_quasar_global_avgpool(mesh_device, channels, cid):
         f"(bad reduce scale / stale-L1 leak)"
     )
     assert_with_pcc(golden, tt_out, pcc=PCC)
+
+
+# ------------------------------------------------------------------------------------------------------------
+# [DIAG] Constant-input bias probe (remove after avgpool is fixed). Decomposes the observed uniform +0.075 bias:
+# with a CONSTANT input c, golden == c for every channel, so
+#   dev(c) == c            -> bias is data-dependent (correlated with input variance); NOT padding/scalar.
+#   dev(c) == c + b        -> ADDITIVE bias b, constant across c -> extra summed rows hold a value != c
+#                             (stale / nonzero pad); b = n_pad * v / 49.
+#   dev(c) == c * s        -> SCALAR wrong (wrong divisor: s = 49/D).
+# Two constants pin it: b = dev(0), s = dev(1) - dev(0). This is host-only (no rebuild) and does not assert,
+# so it always runs to completion and prints. C64 (1 tile/core) keeps it minimal.
+# ------------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("fill", [0.0, 0.25, 0.5, 1.0], ids=["c0.0", "c0.25", "c0.5", "c1.0"])
+def test_quasar_avgpool_bias_probe(mesh_device, fill):
+    device = mesh_device
+    channels = 64
+    batch_size = 1
+    input_h, input_w = _H, _W
+
+    x_nchw = torch.full((batch_size, channels, input_h, input_w), float(fill), dtype=torch.float32)
+    golden = torch.nn.functional.avg_pool2d(x_nchw, kernel_size=(input_h, input_w))  # == fill everywhere
+    x_nhwc = x_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * input_h * input_w, channels)
+
+    num_cores, core_grid = fit_width_sharded_cores(channels, 8 * 8, device)
+    width_mem_config = ttnn.create_sharded_memory_config_(
+        [nearest_32(batch_size * input_h * input_w), channels // num_cores],
+        core_grid,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        tile_layout=True,
+        use_height_and_width_as_shard_shape=True,
+    )
+    x = ttnn.from_torch(x_nhwc.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    x = x.to(device, width_mem_config)
+
+    out = ttnn.experimental.quasar.avg_pool2d(
+        input_tensor=x,
+        batch_size=batch_size,
+        input_h=input_h,
+        input_w=input_w,
+        channels=channels,
+        kernel_size=[input_h, input_w],
+        stride=[1, 1],
+        padding=[0, 0, 0, 0],
+        output_layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+        ),
+    )
+    ttnn.synchronize_device(device)
+    d = ttnn.to_torch(ttnn.from_device(out)).float().reshape(-1)  # [C], all == golden == fill
+
+    print(
+        f"  [BIASPROBE fill={fill}] golden={fill:.4f} dev mean={float(d.mean()):.4f} "
+        f"min={float(d.min()):.4f} max={float(d.max()):.4f} std={float(d.std()):.4f} "
+        f"| dev-golden mean={float(d.mean()) - fill:+.4f}"
+    )
+    # No PCC assert: this probe is purely to read out the bias structure across constants.
