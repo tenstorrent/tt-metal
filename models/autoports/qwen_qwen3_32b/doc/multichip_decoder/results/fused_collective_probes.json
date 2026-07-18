@@ -1,0 +1,53 @@
+{
+  "all_gather_matmul": [
+    {
+      "error": "TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/tensor/spec/tensor_spec.cpp:153: !shard_grid_fit_error.has_value()",
+      "offset": [
+        0,
+        4
+      ],
+      "status": "runtime_error"
+    },
+    {
+      "error": "TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/tensor/spec/tensor_spec.cpp:153: !shard_grid_fit_error.has_value()",
+      "offset": [
+        0,
+        6
+      ],
+      "status": "runtime_error"
+    },
+    {
+      "pcc": 0.004406848131728381,
+      "status": "wrong_result",
+      "variant": "full_gather_width_shard"
+    }
+  ],
+  "matmul_reduce_scatter": [
+    {
+      "error": "TT_THROW @ /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:45: tt::exception",
+      "offset": [
+        0,
+        6
+      ],
+      "status": "runtime_error"
+    },
+    {
+      "error": "TT_THROW @ /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:45: tt::exception",
+      "offset": [
+        0,
+        4
+      ],
+      "status": "runtime_error"
+    },
+    {
+      "pcc": 0.9999715292130575,
+      "status": "pass",
+      "variant": "interleaved_2d_multicast"
+    }
+  ],
+  "provenance": {
+    "decoder_sha256": "370b9690d34d7b12a01fd8d117e93a55094f7d043c99bae1ebe2b7bb0a3f05ea",
+    "hardware": "4x Blackhole p300c, 1x4 FABRIC_1D_RING",
+    "test_sha256": "f13f6ab886948ffedebdf06ab40c21312755bc2b2890f86518d41dabd2d1cd3e"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "accounting": {
+    "bf16_rope_bytes_per_device_per_token": 65536,
+    "bfp8_kv_bytes_per_device_per_token": 1114112,
+    "duplicated_bfp4_weight_bytes_per_device": 8776581120,
+    "norm_weight_bytes_per_device": 1343488,
+    "persistent_ccl_bytes_per_device": 94371840,
+    "prefill_peak_live_bytes_per_device_per_token": 737280,
+    "trace_region_size_parameter_bytes_per_bank": 200000000,
+    "trace_reserved_bytes_per_device": 1600000000
+  },
+  "batch": 32,
+  "error": "TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false\ninfo:\nOut of Memory: Not enough space to allocate 2028994560 B DRAM buffer across 8 banks, where each bank needs to store 253624320 B, but bank size is 4072341376 B (allocated: 3827146752 B, free: 245194624 B, largest free block: 245194624 B)",
+  "failed_stage": "prefill_live_set",
+  "page_block_size": 64,
+  "physical_cache_length": 12416,
+  "provenance": {
+    "decoder_sha256": "7a1e67a0215117c3a746d93de7459e135c8004e5855eb87398a1c45d1f833a83",
+    "hardware": "4x Blackhole p300c, 1x4 FABRIC_1D_RING",
+    "test_sha256": "d8892ea12d1bbb2689fe3d4156ee8ffc0408921d6e313c2d51f3663e9fcc4806"
+  },
+  "result": "expected_out_of_memory",
+  "sequence_length": 12353,
+  "snapshots": {
+    "at_failure": {
+      "allocated_bytes": 30617174016,
+      "free_bytes": 1961556992,
+      "largest_contiguous_bytes_free_per_bank": 245194624,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    },
+    "full_stack_static": {
+      "allocated_bytes": 23515693056,
+      "free_bytes": 9063037952,
+      "largest_contiguous_bytes_free_per_bank": 1132879744,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    },
+    "mesh_open": {
+      "allocated_bytes": 0,
+      "free_bytes": 32578731008,
+      "largest_contiguous_bytes_free_per_bank": 4072341376,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    }
+  }
+}

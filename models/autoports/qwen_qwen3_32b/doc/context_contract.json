@@ -1,32 +1,44 @@
 {
   "model": "Qwen/Qwen3-32B",
   "hf_advertised_context": 40960,
-  "current_supported_context": 8192,
+  "current_supported_context": 12352,
   "limiting_reason": "device_dram",
-  "notes": "The optimized decoder raises the tested batch-32 single-device prefill floor from 4096 to 8192 tokens by using BFP8 KV caches and bounded internal projection/MLP chunks. The value is an evidence-backed supported floor, not a claim that 8193 is the exact boundary. A 16384-token probe reaches a hard device-DRAM allocation failure. The reduction from the HF-advertised context is a physical single-device capacity limit, not a public alignment or convenience cap; multichip work may extend it.",
+  "notes": "The 1x4 multichip decoder raises the batch-32 full-stack capacity from the single-chip stage's 8192-token floor to 12352 logical tokens. TP=4 shards every projection and both KV caches; explicit prefill ownership and row-parallel chunk reduction bound the live set. Every logical sequence length from 1 through 12352 is supported; this is not an aligned-only public contract. Paged-cache allocation rounds the next logical length, 12353, to 12416 physical tokens and reaches a hard device-DRAM allocation failure. The remaining reduction from the HF-advertised 40960 context is a measured physical capacity limit.",
   "capacity_evidence": {
-    "hardware": "Blackhole p300c, one device (1x1 mesh), eight DRAM banks",
-    "workload": "one optimized dense decoder layer, batch 32, BF16 activations, BFP4 projection weights, BFP8 KV caches, internal chunks of at most 640 rows",
+    "hardware": "four Blackhole p300c devices, 1x4 FABRIC_1D_RING, eight DRAM banks per device",
+    "workload": "shape- and byte-faithful reservation for all 64 TP=4 decoder layers: two runtime layouts of every local BFP4 projection, local two-head BFP8 K/V caches, per-layer BF16 RoPE/norm state, persistent decode CCL buffers, and the ownership-aware peak BF16 prefill live set",
+    "physical_dram_bytes_per_device": 34178731008,
+    "trace_reserved_bytes_per_device": 1600000000,
+    "allocatable_dram_bytes_per_device": 32578731008,
     "largest_passing_probe": {
-      "sequence_length": 8192,
+      "sequence_length": 12352,
       "result": "pass",
-      "output_shape": [1, 32, 8192, 5120],
-      "command_record": "doc/optimized_decoder/work_log.md"
+      "full_stack_static_bytes_per_device": 23443308544,
+      "prefill_peak_allocated_bytes_per_device": 32550191104,
+      "free_bytes_per_device": 28539904,
+      "largest_contiguous_bytes_free_per_bank": 3567488,
+      "artifact": "doc/multichip_decoder/results/capacity_seq12352.json",
+      "command_record": "doc/multichip_decoder/work_log.md"
     },
     "tested_failing_probe": {
-      "sequence_length": 16384,
-      "padded_sequence_length": 16384,
+      "sequence_length": 12353,
+      "padded_sequence_length": 12416,
       "result": "expected_out_of_memory",
-      "requested_allocation_bytes": 10737418240,
-      "largest_free_block_bytes": 29524352,
-      "command_record": "doc/optimized_decoder/work_log.md"
+      "failed_stage": "prefill_live_set",
+      "requested_allocation_bytes": 2028994560,
+      "requested_bytes_per_bank": 253624320,
+      "free_bytes_per_bank": 245194624,
+      "largest_free_block_bytes_per_bank": 245194624,
+      "artifact": "doc/multichip_decoder/results/capacity_seq12353.json",
+      "command_record": "doc/multichip_decoder/work_log.md"
     },
     "advertised_context_impossibility": {
-      "packed_qkv_output_bytes": 26843545600,
-      "single_hidden_tensor_bytes": 13421772800,
-      "two_bfp8_kv_cache_tensor_bytes": 2684354560,
+      "all_layer_local_bfp8_kv_bytes_per_device": 45634027520,
+      "duplicated_local_bfp4_weight_bytes_per_device": 8776581120,
+      "bf16_rope_bytes_per_device": 2684354560,
+      "ownership_aware_prefill_peak_live_bytes_per_device": 30198988800,
       "device_dram_bytes": 34178731008,
-      "note": "At batch 32 and sequence 40960, the required BF16 packed-QKV output plus one BF16 hidden tensor already total 40265318400 bytes, exceeding all device DRAM before KV caches, weights, attention output, allocator fragmentation, or other live tensors."
+      "note": "At batch 32 and sequence 40960, local TP-sharded KV alone is 45.634 GB/device and exceeds physical p300c DRAM before weights, RoPE, trace reservation, activations, CCL buffers, or allocator constraints."
     },
     "decode_trace_state": {
       "position_slots_per_layer": 1,
@@ -34,10 +46,10 @@
       "components": "two 32x128 BF16 RoPE tiles (8192 bytes each), 32 uint32 RoPE lookup indices (128 bytes), and 32 int32 cache-update indices (128 bytes)",
       "lifecycle": "fixed-address index buffers refreshed by host-to-device writes, then embedding lands in preallocated RoPE outputs before replay; no device allocation and no per-position retention while a trace is live",
       "stack_note": "The position inputs are model-independent and may be shared by a future layer stack; even if separately owned by all 64 layers, payload is bounded at 1064960 bytes.",
-      "row_major_lookup_tables": {
-        "bytes_per_layer": 4194304,
-        "bytes_for_64_separate_layers": 268435456,
-        "note": "Two bounded 8192x128 BF16 lookup tables enable allocation-free traced position refresh. They are model-independent and shareable by a future layer stack; the single-layer capacity probes include one copy."
+      "rope_lookup_tables": {
+        "bytes_per_layer": 12648448,
+        "bytes_for_64_separate_layers": 809500672,
+        "note": "Cosine and sine are each reserved in TILE and ROW_MAJOR layouts at 12352x128 BF16 so both prefill and allocation-free traced position refresh are modeled. The full-stack reservation conservatively includes 64 separate copies even though they are model-independent and shareable."
       }
     }
   },
@@ -53,7 +65,7 @@
         "runtime_graph": false
       },
       "emitted_shape": [1, 32, 17, 5120],
-      "tested_sequence_lengths": [4, 17, 31, 128, 1024, 2048, 4096, 4097, 8192]
+      "tested_sequence_lengths": [4, 17, 31, 64, 128, 1024, 2048, 4096, 4097, 8192]
     },
     "decode": {
       "status": "translated_and_tested",
@@ -88,6 +100,17 @@
       "kv_cache": "BFLOAT8_B",
       "decode_weights": "DRAM width-sharded across banks",
       "decode_residual": "L1 width-sharded across 40 cores; down projection uses 32 cores"
+    },
+    "multichip_precision_policy": {
+      "mesh": "1x4 FABRIC_1D_RING, TP=4 on mesh axis 1, two links",
+      "stack_residual": "BFLOAT16 hidden-width-sharded, 1280 channels/device",
+      "local_attention": "16 Q heads and 2 KV heads/device; 2048 attention channels/device",
+      "local_mlp": "6400 intermediate channels/device",
+      "projection_weights": "BFLOAT4_B with LoFi; interleaved prefill and DRAM-sharded decode layouts",
+      "kv_cache": "BFLOAT8_B, 2 local KV heads/device for contiguous and paged cache",
+      "collectives": "BFLOAT16 Ring; two all-gathers and two reduce-scatters/layer; persistent decode buffers",
+      "decode_residual": "L1 width-sharded across 20 cores; QKV/gate/up/down use 20 cores and the independently tuned O projection uses 8 cores",
+      "prefill_memory": "projection chunks are at most 640 rows; row-parallel O/down chunks reduce-scatter before concatenation; completed intermediates are explicitly released"
     }
   }
 }
