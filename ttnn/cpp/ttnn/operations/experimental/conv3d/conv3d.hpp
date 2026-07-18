@@ -29,11 +29,6 @@ ttnn::Tensor conv3d(
     const std::string& padding_mode_ = "zeros",
     uint32_t groups_ = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    uint32_t logical_h_mask = 0,
-    uint32_t logical_w_mask = 0,
-    const std::optional<ttnn::Tensor>& pad_offset_tensor = std::nullopt,
-    uint32_t output_pad_h = 0,
-    uint32_t output_pad_w = 0);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::experimental

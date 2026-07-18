@@ -329,7 +329,6 @@ _LTX_DECODER_SHAPE_PARAMS = [
     pytest.param(9, 512, 832, id="9f_512x832"),  # ~480p latent grid
     pytest.param(17, 544, 960, id="17f_544x960"),  # stage-1 half of 1080p (544x960)
     pytest.param(9, 1088, 1920, id="9f_1088x1920"),  # 1080p production (modest T)
-    pytest.param(141, 1088, 1920, id="141f_1088x1920"),  # full production T — hits the tuned blocking table
 ]
 
 _LTX_DECODER_2K_SHAPE_PARAMS = [

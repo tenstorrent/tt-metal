@@ -230,10 +230,6 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     auto [T_out, H_out, W_out] =
         detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
 
-    // Padded-output mode: allocate a spatially padded output; the writer fills only the interior.
-    H_out += 2 * args.output_pad_h;
-    W_out += 2 * args.output_pad_w;
-
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
     ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});
 
@@ -311,12 +307,7 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    uint32_t logical_h_mask,
-    uint32_t logical_w_mask,
-    const std::optional<Tensor>& pad_offset_tensor,
-    uint32_t output_pad_h,
-    uint32_t output_pad_w) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -336,11 +327,7 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .dilation =
             (config.dilation != default_dilation && dilation_ == default_dilation) ? config.dilation : dilation_,
         .padding_mode = padding_mode_,
-        .groups = groups_,
-        .logical_h_mask = logical_h_mask,
-        .logical_w_mask = logical_w_mask,
-        .output_pad_h = output_pad_h,
-        .output_pad_w = output_pad_w};
+        .groups = groups_};
     TT_FATAL(
         config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
@@ -351,10 +338,7 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         dilation_[1],
         dilation_[2]);
     auto tensor_args = OperationType::tensor_args_t{
-        .input_tensor = input_tensor,
-        .weight_tensor = weight_tensor,
-        .bias_tensor = bias_tensor,
-        .pad_offset_tensor = pad_offset_tensor};
+        .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
