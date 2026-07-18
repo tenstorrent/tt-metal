@@ -44,7 +44,13 @@ std::pair<bool, std::string> use_composite_all_gather(
             concat = input_tensor.memory_config().is_sharded() || is_last_dim;
         }
 
-        if ((concat || split) && input_padded) {
+        // Height gathers into interleaved output preserve the physical row stride. This includes
+        // sparse MLA's packed scaled-FP8 rows (656 logical bytes, 704-byte aligned DRAM pages): moving
+        // the complete aligned page is valid, and neither the reader nor writer needs to concatenate or
+        // split a row. Keep the conservative composite fallback for last-dim gathers and re-sharded
+        // outputs, where the padded tail would otherwise be interleaved with payload bytes.
+        const bool preserves_row_pages = gather_dim == rank - 2 && !output_mem_config.is_sharded();
+        if ((concat || split) && input_padded && !preserves_row_pages) {
             return {
                 true,
                 fmt::format(

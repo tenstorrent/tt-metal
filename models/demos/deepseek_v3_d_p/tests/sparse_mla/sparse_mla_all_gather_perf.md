@@ -41,3 +41,24 @@ The remaining current `AllBroadcast` is the broadcast phase of one composite
 all-gather fallback. Its tiled input has padding on the gather dimension, whereas
 the native path requires that logical and padded extents match. It is unrelated to
 the direct KVPE-prefix gather above.
+
+## Scaled-FP8 main KV-cache A/B
+
+On the same LoudBox SP=2 × TP=4 realtime-profiler setup, the main sparse-MLA KV
+cache was changed from row-major BF16 (1152 logical bytes/token) to its packed
+scaled-FP8 representation (656 logical bytes/token). The direct native cache
+gather remains in use for both formats, including its user/layer selection and
+valid-prefix transfer. Negative deltas mean scaled FP8 is faster.
+
+| Model | Case | BF16 total (ms) | Scaled-FP8 total (ms) | Latency delta | BF16 collective (ms) | Scaled-FP8 collective (ms) |
+|---|---|---:|---:|---:|---:|---:|
+| DeepSeek v3.2 | warm | 8.951 | 7.740 | -13.5% | 1.044 | 1.036 |
+| DeepSeek v3.2 | cold | 80.935 | 71.762 | -11.3% | 7.843 | 7.755 |
+| DeepSeek v3.2 | long | 17.256 | 15.827 | -8.3% | 6.841 | 6.751 |
+| GLM 5.1 | warm | 6.425 | 6.232 | -3.0% | 2.510 | 2.482 |
+| GLM 5.1 | cold | 62.565 | 60.979 | -2.5% | 24.361 | 24.262 |
+| GLM 5.1 | long | 14.110 | 13.890 | -1.6% | 8.325 | 8.262 |
+
+The packed row is 656 B, which occupies a 704-B aligned DRAM page. Native
+all-gather now permits this exact height-gather case when output is interleaved:
+the physical row stride is preserved, so transferring the aligned page is safe.
