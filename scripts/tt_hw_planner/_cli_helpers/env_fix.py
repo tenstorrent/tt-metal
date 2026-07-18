@@ -295,11 +295,14 @@ def run_pip_install(pip_args: List[str], *, timeout_s: int = 300) -> "tuple[bool
     import subprocess
     import sys as _sys
 
-    pip_ok, pip_detail = ensure_pip_available()
-    if not pip_ok:
-        return False, f"pip unavailable and bootstrap failed: {pip_detail}"
+    import importlib.util as _ilu
 
-    cmd = [_sys.executable, "-m", "pip", "install", *pip_args]
+    ensure_pip_available()
+    _ilu.invalidate_caches()
+    if _ilu.find_spec("pip") is not None:
+        cmd = [_sys.executable, "-m", "pip", "install", *pip_args]
+    else:
+        cmd = ["uv", "pip", "install", "--python", _sys.executable, *pip_args]
     print(f"  Running: {' '.join(cmd)}")
     try:
         proc = subprocess.run(

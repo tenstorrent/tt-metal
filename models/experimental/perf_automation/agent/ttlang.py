@@ -5,7 +5,6 @@ import importlib.util
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 _PINNED_FIRST = "1.0.1"
@@ -43,9 +42,11 @@ def _uninstall() -> bool:
 
 
 def _available_versions() -> list[str]:
+    from .pkgtools import pip_cmd
+
     try:
         r = subprocess.run(
-            [sys.executable, "-m", "pip", "index", "versions", "tt-lang"],
+            pip_cmd(["index", "versions", "tt-lang"]),
             capture_output=True,
             text=True,
             timeout=120,
