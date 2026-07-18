@@ -123,6 +123,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
 
     @staticmethod
+    def _has_visual(kwargs, pixel_key):
+        """True only when the request carries REAL visual data for this modality. vLLM attaches an
+        empty pixel_values placeholder to text requests for a multimodal-registered model, so a
+        plain ``is not None`` check misclassifies text as multimodal. Mirrors the emptiness test in
+        _gather_user_visual (key absent / empty list / first item None => text-only)."""
+        v = kwargs.get(pixel_key)
+        return v is not None and len(v) > 0 and v[0] is not None
+
+    @staticmethod
     def _gather_user_visual(kwargs, pixel_key, grid_key):
         """Pull this (B=1) user's patches + (t,h,w) grids for one modality out of the vLLM kwargs.
 
@@ -166,8 +175,13 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         model = self.model[0]
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             # Batched serving (max_num_seqs > 1): prefill each request in this step into its decode
-            # slot. Text-only — multimodal is single-sequence (get_supported_mm_limits: B=1).
-            assert kwargs.get("pixel_values") is None and kwargs.get("pixel_values_videos") is None, (
+            # slot. Text-only — multimodal is single-sequence (get_supported_mm_limits: B=1). Check
+            # for REAL visual data (not just non-None): vLLM passes an empty pixel_values placeholder
+            # on text requests to a multimodal-registered model, which a bare `is None` check would
+            # misflag and crash the engine on every text request.
+            assert not self._has_visual(kwargs, "pixel_values") and not self._has_visual(
+                kwargs, "pixel_values_videos"
+            ), (
                 "batched (max_num_seqs>1) serving is text-only; multimodal is single-sequence "
                 "(max_concurrency=1). Run the model at max_num_seqs=1 for image/video requests."
             )
