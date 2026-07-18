@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-logger/tt-logger.hpp>  // [DIAG avgpool x1.15] remove after
 #include <bit>
 #include <cmath>
 #include <filesystem>
@@ -71,6 +72,21 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
+
+    // [DIAG avgpool x1.15 -- remove after] What does the multi_core_H factory actually see/emit? If this
+    // does NOT print during the failing run, a cached program is being reused (stale scaler baked in).
+    // If it prints use_post_mul=0 / scaler=1/49, attributes lost the split. If use_post_mul=1 &
+    // scaler=1.0 but output is still x1.15, the H compute kernel isn't applying REDUCE_POST_MUL.
+    log_warning(
+        tt::LogOp,
+        "QSR_REDUCE_H_FACTORY math_op={} scaler={} post_mul_scaler={} use_post_mul={} scaler_bits=0x{:08x} "
+        "post_mul_bits=0x{:08x}",
+        static_cast<int>(operation_attributes.math_op),
+        operation_attributes.scaler,
+        operation_attributes.post_mul_scaler,
+        use_post_mul,
+        scaler_bits,
+        post_mul_scaler_bits);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
