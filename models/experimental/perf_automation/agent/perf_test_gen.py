@@ -751,12 +751,23 @@ def test_<task>_perf(device_params, device):
 """
 
 
-def _component_prompt(out_rel: str, src_label: str, demo_src: str, task: str, cache_instr: str = "") -> str:
+def _component_prompt(
+    out_rel: str, src_label: str, demo_src: str, task: str, cache_instr: str = "", agentic: bool = False
+) -> str:
     """LLM prompt for a single-component perf test — the GENERAL path (covers any module/model type).
     Mirrors the demo path's proven 'lift the build+run from a complete source' recipe, but the source is
     the component's per-component PCC test and the target is one module timed in isolation. Carries the
     golden-cache fast path (so candidates never reload the full model) and the resident-buffer trace rules
-    (so the isolated-module trace capture does not hang the device)."""
+    (so the isolated-module trace capture does not hang the device). agentic=True drops the one-shot
+    'respond with only the file content' tail, because the agentic builder writes + runs the file itself."""
+    tail = (
+        ""
+        if agentic
+        else (
+            "Do NOT use any tools and do NOT write the file yourself — respond with ONLY the complete python "
+            "file content as your message text, no prose, no markdown fences."
+        )
+    )
     return (
         f"Write a pytest PERFORMANCE test file `{out_rel}` that times ONE component of this TTNN model in "
         f"ISOLATION. The source below is that component's per-component CORRECTNESS (PCC) test — it ALREADY "
@@ -779,9 +790,7 @@ def _component_prompt(out_rel: str, src_label: str, demo_src: str, task: str, ca
         f"ttnn.to_torch / .item() / .cpu() / torch tensor construction / python shape or control-flow "
         f"decisions inside `_forward()`. If the module's own forward has an irreducible host op, print "
         f"TRACE_NOT_TRACE_CAPABLE=1 and skip the trace so it falls back to the eager number:\n"
-        f"{_SKELETON_COMPONENT}\n\n"
-        f"Do NOT use any tools and do NOT write the file yourself — respond with ONLY the complete python "
-        f"file content as your message text, no prose, no markdown fences."
+        f"{_SKELETON_COMPONENT}\n\n" + tail
     )
 
 
@@ -967,6 +976,35 @@ def generate_perf_test(
         prompt = _component_prompt(out_rel, src_label, demo_src, task, cache_instr=_cache_instr)
     if self_traced and not _component:
         prompt = _self_traced_prompt(out_rel, task, src_label, demo_src, self_traced)
+    if (
+        _component
+        and runner is None
+        and validate is not False
+        and os.environ.get("TT_PERF_NO_AGENTIC_BUILDER", "") in ("", "0", "false", "False")
+    ):
+        try:
+            from .perf_test_agent import build_component_perf_test
+
+            _body = _component_prompt(out_rel, src_label, demo_src, task, cache_instr=_cache_instr, agentic=True)
+            if build_component_perf_test(root, task, out_rel, _body):
+                _verdict, _ = validate_generated_perf_test(out_path, task, component=True)
+                if _verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
+                    print(f"      auto-gen perf from pcc (agentic) -> {node}", file=sys.stderr, flush=True)
+                    return node
+                if _eager_terminal_ok(out_path, task):
+                    print(
+                        f"      auto-gen perf from pcc (agentic, eager terminal) -> {node}", file=sys.stderr, flush=True
+                    )
+                    return node
+            print(
+                "      · agentic builder did not converge; falling back to one-shot generator",
+                file=sys.stderr,
+                flush=True,
+            )
+        except Exception as _exc:  # noqa: BLE001
+            print(
+                f"      · agentic builder unavailable ({str(_exc)[:100]}); using one-shot", file=sys.stderr, flush=True
+            )
     # A generative demo's perf test must exercise the (capped) decode loop, not a prefill-only slice.
     demo_is_generative = any(
         k in demo_src.lower()
