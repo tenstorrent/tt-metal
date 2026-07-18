@@ -540,6 +540,17 @@ Result conv2d_L1(
                 hi = override_tiles;
             }
         }
+        // UNCONDITIONAL reader-gather cap (gap 3): read_activation_data mis-reads > 4 M-tiles in ONE gather
+        // -> M-tiles >= 4 come out wrong (test_quasar_gap_large_m_reader_gather: PCC by M-quarter 0.5,0,0.5,0;
+        // per_core_M=16 tiles on Quasar's 2-core shard exposes it; WH shards over more cores so per_core_M stays
+        // small). Cap act_block_h <= 4 tiles regardless of the override so every gather stays in the validated
+        // range (more, smaller height blocks, gathered separately). This makes the split robust for large
+        // per_core_M WITHOUT per-conv act_block_h_override (needed for the uniform model wiring). Remove once
+        // the reader-indices / read_activation_data path handles > 4 M-tiles per gather.
+        constexpr uint32_t kQuasarReaderMaxActBlockHTiles = 4;
+        if (hi > kQuasarReaderMaxActBlockHTiles) {
+            hi = kQuasarReaderMaxActBlockHTiles;
+        }
         // Keep act_block_h a multiple of the (already-valid) out_subblock height AND a divisor of the per-core
         // output height, so the compute subblocking stays valid (factory asserts act_block_h % out_subblock_h
         // == 0) and no partial M-block is produced. out_subblock_h divides the per-core height, so it is
