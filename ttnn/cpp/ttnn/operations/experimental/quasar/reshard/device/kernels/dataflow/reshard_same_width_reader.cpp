@@ -5,7 +5,7 @@
 // Metal 2.0 reshard same-width (HEIGHT_SHARDED -> HEIGHT_SHARDED) reader.
 //
 // Reads units from the remote tensor into the local sharded buffer.
-//   - The remote tensor base address comes from TensorAccessor(tensor::remote).get_bank_base_address().
+//   - The remote tensor base address comes from LocalTensorAccessor(tensor::remote).get_bank_base_address().
 //   - The local sharded buffer base L1 address comes from DataflowBuffer(dfb::shard_cb).get_write_ptr()
 //     (the DFB borrows the local tensor's buffer; it is used here purely as an address source).
 //   - When UNALIGNED is defined, a scratch DFB (dfb::scratch_cb) stages padded remote reads before
@@ -16,7 +16,7 @@
 //   (padded by the host to a uniform max; only the first num_reads*3 entries are read.)
 
 #include <stdint.h>
-#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -41,7 +41,7 @@ void kernel_main() {
         return;
     }
 
-    TensorAccessor remote(tensor::remote);
+    LocalTensorAccessor<uint32_t> remote(tensor::remote);
     Noc noc;
     AllocatorBank<bank_type> bank;
     DataflowBuffer shard_cb(dfb::shard_cb);

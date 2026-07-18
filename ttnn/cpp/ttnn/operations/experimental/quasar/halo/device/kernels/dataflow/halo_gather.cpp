@@ -9,7 +9,7 @@
 //
 // Resource model (see untilize_with_halo_program_factory.cpp):
 //   tensor::out             - output shard (borrowed-memory address source via
-//                             get_bank_base_address(); both readers scatter-write it).
+//                             LocalTensorAccessor::get_bank_base_address(); both readers scatter-write it).
 //   tensor::in              - input shard (skip_untilize path only): read directly by
 //                             base pointer.
 //   tensor::gather_config   - gather config (L1 path): read by base pointer.
@@ -32,6 +32,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -248,7 +249,7 @@ void kernel_main() {
     Noc noc;
 
     // Output shard base (borrowed-memory address source; both readers scatter-write here).
-    TensorAccessor out_acc(tensor::out);
+    LocalTensorAccessor<uint32_t> out_acc(tensor::out);
     const uint32_t out_base_l1_addr = out_acc.get_bank_base_address();
 
     // Gather/padding config base L1 addresses.
@@ -280,10 +281,10 @@ void kernel_main() {
     noc.async_read_barrier();
 #else
     // L1 config: the config tensor is sharded one shard per core; read the local shard directly.
-    TensorAccessor gather_config_acc(tensor::gather_config);
+    LocalTensorAccessor<uint32_t> gather_config_acc(tensor::gather_config);
     gather_config_l1_addr = gather_config_acc.get_bank_base_address();
 #ifdef ENABLE_PADDING
-    TensorAccessor padding_config_acc(tensor::padding_config);
+    LocalTensorAccessor<uint32_t> padding_config_acc(tensor::padding_config);
     padding_config_l1_addr = padding_config_acc.get_bank_base_address();
 #endif
 #endif
@@ -398,7 +399,7 @@ void kernel_main() {
 #else
         {
             // skip_untilize: the resident input shard is the gather source (read directly).
-            TensorAccessor in_acc(tensor::in);
+            LocalTensorAccessor<uint32_t> in_acc(tensor::in);
             in_base_l1_addr = in_acc.get_bank_base_address();
             while (number_of_segments_remaining) {
                 const uint16_t destination_noc_x = config[current_config_index++];

@@ -41,9 +41,9 @@ namespace {
 //   IN          - input tensor.  On the tiled (untilize) path it backs the
 //                 borrowed SRC dataflow buffer the compute kernel consumes; on
 //                 the ROW_MAJOR (skip_untilize) path both readers read it
-//                 directly via TensorAccessor(tensor::in).get_bank_base_address().
+//                 directly via LocalTensorAccessor(tensor::in).get_bank_base_address().
 //   OUT         - output tensor.  BOTH readers NoC-scatter-write disjoint
-//                 regions into it via TensorAccessor(tensor::out).get_bank_base_address().
+//                 regions into it via LocalTensorAccessor(tensor::out).get_bank_base_address().
 //                 (This binding on both readers is legal — a TensorParameter
 //                 has no endpoint-exclusivity constraint, unlike a DFB.)
 //   PAD_CONFIG0/1, GATHER_CONFIG0/1 - op-owned sliding-window config tensors.

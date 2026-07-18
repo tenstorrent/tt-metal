@@ -5,7 +5,7 @@
 // Metal 2.0 reshard same-height (WIDTH_SHARDED -> WIDTH_SHARDED) reader.
 //
 // Reads contiguous segments from the remote tensor into the local sharded buffer.
-//   - The remote tensor base address comes from TensorAccessor(tensor::remote).get_bank_base_address().
+//   - The remote tensor base address comes from LocalTensorAccessor(tensor::remote).get_bank_base_address().
 //   - The local sharded buffer base L1 address comes from DataflowBuffer(dfb::shard_cb).get_write_ptr()
 //     (the DFB borrows the local tensor's buffer; it is used here purely as an address source).
 //
@@ -14,7 +14,7 @@
 //   (padded by the host to a uniform max; only the first num_segments*4 entries are read.)
 
 #include <stdint.h>
-#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -31,7 +31,7 @@ void kernel_main() {
     const uint32_t remote_stride_bytes = get_arg(args::remote_stride_bytes);
     const uint32_t num_segments = get_arg(args::num_segments);
 
-    TensorAccessor remote(tensor::remote);
+    LocalTensorAccessor<uint32_t> remote(tensor::remote);
     DataflowBuffer shard_cb(dfb::shard_cb);
     Noc noc;
     AllocatorBank<bank_type> bank;

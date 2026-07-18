@@ -1136,12 +1136,14 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
     const uint32_t named0 = get_arg(args::named0);
     const uint32_t named1 = get_arg(args::named1);
+    LocalTensorAccessor<uint32_t> local_acc(tensor::io);
+    const uint32_t tensor_base = local_acc.get_bank_base_address();
     TensorAccessor acc(tensor::io);
-    const uint32_t tensor_base = acc.get_bank_base_address();
     const uint32_t page_size = acc.get_aligned_page_size();  // binding's 2nd CRTA word (dynamic_tensor_shape)
     Scratchpad<uint32_t> pad(scratch::pad);
     const uint32_t scratch_base = pad.get_base_address();
