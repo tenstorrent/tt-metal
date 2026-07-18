@@ -49,6 +49,7 @@ def _run(
     stride=(1, 1),
     padding=(0, 0),
     act_block_h_override=128,  # None -> let the factory pick (force_conv_no_spill caps it)
+    skip_known_quasar_fail=True,  # gap tests set False to actually exercise the known-fail combos
 ):
     device = mesh_device
     torch.manual_seed(0)
@@ -70,7 +71,7 @@ def _run(
     # (out_channels >= 256, N >= 8 tiles); pure wide-N and bias with N <= 4 pass. Needs a matmul-kernel fix
     # (the fused-bias wide-N epilogue). Skip that combo on Quasar so the sweep is green; WH/BH run it all.
     _is_quasar = "QUASAR" in str(device.arch()).upper()
-    if with_bias_relu and _is_quasar and n_tiles > 4:
+    if skip_known_quasar_fail and with_bias_relu and _is_quasar and n_tiles > 4:
         import pytest as _pytest
 
         _pytest.skip(
@@ -313,3 +314,82 @@ _LARGER_IDS = [
 @pytest.mark.parametrize("with_bias_relu", [False, True], ids=["pure", "bias_relu"])
 def test_quasar_conv2d_split_program_e2e_shapes(mesh_device, shape, with_bias_relu):
     _run(mesh_device, with_bias_relu=with_bias_relu, **shape)
+
+
+# ============================================================================
+# GAP TESTS — combos the split conv does NOT yet handle on the Quasar emulator.
+# Each PASSES on WH/BH and FAILS (hang/assert/PCC) on Quasar today; they are the
+# standalone repros to drive to green so the full ResNet model can run on Quasar.
+# (These bypass the sweep's known-fail skip via skip_known_quasar_fail=False.)
+# ============================================================================
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_quasar_gap_deep_k_over_32(mesh_device):
+    """GAP 1 — deep reduction K > 32 tiles (ResNet layer2-4 3x3 convs, in_channels >= 128).
+
+    The no-spill/split path is gated to K <= kQuasarConvNoSpillMaxKTiles(=32) in conv2d.cpp, so
+    force_conv_no_spill does NOT fire here (K = 128*3*3/32 = 36 tiles) and act_block_w is NOT set to
+    full_K -> the reader gathers full_K into a window-row-sized ACT CB (overrun) / the K-spill path.
+    FIX DIRECTION: raise the K limit and make the split tilize + single-K-block matmul handle K > 32
+    tiles (L1 fit + matmul in0_block_w > 32), OR spill K across tilize blocks without the 0x19/accumulate.
+    """
+    _run(
+        mesh_device,
+        with_bias_relu=False,
+        in_channels=128,
+        out_channels=64,
+        kernel_size=(3, 3),
+        out_h=8,
+        out_w=16,  # small spatial to fit L1 at K=36 tiles
+        act_block_h_override=32,  # 1 tile -> <=4 M-tiles/gather (isolate the K gap from the reader gap)
+        skip_known_quasar_fail=False,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_quasar_gap_wide_n_fused_bias(mesh_device):
+    """GAP 2 — wide N (out_channels >= 256, N >= 8 tiles) + FUSED bias.
+
+    Program B's fused-bias matmul HANGS at program completion for wide N (pure wide-N and bias N<=4 pass).
+    Shrinking the M block (out_block_h=1) avoids the hang but TRANSPOSES the output on Quasar
+    (a multi-M-block output-order bug). FIX DIRECTION: the fused-bias wide-N epilogue in
+    bmm_large_block_zm_fused_bias_activation_metal2 (compute-kernel DPRINT is no-op'd there), and/or the
+    out_block_h<per_core_M transpose so N can be blocked.
+    """
+    _run(
+        mesh_device,
+        with_bias_relu=True,
+        out_channels=256,  # N = 8 tiles
+        kernel_size=(4, 4),
+        out_h=16,
+        out_w=32,
+        act_block_h_override=128,
+        skip_known_quasar_fail=False,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_quasar_gap_large_m_reader_gather(mesh_device):
+    """GAP 3 — large per-core M with the reader gather UNCAPPED (act_block_h_override=None).
+
+    The no-spill full-window gather (read_activation_data / host reader-indices) mis-reads output rows
+    beyond ~4 M-tiles in a single gather -> M-tiles >= 4 come out wrong (readback PCC by M-quarter
+    1,0,1,0). We currently paper over it by capping act_block_h <= 4 tiles. Here act_block_h_override=None
+    lets force_conv_no_spill pick a larger act_block_h (per_core_M is 16 tiles for M=1024 / 2 cores),
+    re-exposing the bug. FIX DIRECTION: the reader-indices generation / read_activation_data for
+    act_block_h > 4 tiles, so the cap can be dropped.
+    """
+    _run(
+        mesh_device,
+        with_bias_relu=False,
+        out_channels=64,
+        kernel_size=(4, 4),
+        out_h=32,
+        out_w=32,  # M = 1024 sticks -> large per-core M
+        act_block_h_override=None,  # UNCAPPED -> gather > 4 M-tiles
+        skip_known_quasar_fail=False,
+    )
