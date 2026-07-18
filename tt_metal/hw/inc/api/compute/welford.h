@@ -82,14 +82,29 @@ ALWI void two_pass_stats_init() {
     MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
 }
 
+ALWI void two_pass_stats_set_anchor(std::uint32_t input_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_set_anchor(input_dst_idx)));
+}
+
 template <bool accumulate_m2, bool dual_m2 = true>
 ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
     ASSERT(start_row + num_rows <= TILE_WIDTH);
     MATH((llk_math_two_pass_sfpu_update_rows<accumulate_m2, dual_m2>(input_dst_idx, start_row, num_rows)));
 }
 
+template <bool accumulate_m2, bool dual_m2 = true>
+ALWI void two_pass_stats_update_shifted_rows(
+    std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
+    ASSERT(start_row + num_rows <= TILE_WIDTH);
+    MATH((llk_math_two_pass_sfpu_update_shifted_rows<accumulate_m2, dual_m2>(input_dst_idx, start_row, num_rows)));
+}
+
 ALWI void two_pass_stats_finish_mean(std::uint32_t reciprocal_bits) {
     MATH((llk_math_two_pass_sfpu_finish_mean(reciprocal_bits)));
+}
+
+ALWI void two_pass_stats_finish_shifted_mean(std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_finish_shifted_mean(reciprocal_bits)));
 }
 
 ALWI void two_pass_stats_clear() { MATH((llk_math_two_pass_sfpu_clear_stats())); }

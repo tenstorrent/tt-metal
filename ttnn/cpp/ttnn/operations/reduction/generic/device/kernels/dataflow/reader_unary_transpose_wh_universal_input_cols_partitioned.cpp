@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -23,7 +24,9 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
+    constexpr uint32_t stats_mode = get_compile_time_arg_val(4);
+    constexpr bool use_welford = stats_mode != 0;
+    constexpr bool sfpu_two_pass = stats_mode == 2;
     constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
@@ -35,8 +38,8 @@ void kernel_main() {
     constexpr DataFormat reduce_format = get_dataformat(dfb_id_in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
     constexpr uint32_t row_chunk = use_welford ? 1
-                                               : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                       : compute_kernel_lib::DEST_AUTO_LIMIT);
+                                                    : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
+                                                                            : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
 
@@ -71,32 +74,35 @@ void kernel_main() {
     // reset_curr_id - resets curr_id to the next tile in the starting column
     for (uint32_t i = 0; i < num_cols; i += row_chunk) {
         uint32_t chunk_end = std::min(i + row_chunk, num_cols);
-        uint32_t curr_id = col_start_tile_id;
-        uint32_t reset_curr_id = curr_id;
+        uint32_t reset_curr_id = col_start_tile_id;
         uint32_t reset_w = w;
         uint32_t reset_col_start = col_start_tile_id;
 
-        for (uint32_t j = 0; j < Ht; ++j) {
-            w = reset_w;
-            col_start_tile_id = reset_col_start;
-            for (uint32_t k = i; k < chunk_end; ++k) {
-                dfb_in0.reserve_back(onetile);
-                noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                dfb_in0.push_back(onetile);
+        constexpr uint32_t num_passes = sfpu_two_pass && Ht > 1 ? 2 : 1;
+        for (uint32_t pass = 0; pass < num_passes; ++pass) {
+            uint32_t curr_id = reset_curr_id;
+            for (uint32_t j = 0; j < Ht; ++j) {
+                w = reset_w;
+                col_start_tile_id = reset_col_start;
+                for (uint32_t k = i; k < chunk_end; ++k) {
+                    dfb_in0.reserve_back(onetile);
+                    noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    dfb_in0.push_back(onetile);
 
-                ++w;
+                    ++w;
 
-                if (w == Wt) {
-                    col_start_tile_id = curr_id + (Ht - j - 1) * Wt + 1;
-                    curr_id = col_start_tile_id + j * Wt;
-                    w = 0;
-                } else {
-                    ++curr_id;
-                    ++col_start_tile_id;
+                    if (w == Wt) {
+                        col_start_tile_id = curr_id + (Ht - j - 1) * Wt + 1;
+                        curr_id = col_start_tile_id + j * Wt;
+                        w = 0;
+                    } else {
+                        ++curr_id;
+                        ++col_start_tile_id;
+                    }
                 }
+                curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
             }
-            curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
         }
     }
 }

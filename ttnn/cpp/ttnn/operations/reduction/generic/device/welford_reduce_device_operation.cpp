@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "welford_reduce_device_operation.hpp"
+
+#include <cstdlib>
+#include <cstdint>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -22,7 +26,8 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to Std/Var reductions need to be on device! Got storage type: {}",
         tensor_args.storage_type());
-    TT_FATAL(tensor_args.buffer() != nullptr, "Operands to Std/Var reductions need to be allocated in buffers on device!");
+    TT_FATAL(
+        tensor_args.buffer() != nullptr, "Operands to Std/Var reductions need to be allocated in buffers on device!");
     TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to Std/Var reductions must be tilized");
     TT_FATAL(
         tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
@@ -49,7 +54,7 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
         // host dispatch.  Since they will also be reduced, set their dimensions to 1.
         if (operation_attributes.reduce_batch_size > 1) {
             TT_FATAL(output_shape.rank() >= 3, "Output shape rank should be at least 3");
-            uint32_t remaining = operation_attributes.reduce_batch_size;
+            std::uint32_t remaining = operation_attributes.reduce_batch_size;
             for (int i = static_cast<int>(output_shape.rank()) - 3; i >= 0 && remaining > 1; --i) {
                 TT_FATAL(
                     remaining % output_shape[i] == 0,
@@ -90,13 +95,16 @@ ttnn::Tensor welford_reduce(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    uint32_t reduce_batch_size) {
+    std::uint32_t reduce_batch_size) {
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
         MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
+
+    const bool sfpu_two_pass =
+        input_tensor.dtype() == DataType::FLOAT32 && std::getenv("TTNN_STD_VAR_USE_WELFORD") == nullptr;
 
     return ttnn::device_operation::launch<WelfordReduceDeviceOperation>(
         WelfordReduceParams{
@@ -108,7 +116,8 @@ ttnn::Tensor welford_reduce(
             config,
             sub_core_grids,
             correction,
-            reduce_batch_size},
+            reduce_batch_size,
+            sfpu_two_pass},
         input_tensor);
 }
 

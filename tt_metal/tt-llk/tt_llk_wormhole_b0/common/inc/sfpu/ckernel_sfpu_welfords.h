@@ -284,10 +284,12 @@ sfpi_inline void _clear_previous_mean_and_m2_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
-// Experimental two-pass statistics helpers. During pass one LREG4/5 hold
-// independent partial sums, which are combined into the mean in LREG4. During
-// pass two LREG5 holds the centered sum of squares. The input tile has been
-// transposed so channels are rows and the 32 spatial samples remain vector lanes.
+// Experimental two-pass statistics helpers. The basic pass-one path holds
+// independent partial sums in LREG4/5. The shifted path holds an anchor in
+// LREG4 and sums (x - anchor) in LREG5/6 to preserve precision for large common
+// offsets. Both produce the mean in LREG4; pass two holds the centered sum of
+// squares in LREG5/6. The input tile has been transposed so channels are rows
+// and the 32 spatial samples remain vector lanes.
 template <std::uint32_t input_lreg, std::uint32_t accumulator_lreg>
 sfpi_inline void _two_pass_accumulate_sum_row_()
 {
@@ -302,6 +304,35 @@ sfpi_inline void _two_pass_accumulate_sum_block_()
     TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG5, 0);
     TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG4, 0);
     TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPNOP;
+}
+
+sfpi_inline void _two_pass_set_anchor_()
+{
+    _welfords_load_block_<0, 0>();
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+}
+
+template <std::uint32_t input_lreg, std::uint32_t accumulator_lreg>
+sfpi_inline void _two_pass_accumulate_shifted_sum_row_()
+{
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, input_lreg, input_lreg, 0);
+    TTI_SFPNOP;
+    TTI_SFPADD(accumulator_lreg, ckernel::p_sfpu::LCONST_1, input_lreg, accumulator_lreg, 0);
+}
+
+sfpi_inline void _two_pass_accumulate_shifted_sum_block_()
+{
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG6, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG6, 0);
     TTI_SFPNOP;
 }
 
@@ -357,7 +388,7 @@ sfpi_inline void _two_pass_accumulate_m2_dual_block_()
     TTI_SFPNOP;
 }
 
-template <bool accumulate_m2, bool dual_m2, std::uint32_t I, std::uint32_t J>
+template <bool accumulate_m2, bool dual_m2, bool shifted_mean, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t end_row)
 {
     constexpr std::uint32_t block_min = I * 16 + J * 4;
@@ -408,7 +439,27 @@ sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t en
     {
         if (first == 0 && last == 4)
         {
-            _two_pass_accumulate_sum_block_();
+            if constexpr (shifted_mean)
+            {
+                _two_pass_accumulate_shifted_sum_block_();
+            }
+            else
+            {
+                _two_pass_accumulate_sum_block_();
+            }
+            return;
+        }
+        if constexpr (shifted_mean)
+        {
+#define TWO_PASS_SHIFTED_SUM_ROW(N, R, A) \
+    if (first <= N && last > N)           \
+        _two_pass_accumulate_shifted_sum_row_<R, A>();
+            TWO_PASS_SHIFTED_SUM_ROW(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG5)
+            TWO_PASS_SHIFTED_SUM_ROW(1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG6)
+            TWO_PASS_SHIFTED_SUM_ROW(2, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG5)
+            TWO_PASS_SHIFTED_SUM_ROW(3, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG6)
+#undef TWO_PASS_SHIFTED_SUM_ROW
+            TTI_SFPNOP;
             return;
         }
 #define TWO_PASS_SUM_ROW(N, R, A) \
@@ -437,25 +488,60 @@ sfpi_inline void _two_pass_update_rows_(std::uint32_t start_row, std::uint32_t n
     {
         // Constant row bounds let the compiler remove the intersection and
         // per-row predicates from this common full-tile path.
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 0>(0, 32);
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 1>(0, 32);
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 2>(0, 32);
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 3>(0, 32);
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 0>(0, 32);
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 1>(0, 32);
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 2>(0, 32);
-        _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 3>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 0>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 1>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 2>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 3>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 0>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 1>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 2>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 3>(0, 32);
         return;
     }
     const std::uint32_t end_row = start_row + num_rows;
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 0>(start_row, end_row);
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 1>(start_row, end_row);
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 2>(start_row, end_row);
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 0, 3>(start_row, end_row);
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 0>(start_row, end_row);
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 1>(start_row, end_row);
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 2>(start_row, end_row);
-    _two_pass_block_rows_<accumulate_m2, dual_m2, 1, 3>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 0>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 1>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 2>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 0, 3>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 0>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 1>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 2>(start_row, end_row);
+    _two_pass_block_rows_<accumulate_m2, dual_m2, false, 1, 3>(start_row, end_row);
+}
+
+template <bool accumulate_m2, bool dual_m2>
+sfpi_inline void _two_pass_update_shifted_rows_(std::uint32_t start_row, std::uint32_t num_rows)
+{
+    if constexpr (accumulate_m2)
+    {
+        _two_pass_update_rows_<true, dual_m2>(start_row, num_rows);
+        return;
+    }
+    if (num_rows == 0)
+    {
+        return;
+    }
+    if (start_row == 0 && num_rows == 32)
+    {
+        _two_pass_block_rows_<false, dual_m2, true, 0, 0>(0, 32);
+        _two_pass_block_rows_<false, dual_m2, true, 0, 1>(0, 32);
+        _two_pass_block_rows_<false, dual_m2, true, 0, 2>(0, 32);
+        _two_pass_block_rows_<false, dual_m2, true, 0, 3>(0, 32);
+        _two_pass_block_rows_<false, dual_m2, true, 1, 0>(0, 32);
+        _two_pass_block_rows_<false, dual_m2, true, 1, 1>(0, 32);
+        _two_pass_block_rows_<false, dual_m2, true, 1, 2>(0, 32);
+        _two_pass_block_rows_<false, dual_m2, true, 1, 3>(0, 32);
+        return;
+    }
+    const std::uint32_t end_row = start_row + num_rows;
+    _two_pass_block_rows_<false, dual_m2, true, 0, 0>(start_row, end_row);
+    _two_pass_block_rows_<false, dual_m2, true, 0, 1>(start_row, end_row);
+    _two_pass_block_rows_<false, dual_m2, true, 0, 2>(start_row, end_row);
+    _two_pass_block_rows_<false, dual_m2, true, 0, 3>(start_row, end_row);
+    _two_pass_block_rows_<false, dual_m2, true, 1, 0>(start_row, end_row);
+    _two_pass_block_rows_<false, dual_m2, true, 1, 1>(start_row, end_row);
+    _two_pass_block_rows_<false, dual_m2, true, 1, 2>(start_row, end_row);
+    _two_pass_block_rows_<false, dual_m2, true, 1, 3>(start_row, end_row);
 }
 
 sfpi_inline void _two_pass_finish_mean_(std::uint32_t reciprocal_bits)
@@ -465,6 +551,17 @@ sfpi_inline void _two_pass_finish_mean_(std::uint32_t reciprocal_bits)
     TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
     TTI_SFPNOP;
     TTI_SFPMUL(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+}
+
+sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
+{
+    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPNOP;
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }

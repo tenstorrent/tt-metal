@@ -57,7 +57,7 @@ static std::string get_std_var_reduction_doc(const char* op_name, const char* qu
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded (L1): Width, Height, and ND sharding
+            - Sharded (L1): Width, Height, and N-dimensional sharding
             - Output sharding will mirror the input
         )doc",
         op_name,

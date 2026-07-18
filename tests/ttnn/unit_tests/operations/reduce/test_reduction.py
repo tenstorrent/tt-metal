@@ -6,9 +6,13 @@ import os
 
 import pytest
 import torch
-
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, torch_random
+from models.common.utility_functions import (
+    comp_allclose_and_pcc,
+    is_blackhole,
+    torch_random,
+)
+
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -98,21 +102,21 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     )
 
 
-# Regression test for fp32 Welford variance precision under large mean offsets.
+# Regression test for FP32 variance precision under large mean offsets.
 # Uses a bit-exact integer input where the true variance is known analytically:
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
 # correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
 # translation-invariant *and* sign-invariant, so neither adding a large offset to every
 # element nor flipping its sign should change the answer.the scalar is applied after the
 # reduction as var(s*x) = s^2 * var(x).
-# test covers all three reduction kernels (H, W, HW) and both code paths
+# The test covers all three reduction kernels (H, W, HW).
 @pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
-    # The input is read at full fp32 and reduced unscaled; scalar is now applied after the (unscaled, precise) Welford reduction
-    # as var(s*x) = s^2 * var(x), so this case is accurate regardless of offset.
+    # The input is read at full FP32 and reduced unscaled; scalar is applied afterwards
+    # as var(s*x) = s^2 * var(x), so this case remains accurate regardless of offset.
     N = 32
     seq = torch.arange(N, dtype=torch.float32) + offset
     # Lay out the input so the reduction axis is the integer sequence.
@@ -132,8 +136,8 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     tt_out = ttnn.var(tt_in, dim=dim, scalar=scalar, keepdim=True, correction=correction)
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
-    # Tight tolerances: the unscaled fp32 reduction is essentially exact, so we only allow
-    # small accumulation noise from the SFPU Welford recurrence.
+    # Tight tolerances: the unscaled FP32 reduction is essentially exact, so allow only
+    # small SFPU accumulation noise.
     assert_numeric_metrics(
         torch_ref,
         actual,
@@ -145,11 +149,32 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     )
 
 
-# Regression test for fp32 Welford variance precision when do_scale=true (non-unity scalar)
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((32, 16384), -1),
+        ((4096, 32), -2),
+        ((4096, 64), (-2, -1)),
+    ],
+    ids=["W", "H", "HW"],
+)
+def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
+    """Keep a long FP32 reduction stable when the variance is tiny relative to its mean."""
+    torch.manual_seed(123)
+    torch_input = (torch.randn(shape, dtype=torch.float32) + 1e6).contiguous()
+    torch_ref = torch.var(torch_input.to(torch.float64), dim=dim, keepdim=True, correction=True)
+
+    tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.from_device(ttnn.var(tt_in, dim=dim, keepdim=True, correction=True)))
+
+    torch.testing.assert_close(actual, torch_ref, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+
+# Regression test for FP32 variance precision with a non-unity scalar
 # AND the reduction dimension crosses a tile boundary (Wt>1).
 # Unlike test_var_fp32_translation_invariance above, which tests whether inputs preserve
-# FP32 precision by using a large offset, this test checks that the FPU MUL result
-# is preserved in FP32, which requires UnpackToDestFp32 on cb_scaled.
+# FP32 precision by using a large offset, this test checks the post-reduction scalar
+# application across multiple input tiles.
 #
 # Variance of N consecutive integers 0..N-1 is (N^2 - 1) / 12 (population); with Bessel's
 # correction (sample variance) it is N * (N^2 - 1) / (12 * (N - 1)) = N * (N + 1) / 12. The
@@ -158,12 +183,9 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 # by inspection.
 #
 # Parametrized across two N values to cover two Wt regimes of the wt-inner loop in
-# welford_reduce_w with do_scale=true:
+# the W-reduction kernel:
 #   - N=33  -> Wt = ceil(33/32)  = 2   (smallest multi-tile case; original regression target)
-#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop, exercises the per-iter UNPACK
-#                                       hw_configure flip between cb_in's Default mode and
-#                                       cb_scaled's UnpackToDestFp32 mode across many
-#                                       iterations rather than just one boundary crossing)
+#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop)
 @pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
 @pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
 def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
