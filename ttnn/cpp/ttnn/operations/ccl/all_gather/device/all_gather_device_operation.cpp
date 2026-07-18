@@ -43,6 +43,35 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         fabric_is_2d || args.cluster_axis.has_value() || mesh_shape[0] == 1 || mesh_shape[1] == 1,
         "1D fabric on a 2D mesh_device requires cluster_axis to be set");
 
+    const auto& input_shape = input_tensor.logical_shape();
+    const uint32_t input_rank = input_shape.rank();
+    if (args.batch_slice_idx.has_value()) {
+        TT_FATAL(input_rank >= 3, "batch_slice_idx requires rank >= 3, got {}", input_rank);
+        TT_FATAL(args.dim != 0, "batch_slice_idx is not supported when gathering dim 0");
+        TT_FATAL(
+            args.batch_slice_idx.value() < input_shape[0],
+            "batch_slice_idx {} is out of range for dim-0 extent {}",
+            args.batch_slice_idx.value(),
+            input_shape[0]);
+    }
+    if (args.valid_gather_extent.has_value()) {
+        TT_FATAL(input_rank >= 2, "valid_gather_extent requires rank >= 2, got {}", input_rank);
+        TT_FATAL(
+            args.dim == static_cast<int32_t>(input_rank) - 2,
+            "valid_gather_extent is supported only on the height gather dim (rank-2), got dim {} of rank {}",
+            args.dim,
+            input_rank);
+        TT_FATAL(args.valid_gather_extent.value() > 0, "valid_gather_extent must be greater than zero");
+        TT_FATAL(
+            args.valid_gather_extent.value() <= input_shape[args.dim],
+            "valid_gather_extent {} exceeds input extent {}",
+            args.valid_gather_extent.value(),
+            input_shape[args.dim]);
+        TT_FATAL(
+            input_shape[0] == 1 || args.batch_slice_idx.has_value(),
+            "valid_gather_extent with multiple batches requires batch_slice_idx");
+    }
+
     // Constraints on persistent output tensor
     if (tensor_args.persistent_output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.persistent_output_tensor.value();
@@ -66,11 +95,14 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
         // Check the output tensor size
         auto output_shape = output_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
-        auto expected_output_shape = input_shape;
-        expected_output_shape[args.dim] *= args.num_devices;
+        auto input_padded_shape = input_tensor.padded_shape();
+        auto expected_output_shape = input_padded_shape;
+        expected_output_shape[args.dim] = input_padded_shape[args.dim] * args.num_devices;
+        if (args.batch_slice_idx.has_value()) {
+            expected_output_shape[0] = 1;
+        }
         TT_FATAL(
-            output_shape.size() == input_shape.size(),
+            output_shape.size() == input_padded_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
             output_shape.size());
         TT_FATAL(
@@ -86,11 +118,75 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     // to composite path if needed.
 }
 
+void AllGatherDeviceOperation::validate_on_program_cache_hit(
+    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
+    // These knobs are deliberately excluded from the program-cache key. Decode changes
+    // the cache slot and valid prefix on every step, while the program's geometry stays
+    // fixed; the multicast factory patches their runtime arguments on every dispatch.
+    // Validate them here as well so a cache hit cannot bypass the API contract.
+    const auto& input_shape = tensor_args.input_tensor.logical_shape();
+    const uint32_t input_rank = input_shape.rank();
+    if (args.batch_slice_idx.has_value()) {
+        TT_FATAL(input_rank >= 3, "batch_slice_idx requires rank >= 3, got {}", input_rank);
+        TT_FATAL(args.dim != 0, "batch_slice_idx is not supported when gathering dim 0");
+        TT_FATAL(
+            args.batch_slice_idx.value() < input_shape[0],
+            "batch_slice_idx {} is out of range for dim-0 extent {}",
+            args.batch_slice_idx.value(),
+            input_shape[0]);
+    }
+    if (args.valid_gather_extent.has_value()) {
+        TT_FATAL(input_rank >= 2, "valid_gather_extent requires rank >= 2, got {}", input_rank);
+        TT_FATAL(
+            args.dim == static_cast<int32_t>(input_rank) - 2,
+            "valid_gather_extent is supported only on the height gather dim (rank-2), got dim {} of rank {}",
+            args.dim,
+            input_rank);
+        TT_FATAL(args.valid_gather_extent.value() > 0, "valid_gather_extent must be greater than zero");
+        TT_FATAL(
+            args.valid_gather_extent.value() <= input_shape[args.dim],
+            "valid_gather_extent {} exceeds input extent {}",
+            args.valid_gather_extent.value(),
+            input_shape[args.dim]);
+        TT_FATAL(
+            input_shape[0] == 1 || args.batch_slice_idx.has_value(),
+            "valid_gather_extent with multiple batches requires batch_slice_idx");
+    }
+}
+
+ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Prefix extent and selected batch are runtime-only: retaining them in the key
+    // creates a new cached workload (and L1_SMALL semaphore) at every decode position.
+    // Whether batch selection is enabled is structural because it changes the output
+    // batch dimension; its value is patched into reader runtime arguments instead.
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<AllGatherDeviceOperation>,
+        attrs.dim,
+        attrs.output_mem_config,
+        attrs.cluster_axis,
+        attrs.axis_topology,
+        attrs.axis_num_devices,
+        attrs.axis_num_links,
+        attrs.num_devices,
+        attrs.packet_size,
+        attrs.subdevice_id,
+        attrs.sub_core_grid,
+        attrs.batch_slice_idx.has_value(),
+        tensor_args);
+}
+
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
+    // Keep the normal, full-size output allocation for a partial gather. Only the
+    // populated prefix of each device slab is transferred. This lets all decode
+    // positions reuse one program and one L1_SMALL semaphore.
     shape[args.dim] *= args.num_devices;
+    if (args.batch_slice_idx.has_value()) {
+        shape[0] = 1;
+    }
     return TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
@@ -220,11 +316,14 @@ AllGatherDeviceOperation::create_op_performance_model(
 }
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
-    const AllGatherParams& /*args*/, const AllGatherInputs& tensor_args) {
+    const AllGatherParams& operation_attributes, const AllGatherInputs& tensor_args) {
     // Heuristics to pick the kernel algorithm.
     // Multicast supports all Fabric topologies, unicast only supports Fabric 1D topologies.
     // Unicast is empirically found to be faster for large tensors.
     bool use_unicast = false;
+    if (operation_attributes.batch_slice_idx.has_value() || operation_attributes.valid_gather_extent.has_value()) {
+        return program_factory_t{AllGatherMulticastFactory{}};
+    }
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
         // NeighborExchange only permits 1-hop unicast
@@ -255,7 +354,9 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in AllGatherParams.
@@ -305,7 +406,9 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             num_devices,
             packet_size,
             subdevice_id,
-            sub_core_grid},
+            sub_core_grid,
+            batch_slice_idx,
+            valid_gather_extent},
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 
@@ -320,9 +423,19 @@ Tensor all_gather(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     auto [params, inputs] = ttnn::operations::ccl::all_gather_build_operation_args(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
+        input_tensor,
+        persistent_output_tensor,
+        dim,
+        memory_config,
+        cluster_axis,
+        subdevice_id,
+        sub_core_grid,
+        batch_slice_idx,
+        valid_gather_extent);
     return ttnn::device_operation::launch<ttnn::operations::ccl::AllGatherDeviceOperation>(params, inputs);
 }
 

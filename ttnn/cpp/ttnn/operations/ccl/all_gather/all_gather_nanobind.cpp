@@ -32,7 +32,9 @@ using AllGatherFn = ttnn::Tensor (*)(
     std::optional<uint32_t>,
     std::optional<uint32_t>,
     std::optional<uint32_t>,
-    bool);
+    bool,
+    std::optional<uint32_t>,
+    std::optional<uint32_t>);
 
 void bind_all_gather(nb::module_& mod) {
     const auto* doc = R"doc(
@@ -54,6 +56,8 @@ void bind_all_gather(nb::module_& mod) {
             num_workers_per_link (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
             num_buffers_per_channel (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
             use_l1_small_for_semaphores (bool, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
+            batch_slice_idx (int, optional): Select a single dim-0 batch before gathering. Native path only.
+            valid_gather_extent (int, optional): Gather only this leading per-device extent along `dim`. Native path only.
 
         Returns:
             ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices in the mesh.
@@ -91,7 +95,9 @@ void bind_all_gather(nb::module_& mod) {
         nb::arg("chunks_per_sync") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
-        nb::arg("use_l1_small_for_semaphores") = false);
+        nb::arg("use_l1_small_for_semaphores") = false,
+        nb::arg("batch_slice_idx") = nb::none(),
+        nb::arg("valid_gather_extent") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

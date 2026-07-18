@@ -24,6 +24,9 @@ struct AllGatherDeviceOperation {
     using program_factory_t = std::variant<AllGatherMulticastFactory, AllGatherUnicastFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
@@ -46,6 +49,8 @@ Tensor all_gather(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 
 }  // namespace ttnn::prim

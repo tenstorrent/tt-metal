@@ -39,6 +39,11 @@ struct AllGatherParams {
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
+
+    // Optional direct-gather geometry. batch_slice_idx selects one dim-0 slab and
+    // valid_gather_extent limits the leading per-device extent along dim.
+    std::optional<uint32_t> batch_slice_idx;
+    std::optional<uint32_t> valid_gather_extent;
 };
 
 struct AllGatherInputs {

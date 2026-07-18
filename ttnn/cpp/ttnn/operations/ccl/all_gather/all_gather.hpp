@@ -25,7 +25,9 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 
 // Deprecated C++ entry point (legacy argument order).
 // This is intentionally a function template to resolve overload ambiguity with the above.

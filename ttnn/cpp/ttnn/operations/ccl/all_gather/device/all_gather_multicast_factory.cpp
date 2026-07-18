@@ -209,8 +209,15 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
         "concat requires an unpadded input page");  // so slots align to content
 
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    const uint32_t num_output_chunks = num_input_pages * split_factor;
+    const uint32_t total_input_pages = input_tensor.buffer()->num_pages();
+    const uint32_t batch_size = input_shape[0];
+    TT_FATAL(
+        total_input_pages % batch_size == 0,
+        "all_gather input pages {} must divide evenly across batch size {}",
+        total_input_pages,
+        batch_size);
+    const uint32_t pages_per_batch = total_input_pages / batch_size;
+    const uint32_t input_batch_page_offset = operation_attributes.batch_slice_idx.value_or(0) * pages_per_batch;
 
     ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
 
@@ -245,29 +252,50 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // device contributes per stripe. For RM gather_dim=-1 this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
     auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
-    uint32_t input_pages_per_stripe = 1;
+    uint32_t input_pages_per_full_stripe = 1;
+    uint32_t input_pages_per_selected_stripe = 1;
     for (int32_t i = gather_dim; i < rank; i++) {
-        uint32_t extent;
+        const uint32_t full_extent = input_shape[i];
+        const uint32_t selected_extent = (i == gather_dim && operation_attributes.valid_gather_extent.has_value())
+                                             ? operation_attributes.valid_gather_extent.value()
+                                             : full_extent;
         if (i == rank - 1) {
             if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-                extent = input_shape[i] / tile_spec.get_width();
+                input_pages_per_full_stripe *= full_extent / tile_spec.get_width();
+                input_pages_per_selected_stripe *= selected_extent / tile_spec.get_width();
             } else {
                 // This is a page count, so divide by the unaligned page size, not aligned
-                extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
+                input_pages_per_full_stripe *= (full_extent * input_tensor.element_size()) / input_unaligned_page_size;
+                input_pages_per_selected_stripe *=
+                    (selected_extent * input_tensor.element_size()) / input_unaligned_page_size;
             }
         } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
-            extent = input_shape[i] / tile_spec.get_height();
+            input_pages_per_full_stripe *= full_extent / tile_spec.get_height();
+            input_pages_per_selected_stripe *= selected_extent / tile_spec.get_height();
         } else {
-            extent = input_shape[i];
+            input_pages_per_full_stripe *= full_extent;
+            input_pages_per_selected_stripe *= selected_extent;
         }
-        input_pages_per_stripe *= extent;
     }
+
+    const bool partial_gather = operation_attributes.valid_gather_extent.has_value();
+    const bool single_batch_gather = operation_attributes.batch_slice_idx.has_value();
+    const uint32_t num_input_pages =
+        partial_gather ? input_pages_per_selected_stripe : (single_batch_gather ? pages_per_batch : total_input_pages);
+    TT_FATAL(
+        num_input_pages <= pages_per_batch,
+        "selected gather pages {} exceed pages per batch {}",
+        num_input_pages,
+        pages_per_batch);
+    const uint32_t num_output_chunks = num_input_pages * split_factor;
 
     // Stripe = this device's contiguous run of chunks per row = input_pages_per_stripe
     // * split_factor. Measured in chunks (not output pages) so multi-shard concat works:
     // a stripe's chunks are laid across output pages via the inner byte-offset counter
     // and may straddle pages.
-    const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
+    // The output retains its full per-device slab. A partial gather writes only
+    // the leading selected pages into each slab, preserving a fixed output layout.
+    const uint32_t output_chunks_per_stripe = input_pages_per_full_stripe * split_factor;
     const uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
     const uint32_t output_pages_per_row = stripe_distance_chunks / output_chunks_per_page;
     // This device's chunk phase within the output page. Constant across rows because
@@ -353,14 +381,16 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         // Set runtime args
         uint32_t input_pages_per_link = num_input_pages / min_num_links;
         uint32_t remainder = num_input_pages % min_num_links;
-        uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
-        uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
+        uint32_t selected_input_page_start = (link * input_pages_per_link) + std::min(link, remainder);
+        uint32_t selected_input_page_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
+        uint32_t input_tile_id_start = input_batch_page_offset + selected_input_page_start;
+        uint32_t input_tile_id_end = input_batch_page_offset + selected_input_page_end;
 
         // Map this worker's slice of input pages to its slice of output chunks.
         // num_output_chunks already accounts for split_factor, so in matched/concat
         // modes the ratio cancels back to num_input_pages.
-        uint32_t local_output_start = (input_tile_id_start * num_output_chunks) / num_input_pages;
-        uint32_t local_output_end = (input_tile_id_end * num_output_chunks) / num_input_pages;
+        uint32_t local_output_start = (selected_input_page_start * num_output_chunks) / num_input_pages;
+        uint32_t local_output_end = (selected_input_page_end * num_output_chunks) / num_input_pages;
         uint32_t num_worker_output_chunks = local_output_end - local_output_start;
         // s_start = global chunk index of this worker's first write:
         //     stripe_index  = local / output_chunks_per_stripe
@@ -498,11 +528,63 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
 void AllGatherMulticastFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const AllGatherParams& /*operation_attributes*/,
+    const AllGatherParams& operation_attributes,
     const AllGatherInputs& tensor_args,
     Tensor& output_tensor) {
-    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
+    const auto& input_tensor = tensor_args.input_tensor;
+    const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
+
+    auto input_shape = input_tensor.padded_shape();
+    const uint32_t rank = input_shape.rank();
+    int32_t gather_dim = operation_attributes.dim;
+    if (gather_dim < 0) {
+        gather_dim += rank;
+    }
+    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
+    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
+    const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
+    const uint32_t output_chunks_per_page = is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
+    const uint32_t split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
+
+    const uint32_t total_input_pages = input_tensor.buffer()->num_pages();
+    const uint32_t batch_size = input_shape[0];
+    const uint32_t pages_per_batch = total_input_pages / batch_size;
+    const uint32_t input_batch_page_offset = operation_attributes.batch_slice_idx.value_or(0) * pages_per_batch;
+
+    auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    uint32_t input_pages_per_full_stripe = 1;
+    uint32_t input_pages_per_selected_stripe = 1;
+    for (int32_t i = gather_dim; i < rank; i++) {
+        const uint32_t full_extent = input_shape[i];
+        const uint32_t selected_extent = (i == gather_dim && operation_attributes.valid_gather_extent.has_value())
+                                             ? operation_attributes.valid_gather_extent.value()
+                                             : full_extent;
+        if (i == rank - 1) {
+            if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+                input_pages_per_full_stripe *= full_extent / tile_spec.get_width();
+                input_pages_per_selected_stripe *= selected_extent / tile_spec.get_width();
+            } else {
+                input_pages_per_full_stripe *= (full_extent * input_tensor.element_size()) / input_unaligned_page_size;
+                input_pages_per_selected_stripe *=
+                    (selected_extent * input_tensor.element_size()) / input_unaligned_page_size;
+            }
+        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
+            input_pages_per_full_stripe *= full_extent / tile_spec.get_height();
+            input_pages_per_selected_stripe *= selected_extent / tile_spec.get_height();
+        } else {
+            input_pages_per_full_stripe *= full_extent;
+            input_pages_per_selected_stripe *= selected_extent;
+        }
+    }
+    const uint32_t num_input_pages =
+        operation_attributes.valid_gather_extent.has_value()
+            ? input_pages_per_selected_stripe
+            : (operation_attributes.batch_slice_idx.has_value() ? pages_per_batch : total_input_pages);
+    const uint32_t num_output_chunks = num_input_pages * split_factor;
+    const uint32_t output_chunks_per_stripe = input_pages_per_full_stripe * split_factor;
+    const uint32_t stripe_distance_chunks = operation_attributes.num_devices * output_chunks_per_stripe;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -510,16 +592,43 @@ void AllGatherMulticastFactory::override_runtime_arguments(
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
-        for (const auto& core : shared_vars.worker_cores) {
+        for (uint32_t link = 0; link < shared_vars.worker_cores.size(); ++link) {
+            const auto& core = shared_vars.worker_cores[link];
             // reader: [0]=input_addr, [1]=output_addr, [10]=barrier_sem
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args[0] = input_addr;
             reader_args[1] = output_addr;
             reader_args[10] = barrier_sem_addr;
+            const uint32_t input_pages_per_link = num_input_pages / shared_vars.worker_cores.size();
+            const uint32_t remainder = num_input_pages % shared_vars.worker_cores.size();
+            const uint32_t selected_input_page_start = (link * input_pages_per_link) + std::min(link, remainder);
+            const uint32_t selected_input_page_end =
+                ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
+            const uint32_t local_output_start = (selected_input_page_start * num_output_chunks) / num_input_pages;
+            const uint32_t local_output_end = (selected_input_page_end * num_output_chunks) / num_input_pages;
+            const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
+            const uint32_t device_idx = reader_args[9];
+            const uint32_t s_start = (local_output_start / output_chunks_per_stripe) * stripe_distance_chunks +
+                                     device_idx * output_chunks_per_stripe +
+                                     local_output_start % output_chunks_per_stripe;
+            const uint32_t output_page_id_start = s_start / output_chunks_per_page;
+            const uint32_t output_page_byte_offset_start =
+                (s_start % output_chunks_per_page) * (is_split ? output_unaligned_page_size : input_page_size);
+            const uint32_t output_chunk_in_stripe_start = local_output_start % output_chunks_per_stripe;
+            reader_args[2] = input_batch_page_offset + selected_input_page_start;
+            reader_args[3] = input_batch_page_offset + selected_input_page_end;
+            reader_args[4] = output_page_id_start;
+            reader_args[5] = output_chunk_in_stripe_start;
+            reader_args[7] = output_page_byte_offset_start;
+            reader_args[8] = num_worker_output_chunks;
             // writer: [0]=output_addr, [7]=barrier_sem
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args[0] = output_addr;
             writer_args[7] = barrier_sem_addr;
+            writer_args[1] = output_page_id_start;
+            writer_args[2] = output_chunk_in_stripe_start;
+            writer_args[4] = output_page_byte_offset_start;
+            writer_args[5] = num_worker_output_chunks;
         }
     }
 }
