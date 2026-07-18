@@ -49,7 +49,7 @@ def _run(
     stride=(1, 1),
     padding=(0, 0),
     act_block_h_override=128,  # None -> let the factory pick (force_conv_no_spill caps it)
-    skip_known_quasar_fail=True,  # gap tests set False to actually exercise the known-fail combos
+    use_split=True,  # False -> plain (non-split) conv path, as the model uses for 1x1 / mm_conv
 ):
     device = mesh_device
     torch.manual_seed(0)
@@ -67,16 +67,6 @@ def _run(
         f"  DIAG shape: in_ch={in_channels} out_ch={out_channels} k={kernel_size} out=({out_h},{out_w}) "
         f"K_tiles={k_tiles} N_tiles={n_tiles}"
     )
-    # KNOWN Quasar limitation: the FUSED-bias matmul (Program B) hangs at program completion for wide N
-    # (out_channels >= 256, N >= 8 tiles); pure wide-N and bias with N <= 4 pass. Needs a matmul-kernel fix
-    # (the fused-bias wide-N epilogue). Skip that combo on Quasar so the sweep is green; WH/BH run it all.
-    _is_quasar = "QUASAR" in str(device.arch()).upper()
-    if skip_known_quasar_fail and with_bias_relu and _is_quasar and n_tiles > 4:
-        import pytest as _pytest
-
-        _pytest.skip(
-            f"Quasar fused-bias wide-N (out_channels={out_channels}, N={n_tiles} tiles) matmul hang — TODO kernel fix"
-        )
 
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
     torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16).float()
@@ -112,7 +102,7 @@ def _run(
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat16,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        full_inner_dim=True,  # single K-block -> factory split_program_tilize_only eligibility + host split gate
+        full_inner_dim=use_split,  # single K-block -> split eligibility; False = plain path (1x1 / mm_conv)
         # act_block_h_override forces >=2 height blocks (exercises the multi-block tilize that faulted); None lets
         # the factory choose (force_conv_no_spill caps it to fit the DFB ring anyway).
         act_block_h_override=(act_block_h_override if act_block_h_override is not None else 0),
@@ -130,7 +120,10 @@ def _run(
     # intermittently HANGS on Quasar (pack frozen inside tilize_block mid DEST-dvalid handshake, ~block 4 —
     # dprint_spe1 / utd10-12); the datacopy path is what validated on WH.
     saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST")}
-    os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
+    if use_split:
+        os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
+    else:
+        os.environ.pop("TT_METAL_QSR_CONV_SPLIT_PROGRAM", None)  # plain conv path (model's 1x1 / mm_conv route)
     os.environ.pop("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST", None)
     try:
         out, [oh, ow], _wb = ttnn.experimental.quasar.conv2d(
@@ -320,7 +313,6 @@ def test_quasar_conv2d_split_program_e2e_shapes(mesh_device, shape, with_bias_re
 # GAP TESTS — combos the split conv does NOT yet handle on the Quasar emulator.
 # Each PASSES on WH/BH and FAILS (hang/assert/PCC) on Quasar today; they are the
 # standalone repros to drive to green so the full ResNet model can run on Quasar.
-# (These bypass the sweep's known-fail skip via skip_known_quasar_fail=False.)
 # ============================================================================
 
 
@@ -353,7 +345,6 @@ def test_quasar_gap_deep_k_over_32(mesh_device, in_channels, cid):
         out_h=8,
         out_w=16,  # small spatial to minimize L1 (act CB = act_block_h*full_K, weights = full_K*N)
         act_block_h_override=32,  # 1 tile -> <=4 M-tiles/gather (isolate the K gap from the reader gap)
-        skip_known_quasar_fail=False,
     )
 
 
@@ -376,7 +367,6 @@ def test_quasar_gap_wide_n_fused_bias(mesh_device):
         out_h=16,
         out_w=32,
         act_block_h_override=128,
-        skip_known_quasar_fail=False,
     )
 
 
@@ -400,5 +390,39 @@ def test_quasar_gap_large_m_reader_gather(mesh_device):
         out_h=32,
         out_w=32,  # M = 1024 sticks -> large per-core M
         act_block_h_override=None,  # UNCAPPED -> gather > 4 M-tiles
-        skip_known_quasar_fail=False,
+    )
+
+
+# 1x1 convs (bottleneck reduce / expand / downsample) take the PLAIN mm_conv/matmul path, NOT the split
+# (use_split=False -> no split env, full_inner_dim off), exactly as the ResNet model invokes them. Every
+# bottleneck has three 1x1s, so if this path doesn't work on Quasar the model stalls regardless of the 3x3
+# fixes. With folded-BN bias + relu. K = in_channels tiles, N = out_channels tiles.
+_1X1_CASES = [
+    dict(in_channels=64, out_channels=256, cid="in64_out256_expand"),  # K=2 N=8
+    dict(in_channels=256, out_channels=128, cid="in256_out128_reduce"),  # K=8 N=4
+    dict(in_channels=256, out_channels=512, cid="in256_out512_wide"),  # K=8 N=16
+]
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("case", _1X1_CASES, ids=[c["cid"] for c in _1X1_CASES])
+def test_quasar_gap_1x1_matmul_conv(mesh_device, case):
+    """GAP 4 — 1x1 conv on the plain mm_conv/matmul path (the model's bottleneck 1x1s), with bias+relu.
+
+    De-risks the model run: 1x1 convs bypass the split and go straight to the Quasar matmul (tilize activation
+    + linear). If the Quasar matmul-conv path (or its tilize / fused bias) fails here, the model can't run even
+    with all 3x3 gaps closed. FIX DIRECTION (if it fails): whichever sub-path breaks — the mm_conv tilize 0x19,
+    the matmul, or the fused bias.
+    """
+    _run(
+        mesh_device,
+        with_bias_relu=True,
+        in_channels=case["in_channels"],
+        out_channels=case["out_channels"],
+        kernel_size=(1, 1),
+        out_h=16,
+        out_w=32,
+        act_block_h_override=128,
+        use_split=False,  # plain mm_conv path (matches the model's 1x1 invocation)
     )
