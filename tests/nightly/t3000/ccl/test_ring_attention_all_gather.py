@@ -66,7 +66,7 @@ def run_ring_attention_all_gather_impl(
 
     if check_semaphore_realloc_cache_hit and enable_trace:
         # The cache-hit freeze regression must re-apply the hash-excluded GlobalSemaphore addresses on
-        # every dispatch via get_dynamic_runtime_args. A captured trace bakes the addresses at capture
+        # every dispatch via override_runtime_arguments. A captured trace bakes the addresses at capture
         # time and would never exercise the per-dispatch re-apply path, so it must run un-traced.
         pytest.fail("check_semaphore_realloc_cache_hit requires enable_trace=False")
 
@@ -181,7 +181,7 @@ def run_ring_attention_all_gather_impl(
         # Cache-hit freeze regression bookkeeping: every iteration gets its own freshly-allocated
         # semaphore set (all kept alive above so the allocator never reuses an address). We assert the
         # addresses are actually distinct across iterations, otherwise a cache HIT could reuse iter 0's
-        # stale address without the test noticing — the exact bug get_dynamic_runtime_args must prevent.
+        # stale address without the test noticing — the exact bug override_runtime_arguments must prevent.
         seen_sem_addrs = []
         for i in range(num_iters):
             if check_semaphore_realloc_cache_hit:
@@ -501,7 +501,7 @@ def test_ring_attention_all_gather_semaphore_realloc_cache_hit(
     ring_attention_all_gather_async excludes the per-link out_ready GlobalSemaphore L1 addresses from
     its program-cache hash, so calls that differ only in which semaphores they pass still cache-HIT.
     That makes the addresses DYNAMIC: the factory bakes them on the cache-miss build, and
-    RingAttentionAllGatherAsyncDeviceOperation::get_dynamic_runtime_args() must re-apply them on every
+    RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments() must re-apply them on every
     dispatch. If an address froze on the cache-hit fast path, a later dispatch reusing the cached
     program with a freshly-allocated semaphore set would sync on iteration 0's stale semaphore and
     either hang or produce a wrong result.

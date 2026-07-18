@@ -22,14 +22,14 @@ namespace ttnn::experimental::prim {
 // (RingAttentionAllGatherAsyncParams::attribute_values omits `semaphore`), so two calls that differ
 // only in which GlobalSemaphores they pass still cache-hit. That makes the addresses dynamic: the
 // factory bakes them for the cache-miss build, and
-// RingAttentionAllGatherAsyncDeviceOperation::get_dynamic_runtime_args() re-applies them on every
+// RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments() re-applies them on every
 // dispatch — otherwise a cache hit with a different / reallocated semaphore set would silently reuse
 // the address frozen at the first miss (the frozen-runtime-arg bug). A GlobalSemaphore address is not
 // a tensor Buffer* (it exposes no public Buffer accessor), so it cannot be a BufferBinding.
 //
 // The kernel indices and per-core arg slots below are the shared reference for BOTH the factory's
 // cache-miss bake (build_ring_attention_all_gather_program_descriptor via the worker helper) and the
-// cache-hit patch (get_dynamic_runtime_args); reorder the runtime args or the desc.kernels push order
+// cache-hit patch (override_runtime_arguments); reorder the runtime args or the desc.kernels push order
 // in the factory and these constants (and thus the re-apply targets) must be updated in lockstep.
 namespace ring_attention_all_gather_async_dynamic {
 // Two senders per link (forward + backward), each with its own reader and writer kernel. Also the

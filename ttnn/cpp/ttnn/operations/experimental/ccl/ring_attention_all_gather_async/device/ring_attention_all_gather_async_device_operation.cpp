@@ -264,7 +264,7 @@ void RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments(
     }
     // WorkloadDescriptor override: resolve_bindings covers tensor addresses; this re-applies the
     // hash-excluded semaphore addresses to the cached program (no create_workload_descriptor rebuild,
-    // so no GlobalSemaphore/MeshBuffer realloc). Replaces get_dynamic_runtime_args.
+    // so no GlobalSemaphore/MeshBuffer realloc).
     tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
 }
 
