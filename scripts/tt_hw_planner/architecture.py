@@ -251,6 +251,45 @@ def select_model(arch: ArchitectureSpec, total_params: int, weight_bytes_on_disk
 SSM_MODEL_TYPES = {"mamba", "mamba2", "rwkv", "rwkv4", "rwkv5", "rwkv6", "falcon_mamba"}
 
 
+def _num_or_max(v) -> int:
+    """Coerce a scalar or per-layer list of numbers to a single int; 0 otherwise."""
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, list) and v:
+        nums = [int(x) for x in v if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        return max(nums) if nums else 0
+    return 0
+
+
+def _moe_expert_count(cfg: dict) -> int:
+    """Auto-discover the routed-expert count by SCANNING the config for any field
+    that names experts, with no hardcoded field list — the largest numeric value
+    of a key containing 'expert' but not 'shared' (shared experts aren't routed).
+    Tolerates per-layer list values. 0 => not MoE. Model-agnostic: it finds
+    num_experts / num_local_experts / n_routed_experts / moe_num_experts / any
+    future name on its own."""
+    best = 0
+    for k, v in cfg.items():
+        kl = str(k).lower()
+        if "expert" in kl and "shared" not in kl:
+            best = max(best, _num_or_max(v))
+    return best
+
+
+def _moe_experts_per_token(cfg: dict) -> Optional[int]:
+    """Auto-discover active-experts-per-token by scanning for any top-k / per-token
+    expert field (moe_topk / num_experts_per_tok / topk / experts_per_tok / ...),
+    no hardcoded list. None if absent. Tolerates per-layer list values."""
+    best = 0
+    for k, v in cfg.items():
+        kl = str(k).lower()
+        if "topk" in kl or "experts_per_tok" in kl or ("expert" in kl and ("per_tok" in kl or "top" in kl)):
+            best = max(best, _num_or_max(v))
+    return best or None
+
+
 def detect_architecture(cfg: dict) -> str:
     """Return one of: dense | mla | sliding_window | ssm | moe | unknown."""
     if not cfg:
@@ -261,7 +300,7 @@ def detect_architecture(cfg: dict) -> str:
         return "ssm"
     if cfg.get("kv_lora_rank"):
         return "mla"
-    if cfg.get("num_local_experts") or cfg.get("n_routed_experts"):
+    if _moe_expert_count(cfg) > 1:
         return "moe"
     if cfg.get("sliding_window") and cfg.get("sliding_window") > 0:
         return "sliding_window"
@@ -295,14 +334,7 @@ def build_arch_spec(cfg: dict, family: str) -> ArchitectureSpec:
         global_attention_layers=n_global,
         state_size=cfg.get("state_size") or cfg.get("d_state"),
         conv_kernel=cfg.get("conv_kernel") or cfg.get("d_conv"),
-        num_experts=(cfg.get("num_local_experts") or cfg.get("n_routed_experts") or cfg.get("num_experts")),
-        experts_per_token=(
-            cfg.get("num_experts_per_tok")
-            or (
-                cfg.get("top_k")
-                if (cfg.get("num_local_experts") or cfg.get("n_routed_experts") or cfg.get("num_experts"))
-                else None
-            )
-        ),
-        moe_intermediate_size=cfg.get("moe_intermediate_size"),
+        num_experts=(_moe_expert_count(cfg) or None),
+        experts_per_token=_moe_experts_per_token(cfg),
+        moe_intermediate_size=(_num_or_max(cfg.get("moe_intermediate_size")) or None),
     )

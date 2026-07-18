@@ -697,13 +697,31 @@ def generate_perf_test(
     _selfrec_set = _self_tracing_fns(root)
     self_traced = sorted(f for f in _selfrec_set if _invoked_as_pipeline_op(f, demo_src))
     if source_kind == "pcc":
+        _cache_instr = ""
+        if _component:
+            _cache_instr = (
+                f"MODULE-LEVEL FAST PATH (MANDATORY): this is a single-component perf test. Loading the "
+                f"multi-GB full model on every candidate is the dominant cost this must avoid. The "
+                f"correctness (PCC) run caches this component's torch submodule + inputs on disk; READ it and "
+                f"build the ttnn port from that submodule, falling back to the full reference build ONLY on a "
+                f"cache miss:\n"
+                f"    from models.common.golden_cache import golden_cache_path, load_golden_cache\n"
+                f"    _hit = load_golden_cache(golden_cache_path(__file__, {task!r}))\n"
+                f"    if _hit is not None:\n"
+                f"        torch_module, sample_kwargs = _hit[0], _hit[1]\n"
+                f"    else:\n"
+                f"        <build the reference EXACTLY as the pcc source does to get torch_module + "
+                f"sample_kwargs (from_pretrained / _reference_loader / submodule resolve)>\n"
+                f"Do NOT write the cache from this perf test (the PCC test owns it). Then build the ttnn port "
+                f"from torch_module and time ONLY the on-device forward — no PCC/comp_pcc comparison. The "
+                f"from_pretrained fallback must run at most once (the cache miss), never per candidate.\n"
+            )
         prompt = (
             f"Write a pytest PERFORMANCE test file `{out_rel}` for the '{task}' pipeline of this TTNN model.\n"
             f"This source is a CORRECTNESS (PCC) test — build and run the TTNN model EXACTLY as it does, but "
             f"KEEP ONLY the on-device TTNN forward: DROP the reference/torch model construction and DROP every "
             f"PCC / comp_pcc / allclose / assert_with_pcc correctness comparison.\n"
-            f"<pcc_test path='{src_label}'>\n{demo_src}\n</pcc_test>\n\n"
-            "Requirements:\n"
+            f"<pcc_test path='{src_label}'>\n{demo_src}\n</pcc_test>\n\n" + _cache_instr + "Requirements:\n"
         )
     else:
         prompt = (
