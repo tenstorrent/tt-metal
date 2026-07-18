@@ -429,3 +429,118 @@ def test_quasar_gap_1x1_matmul_conv(mesh_device, case, with_bias_relu):
         act_block_h_override=128,
         use_split=False,  # plain mm_conv path (matches the model's 1x1 invocation)
     )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_quasar_bottleneck_integration(mesh_device):
+    """INTEGRATION — a ResNet layer1-style bottleneck chained on-device, split env ON.
+
+    conv1(1x1,pad0,relu) -> conv2(3x3,PAD1,relu) -> conv3(1x1,pad0) + downsample(1x1,pad0) -> quasar.add_(relu).
+    This is the first test of: (a) 3x3 with padding=(1,1) (the model uses it; every isolated gap test used
+    pad=0), (b) chaining convs (inter-op sharding/layout transitions), (c) the residual add_. It also verifies
+    the "model wiring is just the env" claim: configs are PLAIN (no full_inner_dim) and force_conv_no_spill
+    auto-enables the split for conv2 when TT_METAL_QSR_CONV_SPLIT_PROGRAM is set. Fast (one block, small spatial)
+    -- the pre-flight check before the full model run / the layer4 K-spill work.
+    """
+    import torch.nn.functional as F
+
+    device = mesh_device
+    torch.manual_seed(0)
+    C_IN, C_MID, C_OUT = 64, 64, 256  # layer1-like; conv2 3x3 K = 64*9/32 = 18 tiles (split-eligible)
+    H = W = 16
+
+    def _wt(o, i, k):
+        return torch.randn(o, i, k, k, dtype=torch.bfloat16).float()
+
+    def _bt(o):
+        return torch.randn(o, dtype=torch.bfloat16).float()
+
+    x = torch.randn(1, C_IN, H, W, dtype=torch.bfloat16).float()
+    w1, b1 = _wt(C_MID, C_IN, 1), _bt(C_MID)
+    w2, b2 = _wt(C_MID, C_MID, 3), _bt(C_MID)
+    w3, b3 = _wt(C_OUT, C_MID, 1), _bt(C_OUT)
+    wd, bd = _wt(C_OUT, C_IN, 1), _bt(C_OUT)
+
+    o1 = F.relu(F.conv2d(x, w1, b1, stride=1, padding=0))
+    o2 = F.relu(F.conv2d(o1, w2, b2, stride=1, padding=1))
+    o3 = F.conv2d(o2, w3, b3, stride=1, padding=0)
+    dsg = F.conv2d(x, wd, bd, stride=1, padding=0)
+    golden = F.relu(o3 + dsg)  # [1, C_OUT, H, W]
+
+    # pre-shard x into L1 (height-sharded), as the model's first conv input
+    nhw = H * W
+    flat = torch.permute(x, (0, 2, 3, 1)).reshape(1, 1, nhw, C_IN).contiguous()
+    grid = device.compute_with_storage_grid_size()
+    max_cores = grid.x * grid.y
+    num_cores = max(c for c in range(1, max_cores + 1) if nhw % c == 0)
+    core_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
+    in_mem = ttnn.create_sharded_memory_config(
+        shape=(1, 1, nhw // num_cores, C_IN),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_x = ttnn.from_torch(flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(device, in_mem)
+
+    cc = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True)
+
+    def _conv(inp, w, b, in_ch, out_ch, k, pad, ih, iw, relu):
+        cfg = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            reshard_if_not_optimal=True,
+            activation=(ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if relu else None),
+        )
+        out, [oh, ow], _ = ttnn.experimental.quasar.conv2d(
+            input_tensor=inp,
+            weight_tensor=ttnn.from_torch(w, dtype=ttnn.bfloat16),
+            bias_tensor=ttnn.from_torch(b.reshape(1, 1, 1, out_ch), dtype=ttnn.bfloat16),
+            in_channels=in_ch,
+            out_channels=out_ch,
+            batch_size=1,
+            input_height=ih,
+            input_width=iw,
+            kernel_size=(k, k),
+            stride=(1, 1),
+            padding=(pad, pad),
+            dilation=(1, 1),
+            groups=1,
+            device=device,
+            conv_config=cfg,
+            compute_config=cc,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=ttnn.bfloat16,
+        )
+        return out, oh, ow
+
+    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST")}
+    os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"  # auto-splits conv2 (3x3, K<=72) via force_conv_no_spill
+    os.environ.pop("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST", None)
+    try:
+        c1, h1, w1o = _conv(tt_x, w1, b1, C_IN, C_MID, 1, 0, H, W, relu=True)
+        print("  BN conv1 done", tuple(c1.shape))
+        c2, h2, w2o = _conv(c1, w2, b2, C_MID, C_MID, 3, 1, h1, w1o, relu=True)
+        print("  BN conv2(3x3 pad1) done", tuple(c2.shape))
+        c3, h3, w3o = _conv(c2, w3, b3, C_MID, C_OUT, 1, 0, h2, w2o, relu=False)
+        print("  BN conv3 done", tuple(c3.shape))
+        dso, _, _ = _conv(tt_x, wd, bd, C_IN, C_OUT, 1, 0, H, W, relu=False)
+        print("  BN downsample done", tuple(dso.shape))
+        if dso.memory_config() != c3.memory_config():
+            dso = ttnn.experimental.quasar.to_memory_config(dso, c3.memory_config())
+        out = ttnn.experimental.quasar.add_(c3, dso, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+        print("  BN residual add_+relu done", tuple(out.shape))
+    finally:
+        for kk, vv in saved.items():
+            if vv is None:
+                os.environ.pop(kk, None)
+            else:
+                os.environ[kk] = vv
+
+    tt_out = ttnn.to_torch(ttnn.from_device(out))
+    tt_out = tt_out.reshape(1, h3, w3o, tt_out.shape[-1])[:, :, :, :C_OUT]
+    tt_out = torch.permute(tt_out, (0, 3, 1, 2))
+    print(f"  bottleneck done. out={tuple(tt_out.shape)} golden={tuple(golden.shape)}")
+    assert_with_pcc(golden, tt_out.float(), pcc=PCC)
