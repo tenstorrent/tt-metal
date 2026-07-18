@@ -394,7 +394,11 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     subblock_inputs_systolic.per_core_M = out_block_h;
     subblock_inputs_systolic.per_core_N = out_block_w;
     subblock_inputs_systolic.subblock_w_eq_per_core_n_required = output_is_sharded && !rmo_fits_systolic;
-    subblock_inputs_systolic.prefer_fast_path = true;
+    // Prefer the h==1 fast-path subblock only when this config actually emits tile_pack_row_major
+    // (rmo_fits_systolic). h==1 is zero-overhead ONLY on the row-major pack path; on the
+    // subblock-major / interleaved pack path it gives no pack benefit and can be slower, so fall
+    // back to the legacy (prefer h>1) order there.
+    subblock_inputs_systolic.prefer_fast_path = rmo_fits_systolic;
     auto subblock_choice_systolic = auto_tune::determine_largest_subblock(subblock_inputs_systolic);
     return MatmulMultiCoreReuseMultiCast1DProgramConfig{
         .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
@@ -556,7 +560,9 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     subblock_inputs.per_core_N = out_block_w;
     subblock_inputs.subblock_h_eq_per_core_m_required = per_core_M_equals_subblock_h_constraint;
     subblock_inputs.subblock_w_eq_per_core_n_required = out_sharded && !rmo_fits;
-    subblock_inputs.prefer_fast_path = true;
+    // h==1 fast-path subblock is zero-overhead only on the row-major pack path (tile_pack_row_major).
+    // Track rmo_fits so interleaved / subblock-major output uses the legacy (prefer h>1) order.
+    subblock_inputs.prefer_fast_path = rmo_fits;
     auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
     return MatmulMultiCoreReuseMultiCast1DProgramConfig{
@@ -688,7 +694,10 @@ MatmulProgramConfig create_matmul_program_config(
             .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
         subblock_inputs.per_core_M = m_tiles_for_subblock;
         subblock_inputs.per_core_N = n_tiles_per_core;
-        subblock_inputs.prefer_fast_path = true;
+        // MatmulMultiCoreReuseProgramConfig's factory always packs SubblockMajor (it has no
+        // tile_pack_row_major field / fast pack path), so h==1 yields no pack benefit here — use
+        // the legacy (prefer h>1) subblock order.
+        subblock_inputs.prefer_fast_path = false;
         auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
         uint32_t out_subblock_h = subblock_choice.out_subblock_h;
         uint32_t out_subblock_w = subblock_choice.out_subblock_w;
@@ -848,7 +857,9 @@ MatmulProgramConfig create_matmul_program_config(
     subblock_inputs.per_core_M = out_block_h;
     subblock_inputs.per_core_N = out_block_w;
     subblock_inputs.subblock_w_eq_per_core_n_required = mem_config.is_sharded() && !rmo_fits;
-    subblock_inputs.prefer_fast_path = true;
+    // h==1 fast-path subblock is zero-overhead only on the row-major pack path (tile_pack_row_major).
+    // Track rmo_fits so interleaved / subblock-major output uses the legacy (prefer h>1) order.
+    subblock_inputs.prefer_fast_path = rmo_fits;
     auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
     uint32_t out_subblock_h = subblock_choice.out_subblock_h;
     uint32_t out_subblock_w = subblock_choice.out_subblock_w;
@@ -1002,7 +1013,10 @@ MatmulProgramConfig get_matmul_program_config(
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
             subblock_inputs.subblock_w_eq_per_core_n_required = output_mem_config.is_sharded() && !rmo_fits;
-            subblock_inputs.prefer_fast_path = true;
+            // h==1 fast-path subblock is zero-overhead only on the row-major pack path
+            // (tile_pack_row_major). Track rmo_fits so interleaved / subblock-major output uses the
+            // legacy (prefer h>1) order.
+            subblock_inputs.prefer_fast_path = rmo_fits;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
             return MatmulMultiCoreReuseMultiCast1DProgramConfig{
@@ -1113,7 +1127,10 @@ MatmulProgramConfig get_matmul_program_config(
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
             subblock_inputs.subblock_w_eq_per_core_n_required = output_mem_config.is_sharded() && !rmo_fits;
-            subblock_inputs.prefer_fast_path = true;
+            // h==1 fast-path subblock is zero-overhead only on the row-major pack path
+            // (tile_pack_row_major). Track rmo_fits so interleaved / subblock-major output uses the
+            // legacy (prefer h>1) order.
+            subblock_inputs.prefer_fast_path = rmo_fits;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
             return MatmulMultiCoreReuseMultiCastProgramConfig{
@@ -1176,7 +1193,9 @@ MatmulProgramConfig get_matmul_program_config(
         subblock_inputs.per_core_M = std::min(per_core_M, M);
         subblock_inputs.per_core_N = per_core_N;
         subblock_inputs.subblock_w_eq_per_core_n_required = output_mem_config.is_sharded();
-        subblock_inputs.prefer_fast_path = true;
+        // This factory packs SubblockMajor (no tile_pack_row_major fast path), so h==1 gives no
+        // pack benefit — use the legacy (prefer h>1) subblock order.
+        subblock_inputs.prefer_fast_path = false;
         auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
         auto out_subblock_h = subblock_choice.out_subblock_h;
         auto out_subblock_w = subblock_choice.out_subblock_w;
@@ -1700,8 +1719,10 @@ MatmulProgramConfig create_simple_matmul_program_config(
             subblock_inputs.per_core_N = out_block_w;
             // For interleaved output, the subblock-major writer handles arbitrary
             // (out_subblock_h, out_subblock_w) — the constraint is sharded-only.
-            subblock_inputs.subblock_w_eq_per_core_n_required = mem_config.is_sharded() && !rmo_fits;
-            subblock_inputs.prefer_fast_path = true;
+            // h==1 fast-path subblock is zero-overhead only on the row-major pack path
+            // (tile_pack_row_major). Track rmo_fits so interleaved / subblock-major output uses the
+            // legacy (prefer h>1) order.
+            subblock_inputs.prefer_fast_path = rmo_fits;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
             out_subblock_h = subblock_choice.out_subblock_h;
             out_subblock_w = subblock_choice.out_subblock_w;
