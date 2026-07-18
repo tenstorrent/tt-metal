@@ -797,6 +797,12 @@ def make_run_profiled(
         env = dict(os.environ)
         env["TT_METAL_DEVICE_PROFILER"] = "1"
         env.update(extra_env or {})
+        _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
+        if _prof:
+            try:
+                env.update(json.loads(_prof))
+            except (ValueError, TypeError):
+                pass
         try:
             from .profiler_heal import ensure_profiler_patched
 

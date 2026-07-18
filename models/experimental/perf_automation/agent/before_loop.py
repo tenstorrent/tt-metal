@@ -481,6 +481,26 @@ def before_loop(
     }
     run.manifest.write(manifest)
 
+    try:
+        from models.experimental.perf_automation.cc_optimize.run import _bridge_depth_env, _coverage_layers
+
+        _bl_cov, _ = _coverage_layers(
+            tt_root,
+            sub_env,
+            devices,
+            perf_rel,
+            case,
+            model_name=str(config.get("model_name") or ""),
+            config_ref=str(config.get("config_ref") or ""),
+        )
+        if _bl_cov:
+            os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
+            _bl_depth = _bridge_depth_env(tt_root, sub_env, devices, perf_rel, case, _bl_cov)
+            if _bl_depth:
+                os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
+    except Exception as _bl_e:  # noqa: BLE001
+        print(f"      depth-bridge skipped: {str(_bl_e)[:160]}", file=sys.stderr, flush=True)
+
     stages.start("tracy_baseline", "Measuring the baseline latency (trace+2CQ)")
 
     def _run_baseline():

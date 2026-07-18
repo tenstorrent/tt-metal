@@ -699,6 +699,12 @@ def _run_full_pipeline_ms():
     env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
     env.setdefault("TT_PERF_TRACE", "1")
     env["TT_PERF_PREFILL_TRACE"] = "1"
+    _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
+    if _prof:
+        try:
+            env.update(json.loads(_prof))
+        except (ValueError, TypeError):
+            pass
     _cq = os.environ.get("PERF_MCP_FULLPIPE_CQ")
     if _cq and _cq.isdigit():
         env["TT_PERF_NUM_CQ"] = _cq

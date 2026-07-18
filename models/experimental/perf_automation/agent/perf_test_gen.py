@@ -391,6 +391,10 @@ def _extract_error(out: str) -> str:
             or "assert" in s
             or "cannot import" in s
             or "has no attribute" in s
+            or "TRACE_REPLAY_SKIPPED" in ln
+            or "TRACE_NOT_TRACE_CAPABLE" in ln
+            or "TRACE_REPLAY_PATH" in ln
+            or "TRACE_2CQ_FALLBACK" in ln
         ):
             picked.append(s)
     tail = "\n".join(picked[-25:]) if picked else ""

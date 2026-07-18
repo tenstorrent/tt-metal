@@ -102,8 +102,36 @@ def _want_2cq(mode, has_write, ncq):
     return want
 
 
+def _measure_native(device, stage, ncq):
+    """Time a SELF-TRACED stage: the pipeline owns its trace capture + CQ1 input-staging (persistent-
+    buffer / vLLM-style decode, e.g. GLM's decode(enable_trace=True)), so we must NOT begin_trace_capture
+    around it -- doing so raises "Writes/Reads are not supported during trace capture" because the step
+    does host<->device I/O + execute_trace internally. Instead warm it (the pipeline lazily captures its
+    own trace on the first call) and time steady-state replays. The pipeline reports its real path via an
+    optional trace_path(); default by CQ count."""
+    for _ in range(_WARMUP_ITERS):
+        stage.step()
+    ttnn.synchronize_device(device)
+    t0 = time.perf_counter()
+    for _ in range(_REPLAY_ITERS):
+        stage.step()
+    ttnn.synchronize_device(device)
+    per_s = (time.perf_counter() - t0) / _REPLAY_ITERS
+    tp = getattr(stage, "trace_path", None)
+    if callable(tp):
+        try:
+            path = str(tp())
+        except Exception:
+            path = "trace+2cq" if (ncq is None or ncq >= 2) else "trace+1cq"
+    else:
+        path = "trace+2cq" if (ncq is None or ncq >= 2) else "trace+1cq"
+    return per_s * 1000.0, path
+
+
 def _measure_stage(device, stage, mode, ncq):
     """Capture stage.step as a trace, replay it (2CQ if it stages inputs), return (ms, path)."""
+    if getattr(stage, "self_traced", False):
+        return _measure_native(device, stage, ncq)
     tid = _capture_step_trace(device, stage.step)
     try:
         if _want_2cq(mode, stage.write is not None, ncq):
@@ -133,6 +161,8 @@ class _LegacyStage:
         self.step = adapter.step
         w = getattr(adapter, "write_inputs", None)
         self.write = w if callable(w) else None
+        self.self_traced = bool(getattr(adapter, "self_traced", False))
+        self.trace_path = getattr(adapter, "trace_path", None)
 
 
 def measure_adapter(adapter, device, mode: str = "auto") -> float:

@@ -25,6 +25,16 @@ DECODE CONTRACT (duck-typed on the built pipeline object):
     decode_write_inputs(state) -> None    OPTIONAL (fallback). Model-authored staging of the next step's
                                           inputs on CQ1. Used only when decode_input_buffer is absent.
                                           Also flips auto mode into 2CQ.
+    self_traced = True                    OPTIONAL (class/instance attr). Declares that the pipeline OWNS
+                                          its trace capture + CQ1 input-staging internally (persistent-
+                                          buffer / vLLM-style decode -- e.g. GLM's decode(enable_trace=True)).
+                                          Such a decode_step does host<->device I/O + execute_trace inside
+                                          itself, so measure_adapter must NOT begin_trace_capture around it;
+                                          it TIMES the native step instead (see trace_replay._measure_native).
+                                          The purity rule above is waived and the tool does no CQ1 staging.
+    trace_path() -> str                   OPTIONAL, only meaningful with self_traced. Returns the real replay
+                                          path ("trace+2cq"/"trace+1cq") the pipeline actually took, so the
+                                          headline honestly reflects whether CQ1 overlap engaged.
 
 A pipeline WITHOUT decode_step (repeat-prefill / host-argmax decode) raises AttributeError in setup;
 the perf test's guard then falls back to FORWARD_WALL_MS and the detector reports 'repeat_prefill'.
@@ -88,6 +98,10 @@ class PipelineDecodeAdapter:
             )
         prefill = getattr(self._pipe, "decode_prefill", None)
         self._state = prefill(self._prompt) if callable(prefill) else None
+        if bool(getattr(self._pipe, "self_traced", False)):
+            self.self_traced = True
+            self.trace_path = getattr(self._pipe, "trace_path", None)
+            return
         if self._bind_persistent_write(self._state):
             return
         wi = getattr(self._pipe, "decode_write_inputs", None)
@@ -126,12 +140,14 @@ class _Stage:
     """One profilable unit emit-e2e emitted: a name, a host-op-free traceable step, and an
     optional CQ1 input-staging hook (its presence flips that stage into the 2CQ path)."""
 
-    __slots__ = ("name", "step", "write")
+    __slots__ = ("name", "step", "write", "self_traced", "trace_path")
 
-    def __init__(self, name, step, write=None):
+    def __init__(self, name, step, write=None, self_traced=False, trace_path=None):
         self.name = name
         self.step = step
         self.write = write
+        self.self_traced = bool(self_traced)
+        self.trace_path = trace_path
 
 
 class PipelineStageAdapter:
@@ -187,6 +203,9 @@ class PipelineStageAdapter:
         def _dstep():
             box["state"] = step(box["state"])
 
+        if bool(getattr(p, "self_traced", False)):
+            self.stages = [_Stage("decode", _dstep, None, True, getattr(p, "trace_path", None))]
+            return
         wi = getattr(p, "decode_write_inputs", None)
         _dwrite = (lambda: wi(box["state"])) if callable(wi) else None
         self.stages = [_Stage("decode", _dstep, _dwrite)]

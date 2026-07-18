@@ -474,6 +474,136 @@ def _coverage_cache_put(repo_root: Path, node, case, k: int) -> None:
         pass
 
 
+def _depth_cache_get(repo_root: Path, node):
+    try:
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"depth|{node}")
+        if entry and entry.get("fp") == _coverage_fingerprint(node):
+            return dict(entry["env"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _depth_cache_put(repo_root: Path, node, env) -> None:
+    try:
+        path = _coverage_cache_path(repo_root)
+        data = json.loads(path.read_text()) if path.is_file() else {}
+        data[f"depth|{node}"] = {"env": dict(env), "fp": _coverage_fingerprint(node)}
+        path.write_text(json.dumps(data, indent=1))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _claude_text(prompt: str, timeout_s: int = 300):
+    env = dict(os.environ)
+    for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(_k, None)
+    _nat = env.pop("PERF_NATIVE_ANTHROPIC_API_KEY", "")
+    if _nat:
+        env["ANTHROPIC_API_KEY"] = _nat
+    else:
+        env.pop("ANTHROPIC_API_KEY", None)
+    try:
+        r = subprocess.run(
+            [_resolve_claude_bin(), "-p", prompt, "--output-format", "text"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env=env,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _blocks_ran(seq) -> int:
+    m = -1
+    for tok in seq or []:
+        if isinstance(tok, str) and tok.startswith("PERF_BLOCK_SIGNPOST:"):
+            try:
+                m = max(m, int(tok.split(":", 1)[1]))
+            except (ValueError, IndexError):
+                pass
+    return m + 1
+
+
+def _model_root_from_node(repo_root: Path, node):
+    p = (node or "").split("::", 1)[0]
+    if "/tests/" in p:
+        p = p.split("/tests/", 1)[0]
+    root = repo_root / p
+    return root if root.is_dir() else None
+
+
+def _llm_depth_env(model_root: Path, cov: int) -> dict:
+    tt_dir = model_root / "tt"
+    srcs, total = [], 0
+    for py in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
+        try:
+            txt = py.read_text(errors="ignore")
+        except Exception:  # noqa: BLE001
+            continue
+        srcs.append(f"### {py.name}\n{txt}")
+        total += len(txt)
+        if total > 60000:
+            break
+    if not srcs:
+        return {}
+    prompt = (
+        f"This TTNN model runs a stack of transformer layers/blocks. A profiler must execute only {cov} "
+        f"layers (a representative slice), not all of them, to keep profiling fast. From the source below, "
+        f"find the environment variable(s) this model reads to LIMIT how many layers/blocks it runs, plus "
+        f"any flag it requires to permit a partial/truncated run. Respond with ONLY a JSON object mapping "
+        f"env-var name to the string value that makes it run exactly {cov} layers; respond with {{}} if the "
+        f"model exposes no such control.\n\n" + "\n\n".join(srcs)
+    )
+    out = _claude_text(prompt) or ""
+    m = re.search(r"\{[^{}]*\}", out, re.DOTALL)
+    if not m:
+        return {}
+    try:
+        d = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    return {str(k): str(v) for k, v in d.items() if str(k)}
+
+
+def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int) -> dict:
+    if not node or os.environ.get("PERF_MCP_DEPTH_BRIDGE", "1") != "1":
+        return {}
+    cached = _depth_cache_get(repo_root, node)
+    if cached is not None:
+        if cached:
+            print(f"  [optimize/cc] depth-knob bridge (cached): {cached}")
+        return cached
+    model_root = _model_root_from_node(repo_root, node)
+    if model_root is None:
+        return {}
+    _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
+    ran = _blocks_ran(seq)
+    if ran <= 0 or ran <= cov + 1:
+        _depth_cache_put(repo_root, node, {})
+        return {}
+    env = _llm_depth_env(model_root, cov)
+    if not env:
+        print(f"  [optimize/cc] depth-knob bridge: model ran {ran} layers ignoring TT_PERF_LAYERS={cov}; no knob found")
+        _depth_cache_put(repo_root, node, {})
+        return {}
+    probe_env = dict(mcp_env)
+    probe_env.update(env)
+    _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
+    capped = _blocks_ran(seq2)
+    if capped <= 0 or capped > ran - 1:
+        print(f"  [optimize/cc] depth-knob bridge: {env} did not cap layers ({ran}->{capped}); ignoring")
+        _depth_cache_put(repo_root, node, {})
+        return {}
+    print(f"  [optimize/cc] depth-knob bridge: model ignores TT_PERF_LAYERS; enforcing {env} ({ran}->{capped} layers)")
+    _depth_cache_put(repo_root, node, env)
+    return env
+
+
 def _coverage_layers(
     repo_root: Path,
     mcp_env: dict,
@@ -1142,6 +1272,9 @@ def optimize_pipeline(
     if _cov:
         _cov_env["TT_PERF_LAYERS"] = str(_cov)
         print(f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov} (covers all block types)")
+        _depth_env = _bridge_depth_env(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov)
+        if _depth_env:
+            _cov_env["PERF_MCP_PROFILE_ENV"] = json.dumps(_depth_env)
     tools = list(_ALLOWED_TOOLS)
     hitl_dir = None
     if hitl:
