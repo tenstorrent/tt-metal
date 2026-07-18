@@ -218,6 +218,10 @@ def _purge_transformers_modules() -> None:
 _TRANSFORMERS_PIN = "transformers==5.8.1"
 
 
+def _active_transformers_pin() -> str:
+    return os.environ.get("TT_HW_PLANNER_TRANSFORMERS_PIN") or _TRANSFORMERS_PIN
+
+
 def _upgrade_transformers_from_upstream() -> Tuple[bool, str]:
     import subprocess
 
@@ -227,7 +231,7 @@ def _upgrade_transformers_from_upstream() -> Tuple[bool, str]:
         "pip",
         "install",
         "-U",
-        _TRANSFORMERS_PIN,
+        _active_transformers_pin(),
     ]
     print(f"  Running: {' '.join(cmd)}")
     print("  (this typically takes 20-40s — PyPI wheel, no source build)")
@@ -396,7 +400,10 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
         return True
 
     if not allow_fix:
-        print("  --no-env-fix: skipping the automatic upgrade.\n" f'  Manual fix: pip install -U "{_TRANSFORMERS_PIN}"')
+        print(
+            "  --no-env-fix: skipping the automatic upgrade.\n"
+            f'  Manual fix: pip install -U "{_active_transformers_pin()}"'
+        )
         return False
 
     if os.environ.get(_ENV_FIX_ATTEMPTED_FLAG):
@@ -8043,12 +8050,18 @@ def _warn_on_registry_drift(args=None) -> None:
             format_drift,
             has_hard_drift,
             refresh_registry,
+            upstream_transformers_pin,
         )
 
         offline = bool(getattr(args, "offline", False) or getattr(args, "no_registry_sync", False))
         tree = fetch_upstream_models(REPO_ROOT, offline=offline)
         refresh_registry(tree.root, sha=tree.sha)
         os.environ["TT_HW_PLANNER_REGISTRY_SHA"] = f"{tree.source}:{tree.sha}"
+        _tpin = upstream_transformers_pin(tree.root)
+        if _tpin:
+            os.environ["TT_HW_PLANNER_TRANSFORMERS_PIN"] = _tpin
+            if os.environ.get("TT_HW_PLANNER_VERBOSE"):
+                print(f"[registry] transformers pin from upstream tt-metal: {_tpin}")
         if tree.stale:
             print(
                 f"[registry] using LOCAL tree (may be stale) — upstream not fetched (offline/no-network); sha={tree.sha[:12]}"

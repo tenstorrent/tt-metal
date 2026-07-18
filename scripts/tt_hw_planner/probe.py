@@ -119,6 +119,41 @@ def _category_from_model_type(model_type: str) -> Optional[str]:
         return "STT"
     if mt in {"llava", "blip-2", "blip2", "idefics", "paligemma", "qwen2_5_vl", "qwen2_vl"}:
         return "VLM"
+    return _category_from_transformers_registry(mt)
+
+
+def _category_from_transformers_registry(model_type: str) -> Optional[str]:
+    """Classify an unknown model_type via the installed transformers library's task
+    registries. Self-updating: a model_type unknown to the hardcoded tables above is
+    still classified as long as the venv's transformers version knows it (and that
+    version now tracks upstream tt-metal via registry_sync). Fallback only, so known
+    types keep their curated category. Returns a category or None; never raises."""
+    try:
+        from transformers.models.auto import modeling_auto as _ma
+    except Exception:
+        return None
+
+    def _has(mapping_name: str) -> bool:
+        m = getattr(_ma, mapping_name, None)
+        return isinstance(m, dict) and model_type in m
+
+    if _has("MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES") or _has("MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES"):
+        return "VLM"
+    if _has("MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES") or _has("MODEL_FOR_CTC_MAPPING_NAMES"):
+        return "STT"
+    if (
+        _has("MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING_NAMES")
+        or _has("MODEL_FOR_OBJECT_DETECTION_MAPPING_NAMES")
+        or _has("MODEL_FOR_SEMANTIC_SEGMENTATION_MAPPING_NAMES")
+        or _has("MODEL_FOR_IMAGE_SEGMENTATION_MAPPING_NAMES")
+    ):
+        return "CNN"
+    if (
+        _has("MODEL_FOR_CAUSAL_LM_MAPPING_NAMES")
+        or _has("MODEL_FOR_MASKED_LM_MAPPING_NAMES")
+        or _has("MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES")
+    ):
+        return "LLM"
     return None
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -122,6 +123,29 @@ def _discover_marker_roots(tree_root: Path) -> List[Root]:
     except Exception:
         return []
     return out
+
+
+_EXTRA_SYNC_FILES = ("tt_metal/python_env/requirements-dev.txt",)
+
+
+def upstream_transformers_pin(tree_root) -> Optional[str]:
+    """Parse the pinned transformers requirement from a fetched upstream tree
+    (tt_metal/python_env/requirements-dev.txt), e.g. 'transformers==5.10.2'.
+
+    This lets the tool's transformers version track upstream tt-metal instead of a
+    hardcoded pin: auto-sync already fetches current main, so reading its declared
+    requirement keeps model-loading + classification current with what tt-metal
+    itself requires. Returns None if not found; never raises."""
+    try:
+        req = Path(tree_root) / "tt_metal" / "python_env" / "requirements-dev.txt"
+        for line in req.read_text().splitlines():
+            s = line.split("#", 1)[0].strip()
+            m = re.match(r"^transformers\s*==\s*([0-9][0-9A-Za-z.\-]*)$", s)
+            if m:
+                return f"transformers=={m.group(1)}"
+    except Exception:
+        pass
+    return None
 
 
 def _fetch_path_set() -> List[str]:
@@ -359,7 +383,7 @@ def fetch_upstream_models(repo_root, offline: bool = False, timeout: int = 90) -
         _git(["config", "core.sparseCheckout", "true"], cwd=dest, timeout=20)
         sparse = dest / ".git" / "info" / "sparse-checkout"
         sparse.parent.mkdir(parents=True, exist_ok=True)
-        sparse.write_text("\n".join(f"{s}/*" for s in _fetch_path_set()) + "\n")
+        sparse.write_text("\n".join([f"{s}/*" for s in _fetch_path_set()] + list(_EXTRA_SYNC_FILES)) + "\n")
         if _git(["fetch", "--depth", "1", "origin", sha], cwd=dest, timeout=timeout).returncode != 0:
             raise RuntimeError("git fetch failed")
         if _git(["checkout", "-q", "FETCH_HEAD"], cwd=dest, timeout=timeout).returncode != 0:
