@@ -1,0 +1,48 @@
+{
+  "batch": 1,
+  "ccl_dtype": "bfp8",
+  "decode_cache_pcc_vs_hf": {
+    "31": {
+      "key": 0.9967718815967609,
+      "value": 0.9955753088574035
+    },
+    "32": {
+      "key": 0.9967802346683475,
+      "value": 0.9955573920337433
+    }
+  },
+  "decode_pcc_vs_hf": {
+    "31": 0.99915724095252,
+    "32": 0.9990133138930417
+  },
+  "generated_at_utc": "2026-07-18T17:53:22.111422+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "cc42de2c66ab5ed7f1d9da7d6e842952ad9cdd11e1f59239496ee5856553d16f",
+  "mesh": [
+    1,
+    4
+  ],
+  "page_table": [
+    2,
+    0,
+    3,
+    1
+  ],
+  "prefill_key_cache_pcc_vs_hf": 0.9967752804772304,
+  "prefill_pcc_vs_hf": 0.9999344670817247,
+  "prefill_sequence_length": 31,
+  "prefill_value_cache_pcc_vs_hf": 0.9955550684770795,
+  "rank_outputs_bitwise_equal": true,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "stacked_decoder_layout": [
+    1,
+    1,
+    1,
+    3072
+  ],
+  "test_sha256": "3ba22fccf841f0fe0821f627e1f6229a4e7922d1e4f5d4b4761c84ccf1212f56",
+  "trace_program_cache_entries_stable": true,
+  "trace_replay_bitwise_deterministic": true,
+  "trace_replays": 8,
+  "weights": "real_layer_14"
+}

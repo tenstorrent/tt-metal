@@ -1,0 +1,26 @@
+{
+  "all_resource_identities_shared": true,
+  "batch": 1,
+  "borrower_owns_resources": false,
+  "borrower_trace_output_pcc": 1.0,
+  "borrower_trace_replays": 3,
+  "ccl_dtype": "bfp8",
+  "ccl_mode": "persistent_async",
+  "generated_at_utc": "2026-07-18T19:41:19.283467+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "mesh": [
+    1,
+    4
+  ],
+  "output_memory": "replicated-mesh BF16 L1 WIDTH_SHARDED",
+  "owner_output_pcc_after_borrower_release": 1.0,
+  "owner_owns_resources": true,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "sequential_output_pcc": 1.0,
+  "shared_buffer_bytes_per_device_each": 417792,
+  "shared_buffer_bytes_per_device_total": 835584,
+  "shared_buffer_count": 2,
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38",
+  "weights": "real_layer_14"
+}

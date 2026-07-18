@@ -1,0 +1,6 @@
+# Preserve byte-exact generated artifacts. Fixed-width Watcher rows carry
+# meaningful trailing padding, and generated reports retain their producer's
+# CRLF and padded tables.
+*.log -diff
+*.csv -diff
+*.txt -diff

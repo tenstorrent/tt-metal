@@ -1,0 +1,75 @@
+{
+  "advisor_residual_mode": "legacy_32core",
+  "batch": 32,
+  "ccl_dtype": "bf16",
+  "ccl_mode": "persistent_async",
+  "decode_matmul_mode": "dram_sharded",
+  "down_target_cores": 8,
+  "effective_ccl_topology": "Ring",
+  "gate_up_target_cores": 24,
+  "generated_at_utc": "2026-07-18T17:51:01.860167+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "cc42de2c66ab5ed7f1d9da7d6e842952ad9cdd11e1f59239496ee5856553d16f",
+  "iterations_per_sample": 100,
+  "multichip_prefill_ms": 3.12819704413414,
+  "multichip_trace_ms": 0.5418650759384036,
+  "num_links": 2,
+  "o_target_cores": 8,
+  "parallel_efficiency": 0.3545544063433222,
+  "physical_decode_geometry": {
+    "down_grid": [
+      8,
+      1
+    ],
+    "down_grid_cores": 8,
+    "gate_up_grid": [
+      8,
+      3
+    ],
+    "gate_up_grid_cores": 24,
+    "mlp_local_width": 5760,
+    "mlp_padded_width": 6144,
+    "mlp_padding": 384,
+    "o_grid": [
+      8,
+      1
+    ],
+    "o_grid_cores": 8,
+    "o_local_input_width": 768,
+    "qkv_grid": [
+      8,
+      1
+    ],
+    "qkv_grid_cores": 8,
+    "qkv_local_width": 1280,
+    "qkv_padded_width": 1280,
+    "qkv_padding": 0
+  },
+  "precision_policy": "all_bfp4_attention_hifi2",
+  "prefill_parallel_efficiency": 0.2607521831707988,
+  "prefill_samples": [
+    3.586862236261368,
+    3.5004569217562675,
+    2.9509877786040306,
+    3.12819704413414,
+    3.0059628188610077
+  ],
+  "prefill_speedup": 1.0430087326831952,
+  "qkv_target_cores": 8,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "samples": [
+    0.5418482515960932,
+    0.5418684892356396,
+    0.5419259006157517,
+    0.5418305099010468,
+    0.5418650759384036
+  ],
+  "sequence_length": 17,
+  "single_chip_baseline_ms": 0.7684826012700796,
+  "single_chip_prefill_ms": 3.2627368345856667,
+  "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch32.json",
+  "speedup": 1.4182176253732888,
+  "test_sha256": "6298b03bb1ac02b1757927b17fc5b3f3fb9bd67726941fa5e7e20d84b74e0da1",
+  "use_packed_mlp": false,
+  "weights": "real_layer_14"
+}

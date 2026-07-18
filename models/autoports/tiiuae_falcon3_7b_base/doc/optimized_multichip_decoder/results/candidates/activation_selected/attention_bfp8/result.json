@@ -1,0 +1,159 @@
+{
+  "advisor_residual_mode": "legacy_32core",
+  "attention_activation_dtype": "bfp8",
+  "batch": 1,
+  "ccl_dtype": "bfp8",
+  "ccl_mode": "persistent_async",
+  "decode_matmul_geometry": {
+    "down": {
+      "grid": [
+        8,
+        1
+      ],
+      "in0_block_w": 24,
+      "input_memory": "L1 width-sharded",
+      "input_shard_tiles": 24,
+      "output_memory": "L1 width-sharded",
+      "per_core_m": 1,
+      "per_core_n": 12,
+      "shape": [
+        32,
+        6144,
+        3072
+      ],
+      "weight_memory": "DRAM width-sharded over 8 banks"
+    },
+    "gate_up": {
+      "grid": [
+        8,
+        3
+      ],
+      "in0_block_w": 4,
+      "input_memory": "L1 width-sharded",
+      "input_shard_tiles": 4,
+      "output_memory": "L1 width-sharded",
+      "per_core_m": 1,
+      "per_core_n": 8,
+      "shape_each": [
+        32,
+        3072,
+        6144
+      ],
+      "weight_memory": "DRAM width-sharded over 8 banks"
+    },
+    "o": {
+      "grid": [
+        4,
+        1
+      ],
+      "in0_block_w": 6,
+      "input_memory": "L1 width-sharded",
+      "input_shard_tiles": 6,
+      "output_memory": "L1 width-sharded",
+      "per_core_m": 1,
+      "per_core_n": 24,
+      "shape": [
+        32,
+        768,
+        3072
+      ],
+      "weight_memory": "DRAM width-sharded over 8 banks"
+    },
+    "output_subblock_fields": "not exposed by this TTNN program class",
+    "program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+    "qkv": {
+      "grid": [
+        4,
+        1
+      ],
+      "in0_block_w": 24,
+      "input_memory": "L1 width-sharded",
+      "input_shard_tiles": 24,
+      "output_memory": "L1 width-sharded",
+      "per_core_m": 1,
+      "per_core_n": 10,
+      "shape": [
+        32,
+        3072,
+        1280
+      ],
+      "weight_memory": "DRAM width-sharded over 8 banks"
+    }
+  },
+  "decode_matmul_mode": "dram_sharded",
+  "decode_pcc_vs_hf": 0.9999982818479153,
+  "down_target_cores": 8,
+  "effective_ccl_topology": "Ring",
+  "gate_up_target_cores": 24,
+  "generated_at_utc": "2026-07-18T19:24:58.294616+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "81f11b11f489678bba1d4d87dd9b7d0a0f41f5871b571bd892019a07f356d408",
+  "iterations_per_sample": 100,
+  "mlp_activation_dtype": "bf16",
+  "multichip_prefill_ms": 0.9187120012938976,
+  "multichip_trace_ms": 0.2956016920506954,
+  "num_links": 2,
+  "o_target_cores": 4,
+  "parallel_efficiency": 0.5446912908605201,
+  "physical_decode_geometry": {
+    "down_grid": [
+      8,
+      1
+    ],
+    "down_grid_cores": 8,
+    "gate_up_grid": [
+      8,
+      3
+    ],
+    "gate_up_grid_cores": 24,
+    "mlp_local_width": 5760,
+    "mlp_padded_width": 6144,
+    "mlp_padding": 384,
+    "o_grid": [
+      4,
+      1
+    ],
+    "o_grid_cores": 4,
+    "o_local_input_width": 768,
+    "qkv_grid": [
+      4,
+      1
+    ],
+    "qkv_grid_cores": 4,
+    "qkv_local_width": 1280,
+    "qkv_padded_width": 1280,
+    "qkv_padding": 0
+  },
+  "precision_policy": "all_bfp4_lofi",
+  "prefill_grid_x_limit": 11,
+  "prefill_iterations_per_sample": 1,
+  "prefill_l1_inputs": false,
+  "prefill_parallel_efficiency": null,
+  "prefill_pcc_vs_hf": 0.9999819755583389,
+  "prefill_samples": [
+    1.8294691108167171,
+    1.0715438984334469,
+    0.9187120012938976,
+    0.8614840917289257,
+    0.8017192594707012
+  ],
+  "prefill_speedup": null,
+  "qkv_target_cores": 4,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "return_sharded_decode_output": true,
+  "samples": [
+    0.2956016920506954,
+    0.29556961730122566,
+    0.2955868514254689,
+    0.29570928774774075,
+    0.29565528966486454
+  ],
+  "sequence_length": 17,
+  "single_chip_baseline_ms": 0.644046668894589,
+  "single_chip_prefill_ms": null,
+  "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch1.json",
+  "speedup": 2.1787651634420806,
+  "test_sha256": "49ce9ce08cfa91c7fa875ce58b1e04d4e1c77d8621a50a2e98334304e53a47e1",
+  "use_packed_mlp": false,
+  "weights": "real_layer_14"
+}

@@ -1,0 +1,74 @@
+{
+  "advisor_residual_mode": "legacy_32core",
+  "batch": 32,
+  "ccl_dtype": "bf16",
+  "decode_matmul_mode": "shard_advisor",
+  "down_target_cores": 8,
+  "effective_ccl_topology": "Ring",
+  "gate_up_target_cores": 24,
+  "generated_at_utc": "2026-07-18T17:44:44.142309+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "993a1ae4c6cbc05eb17b6269a2d5266a31486fbcb8e0c32199ace48551a8cf49",
+  "iterations_per_sample": 100,
+  "multichip_prefill_ms": 3.2716812565922737,
+  "multichip_trace_ms": 0.6410232000052929,
+  "num_links": 2,
+  "o_target_cores": 8,
+  "parallel_efficiency": 0.2997093557860832,
+  "physical_decode_geometry": {
+    "down_grid": [
+      8,
+      1
+    ],
+    "down_grid_cores": 8,
+    "gate_up_grid": [
+      8,
+      3
+    ],
+    "gate_up_grid_cores": 24,
+    "mlp_local_width": 5760,
+    "mlp_padded_width": 6144,
+    "mlp_padding": 384,
+    "o_grid": [
+      8,
+      1
+    ],
+    "o_grid_cores": 8,
+    "o_local_input_width": 768,
+    "qkv_grid": [
+      8,
+      1
+    ],
+    "qkv_grid_cores": 8,
+    "qkv_local_width": 1280,
+    "qkv_padded_width": 1280,
+    "qkv_padding": 0
+  },
+  "precision_policy": "all_bfp4_lofi",
+  "prefill_parallel_efficiency": 0.24931652709225688,
+  "prefill_samples": [
+    3.5450118593871593,
+    3.3854381181299686,
+    3.1523737125098705,
+    3.1524342484772205,
+    3.2716812565922737
+  ],
+  "prefill_speedup": 0.9972661083690275,
+  "qkv_target_cores": 8,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "samples": [
+    0.641030608676374,
+    0.6408745096996427,
+    0.6412628572434187,
+    0.6407339405268431,
+    0.6410232000052929
+  ],
+  "sequence_length": 17,
+  "single_chip_baseline_ms": 0.7684826012700796,
+  "single_chip_prefill_ms": 3.2627368345856667,
+  "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch32.json",
+  "speedup": 1.1988374231443328,
+  "test_sha256": "f4c8d6da8c784476b24a8d1c89244e342ce39fd98592fc0fce50c0a118314972",
+  "use_packed_mlp": false,
+  "weights": "real_layer_14"
+}

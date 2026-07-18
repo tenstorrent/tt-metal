@@ -1,0 +1,37 @@
+{
+  "deferred_gather_samples": [
+    0.08464411832392216,
+    0.08468360174447298,
+    0.08473931346088648,
+    0.08467899169772863,
+    0.08464162237942219
+  ],
+  "dtype": "bfloat16",
+  "generated_at_utc": "2026-07-18T19:35:39.251895+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "iterations_per_sample": 100,
+  "mesh": [
+    1,
+    4
+  ],
+  "reduce_scatter_add_all_gather_rmsnorm_ms": 0.08467899169772863,
+  "replicated_all_reduce_add_rmsnorm_ms": 0.08549354039132595,
+  "replicated_samples": [
+    0.08549354039132595,
+    0.08560094982385635,
+    0.08548602927476168,
+    0.08544415701180696,
+    0.08555546402931213
+  ],
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "selected": "deferred_gather",
+  "shape": [
+    1,
+    1,
+    1,
+    3072
+  ],
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38",
+  "topology_pcc": 1.0
+}

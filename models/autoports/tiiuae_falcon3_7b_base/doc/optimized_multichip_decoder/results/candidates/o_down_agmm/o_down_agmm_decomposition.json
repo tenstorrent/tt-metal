@@ -1,0 +1,110 @@
+{
+  "agmm": {
+    "chunks_per_sync": 10,
+    "core_grid_offset": [
+      0,
+      4
+    ],
+    "down_in0_block_w": 96,
+    "local_output_width": 768,
+    "matmul_grid": [
+      8,
+      1
+    ],
+    "num_buffers_per_channel": 2,
+    "num_links": 1,
+    "num_workers_per_link": 2,
+    "o_in0_block_w": 12,
+    "per_core_M": 1,
+    "per_core_N": 3
+  },
+  "boundary_contract": "BFP8 projection/CCL, local BF16 residual add; local-output candidates remain hidden-fractured and never restore to replicated layout",
+  "combined_boundary_ms": {
+    "explicit_bfp8_async_all_gather_local_output": 0.1730242883786559,
+    "fused_bfp8_all_gather_matmul_local_output": 0.14922128058969975,
+    "selected_row_parallel_persistent_bfp8_all_reduce": 0.089642065577209
+  },
+  "generated_at_utc": "2026-07-18T19:33:50.408654+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "81f11b11f489678bba1d4d87dd9b7d0a0f41f5871b571bd892019a07f356d408",
+  "mesh": [
+    1,
+    4
+  ],
+  "probe_test_sha256": "1ed8037d28718784fd4263163d7ab79dd1a651ac1d6b6a239446ad72ebbf26ff",
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "results": {
+    "down": {
+      "explicit_bfp8_async_all_gather_local_output_ms": 0.13403463177382946,
+      "explicit_pcc_vs_selected": 0.9991474005314945,
+      "explicit_samples": [
+        0.13416086323559284,
+        0.13411167077720165,
+        0.13402711134403944,
+        0.13391538988798857,
+        0.13403463177382946
+      ],
+      "fused_bfp8_all_gather_matmul_local_output_ms": 0.1159100467339158,
+      "fused_pcc_vs_selected": 0.9991535525102125,
+      "fused_samples": [
+        0.11589382775127888,
+        0.1159100467339158,
+        0.11588920839130878,
+        0.11591846588999033,
+        0.11601405218243599
+      ],
+      "logical_matmul_shape": [
+        32,
+        24576,
+        3072
+      ],
+      "selected_row_parallel_persistent_bfp8_all_reduce_ms": 0.05704008974134922,
+      "selected_samples": [
+        0.05704008974134922,
+        0.057038478553295135,
+        0.05708315875381231,
+        0.05705570802092552,
+        0.05700862966477871
+      ],
+      "trace_replay_bitwise_deterministic": true
+    },
+    "o": {
+      "explicit_bfp8_async_all_gather_local_output_ms": 0.03898965660482645,
+      "explicit_pcc_vs_selected": 0.9998789567308124,
+      "explicit_samples": [
+        0.038985651917755604,
+        0.03900890238583088,
+        0.03898965660482645,
+        0.03899255767464638,
+        0.038988059386610985
+      ],
+      "fused_bfp8_all_gather_matmul_local_output_ms": 0.03331123385578394,
+      "fused_pcc_vs_selected": 0.9998793350722777,
+      "fused_samples": [
+        0.03329609986394644,
+        0.03330581821501255,
+        0.0333237461745739,
+        0.03331123385578394,
+        0.03335992339998484
+      ],
+      "logical_matmul_shape": [
+        32,
+        3072,
+        3072
+      ],
+      "selected_row_parallel_persistent_bfp8_all_reduce_ms": 0.032601975835859776,
+      "selected_samples": [
+        0.032601975835859776,
+        0.032611992210149765,
+        0.0326008815318346,
+        0.03259946592152119,
+        0.03265596926212311
+      ],
+      "trace_replay_bitwise_deterministic": true
+    }
+  },
+  "rows": 32,
+  "selected": "row_parallel_persistent_bfp8_all_reduce",
+  "test_sha256": "49ce9ce08cfa91c7fa875ce58b1e04d4e1c77d8621a50a2e98334304e53a47e1",
+  "weights": "real layer-14 O/down BFP4 LoFi"
+}

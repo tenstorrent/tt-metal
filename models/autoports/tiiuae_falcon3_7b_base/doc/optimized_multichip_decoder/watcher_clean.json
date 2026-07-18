@@ -1,0 +1,16 @@
+{
+  "command": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 FALCON3_RUN_MULTICHIP_TOPOLOGY=1 FALCON3_RUN_MULTICHIP_FRACTURED_BOUNDARY=1 FALCON3_RUN_MULTICHIP_FRACTURED_SELECTED_POLICY=1 FALCON3_RUN_MULTICHIP_HETEROGENEOUS_POSITIONS=1 FALCON3_RUN_MULTICHIP_LONG_PREFILL=1 FALCON3_RUN_MULTICHIP_MAX_CONTEXT=1 FALCON3_RUN_MULTICHIP_BASELINE=1 FALCON3_MULTICHIP_RESULTS_DIR=models/autoports/tiiuae_falcon3_7b_base/doc/optimized_multichip_decoder/results/watcher pytest -q -rA models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py",
+  "command_result": "10 passed, 2 skipped in 80.84 seconds",
+  "device_error_pattern_matches": 0,
+  "device_log_sha256": "2f0bb6b9b6e4b54ac3ea98f553d50870e621479faaab8648843f298391ff92bf",
+  "generated_at_utc": "2026-07-18T19:42:27Z",
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "log": "watcher_final.log",
+  "log_sha256": "47d5fd77b45d82d82adb455a56f8f59a443a86c264c88b94c44d1ee2bb8c30c5",
+  "profiler_enabled": false,
+  "raw_device_log": "watcher_raw.log",
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38",
+  "watcher_enabled": true,
+  "watcher_eth_disabled": true,
+  "watcher_interval_seconds": 10
+}

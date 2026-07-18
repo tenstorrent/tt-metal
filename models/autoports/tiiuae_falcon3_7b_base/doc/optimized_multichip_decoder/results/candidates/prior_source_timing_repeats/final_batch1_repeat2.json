@@ -1,0 +1,76 @@
+{
+  "advisor_residual_mode": "legacy_32core",
+  "batch": 1,
+  "ccl_dtype": "bfp8",
+  "ccl_mode": "persistent_async",
+  "decode_matmul_mode": "dram_sharded",
+  "down_target_cores": 8,
+  "effective_ccl_topology": "Ring",
+  "gate_up_target_cores": 24,
+  "generated_at_utc": "2026-07-18T18:12:56.192285+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "57e63c21fdcc793a36450ed9e2d1b9f606d2ec79bfb31540ef82097deea75a67",
+  "iterations_per_sample": 100,
+  "multichip_prefill_ms": 0.912640243768692,
+  "multichip_trace_ms": 0.30291023198515177,
+  "num_links": 2,
+  "o_target_cores": 8,
+  "parallel_efficiency": 0.5315491199106797,
+  "physical_decode_geometry": {
+    "down_grid": [
+      8,
+      1
+    ],
+    "down_grid_cores": 8,
+    "gate_up_grid": [
+      8,
+      3
+    ],
+    "gate_up_grid_cores": 24,
+    "mlp_local_width": 5760,
+    "mlp_padded_width": 6144,
+    "mlp_padding": 384,
+    "o_grid": [
+      8,
+      1
+    ],
+    "o_grid_cores": 8,
+    "o_local_input_width": 768,
+    "qkv_grid": [
+      8,
+      1
+    ],
+    "qkv_grid_cores": 8,
+    "qkv_local_width": 1280,
+    "qkv_padded_width": 1280,
+    "qkv_padding": 0
+  },
+  "precision_policy": "all_bfp4_lofi",
+  "prefill_parallel_efficiency": null,
+  "prefill_samples": [
+    1.203654333949089,
+    0.9261248633265495,
+    0.912640243768692,
+    0.8778027258813381,
+    0.8729239925742149
+  ],
+  "prefill_speedup": null,
+  "qkv_target_cores": 8,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "return_sharded_decode_output": true,
+  "samples": [
+    0.3028746694326401,
+    0.30291023198515177,
+    0.3029028279706836,
+    0.30311673413962126,
+    0.3029268700629473
+  ],
+  "sequence_length": 17,
+  "single_chip_baseline_ms": 0.644046668894589,
+  "single_chip_prefill_ms": null,
+  "single_chip_provenance": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_decoder/results/final/final_batch1.json",
+  "speedup": 2.1261964796427186,
+  "test_sha256": "9c10d911f139bba348ad82653fb006a76b9353163034e9d7e602ac1275b4b799",
+  "use_packed_mlp": false,
+  "weights": "real_layer_14"
+}

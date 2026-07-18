@@ -32,7 +32,7 @@ from models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder impor
 from models.autoports.tiiuae_falcon3_7b_base.tests.test_optimized_decoder import (
     _recorded_layer14_inputs,
     _recorded_layer14_seq31_inputs,
-    _release_model,
+    _release_model as _release_optimized_model,
 )
 from models.autoports.tiiuae_falcon3_7b_base.tt.functional_decoder import IR_REPRESENTATIVE_LAYER
 from models.autoports.tiiuae_falcon3_7b_base.tt.multichip_decoder import (
@@ -171,6 +171,15 @@ def _release_tensors(*tensors) -> None:
             tensor.deallocate(True)
 
 
+def _release_model(model) -> None:
+    if getattr(model, "owns_persistent_ccl_resources", False):
+        _release_tensors(
+            getattr(model, "attention_ccl_buffer", None),
+            getattr(model, "mlp_ccl_buffer", None),
+        )
+    _release_optimized_model(model)
+
+
 def _trace_mesh_callable(mesh_device, function, *, samples: int = 5, iterations: int = 100):
     warm_output = function()
     ttnn.synchronize_device(mesh_device)
@@ -214,6 +223,140 @@ def test_multichip_runtime_is_owned_and_host_fallback_free():
         source = inspect.getsource(method)
         for token in forbidden:
             assert token not in source, f"{method.__name__} contains runtime fallback token {token!r}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100_000_000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [TARGET_MESH_SHAPE], indirect=True)
+@pytest.mark.timeout(1800)
+def test_persistent_ccl_resources_are_shared_and_owner_releasable(mesh_device):
+    """Exercise one owner and one borrower without constructing a full model."""
+    config = _config()
+    state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+    owner = MultichipDecoder.from_state_dict(
+        state_dict,
+        hf_config=config,
+        layer_idx=IR_REPRESENTATIVE_LAYER,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=128,
+    )
+    borrower = MultichipDecoder.from_state_dict(
+        state_dict,
+        hf_config=config,
+        layer_idx=IR_REPRESENTATIVE_LAYER,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=128,
+        persistent_ccl_resources=owner.persistent_ccl_resources,
+    )
+    assert owner.owns_persistent_ccl_resources
+    assert not borrower.owns_persistent_ccl_resources
+    assert borrower.persistent_ccl_resources is owner.persistent_ccl_resources
+    for borrowed, owned in zip(borrower.persistent_ccl_resources, owner.persistent_ccl_resources, strict=True):
+        assert borrowed is owned
+
+    _, decode_hidden = _recorded_layer14_inputs(1)
+    owner_hidden = _mesh_input(decode_hidden, mesh_device)
+    borrower_hidden = _mesh_input(decode_hidden, mesh_device)
+    owner_position = _mesh_int32(torch.tensor([0], dtype=torch.int32), mesh_device)
+    borrower_position = _mesh_int32(torch.tensor([0], dtype=torch.int32), mesh_device)
+    owner_key, owner_value = owner.allocate_kv_cache()
+    borrower_key, borrower_value = borrower.allocate_kv_cache()
+
+    owner_output = owner.decode_forward(
+        owner_hidden,
+        key_cache=owner_key,
+        value_cache=owner_value,
+        cache_position=owner_position,
+        position_index=0,
+    )
+    borrower_output = borrower.decode_forward(
+        borrower_hidden,
+        key_cache=borrower_key,
+        value_cache=borrower_value,
+        cache_position=borrower_position,
+        position_index=0,
+    )
+    ttnn.synchronize_device(mesh_device)
+    owner_host = _first_rank(owner_output)
+    borrower_host = _first_rank(borrower_output)
+    sequential_pcc = comp_pcc(owner_host.float(), borrower_host.float())[1]
+    assert sequential_pcc >= 0.99999
+    assert owner_output.memory_config() == owner.residual_memory_config
+    assert borrower_output.memory_config() == borrower.residual_memory_config
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    trace_output = borrower.decode_forward(
+        borrower_hidden,
+        key_cache=borrower_key,
+        value_cache=borrower_value,
+        cache_position=borrower_position,
+        position_index=0,
+    )
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        for _ in range(3):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        trace_pcc = comp_pcc(borrower_host.float(), _first_rank(trace_output).float())[1]
+        assert trace_pcc >= 0.99999
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+    _release_tensors(
+        borrower_hidden,
+        borrower_position,
+        borrower_key,
+        borrower_value,
+        borrower_output,
+        trace_output,
+    )
+    _release_model(borrower)
+
+    owner_after_borrower_release = owner.decode_forward(
+        owner_hidden,
+        key_cache=owner_key,
+        value_cache=owner_value,
+        cache_position=owner_position,
+        position_index=0,
+    )
+    ttnn.synchronize_device(mesh_device)
+    post_release_pcc = comp_pcc(owner_host.float(), _first_rank(owner_after_borrower_release).float())[1]
+    assert post_release_pcc >= 0.99999
+    _write_result_artifact(
+        "persistent_resource_sharing.json",
+        {
+            "weights": "real_layer_14",
+            "batch": 1,
+            "mesh": list(TARGET_MESH_SHAPE),
+            "ccl_mode": "persistent_async",
+            "ccl_dtype": "bfp8",
+            "shared_buffer_count": 2,
+            "shared_buffer_bytes_per_device_each": 417792,
+            "shared_buffer_bytes_per_device_total": 835584,
+            "owner_owns_resources": True,
+            "borrower_owns_resources": False,
+            "all_resource_identities_shared": True,
+            "sequential_output_pcc": sequential_pcc,
+            "borrower_trace_replays": 3,
+            "borrower_trace_output_pcc": trace_pcc,
+            "owner_output_pcc_after_borrower_release": post_release_pcc,
+            "output_memory": "replicated-mesh BF16 L1 WIDTH_SHARDED",
+        },
+    )
+    _release_tensors(
+        owner_hidden,
+        owner_position,
+        owner_key,
+        owner_value,
+        owner_output,
+        owner_after_borrower_release,
+    )
+    _release_model(owner)
 
 
 @pytest.mark.skipif(
@@ -534,9 +677,16 @@ def test_safe_fractured_residual_through_distributed_norm_and_qkv(mesh_device):
             "fractured_over_replicated_ratio": fractured_ms / replicated_ms,
             "output_pcc": pcc,
             "selected": "fractured" if fractured_ms < replicated_ms else "replicated",
-            "fused_mm_rs_rejected_source": "models/demos/gpt_oss/tt/attention/operations.py:is_shape_fused_mm_rs_supported",
-            "fused_mm_rs_issue": "#46181",
-            "fused_mm_rs_blocker": "Blackhole race reads matmul blocks before they are fully written; repository gate returns false",
+            "fused_mm_rs_exact_shape_probe": {
+                "o_trace_pcc_min": 0.9927695,
+                "down_trace_pcc_min": 0.9932234,
+                "o_fused_device_us": 38.614,
+                "o_separate_matmul_plus_reduce_scatter_device_us": 41.146,
+                "down_fused_device_us": 114.594,
+                "down_separate_matmul_plus_reduce_scatter_device_us": 115.865,
+                "result": "supported, but its 1.3--2.5 us primitive saving is smaller than this complete family's boundary loss",
+                "provenance": "doc/optimized_multichip_decoder/tracy/mmrs_{fused,non_fused}/ops.csv",
+            },
         },
     )
     _release_tensors(
@@ -546,6 +696,282 @@ def test_safe_fractured_residual_through_distributed_norm_and_qkv(mesh_device):
         residual_replicated,
         residual_fractured,
         gamma_fractured,
+    )
+    _release_model(model)
+
+
+@pytest.mark.skipif(
+    os.getenv("FALCON3_RUN_MULTICHIP_FRACTURED_SELECTED_POLICY") != "1",
+    reason="manual persistent-BFP8 fractured-residual family gate",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100_000_000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [TARGET_MESH_SHAPE], indirect=True)
+@pytest.mark.timeout(1800)
+def test_selected_policy_replicated_vs_persistent_bfp8_fractured_boundary(mesh_device):
+    """Compare complete boundaries under persistent/preallocated BFP8 CCL policy."""
+    torch.manual_seed(20260718)
+    config = _config()
+    state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+    model = MultichipDecoder.from_state_dict(
+        state_dict,
+        hf_config=config,
+        layer_idx=IR_REPRESENTATIVE_LAYER,
+        mesh_device=mesh_device,
+        batch=32,
+        max_cache_len=128,
+    )
+    rows = 32
+    hidden = config.hidden_size
+    local_hidden = hidden // TENSOR_PARALLEL_SIZE
+    partial_host = torch.randn(1, 1, rows, hidden, dtype=torch.bfloat16) * 0.01
+    residual_host = torch.randn_like(partial_host)
+    gamma_host = state_dict[f"model.layers.{IR_REPRESENTATIVE_LAYER}.input_layernorm.weight"]
+    selected_partial = ttnn.from_torch(
+        partial_host,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=model.residual_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    selected_residual = ttnn.from_torch(
+        residual_host,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=model.residual_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    fractured_partial = ttnn.from_torch(
+        partial_host,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    fractured_residual = ttnn.from_torch(
+        residual_host,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    )
+    gamma_fractured = ttnn.from_torch(
+        gamma_host.reshape(1, 1, hidden // 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+
+    # reduce_scatter_minimal_async owns explicit persistent intermediate and
+    # output buffers. all_gather_async exposes persistent semaphores but no
+    # caller-provided output-buffer parameter in the current API.
+    rs_intermediate = ttnn.from_torch(
+        torch.zeros_like(partial_host),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    rs_output = ttnn.from_torch(
+        torch.zeros(1, 1, rows, local_hidden, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    semaphore_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    rs_semaphores = [ttnn.create_global_semaphore(mesh_device, semaphore_grid, 0) for _ in range(3)]
+    stats_ag_semaphores = [ttnn.create_global_semaphore(mesh_device, semaphore_grid, 0) for _ in range(2)]
+    hidden_ag_semaphores = [ttnn.create_global_semaphore(mesh_device, semaphore_grid, 0) for _ in range(2)]
+
+    def next_qkv(normed):
+        qkv_input = model._move_owned(normed, model.qkv_input_memory_config)
+        output = ttnn.matmul(
+            qkv_input,
+            model.qkv_decode_weight,
+            dtype=ttnn.bfloat16,
+            program_config=model.qkv_decode_program_config,
+            compute_kernel_config=model.attention_compute_config,
+            memory_config=model.qkv_output_memory_config,
+        )
+        qkv_input.deallocate(True)
+        return output
+
+    def selected_boundary():
+        reduced_bfp8 = ttnn.experimental.all_reduce_async(
+            selected_partial,
+            model.attention_ccl_buffer,
+            cluster_axis=model.tensor_parallel_axis,
+            mesh_device=mesh_device,
+            multi_device_global_semaphore=model.attention_ccl_semaphore,
+            dtype=ttnn.bfloat8_b,
+            memory_config=model.residual_memory_config,
+            topology=ttnn.Topology.Ring,
+            num_links=2,
+        )
+        reduced = ttnn.typecast(reduced_bfp8, ttnn.bfloat16)
+        reduced_bfp8.deallocate(True)
+        added = ttnn.add(selected_residual, reduced, memory_config=model.residual_memory_config)
+        reduced.deallocate(True)
+        normed = ttnn.rms_norm(
+            added,
+            epsilon=model.rms_norm_eps,
+            weight=model.input_norm_weight,
+            program_config=model.norm_program_config,
+            compute_kernel_config=model.norm_compute_config,
+            memory_config=model.residual_memory_config,
+        )
+        added.deallocate(True)
+        return next_qkv(normed)
+
+    def fractured_boundary():
+        scattered_bfp8 = ttnn.experimental.reduce_scatter_minimal_async(
+            fractured_partial,
+            persistent_output_buffers=[rs_intermediate, rs_output],
+            dim=3,
+            multi_device_global_semaphore=rs_semaphores,
+            num_links=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+        )
+        scattered = ttnn.typecast(scattered_bfp8, ttnn.bfloat16)
+        local_added = ttnn.add(fractured_residual, scattered, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scattered.deallocate(True)
+        stats = ttnn.rms_norm_pre_all_gather(
+            local_added,
+            compute_kernel_config=model.norm_compute_config,
+            dtype=ttnn.bfloat16,
+        )
+        stats = ttnn.reshape(stats, ttnn.Shape((1, 1, rows, 32)))
+        stats_bfp8 = ttnn.typecast(stats, ttnn.bfloat8_b)
+        stats.deallocate(True)
+        gathered_stats_bfp8 = ttnn.experimental.all_gather_async(
+            stats_bfp8,
+            dim=3,
+            multi_device_global_semaphore=stats_ag_semaphores,
+            num_links=2,
+            topology=ttnn.Topology.Ring,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        stats_bfp8.deallocate(True)
+        gathered_stats = ttnn.typecast(gathered_stats_bfp8, ttnn.bfloat16)
+        gathered_stats_bfp8.deallocate(True)
+        local_normed = ttnn.rms_norm_post_all_gather(
+            local_added,
+            gathered_stats,
+            epsilon=model.rms_norm_eps,
+            weight=gamma_fractured,
+            compute_kernel_config=model.norm_compute_config,
+        )
+        local_added.deallocate(True)
+        gathered_stats.deallocate(True)
+        local_normed_bfp8 = ttnn.typecast(local_normed, ttnn.bfloat8_b)
+        local_normed.deallocate(True)
+        gathered_normed_bfp8 = ttnn.experimental.all_gather_async(
+            local_normed_bfp8,
+            dim=3,
+            multi_device_global_semaphore=hidden_ag_semaphores,
+            num_links=2,
+            topology=ttnn.Topology.Ring,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        local_normed_bfp8.deallocate(True)
+        gathered_normed = ttnn.typecast(gathered_normed_bfp8, ttnn.bfloat16)
+        gathered_normed_bfp8.deallocate(True)
+        return next_qkv(gathered_normed)
+
+    selected_output = selected_boundary()
+    fractured_output = fractured_boundary()
+    selected_host = ttnn.to_torch(selected_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    fractured_host = ttnn.to_torch(fractured_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    pcc = comp_pcc(selected_host.float(), fractured_host.float())[1]
+    assert pcc >= REAL_WEIGHT_PCC
+    _release_tensors(selected_output, fractured_output)
+
+    selected_trace_output, selected_samples = _trace_mesh_callable(mesh_device, selected_boundary)
+    fractured_trace_output, fractured_samples = _trace_mesh_callable(mesh_device, fractured_boundary)
+    selected_ms = sorted(selected_samples)[len(selected_samples) // 2]
+    fractured_ms = sorted(fractured_samples)[len(fractured_samples) // 2]
+    # BFP8_B tiles occupy 1,088 physical bytes (1,024 payload bytes plus tile
+    # exponent metadata).  Ring all-reduce sends 2 * (P - 1) / P of the full
+    # tensor per rank; reduce-scatter and all-gather each send (P - 1) / P.
+    bfp8_tile_bytes = 1088
+    full_hidden_bytes = rows * hidden // (32 * 32) * bfp8_tile_bytes
+    local_hidden_bytes = full_hidden_bytes // TENSOR_PARALLEL_SIZE
+    local_stats_bytes = bfp8_tile_bytes
+    selected_ring_bytes_sent_per_rank = 2 * (TENSOR_PARALLEL_SIZE - 1) * local_hidden_bytes
+    fractured_ring_bytes_sent_per_rank = (
+        (TENSOR_PARALLEL_SIZE - 1) * local_hidden_bytes
+        + (TENSOR_PARALLEL_SIZE - 1) * local_stats_bytes
+        + (TENSOR_PARALLEL_SIZE - 1) * local_hidden_bytes
+    )
+    _write_result_artifact(
+        "fractured_selected_policy_boundary.json",
+        {
+            "boundary": "row-parallel partial -> residual add -> distributed RMSNorm -> next QKV",
+            "shape": [1, 1, rows, hidden],
+            "weights": "real layer-14 RMSNorm and QKV",
+            "selected_replicated": {
+                "residual_layout": "replicated mesh; BF16 L1 width-sharded on 32 cores",
+                "collectives": ["persistent all_reduce_async BFP8"],
+                "preallocated_buffers": 1,
+                "bfp8_full_hidden_physical_bytes": full_hidden_bytes,
+                "ring_bytes_sent_per_rank": selected_ring_bytes_sent_per_rank,
+                "trace_ms": selected_ms,
+                "samples": selected_samples,
+            },
+            "fractured": {
+                "residual_layout": "hidden-sharded mesh; BF16 DRAM interleaved per rank",
+                "collectives": [
+                    "persistent-buffer reduce_scatter_minimal_async BFP8",
+                    "persistent-semaphore statistics all_gather_async BFP8",
+                    "persistent-semaphore hidden all_gather_async BFP8",
+                ],
+                "preallocated_reduce_scatter_buffers": 2,
+                "all_gather_output_buffer_api": "not exposed",
+                "bfp8_full_hidden_physical_bytes": full_hidden_bytes,
+                "bfp8_local_hidden_physical_bytes": local_hidden_bytes,
+                "bfp8_local_stats_physical_bytes": local_stats_bytes,
+                "ring_bytes_sent_per_rank": fractured_ring_bytes_sent_per_rank,
+                "trace_ms": fractured_ms,
+                "samples": fractured_samples,
+            },
+            "cluster_axis": 1,
+            "num_links": 2,
+            "topology": "Ring",
+            "output_pcc": pcc,
+            "fractured_over_selected_ratio": fractured_ms / selected_ms,
+            "fractured_over_selected_ring_bytes_ratio": fractured_ring_bytes_sent_per_rank
+            / selected_ring_bytes_sent_per_rank,
+            "selected": "fractured" if fractured_ms < selected_ms else "replicated",
+            "next_layer_compatibility": "both execute the selected real QKV; fractured gathers only normalized input while retaining a hidden-sharded residual",
+            "fused_mmrs_selected_program_blocker": "MatmulReduceScatterAsync validates only MatmulMultiCoreReuseMultiCastProgramConfig (2D multicast); selected decode uses MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+        },
+    )
+    _release_tensors(
+        selected_trace_output,
+        fractured_trace_output,
+        selected_partial,
+        selected_residual,
+        fractured_partial,
+        fractured_residual,
+        gamma_fractured,
+        rs_intermediate,
+        rs_output,
     )
     _release_model(model)
 
@@ -884,6 +1310,8 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
     config = _config()
     state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
     hf_layer = _hf_layer(config, state_dict, IR_REPRESENTATIVE_LAYER)
+    correctness_ccl_dtype_name = os.getenv("FALCON3_MULTICHIP_CORRECTNESS_CCL_DTYPE", "bfp8")
+    correctness_ccl_dtype = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[correctness_ccl_dtype_name]
     model = MultichipDecoder.from_state_dict(
         state_dict,
         hf_config=config,
@@ -891,6 +1319,7 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
         mesh_device=mesh_device,
         batch=1,
         max_cache_len=128,
+        ccl_dtype=correctness_ccl_dtype,
     )
     assert model.precision_policy_name == "all_bfp4_lofi"
     assert (model.local_num_heads, model.local_num_kv_heads) == (3, 1)
@@ -903,8 +1332,8 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
     assert tuple(model.down_decode_weight.shape) == (6144, 3072)
     assert model.mlp_decode_padding == 384
     assert model.dram_banks == 8
-    assert (model.qkv_grid.x, model.qkv_grid.y) == (8, 1)
-    assert (model.o_grid.x, model.o_grid.y) == (8, 1)
+    assert (model.qkv_grid.x, model.qkv_grid.y) == (4, 1)
+    assert (model.o_grid.x, model.o_grid.y) == (4, 1)
     assert (model.gate_up_grid.x, model.gate_up_grid.y) == (8, 3)
     assert (model.down_grid.x, model.down_grid.y) == (8, 1)
     assert tuple(model.down_weight.shape) == (5760, 3072)
@@ -912,6 +1341,12 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
     assert model.detected_num_links == 2
     assert model.num_links == 2
     assert model.topology == ttnn.Topology.Ring
+    assert model.ccl_mode == "persistent_async"
+    assert model.owns_persistent_ccl_resources
+    assert model.persistent_ccl_resources[0] is model.attention_ccl_buffer
+    assert model.persistent_ccl_resources[1] is model.mlp_ccl_buffer
+    assert model.persistent_ccl_resources[2] is model.attention_ccl_semaphore
+    assert model.persistent_ccl_resources[3] is model.mlp_ccl_semaphore
 
     prefill, decode_31, decode_32 = _recorded_layer14_seq31_inputs(1)
     hf_cache = DynamicCache(config=config)
@@ -958,6 +1393,7 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
             page_table=page_table,
         )
         _assert_replicated(tt_output)
+        assert tt_output.memory_config() == model.residual_memory_config
         actual = _first_rank(tt_output).squeeze(0)
         decode_pccs[str(position)] = comp_pcc(expected, actual)[1]
         _assert_pcc(f"multichip real decode position={position}", expected, actual, REAL_WEIGHT_PCC)
@@ -985,7 +1421,7 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
             REAL_WEIGHT_PCC,
         )
 
-    # A replicated DRAM output is directly stackable as the next layer's input.
+    # The replicated-mesh, width-sharded L1 residual is the inter-layer contract.
     stacked = model.decode_forward(
         outputs[-1],
         key_cache=key_cache,
@@ -996,6 +1432,7 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
     )
     assert tuple(stacked.shape) == (1, 1, 1, config.hidden_size)
     _assert_replicated(stacked)
+    assert stacked.memory_config() == model.residual_memory_config
     stacked.deallocate(True)
 
     # Warm the exact fixed-position path, then prove mesh trace capture/replay.
@@ -1020,6 +1457,7 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
         page_table=page_table,
     )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    assert trace_output.memory_config() == model.residual_memory_config
     try:
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
@@ -1037,6 +1475,7 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
         "paged_non_aligned_correctness.json",
         {
             "weights": "real_layer_14",
+            "ccl_dtype": correctness_ccl_dtype_name,
             "mesh": list(TARGET_MESH_SHAPE),
             "batch": 1,
             "prefill_sequence_length": 31,
@@ -1051,6 +1490,16 @@ def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device
             "trace_replay_bitwise_deterministic": True,
             "trace_program_cache_entries_stable": True,
             "stacked_decoder_layout": [1, 1, 1, config.hidden_size],
+            "inter_layer_residual_contract": {
+                "mesh_placement": "replicated",
+                "device_memory": "L1",
+                "device_layout": "WIDTH_SHARDED",
+                "core_grid": [8, 4],
+                "shard_shape": [32, 96],
+                "dtype": "bfloat16",
+                "inter_layer_collective": None,
+                "inter_layer_reshard": None,
+            },
         },
     )
 
@@ -1222,14 +1671,38 @@ def test_warmed_multichip_trace_performance(mesh_device):
     if batch not in (1, 32):
         raise ValueError("performance workload batch must be 1 or 32")
     prefill, decode_hidden = _recorded_layer14_inputs(batch)
+    hf_layer = _hf_layer(config, state_dict, IR_REPRESENTATIVE_LAYER)
+    hf_cache = DynamicCache(config=config)
+    expected_prefill = _hf_prefill(hf_layer, config, prefill, cache=hf_cache)
+    expected_decode = _hf_decode(hf_layer, config, decode_hidden, hf_cache, 17)
     legacy_mlp_target_cores = os.getenv("FALCON3_MULTICHIP_MLP_CORES")
     gate_up_target_cores = int(os.getenv("FALCON3_MULTICHIP_GATE_UP_CORES", legacy_mlp_target_cores or "24"))
     down_target_cores = int(os.getenv("FALCON3_MULTICHIP_DOWN_CORES", legacy_mlp_target_cores or "8"))
-    qkv_target_cores = int(os.getenv("FALCON3_MULTICHIP_QKV_CORES", "8"))
-    o_target_cores = int(os.getenv("FALCON3_MULTICHIP_O_CORES", "8"))
-    ccl_dtype_name = os.getenv("FALCON3_MULTICHIP_CCL_DTYPE", "bf16")
+    qkv_target_cores = int(os.getenv("FALCON3_MULTICHIP_QKV_CORES", "4"))
+    o_target_cores = int(os.getenv("FALCON3_MULTICHIP_O_CORES", "4"))
+    ccl_dtype_name = os.getenv("FALCON3_MULTICHIP_CCL_DTYPE", "bfp8")
     ccl_dtype = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[ccl_dtype_name]
+    ccl_mode = os.getenv("FALCON3_MULTICHIP_CCL_MODE", "persistent_async")
     num_links = int(os.getenv("FALCON3_MULTICHIP_NUM_LINKS", "2"))
+    attention_activation_dtype_name = os.getenv("FALCON3_MULTICHIP_ATTENTION_ACTIVATION_DTYPE", "bfp8")
+    attention_activation_dtype = {
+        "bf16": ttnn.bfloat16,
+        "bfp8": ttnn.bfloat8_b,
+    }[attention_activation_dtype_name]
+    mlp_activation_dtype_name = os.getenv("FALCON3_MULTICHIP_MLP_ACTIVATION_DTYPE", "bfp8")
+    mlp_activation_dtype = {
+        "bf16": ttnn.bfloat16,
+        "bfp8": ttnn.bfloat8_b,
+    }[mlp_activation_dtype_name]
+    precision_policy = os.getenv("FALCON3_MULTICHIP_PRECISION_POLICY", "all_bfp4_lofi")
+    decode_matmul_mode = os.getenv("FALCON3_MULTICHIP_DECODE_MATMUL_MODE", "dram_sharded")
+    advisor_residual_mode = os.getenv("FALCON3_MULTICHIP_ADVISOR_RESIDUAL_MODE", "legacy_32core")
+    use_packed_mlp = os.getenv("FALCON3_MULTICHIP_PACKED_MLP", "0") == "1"
+    prefill_grid_x_limit = int(os.getenv("FALCON3_MULTICHIP_PREFILL_GRID_X", "11"))
+    prefill_l1_inputs = os.getenv("FALCON3_MULTICHIP_PREFILL_L1_INPUTS", "0") == "1"
+    prefill_iterations_per_sample = int(os.getenv("FALCON3_MULTICHIP_PREFILL_ITERATIONS_PER_SAMPLE", "1"))
+    if prefill_iterations_per_sample <= 0:
+        raise ValueError("prefill iterations per sample must be positive")
     model = MultichipDecoder.from_state_dict(
         state_dict,
         hf_config=config,
@@ -1237,25 +1710,37 @@ def test_warmed_multichip_trace_performance(mesh_device):
         mesh_device=mesh_device,
         batch=batch,
         max_cache_len=128,
+        precision_policy=precision_policy,
+        decode_matmul_mode=decode_matmul_mode,
+        advisor_residual_mode=advisor_residual_mode,
+        use_packed_mlp=use_packed_mlp,
         qkv_target_cores=qkv_target_cores,
         gate_up_target_cores=gate_up_target_cores,
         down_target_cores=down_target_cores,
         o_target_cores=o_target_cores,
         ccl_dtype=ccl_dtype,
+        ccl_mode=ccl_mode,
         num_links=num_links,
+        attention_activation_dtype=attention_activation_dtype,
+        mlp_activation_dtype=mlp_activation_dtype,
+        prefill_grid_x_limit=prefill_grid_x_limit,
+        prefill_l1_inputs=prefill_l1_inputs,
     )
     tt_prefill = _mesh_input(prefill, mesh_device)
     key_cache, value_cache = model.allocate_kv_cache()
     prefill_warm = model.prefill_forward(tt_prefill, key_cache=key_cache, value_cache=value_cache)
     ttnn.synchronize_device(mesh_device)
+    prefill_pcc_vs_hf = comp_pcc(expected_prefill, _first_rank(prefill_warm).squeeze(0))[1]
+    assert prefill_pcc_vs_hf >= REAL_WEIGHT_PCC
     prefill_warm.deallocate(True)
     prefill_samples = []
     for _ in range(5):
         start = time.perf_counter()
-        prefill_output = model.prefill_forward(tt_prefill, key_cache=key_cache, value_cache=value_cache)
-        ttnn.synchronize_device(mesh_device)
-        prefill_samples.append((time.perf_counter() - start) * 1000.0)
-        prefill_output.deallocate(True)
+        for _ in range(prefill_iterations_per_sample):
+            prefill_output = model.prefill_forward(tt_prefill, key_cache=key_cache, value_cache=value_cache)
+            ttnn.synchronize_device(mesh_device)
+            prefill_output.deallocate(True)
+        prefill_samples.append((time.perf_counter() - start) * 1000.0 / prefill_iterations_per_sample)
     multichip_prefill_ms = sorted(prefill_samples)[len(prefill_samples) // 2]
 
     tt_hidden = _mesh_input(decode_hidden, mesh_device)
@@ -1268,6 +1753,8 @@ def test_warmed_multichip_trace_performance(mesh_device):
         position_index=17,
     )
     ttnn.synchronize_device(mesh_device)
+    decode_pcc_vs_hf = comp_pcc(expected_decode, _first_rank(warm).squeeze(0))[1]
+    assert decode_pcc_vs_hf >= REAL_WEIGHT_PCC
     warm.deallocate(True)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -1308,6 +1795,13 @@ def test_warmed_multichip_trace_performance(mesh_device):
             "batch": batch,
             "sequence_length": 17,
             "weights": "real_layer_14",
+            "prefill_pcc_vs_hf": prefill_pcc_vs_hf,
+            "decode_pcc_vs_hf": decode_pcc_vs_hf,
+            "precision_policy": precision_policy,
+            "decode_matmul_mode": decode_matmul_mode,
+            "advisor_residual_mode": advisor_residual_mode,
+            "use_packed_mlp": use_packed_mlp,
+            "return_sharded_decode_output": model.return_sharded_decode_output,
             "qkv_target_cores": qkv_target_cores,
             "gate_up_target_cores": gate_up_target_cores,
             "down_target_cores": down_target_cores,
@@ -1329,10 +1823,64 @@ def test_warmed_multichip_trace_performance(mesh_device):
                 "down_grid": [model.down_grid.x, model.down_grid.y],
                 "down_grid_cores": model.down_grid.x * model.down_grid.y,
             },
+            "decode_matmul_geometry": {
+                "program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+                "output_subblock_fields": "not exposed by this TTNN program class",
+                "qkv": {
+                    "shape": [32, model.hidden_size, model.local_qkv_decode_size],
+                    "input_shard_tiles": model.hidden_size // 32 // model.qkv_grid.num_cores,
+                    "in0_block_w": model.hidden_size // 32 // model.qkv_grid.num_cores,
+                    "per_core_m": 1,
+                    "per_core_n": model.local_qkv_decode_size // 32 // model.qkv_grid.num_cores,
+                    "grid": [model.qkv_grid.x, model.qkv_grid.y],
+                    "input_memory": "L1 width-sharded",
+                    "weight_memory": "DRAM width-sharded over 8 banks",
+                    "output_memory": "L1 width-sharded",
+                },
+                "o": {
+                    "shape": [32, model.local_hidden_size, model.hidden_size],
+                    "input_shard_tiles": model.local_hidden_size // 32 // model.o_grid.num_cores,
+                    "in0_block_w": model.local_hidden_size // 32 // model.o_grid.num_cores,
+                    "per_core_m": 1,
+                    "per_core_n": model.hidden_size // 32 // model.o_grid.num_cores,
+                    "grid": [model.o_grid.x, model.o_grid.y],
+                    "input_memory": "L1 width-sharded",
+                    "weight_memory": "DRAM width-sharded over 8 banks",
+                    "output_memory": "L1 width-sharded",
+                },
+                "gate_up": {
+                    "shape_each": [32, model.hidden_size, model.local_intermediate_decode_size],
+                    "input_shard_tiles": model.hidden_size // 32 // model.gate_up_grid.num_cores,
+                    "in0_block_w": model.hidden_size // 32 // model.gate_up_grid.num_cores,
+                    "per_core_m": 1,
+                    "per_core_n": model.local_intermediate_decode_size // 32 // model.gate_up_grid.num_cores,
+                    "grid": [model.gate_up_grid.x, model.gate_up_grid.y],
+                    "input_memory": "L1 width-sharded",
+                    "weight_memory": "DRAM width-sharded over 8 banks",
+                    "output_memory": "L1 width-sharded",
+                },
+                "down": {
+                    "shape": [32, model.local_intermediate_decode_size, model.hidden_size],
+                    "input_shard_tiles": model.local_intermediate_decode_size // 32 // model.down_grid.num_cores,
+                    "in0_block_w": model.local_intermediate_decode_size // 32 // model.down_grid.num_cores,
+                    "per_core_m": 1,
+                    "per_core_n": model.hidden_size // 32 // model.down_grid.num_cores,
+                    "grid": [model.down_grid.x, model.down_grid.y],
+                    "input_memory": "L1 width-sharded",
+                    "weight_memory": "DRAM width-sharded over 8 banks",
+                    "output_memory": "L1 width-sharded",
+                },
+            },
             "ccl_dtype": ccl_dtype_name,
+            "ccl_mode": ccl_mode,
             "num_links": num_links,
+            "attention_activation_dtype": attention_activation_dtype_name,
+            "mlp_activation_dtype": mlp_activation_dtype_name,
+            "prefill_grid_x_limit": prefill_grid_x_limit,
+            "prefill_l1_inputs": prefill_l1_inputs,
             "effective_ccl_topology": "Ring",
             "prefill_samples": prefill_samples,
+            "prefill_iterations_per_sample": prefill_iterations_per_sample,
             "multichip_prefill_ms": multichip_prefill_ms,
             "single_chip_prefill_ms": baseline_prefill_ms,
             "prefill_speedup": prefill_speedup,

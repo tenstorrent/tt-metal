@@ -28,6 +28,12 @@
     "all_layers_two_phase_projection_and_norm_bytes_per_device": 1937080320,
     "decode_mlp_padding_bytes_per_device": 55738368,
     "trace_region_reserve_bytes_per_device": 100000000,
+    "shared_persistent_decode_ccl_bytes_per_device": 835584,
+    "persistent_decode_ccl_buffer_count": 2,
+    "persistent_decode_ccl_buffer_dtype": "bfloat8_b",
+    "persistent_decode_ccl_shared_across_all_layers": true,
+    "decode_attention_activation_dtype": "bfloat8_b",
+    "decode_mlp_activation_dtype": "bfloat8_b",
     "prefill_chunk_rows": 1024,
     "calculated_live_chunk_activation_bytes_per_device": 63176704,
     "calculated_full_context_peak_transient_bytes_per_device": 452984832,
@@ -35,10 +41,36 @@
     "calculated_batch1_resident_plus_reserved_bytes_per_device": 3307954432,
     "sampled_key_cache_pcc_vs_hf": 0.9964410657318681,
     "sampled_value_cache_pcc_vs_hf": 0.9953481660889436,
-    "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/multichip_decoder/results/max_context_batch1.json",
-    "explanation": "TP4 stores one of four KV heads per device, and the decoder chunks dense prefill rows internally. BFP8 cache accounting uses the physical 1,088-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer. A local 1,024-row kernel has a 63,176,704-byte calculated live set, but the source retains full-sequence tensors around chunked linears. The largest explicit additional set is at O-projection chunk concatenation: 50,331,648 bytes of local attention input plus 201,326,592 bytes of accumulated output chunks plus a 201,326,592-byte concatenated output, or 452,984,832 bytes beyond the separately counted resident residual. The contract reserves 512 MiB for this peak and allocator headroom. A full 32,768-token paged prefill plus decode at position 32,767 completed on the target 1x4 Blackhole mesh."
+    "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_multichip_decoder/results/final_correctness/max_context_batch1.json",
+    "explanation": "TP4 stores one of four KV heads per device, and the decoder chunks dense prefill rows internally. BFP8 cache accounting uses the physical 1,088-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer. A local 1,024-row kernel has a 63,176,704-byte calculated live set, but the source retains full-sequence tensors around chunked linears. The largest explicit additional set is at O-projection chunk concatenation: 50,331,648 bytes of local attention input plus 201,326,592 bytes of accumulated output chunks plus a 201,326,592-byte concatenated output, or 452,984,832 bytes beyond the separately counted resident residual. The contract reserves 512 MiB for this peak and allocator headroom. The optimized decode path adds two BFP8 persistent all-reduce buffers totaling 835,584 L1 bytes per device; the pair is shared across all decoder layers through persistent_ccl_resources rather than allocated per layer. A full 32,768-token paged prefill plus decode at position 32,767 completed on the target 1x4 Blackhole mesh."
   },
-  "notes": "The multichip decoder restores the full Hugging Face advertised 32,768-token context; batch 1 is the fully executed capacity gate. BFP8 rank-local KV storage, TP4 projection weights, and internally chunked dense MLP execution make it physical on the target mesh. The calculated batch-1 resident plus trace/transient reserve is 3,307,954,432 bytes per device. The projection-and-norm term includes physical TILE_LAYOUT padding of each logical BF16 [3072] norm vector to [32,3072], and the 512 MiB transient reserve covers full-sequence buffers retained around the chunked linears. Batch 32 remains validated for the compiler-derived short workload and heterogeneous decode positions, but full-context batch 32 is not claimed by this decoder-only stage because it was not executed: its all-layer local KV caches and BF16 residual would consume 15,971,909,632 and 6,442,450,944 bytes per device, respectively, and the resident lower bound including weights, rotary cache, and trace reserve is 24,484,995,328 bytes before full-prefill concatenation and attention temporaries.",
+  "notes": "The optimized multichip decoder preserves the full Hugging Face advertised 32,768-token context; batch 1 is the fully executed capacity gate. BFP8 rank-local KV storage, TP4 projection weights, and internally chunked dense MLP execution make it physical on the target mesh. The calculated batch-1 resident plus trace/transient reserve is 3,307,954,432 bytes per device; the additional shared decode-CCL L1 reserve is 835,584 bytes per device and does not scale with layer count. Decode attention and MLP projection activations now remain BFP8 through their local/CCL boundary, which lowers decode transient traffic and does not reduce context; prefill capacity accounting and the BF16 inter-layer residual contract are unchanged. The projection-and-norm term includes physical TILE_LAYOUT padding of each logical BF16 [3072] norm vector to [32,3072], and the 512 MiB transient reserve covers full-sequence buffers retained around the chunked linears. Batch 32 remains validated for the compiler-derived short workload and heterogeneous decode positions, but full-context batch 32 is not claimed by this decoder-only stage because it was not executed: its all-layer local KV caches and BF16 residual would consume 15,971,909,632 and 6,442,450,944 bytes per device, respectively, and the resident lower bound including weights, rotary cache, and trace reserve is 24,484,995,328 bytes before full-prefill concatenation and attention temporaries.",
+  "inter_layer_residual_contract": {
+    "logical_shape": [
+      1,
+      "batch",
+      1,
+      3072
+    ],
+    "dtype": "bfloat16",
+    "tile_layout": true,
+    "mesh_placement": "replicated",
+    "device_memory": "L1",
+    "device_tensor_layout": "WIDTH_SHARDED",
+    "core_grid": [
+      8,
+      4
+    ],
+    "physical_shard_shape_batch_1_or_32": [
+      32,
+      96
+    ],
+    "inter_layer_collective": null,
+    "inter_layer_reshard": null,
+    "next_layer_input_conversion": null,
+    "public_boundary_opt_out": "Construct with return_sharded_decode_output=false only at a true host/public boundary.",
+    "non_aligned_logical_rows": "Owned internally: rows are padded for tiled kernels and the logical output is sliced while retaining this device layout."
+  },
   "paths": {
     "prefill": {
       "status": "multichip_validated",
@@ -68,7 +100,7 @@
       "cache_length": 32768,
       "max_context_validated_batch": 1,
       "kv_cache_dtype": "bfloat8_b",
-      "classification": "TP4: rank-local paged_update_cache and decode SDPA with replicated logical positions/page tables"
+      "classification": "TP4: rank-local paged_update_cache and decode SDPA with replicated logical positions/page tables; BFP8 attention/MLP projection activations and persistent asynchronous BFP8 decode all-reduces; replicated-mesh BF16 width-sharded L1 inter-layer residual"
     }
   },
   "ir_provenance": {

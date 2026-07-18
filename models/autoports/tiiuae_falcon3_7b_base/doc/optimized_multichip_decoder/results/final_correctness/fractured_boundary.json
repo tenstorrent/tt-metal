@@ -1,0 +1,51 @@
+{
+  "boundary": "row-parallel partial -> residual add -> distributed RMSNorm -> next QKV",
+  "ccl_dtype": "bfloat16",
+  "effective_topology": "Ring",
+  "fractured_over_replicated_ratio": 1.12737121222239,
+  "fractured_reduce_scatter_add_distributed_rmsnorm_all_gather_qkv_ms": 0.10966855101287365,
+  "fractured_samples": [
+    0.10970472358167171,
+    0.10960563085973263,
+    0.10968739166855812,
+    0.10966855101287365,
+    0.10964460205286741
+  ],
+  "fused_mm_rs_exact_shape_probe": {
+    "down_fused_device_us": 114.594,
+    "down_separate_matmul_plus_reduce_scatter_device_us": 115.865,
+    "down_trace_pcc_min": 0.9932234,
+    "o_fused_device_us": 38.614,
+    "o_separate_matmul_plus_reduce_scatter_device_us": 41.146,
+    "o_trace_pcc_min": 0.9927695,
+    "provenance": "doc/optimized_multichip_decoder/tracy/mmrs_{fused,non_fused}/ops.csv",
+    "result": "supported, but its 1.3--2.5 us primitive saving is smaller than this complete family's boundary loss"
+  },
+  "generated_at_utc": "2026-07-18T19:35:45.150642+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "mesh": [
+    1,
+    4
+  ],
+  "num_links": 2,
+  "output_pcc": 0.9998720678730362,
+  "replicated_all_reduce_add_rmsnorm_qkv_ms": 0.0972781190648675,
+  "replicated_samples": [
+    0.09724626317620277,
+    0.0972781190648675,
+    0.09735656902194023,
+    0.0972653878852725,
+    0.09730536956340075
+  ],
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "selected": "replicated",
+  "shape": [
+    1,
+    1,
+    32,
+    3072
+  ],
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38",
+  "weights": "real layer-14 RMSNorm and QKV"
+}

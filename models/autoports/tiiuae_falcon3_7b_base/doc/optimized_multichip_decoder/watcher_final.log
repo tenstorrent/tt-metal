@@ -1,0 +1,532 @@
+Script started on 2026-07-18 19:41:01+00:00 [COMMAND="TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 FALCON3_RUN_MULTICHIP_TOPOLOGY=1 FALCON3_RUN_MULTICHIP_FRACTURED_BOUNDARY=1 FALCON3_RUN_MULTICHIP_FRACTURED_SELECTED_POLICY=1 FALCON3_RUN_MULTICHIP_HETEROGENEOUS_POSITIONS=1 FALCON3_RUN_MULTICHIP_LONG_PREFILL=1 FALCON3_RUN_MULTICHIP_MAX_CONTEXT=1 FALCON3_RUN_MULTICHIP_BASELINE=1 FALCON3_MULTICHIP_RESULTS_DIR=models/autoports/tiiuae_falcon3_7b_base/doc/optimized_multichip_decoder/results/watcher pytest -q -rA models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py" <not executed on terminal>]
+[32m2026-07-18 19:41:03.157[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collecting 12 items                                                            collected 12 items                                                             
+
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_runtime_is_owned_and_host_fallback_free PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_persistent_ccl_resources_are_shared_and_owner_releasable[blackhole-mesh_device0-device_params0] [90m2026-07-18 19:41:04.914[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:228)[0m
+[90m2026-07-18 19:41:04.914[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor started.[0m [90m(cluster.cpp:348)[0m
+[90m2026-07-18 19:41:04.914[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating TopologyDiscovery for architecture: blackhole[0m [90m(topology_discovery.cpp:91)[0m
+[90m2026-07-18 19:41:04.914[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting topology discovery.[0m [90m(topology_discovery.cpp:110)[0m
+[90m2026-07-18 19:41:04.916[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.8.0[0m [90m(topology_discovery.cpp:569)[0m
+[90m2026-07-18 19:41:04.916[0m | [32minfo    [m | [35m            UMD[0m | [37mFirmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported.[0m [90m(topology_discovery.cpp:601)[0m
+[90m2026-07-18 19:41:04.920[0m | [32minfo    [m | [35m            UMD[0m | [37mCompleted topology discovery.[0m [90m(topology_discovery.cpp:114)[0m
+[90m2026-07-18 19:41:05.142[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {}[0m [90m(cluster.cpp:168)[0m
+[90m2026-07-18 19:41:05.142[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:142)[0m
+[90m2026-07-18 19:41:05.142[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.8.0[0m [90m(cluster.cpp:145)[0m
+[90m2026-07-18 19:41:05.142[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor completed.[0m [90m(cluster.cpp:520)[0m
+[90m2026-07-18 19:41:05.144[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:1024)[0m
+[90m2026-07-18 19:41:05.321[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster completed.[0m [90m(cluster.cpp:1032)[0m
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.23920000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+[32m2026-07-18 19:41:05.443[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:41:05.443[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:41:05.443[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:41:05.444[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:05.444[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:41:05.444[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:41:05.499[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:41:05.499[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:05.499[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:05.499[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:05.499[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:05.499[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:41:05.499[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:05.504[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:05.505[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:41:05.511[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:05.516[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:05.537[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:05.537[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:05.538[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:05.539[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:05.539[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:41:05.539[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[90m2026-07-18 19:41:05.683[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 19:41:05.683[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 19:41:05.683[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 19:41:05.683[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 19:41:06.263[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=23280168257239 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 19:41:06.263[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=23306667592556 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 19:41:06.263[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=23371930992442 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 19:41:06.264[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=23338543222569 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[32m2026-07-18 19:41:06.293[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+[90m2026-07-18 19:41:15.587[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:15.592[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:15.596[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:15.601[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+Building ncrisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache15229645552935298160/kernels/reader_interleaved_no_bcast/6579234549129234107/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache15229645552935298160/kernels/reader_interleaved_no_bcast/6579234549129234107/ncrisc/ncrisck.7230473311360540935.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache15229645552935298160/kernels/reader_interleaved_no_bcast/6579234549129234107/ncrisc/ncrisck.7230473311360540935.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_DISABLE_ETH -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_interleaved_no_bcast/6579234549129234107/\"" -DBCAST_LLK='0' -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_TILE_WITH_FIRST_COLUMN='fill_tile_with_first_column_bfp8' -DFILL_TILE_WITH_FIRST_COLUMN_B='fill_tile_with_first_column_bfp8' -DFILL_TILE_WITH_FIRST_ELEMENT='fill_tile_with_first_element_bfp8' -DFILL_TILE_WITH_FIRST_ELEMENT_B='fill_tile_with_first_element_bfp8' -DFILL_TILE_WITH_FIRST_ROW='fill_tile_with_first_row_bfp8' -DFILL_TILE_WITH_FIRST_ROW_B='fill_tile_with_first_row_bfp8' -DFILL_WITH_VALUE='fill_with_val_bfloat16' -DFILL_WITH_VALUE_B='fill_with_val_bfloat16' -DROUTING_MODE='145' -DSRC_SHARDED='1' -DSRC_SHARDED_B='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=17,1088,1,24,8,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,17,1088,1,24,8,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,1 
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp:39:20: warning: variable 'src_b_args' set but not used [-Wunused-but-set-variable]
+   39 |     constexpr auto src_b_args =
+      |                    ^~~~~~~~~~
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_replicated_vs_deferred_gather_residual_topology[blackhole-mesh_device0-device_params0] [32m2026-07-18 19:41:19.867[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:41:19.868[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:41:19.868[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:41:19.868[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:41:19.868[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:19.868[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:41:19.868[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:41:19.868[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:41:19.868[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:19.869[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:19.869[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:19.869[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:19.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:41:19.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:19.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:19.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:19.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:19.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:41:19.932[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:19.934[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:41:19.938[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:19.945[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:19.949[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:19.955[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:19.956[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:19.956[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:19.957[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:19.957[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:41:19.957[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 19:41:20.116[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_safe_fractured_residual_through_distributed_norm_and_qkv[blackhole-mesh_device0-device_params0] [32m2026-07-18 19:41:26.594[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:41:26.594[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:41:26.594[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:41:26.594[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:41:26.594[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:26.594[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:41:26.594[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:41:26.595[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:41:26.595[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:26.595[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:26.595[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:26.595[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:26.657[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:41:26.657[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:26.657[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:26.657[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:26.657[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:26.657[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:41:26.657[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:26.660[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:41:26.663[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:26.670[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:26.674[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:26.680[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:26.681[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:26.681[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:26.682[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:26.682[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:41:26.682[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 19:41:26.840[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_selected_policy_replicated_vs_persistent_bfp8_fractured_boundary[blackhole-mesh_device0-device_params0] [32m2026-07-18 19:41:33.448[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:41:33.448[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:41:33.448[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:41:33.448[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:41:33.448[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:33.448[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:41:33.448[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:41:33.449[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:41:33.449[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:33.449[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:33.449[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:33.449[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:33.512[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:41:33.512[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:33.512[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:33.512[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:33.512[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:33.512[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:41:33.512[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:33.514[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:41:33.518[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:33.525[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:33.529[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:33.535[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:33.535[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:33.536[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:33.537[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:33.537[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:41:33.537[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 19:41:33.693[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+[90m2026-07-18 19:41:38.831[0m | [33m[1mwarning [m | [35m             Op[0m | [37mttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used[0m [90m(tilize_device_operation.cpp:151)[0m
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_decode_uses_heterogeneous_device_positions_per_user[blackhole-mesh_device0-device_params0] [32m2026-07-18 19:41:40.059[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:41:40.059[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:41:40.059[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:41:40.059[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:41:40.059[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:40.059[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:41:40.059[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:41:40.060[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:41:40.060[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:40.060[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:40.060[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:40.060[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:40.123[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:41:40.123[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:40.123[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:40.123[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:40.123[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:40.123[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:41:40.123[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:40.126[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:41:40.129[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:40.136[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:40.140[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:40.146[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:40.146[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:40.147[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:40.148[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:40.148[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:41:40.148[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 19:41:40.307[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+[90m2026-07-18 19:41:50.194[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:50.199[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:50.203[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:50.207[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_prefill_1025_matches_hf[blackhole-mesh_device0-device_params0] [32m2026-07-18 19:41:51.354[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:41:51.354[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:51.355[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:51.419[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:41:51.419[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:51.419[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:51.419[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:51.419[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:51.419[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:41:51.419[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:51.421[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:41:51.425[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:51.432[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:51.436[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:51.442[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:51.442[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:51.443[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:51.444[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:51.444[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:41:51.444[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 19:41:51.602[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+[32m2026-07-18 19:41:57.215[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip real paged prefill seq=1025: PCC=0.99994438 target=0.99[0m
+[32m2026-07-18 19:41:57.234[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged key cache seq=1025: PCC=0.99679253 target=0.99[0m
+[32m2026-07-18 19:41:57.245[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged value cache seq=1025: PCC=0.99555432 target=0.99[0m
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_batch1_advertised_context_paged_cache_and_last_position[blackhole-mesh_device0-device_params0] [32m2026-07-18 19:41:57.824[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:41:57.824[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:41:57.824[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:41:57.824[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:41:57.824[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:41:57.824[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:41:57.824[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:41:57.825[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:41:57.825[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:57.825[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:57.825[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:57.825[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:41:57.888[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:41:57.888[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:57.888[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:57.888[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:57.888[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:41:57.888[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:41:57.888[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:57.891[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:41:57.894[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:57.901[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:57.905[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:41:57.911[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:57.912[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:57.912[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:57.913[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:41:57.913[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:41:57.913[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 19:41:58.072[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+[32m2026-07-18 19:42:04.533[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip max-context sampled key cache: PCC=0.99644107 target=0.99[0m
+[32m2026-07-18 19:42:04.534[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip max-context sampled value cache: PCC=0.99534817 target=0.99[0m
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-mesh_device0-device_params0] [32m2026-07-18 19:42:05.148[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:42:05.148[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:42:05.148[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:42:05.148[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:42:05.148[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:05.148[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:42:05.148[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 19:42:05.149[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:42:05.149[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:05.149[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:05.149[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:05.149[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:05.213[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:42:05.213[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:05.213[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:05.213[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:05.213[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:05.213[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:42:05.213[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:05.216[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:42:05.219[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:05.226[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:05.230[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:05.236[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:05.237[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:05.237[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:05.238[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:05.238[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:42:05.238[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 19:42:05.397[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+[32m2026-07-18 19:42:10.616[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip real prefill seq=31: PCC=0.99993482 target=0.99[0m
+[32m2026-07-18 19:42:10.620[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged key cache seq=31: PCC=0.99677528 target=0.99[0m
+[32m2026-07-18 19:42:10.621[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged value cache seq=31: PCC=0.99555507 target=0.99[0m
+[32m2026-07-18 19:42:10.658[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip real decode position=31: PCC=0.99911336 target=0.99[0m
+[32m2026-07-18 19:42:10.661[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged key cache position=31: PCC=0.99676783 target=0.99[0m
+[32m2026-07-18 19:42:10.662[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged value cache position=31: PCC=0.99557341 target=0.99[0m
+[32m2026-07-18 19:42:10.683[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip real decode position=32: PCC=0.99893575 target=0.99[0m
+[32m2026-07-18 19:42:10.687[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged key cache position=32: PCC=0.99676822 target=0.99[0m
+[32m2026-07-18 19:42:10.687[0m | [1mINFO    [0m | [36mmodels.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder[0m:[36m_assert_pcc[0m:[36m158[0m - [1mmultichip paged value cache position=32: PCC=0.99555114 target=0.99[0m
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_warmed_multichip_trace_performance[blackhole-mesh_device0-device_params0] SKIPPED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_profile_signposts[blackhole-mesh_device0-device_params0] SKIPPED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_directly_matches_single_chip_optimized_baseline [90m2026-07-18 19:42:11.519[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:42:11.519[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:11.519[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:11.519[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:11.519[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:11.582[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:42:11.582[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:11.582[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:11.582[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:11.582[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:11.582[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:42:11.582[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:11.582[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[90m2026-07-18 19:42:11.586[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:11.590[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:11.594[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:12.216[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=23369200292203 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 19:42:17.931[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 19:42:17.931[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 19:42:17.931[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.931[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 19:42:17.932[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 19:42:17.932[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[32m2026-07-18 19:42:17.932[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 19:42:17.932[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 19:42:17.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:42:17.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:17.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:17.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:17.932[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:17.996[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log[0m [90m(watcher_server.cpp:286)[0m
+[90m2026-07-18 19:42:17.996[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 0[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:17.996[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 1[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:17.996[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 2[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:17.996[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher attached device 3[0m [90m(watcher_server.cpp:132)[0m
+[90m2026-07-18 19:42:17.996[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher server initialized, disabled features: ETH[0m [90m(watcher_server.cpp:547)[0m
+[90m2026-07-18 19:42:17.996[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 0[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:17.999[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 19:42:18.002[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 1[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:18.009[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 2[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:18.013[0m | [32minfo    [m | [35m          Metal[0m | [37mWatcher checking device 3[0m [90m(watcher_device_reader.cpp:393)[0m
+[90m2026-07-18 19:42:18.019[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:18.019[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:18.020[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:18.021[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 19:42:18.021[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 19:42:18.021[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[90m2026-07-18 19:42:18.740[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=23404510386042 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 19:42:18.741[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=23436386031489 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 19:42:18.741[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=23469773469468 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+13.36s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_directly_matches_single_chip_optimized_baseline
+13.20s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_persistent_ccl_resources_are_shared_and_owner_releasable[blackhole-mesh_device0-device_params0]
+10.68s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_decode_uses_heterogeneous_device_positions_per_user[blackhole-mesh_device0-device_params0]
+6.70s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_batch1_advertised_context_paged_cache_and_last_position[blackhole-mesh_device0-device_params0]
+6.24s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_safe_fractured_residual_through_distributed_norm_and_qkv[blackhole-mesh_device0-device_params0]
+6.11s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_replicated_vs_deferred_gather_residual_topology[blackhole-mesh_device0-device_params0]
+6.00s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_selected_policy_replicated_vs_persistent_bfp8_fractured_boundary[blackhole-mesh_device0-device_params0]
+5.85s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_prefill_1025_matches_hf[blackhole-mesh_device0-device_params0]
+5.54s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-mesh_device0-device_params0]
+1.58s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_persistent_ccl_resources_are_shared_and_owner_releasable[blackhole-mesh_device0-device_params0]
+0.47s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_replicated_vs_deferred_gather_residual_topology[blackhole-mesh_device0-device_params0]
+0.47s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-mesh_device0-device_params0]
+0.46s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_prefill_1025_matches_hf[blackhole-mesh_device0-device_params0]
+0.46s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_decode_uses_heterogeneous_device_positions_per_user[blackhole-mesh_device0-device_params0]
+0.46s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_batch1_advertised_context_paged_cache_and_last_position[blackhole-mesh_device0-device_params0]
+0.46s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_safe_fractured_residual_through_distributed_norm_and_qkv[blackhole-mesh_device0-device_params0]
+0.46s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_selected_policy_replicated_vs_persistent_bfp8_fractured_boundary[blackhole-mesh_device0-device_params0]
+0.22s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_directly_matches_single_chip_optimized_baseline
+0.21s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_runtime_is_owned_and_host_fallback_free
+0.16s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_selected_policy_replicated_vs_persistent_bfp8_fractured_boundary[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_replicated_vs_deferred_gather_residual_topology[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_safe_fractured_residual_through_distributed_norm_and_qkv[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_prefill_1025_matches_hf[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_decode_uses_heterogeneous_device_positions_per_user[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_persistent_ccl_resources_are_shared_and_owner_releasable[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_batch1_advertised_context_paged_cache_and_last_position[blackhole-mesh_device0-device_params0]
+
+(7 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_runtime_is_owned_and_host_fallback_free
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_persistent_ccl_resources_are_shared_and_owner_releasable[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_replicated_vs_deferred_gather_residual_topology[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_safe_fractured_residual_through_distributed_norm_and_qkv[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_selected_policy_replicated_vs_persistent_bfp8_fractured_boundary[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_decode_uses_heterogeneous_device_positions_per_user[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_prefill_1025_matches_hf[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_batch1_advertised_context_paged_cache_and_last_position[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_directly_matches_single_chip_optimized_baseline
+SKIPPED [1] models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py:1656: manual warmed mesh performance gate
+SKIPPED [1] models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py:1901: manual Tracy profile gate
+=================== 10 passed, 2 skipped in 80.84s (0:01:20) ===================
+nanobind: leaked 2 instances!
+ - leaked instance 0x700431d84288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x70043251df38 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 22 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "memory_config"
+ - leaked function "to_json"
+ - leaked function "to_numpy"
+ - leaked function "load_sub_device_manager"
+ - leaked function "id"
+ - leaked function "__init__"
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "devices"
+ - leaked function "dram_grid_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html[90m2026-07-18 19:42:26.422[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT cache stats: 778/810 hits (96.0%) [778 cached, 1827 build-once dedup, 0 merged artifacts, 0 merged genfiles][0m [90m(build_cache_telemetry.cpp:207)[0m
+[90m2026-07-18 19:42:26.422[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT telemetry: 3 registered TelemetryTokens[0m [90m(build_cache_telemetry.cpp:230)[0m
+[90m2026-07-18 19:42:26.423[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher thread stopped watching...[0m [90m(watcher_server.cpp:595)[0m
+[90m2026-07-18 19:42:26.423[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 0[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:26.423[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 1[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:26.423[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 2[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:26.423[0m | [32minfo    [m | [35m      LLRuntime[0m | [37mWatcher detached device 3[0m [90m(watcher_server.cpp:181)[0m
+[90m2026-07-18 19:42:26.435[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:512)[0m
+[90m2026-07-18 19:42:26.435[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1037)[0m
+[90m2026-07-18 19:42:26.969[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster completed.[0m [90m(cluster.cpp:1046)[0m
+[90m2026-07-18 19:42:26.969[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor started.[0m [90m(cluster.cpp:754)[0m
+[90m2026-07-18 19:42:26.969[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor completed.[0m [90m(cluster.cpp:757)[0m
+
+Script done on 2026-07-18 19:42:27+00:00 [COMMAND_EXIT_CODE="0"]

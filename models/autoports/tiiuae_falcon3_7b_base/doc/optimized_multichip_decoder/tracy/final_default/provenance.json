@@ -1,0 +1,18 @@
+{
+  "capture_generated_at_utc": "2026-07-18T19:39:20Z",
+  "capture_command": "FALCON3_RUN_MULTICHIP_PROFILE=1 python -m tracy -r -p -v -o models/autoports/tiiuae_falcon3_7b_base/doc/optimized_multichip_decoder/tracy/final_default -m pytest models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_profile_signposts",
+  "decode_report_csv_sha256": "a0d4fe6c1faf0682f595ffe6618fd9eff68c1046f81713b30ff95656a032c31a",
+  "decode_report_stacked_csv_sha256": "5a570f9f539b0e51b5a5ed84fafe5e2df0f50d48038e657ebe847c1b3fed0ad6",
+  "decode_report_stacked_png_sha256": "82f2d7ff8de93f85382579b23d9d38fa7efdbf23c153b7f169d9bf09fbffbd32",
+  "decode_report_txt_sha256": "3c42010db19555b46da0073d888a22db91057d3c9f694a6642c4ffdb93a48139",
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "mesh": "1x4 Blackhole p300c, FABRIC_1D_RING, two links",
+  "ops_csv_sha256": "18c2c506aa4ee56fe092b091796d4ca89928d81ff59f6d5605428e7c114f1e0e",
+  "prefill_report_csv_sha256": "d08d8424543f8d6afa1fdf99aa07005099cf06ad8cb87e97dc7b9336053cf836",
+  "prefill_report_stacked_csv_sha256": "717fb84e64f3dde0b490b3b822bcb1b2a2e44b92ddcaf7fdb0f5987c126f54b7",
+  "prefill_report_stacked_png_sha256": "375406d7b81c8bc2cb77a20a8e0dfca8891b6887996f22ed782f6111226b1ab8",
+  "prefill_report_txt_sha256": "605ae3bb6f642da997e1ade760369e1efd9e744c5131f4461fc4d4020fd8b403",
+  "profiler": "Tracy; Watcher disabled",
+  "repo_head_at_capture": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38"
+}
