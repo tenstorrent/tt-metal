@@ -87,9 +87,10 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
     assert table.num_configs() == 2  # packed KVPE, tiled index
 
     bf16_params = replace(params, sparse_kv_cache_format=SparseKVCacheFormat.BF16)
-    bf16_cache, bf16_index_cache = adapter.allocate_kv_cache(
-        mesh_device=mesh_device, hf_config=config, params=bf16_params
-    )
+    bf16_caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=config, params=bf16_params)
+    bf16_cache = bf16_caches.kvpe
+    bf16_index_cache = bf16_caches.index
+    assert bf16_index_cache is not None
     assert bf16_cache.format == SparseKVCacheFormat.BF16
     assert bf16_cache.tensor.dtype == ttnn.bfloat16
     assert cache.tensor.buffer_aligned_page_size() < bf16_cache.tensor.buffer_aligned_page_size()
