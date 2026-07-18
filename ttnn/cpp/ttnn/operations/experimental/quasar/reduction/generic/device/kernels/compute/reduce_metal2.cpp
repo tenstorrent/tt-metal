@@ -30,6 +30,18 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
 
+    // [DIAG avgpool x1.15 -- remove after] The DECISIVE read: what scaler value did the reader actually
+    // pack into the GAPOOL SrcB CB? bf16 1.0 = 16256 (0x3f80) => the scaler=1.0 workaround reached GAPOOL
+    // (so a x1.1504 gain would be a GAPOOL-HW issue even at SrcB=1.0 -> LLK/HW ticket). bf16 1/49 = 15527
+    // (0x3ca7) => the workaround did NOT propagate; GAPOOL sees the fractional scaler and quantizes it to
+    // 3/128 (=x1.1504) -> the fix is app-side (make the reduce truly use 1.0 + external post-mul).
+    {
+        DataflowBuffer scaler_cb(dfb::scaler);
+        scaler_cb.wait_front(1);
+        volatile tt_l1_ptr uint16_t* sp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scaler_cb.get_read_ptr());
+        UNPACK(DPRINT("SCALER_CB s0={} s1={} s16={}\n", (uint32_t)sp[0], (uint32_t)sp[1], (uint32_t)sp[16]));
+    }
+
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
