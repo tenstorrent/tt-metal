@@ -183,7 +183,22 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
+#ifdef ARCH_QUASAR
+                                // QSR avg_pool coherency fix (same class as the once-at-init clears above):
+                                // clear_out_tiles copies clear_value_cb -> in_cb via a NoC self-loopback read,
+                                // which is UNRELIABLE on the Quasar sim (drops / reads stale SRAM). This clear
+                                // runs right before the PARTIAL last reduction chunk (e.g. window 49 = 32 + 17);
+                                // if it drops, the padding rows [remaining, TILE_HEIGHT) of the freshly reserved
+                                // in_cb entry hold stale L1 that the reduce sums into the average -> per-channel
+                                // means shifted up and DECORRELATED from the golden (low PCC). 0 is the avg (sum)
+                                // additive identity, so an SRAM-coherent NoC zero-write of the just-reserved
+                                // in_cb entry produces the identical clear without the loopback. get_entry_size()
+                                // is exactly the one-page region clear_out_tiles(..., in_cb_ntiles) covered.
+                                noc.async_write_zeros(in_cb, in_cb.get_entry_size());
+                                noc.write_zeros_l1_barrier();
+#else
                                 clear_out_tiles<clear_value_cb_id>(noc, in_cb, clear_cb, in_cb_ntiles);
+#endif
                             }
                         }
                     }

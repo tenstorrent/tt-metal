@@ -482,6 +482,19 @@ void kernel_main() {
                     // Push the whole stick once, after every c-block has packed its slice, so the DM reader
                     // consumes exactly one full stick per wait_front/pop_front(scratch_npages) -- the previous
                     // per-c-block push overran the ring (see the reserve note above).
+                    //
+                    // [DEBUG scratch scaffold] Producer-side pack-write commit barrier. push_back() below posts
+                    // the SPSC credit the DM reader spins on (reader_pool_2d.cpp wait_front), after which it reads
+                    // this stick's row DIRECTLY from TL1. On HW the credit instruction itself waits for the packer
+                    // write to drain (TT_PUSH_TILES packer_wr_done_wait_mask=0x1 in llk_push_tiles), but the Quasar
+                    // emulator does NOT honor that embedded sub-field, so the counter can post before
+                    // pack_untilize_dest's TL1 write lands -> the reader reads a stale/empty scratch slot (a
+                    // fraction of sticks dropped->0 or dup->neighbor: PCC 0.897; watcher latency hides it, since
+                    // the scratch CB is single-buffered so the credit is the only producer->consumer serializer).
+                    // Drain the packer engine before posting the credit. Mirrors the "wait for pack to finish"
+                    // STALLWAIT idiom in llk_pack_common.h:307. No-op-equivalent on HW (redundant with the wr_done
+                    // wait); remove once the sim models PUSH_TILES.packer_wr_done_wait_mask.
+                    PACK((TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK)));
                     curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
                 }
 #else
