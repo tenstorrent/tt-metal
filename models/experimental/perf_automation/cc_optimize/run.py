@@ -173,9 +173,10 @@ def discover(
         perf_dir,
         cc_env(repo_root, devices),
         devices,
-        int(os.environ.get("PERF_MCP_DISCOVER_TIMEOUT", "3600") or "3600"),
+        int(os.environ.get("PERF_MCP_DISCOVER_TIMEOUT", "10800") or "10800"),
         "discovery",
         capture=False,
+        stall_s=int(os.environ.get("PERF_MCP_DISCOVER_STALL_SEC", "1200") or "1200"),
     )
     mani = _latest_manifest(perf_dir)
     if mani is None or rc is None:
@@ -901,7 +902,15 @@ def _reclaim_device(devices: str) -> str:
 
 
 def _run_device_proc(
-    cmd, cwd, env, devices: str, timeout_s: int, label: str = "", reset_on_timeout: bool = True, capture: bool = True
+    cmd,
+    cwd,
+    env,
+    devices: str,
+    timeout_s: int,
+    label: str = "",
+    reset_on_timeout: bool = True,
+    capture: bool = True,
+    stall_s: int = 0,
 ):
     """Run a DEVICE-touching subprocess so a device wedge can never hang the tool forever. Own session +
     hard timeout; on timeout SIGKILL the WHOLE process group + _reclaim_device (kill any holder + tt-smi
@@ -909,7 +918,7 @@ def _run_device_proc(
     combined stdout+stderr); rc is None when it timed out / was killed.
 
     Recovery-timeout tiers (all env-overridable, one knob each):
-      BUILD   discover (perf-test build, legitimately ~25 min)  -> PERF_MCP_DISCOVER_TIMEOUT (3600s)
+      BUILD   discover (stall-detector on no CPU progress)      -> PERF_MCP_DISCOVER_STALL_SEC (1200s), backstop PERF_MCP_DISCOVER_TIMEOUT (10800s)
       MEASURE gate / coverage / full-pipeline device runs       -> PERF_MCP_MEASURE_TIMEOUT  (1200s)
       ROUND   agent round (stall-detector on no-progress)       -> PERF_MCP_ROUND_STALL_SEC  (600s)"""
     proc = subprocess.Popen(
@@ -926,9 +935,34 @@ def _run_device_proc(
         if capture:
             out, _ = proc.communicate(timeout=timeout_s)
             out = out or ""
+            rc = proc.returncode
+        elif stall_s:
+            from agent.probes import _pgroup_cpu_jiffies
+
+            pgid = proc.pid
+            start = time.monotonic()
+            last_progress = start
+            last_cpu = _pgroup_cpu_jiffies(pgid)
+            while proc.poll() is None:
+                time.sleep(15)
+                now = time.monotonic()
+                cpu = _pgroup_cpu_jiffies(pgid)
+                if cpu > last_cpu + 10:
+                    last_progress = now
+                last_cpu = cpu
+                if now - last_progress >= stall_s:
+                    print(
+                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no CPU progress for "
+                        f"{stall_s}s) -- treating as wedge",
+                        flush=True,
+                    )
+                    raise subprocess.TimeoutExpired(cmd, stall_s)
+                if now - start >= timeout_s:
+                    raise subprocess.TimeoutExpired(cmd, timeout_s)
+            rc = proc.returncode
         else:
             proc.wait(timeout=timeout_s)
-        rc = proc.returncode
+            rc = proc.returncode
     except subprocess.TimeoutExpired:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

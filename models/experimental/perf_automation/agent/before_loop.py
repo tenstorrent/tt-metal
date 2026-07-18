@@ -493,13 +493,18 @@ def before_loop(
             model_name=str(config.get("model_name") or ""),
             config_ref=str(config.get("config_ref") or ""),
         )
-        if _bl_cov:
-            os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
-            _bl_depth = _bridge_depth_env(tt_root, sub_env, devices, perf_rel, case, _bl_cov)
-            if _bl_depth:
-                os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
+        if not _bl_cov:
+            _bl_cov = int(os.environ.get("PERF_MCP_DEPTH_DEFAULT_LAYERS", "4"))
+        print(f"      depth-bridge: node={perf_rel} case={case} cov={_bl_cov}", file=sys.stderr, flush=True)
+        os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
+        _bl_depth = _bridge_depth_env(tt_root, sub_env, devices, perf_rel, case, _bl_cov)
+        if _bl_depth:
+            os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
     except Exception as _bl_e:  # noqa: BLE001
+        import traceback as _tb
+
         print(f"      depth-bridge skipped: {str(_bl_e)[:160]}", file=sys.stderr, flush=True)
+        print(_tb.format_exc()[-600:], file=sys.stderr, flush=True)
 
     stages.start("tracy_baseline", "Measuring the baseline latency (trace+2CQ)")
 
