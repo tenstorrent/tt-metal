@@ -318,8 +318,15 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
         L = x_u.shape[-2]
         cos_p, sin_p = rot_mats_prefill(mesh_device, rd, L, theta)
         pt = rm_pt([blocks])  # [1, bpu]
+        # Prefill input is K-sharded (model's prefill norm skips its AG; fused in-proj gathers).
         attn.forward_prefill_paged(
-            replicate_to_device(mesh_device, x_u), cos_p, sin_p, pt, chunk_page_table=pt, chunk_start_idx=0, user_id=0
+            shard_to_device(mesh_device, x_u, dim=-1),
+            cos_p,
+            sin_p,
+            pt,
+            chunk_page_table=pt,
+            chunk_start_idx=0,
+            user_id=0,
         )
 
     # Distinct, tile-aligned prompt lengths per user (all < bpu*block_size and < max_seq).

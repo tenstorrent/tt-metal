@@ -429,7 +429,12 @@ class TPAttention:
 
         q8, k8, v8 = q, k, v
         padded = max(32, ((S + 31) // 32) * 32)
-        ch = min(128 if S >= 2048 else 64, padded)  # 128 beats 256
+        # SDPA flash chunk: 256 wins once S>2048 (chunk256 vs 128 @ S=3072/4096: 1.74x/1.77x,
+        # PCC 0.9998 unchanged; test_sdpa_prefill_opt). At S=2048 they tie (256=1.01x) so keep 128
+        # there; 64 below. full-attn prefill chunks at attn_chunk_size=max(chunk,4096) so S<=4096
+        # here -- 256 fits L1 (512 OOMs). NOTE: only this non-paged forward_prefill path; the paged
+        # chunked-prefill SDPA keeps 128 (256 is worse for its q-chunk-vs-paged-KV shape).
+        ch = min(256 if S > 2048 else (128 if S >= 2048 else 64), padded)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
         )
