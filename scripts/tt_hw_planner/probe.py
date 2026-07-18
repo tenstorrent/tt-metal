@@ -122,6 +122,26 @@ def _category_from_model_type(model_type: str) -> Optional[str]:
     return None
 
 
+def _arch_override_category(category: str, cfg: dict) -> str:
+    """Trust ``config.architectures`` over a diffusion/unknown pipeline_tag.
+
+    A causal/MoE transformer can carry a diffusion pipeline_tag (e.g.
+    HunyuanImage-3.0 is tagged text-to-image but its config declares
+    ``architectures=["HunyuanImage3ForCausalMM"]`` with ``num_experts``). The
+    pipeline_tag alone lands it in ``Image``, which early-returns before
+    ``detect_architecture`` ever runs, so the MoE/attention structure is never
+    seen and sibling matching force-fits a diffusion family. When the config
+    itself declares a ``*ForCausalLM``/``*ForCausalMM`` architecture, reclassify
+    an ``Image``/``Video``/``Unknown`` category to ``LLM`` so architecture
+    detection runs. Model-agnostic (matches the architecture suffix, not a
+    model name)."""
+    if category in {"Image", "Video", "Unknown"}:
+        archs = " ".join(cfg.get("architectures") or [])
+        if re.search(r"ForCausal(LM|MM)\b", archs):
+            return "LLM"
+    return category
+
+
 @dataclass
 class ModelProbe:
     model_id: str
@@ -447,6 +467,13 @@ def probe_model(model_id: str) -> ModelProbe:
         probe.category = model_type_category
     elif model_type_category and probe.category == "Unknown":
         probe.category = model_type_category
+
+    _arch_cat = _arch_override_category(probe.category, cfg)
+    if _arch_cat != probe.category:
+        probe.flags.append(
+            f"Reclassified {probe.category} to {_arch_cat} via " f"config.architectures={cfg.get('architectures')!r}"
+        )
+        probe.category = _arch_cat
 
     if probe.category not in TRANSFORMER_CATEGORIES:
         probe.config_status = None
