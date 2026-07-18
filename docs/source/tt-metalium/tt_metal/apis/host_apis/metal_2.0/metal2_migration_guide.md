@@ -234,8 +234,8 @@ Program program = MakeProgramFromSpec(*mesh_device, spec);
 ProgramRunArgs params;
 params.kernel_run_args = {{
     .kernel = READER,
-    .runtime_arg_values = {{NodeCoord{0, 0},
-        {{"start_page", start_page}, {"num_pages", num_pages}}}},
+    .runtime_arg_values = {{"start_page", {{NodeCoord{0, 0}, start_page}}},
+                           {"num_pages",  {{NodeCoord{0, 0}, num_pages}}}},
 }};
 SetProgramRunArgs(program, params);
 ```
@@ -537,8 +537,8 @@ KernelSpec reader{
 ProgramRunArgs params;
 params.kernel_run_args = {{
     .kernel = READER,
-    .runtime_arg_values = {{NodeCoord{0, 0},
-        {{"start_page", start_page}, {"num_tiles", num_tiles}}}},
+    .runtime_arg_values = {{"start_page", {{NodeCoord{0, 0}, start_page}}},
+                           {"num_tiles",  {{NodeCoord{0, 0}, num_tiles}}}},
     .common_runtime_arg_values = {{"bank_id", bank_id}},
 }};
 SetProgramRunArgs(program, params); // temporary free function
@@ -1076,9 +1076,9 @@ Program program = MakeProgramFromSpec(*mesh_device, spec);
 ProgramRunArgs params;
 params.kernel_run_args = {
     {.kernel = READER,
-     .runtime_arg_values = {{node, {{"num_pages", num_pages}}}}},
+     .runtime_arg_values = {{"num_pages", {{node, num_pages}}}}},
     {.kernel = WRITER,
-     .runtime_arg_values = {{node, {{"num_pages", num_pages}}}}},
+     .runtime_arg_values = {{"num_pages", {{node, num_pages}}}}},
 };
 params.tensor_args = {
     {INPUT,  TensorArgument{input_tensor}},
@@ -1171,17 +1171,17 @@ ProgramSpec spec{
 Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 ProgramRunArgs params;
-// One runtime_arg_values entry per node where the kernel runs.
+// runtime_arg_values is keyed by argument name, then by node. (Legacy factories
+// usually build these node-first; the AddRuntimeArgsForNode helper in
+// program_run_args.hpp produces this name-first table from a node-first loop.)
 // Tensor identity is singular: one TensorParameter for the input tensor,
 // regardless of how many nodes access it. Per-node access varies via slice
 // indices, not addresses.
 params.kernel_run_args = {{
     .kernel = READER,
     .runtime_arg_values = {
-        {{0,0}, {{"start_page", 0u},                  {"num_pages", pages_per_node}}},
-        {{1,0}, {{"start_page", 1u*pages_per_node},   {"num_pages", pages_per_node}}},
-        {{0,1}, {{"start_page", 2u*pages_per_node},   {"num_pages", pages_per_node}}},
-        {{1,1}, {{"start_page", 3u*pages_per_node},   {"num_pages", pages_per_node}}},
+        {"start_page", {{{0,0}, 0u}, {{1,0}, 1u*pages_per_node}, {{0,1}, 2u*pages_per_node}, {{1,1}, 3u*pages_per_node}}},
+        {"num_pages",  {{{0,0}, pages_per_node}, {{1,0}, pages_per_node}, {{0,1}, pages_per_node}, {{1,1}, pages_per_node}}},
     },
 }, /* writer entry similarly */ };
 params.tensor_args = {
@@ -1196,7 +1196,7 @@ Key differences vs. the legacy pattern:
 - Multi-core placement moves from `core_ranges` on each kernel to a single `target_nodes` on the `WorkUnitSpec`.
 - The semaphore is bound at the kernel spec; the semaphore ID no longer travels as a runtime argument. Kernel code accesses it as `sem::done`.
 - **Tensor identity is singular** — one `TensorParameter` per tensor, regardless of how many nodes access it. The legacy column repeats `input_tensor.buffer()->address()` on every node; Metal 2.0 makes that singular by construction. Per-node access varies through `start_page` / `num_pages` slice RTAs only.
-- Per-node runtime args are still per-node, but addressed by `NodeCoord` and named.
+- Per-node runtime args are keyed by argument **name**, then by `NodeCoord`.
 
 ---
 
