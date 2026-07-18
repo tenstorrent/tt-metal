@@ -910,6 +910,27 @@ def _get_default_compute_kernel_config(device: Any, provided: Any) -> Any:
         return None
 
 
+def _high_accuracy_compute_kernel_config(device: Any) -> Any:
+    """Maximum-accuracy matmul compute config: HiFi3 + fp32 accumulation.
+
+    Used for single-tile matmuls where perf is irrelevant so the result matches
+    the fp32/torch reference bit-for-bit (HiFi2 is not enough -- it can leave a
+    ~1 ULP residual that trips sub-ULP numeric-check thresholds).  HiFi3 (not
+    HiFi4) is used with fp32 accumulation per the documented Wormhole guidance
+    that HiFi4+fp32 can be less accurate there due to a hardware bug."""
+    ttnn = _ttnn()
+    try:
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    except Exception:
+        return None
+
+
 def _infer_distributed_plan(signature: AutoMatmulSignature) -> DistributedCollectivePlan:
     if not _is_distributed(signature):
         return DistributedCollectivePlan(kind="none")
@@ -1206,18 +1227,18 @@ def _default_candidate_kwargs(
 ) -> dict[str, Any]:
     """Effective kwargs for the default candidate.
 
-    For single-output-tile matmuls, run the default op with fp32 accumulation
-    (when the caller hasn't pinned a compute config): tuning is skipped at this
-    size, and the lower-precision stock default can drift ~1 ULP from the
-    reference, so we opt into the high-accuracy compute config for free.  Applied
-    identically here and in cache reconstruction so a cached winner rebuilds the
-    same op.  Larger shapes are returned unchanged."""
+    For single-output-tile matmuls, run the default op with the maximum-accuracy
+    compute config (HiFi3 + fp32 accumulation) when the caller hasn't pinned one:
+    tuning is skipped at this size, and the lower-precision stock default can
+    drift ~1 ULP from the reference, tripping sub-ULP numeric-check thresholds.
+    Applied identically here and in cache reconstruction so a cached winner
+    rebuilds the same op.  Larger shapes are returned unchanged."""
     if not _is_single_output_tile(signature):
         return kwargs
     if kwargs.get("compute_kernel_config") is not None:
         return kwargs
     device = prepared.input_tensor_a.device()
-    accurate_cc = _get_default_compute_kernel_config(device, None)
+    accurate_cc = _high_accuracy_compute_kernel_config(device)
     if accurate_cc is None:
         return kwargs
     adjusted = dict(kwargs)
