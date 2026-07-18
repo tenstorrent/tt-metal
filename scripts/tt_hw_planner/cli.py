@@ -8231,6 +8231,20 @@ def _cmd_up_isolated(args) -> int:
     session = _wt_create(args.model_id)
     print(f"  [isolation] worktree: {session.path}")
 
+    try:
+        from .registry_sync import fetch_upstream_models, hydrate_upstream_into_repo
+
+        _offline = bool(getattr(args, "offline", False) or getattr(args, "no_registry_sync", False))
+        _tree = fetch_upstream_models(session.path, offline=_offline)
+        _hydrated = hydrate_upstream_into_repo(session.path, _tree, overwrite=False)
+        if _hydrated:
+            print(
+                f"  [isolation] hydrated {len(_hydrated)} NEW upstream file(s) from {_tree.source}:{_tree.sha[:12]} "
+                f"into the worktree (add-only: fresh reuse/adapt siblings, existing modules untouched)"
+            )
+    except Exception:
+        pass
+
     with using_repo(session.path):
         n_shared, shared_files = apply_for("_shared")
         n_model, model_files = apply_for(args.model_id)

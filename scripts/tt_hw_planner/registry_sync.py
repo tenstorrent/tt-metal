@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -367,6 +368,53 @@ def fetch_upstream_models(repo_root, offline: bool = False, timeout: int = 90) -
         return UpstreamTree(dest, sha, "remote", False)
     except Exception:
         return UpstreamTree(repo_root, _local_head_sha(repo_root), "local", True)
+
+
+def hydrate_upstream_into_repo(repo_root, tree, *, overwrite: bool = True) -> List[str]:
+    """Copy every synced upstream subtree (:func:`_fetch_path_set` — currently
+    ``tt_transformers``/``tt_dit``/``tt_cnn``/``common`` plus any ``--add-source``
+    roots) from the pinned fresh-main cache snapshot into ``repo_root``.
+
+    The registry sync only ever wrote the fetched modules to the cache and derived
+    a name/family overlay; the actual REUSE (import canonical-wrapper) and ADAPT
+    (verbatim copy) porting resolves its source under ``repo_root``. So a sibling
+    added to main after this checkout's fork point was discoverable-by-name but its
+    code never reached the tree the bring-up ports against. Hydrating the fetched
+    subtrees into ``repo_root`` makes those new siblings physically present, so the
+    existing import/copy path picks them up with no other change.
+
+    No-op unless a fresh remote snapshot was fetched (``tree.source == 'remote'``);
+    on an offline/local fallback the tree IS ``repo_root`` and there is nothing to
+    copy. Intended for a disposable isolation worktree — callers must not point it
+    at a user's real checkout. ``overwrite`` also refreshes drifted existing files
+    (use latest); set False for add-only. Returns the repo-relative files hydrated;
+    never raises.
+    """
+    hydrated: List[str] = []
+    try:
+        if getattr(tree, "source", "") != "remote":
+            return hydrated
+        src_root = Path(getattr(tree, "root", ""))
+        dst_root = Path(repo_root)
+        if not src_root.is_dir() or src_root.resolve() == dst_root.resolve():
+            return hydrated
+        for sub in _fetch_path_set():
+            src_sub = src_root / sub
+            if not src_sub.is_dir():
+                continue
+            for f in src_sub.rglob("*"):
+                if not f.is_file():
+                    continue
+                rel = f.relative_to(src_root)
+                out = dst_root / rel
+                if out.exists() and not overwrite:
+                    continue
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, out)
+                hydrated.append(str(rel))
+    except Exception:
+        pass
+    return hydrated
 
 
 def _read_provides(py: Path) -> List[dict]:
