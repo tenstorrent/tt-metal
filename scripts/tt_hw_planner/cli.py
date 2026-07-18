@@ -1700,6 +1700,16 @@ def _enforce_backend_match_quality_or_abort(
         model_type=model_type,
         pipeline_tag=pipeline_tag,
     )
+    try:
+        from .family_backends import rank_backends as _rank_backends
+
+        _siblings = _rank_backends(category=probe.category, model_type=model_type, pipeline_tag=pipeline_tag, top_n=3)
+        if _siblings:
+            print("  Sibling candidates (top %d, exact first):" % len(_siblings))
+            for _si, (_sb, _ssc, _sr) in enumerate(_siblings, 1):
+                print("    %d. %s  [score=%d; %s]" % (_si, _sb.name, _ssc, _sr))
+    except Exception:
+        pass
     if backend is None:
         auto_picked = _try_auto_onboard_inline(
             model_id=model_id,

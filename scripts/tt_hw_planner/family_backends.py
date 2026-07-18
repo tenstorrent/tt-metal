@@ -378,14 +378,14 @@ def pick_backend_with_quality(
     for b in candidates:
         if mt and mt in {k.lower() for k in b.model_type_keys}:
             return (b, "exact")
-    for b in candidates:
-        if pt and pt in {t.lower() for t in b.pipeline_tags}:
-            return (b, "pipeline")
-
     if mt:
         for b in all_backends():
             if mt in {k.lower() for k in b.model_type_keys}:
                 return (b, "exact")
+
+    for b in candidates:
+        if pt and pt in {t.lower() for t in b.pipeline_tags}:
+            return (b, "pipeline")
     if pt:
         for b in all_backends():
             if pt in {t.lower() for t in b.pipeline_tags}:
