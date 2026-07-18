@@ -44,5 +44,5 @@ void kernel_main() {
     while (!idma_acked_cmdbuf_0()) {
     }
 
-    DEVICE_PRINT("IDMA 1D strided done: {} elements, total_bytes: {} \n", num_elements, total_bytes);
+    DEVICE_PRINT("IDMA basic done: {} elements, total_bytes: {}\n", num_elements, total_bytes);
 }
