@@ -175,19 +175,48 @@ template <
     typename In1BaseOffsetFn,
     typename Activation,
     matmul_config::DataFormatReconfig reconfig,
+    uint32_t c_in0_num_subblocks,
+    uint32_t c_in1_num_subblocks,
+    uint32_t c_out_subblock_h,
+    uint32_t c_out_subblock_w,
+    uint32_t c_in0_block_k,
+    uint32_t c_num_k_blocks,
+    uint32_t c_batch,
+    uint32_t c_last_in1_subblock_w_valid,
+    uint32_t c_in1_per_core_w,
+    uint32_t c_out_row_width,
     typename Buf>
 ALWI void matmul_block(
     Buf& in0_buf,
     Buf& in1_buf,
     Buf& out_buf,
     Buf& interm_buf,
-    const MatmulBlockShape& shape,
+    const MatmulBlockShape& shape_rt,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
     PostKBlockFn post_k_block,
     KBlockInnerDimFn k_block_inner_dim,
     In0SourceFn in0_source_fn,
     In1BaseOffsetFn in1_base_offset_fn) {
+
+    // Compile-time block-shape opt-in (see .hpp): when c_num_k_blocks != 0 the caller passed the
+    // block dims as template params — rebuild a constexpr MatmulBlockShape so its fields fold to
+    // immediates. The runtime `shape_rt` reference does NOT const-fold through this ALWI at -O3,
+    // leaving every loop bound / derived tile-count a runtime load (a per-subblock pack-thread
+    // tax on high-iteration pack-bound callers). c_num_k_blocks == 0 (default) selects shape_rt,
+    // so non-opting callers keep the exact runtime path. Field order mirrors MatmulBlockShape::of.
+    constexpr MatmulBlockShape shape_ct{
+        c_in0_num_subblocks,
+        c_in1_num_subblocks,
+        c_out_subblock_h,
+        c_out_subblock_w,
+        c_in0_block_k,
+        c_num_k_blocks,
+        c_batch,
+        c_last_in1_subblock_w_valid,
+        c_in1_per_core_w,
+        c_out_row_width};
+    const MatmulBlockShape& shape = (c_num_k_blocks != 0) ? shape_ct : shape_rt;
 
     // NoWaitNoPop is in1-only: cross-chip global-CB receivers and L1-sharded weight CBs
     // are in1-side patterns; in0 has no analogous external-management case.

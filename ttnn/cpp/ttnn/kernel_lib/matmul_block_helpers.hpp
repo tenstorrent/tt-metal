@@ -408,6 +408,24 @@ template <
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::InputAndOutput,
+    // ── Compile-time block-shape opt-in (perf) ───────────────────────────────────────
+    // Pass the block dims here (they are compile-time constants at every caller) and the
+    // helper rebuilds a constexpr MatmulBlockShape so its fields FOLD TO IMMEDIATES. The
+    // runtime `const MatmulBlockShape& shape` below does NOT const-fold through this ALWI
+    // reference at -O3 — every loop bound / derived tile-count stays a runtime load, a
+    // per-subblock pack-thread tax (measured +0.38% on pack-bound block-sharded conv2d,
+    // 33 K-blocks × 13 subblocks). c_num_k_blocks == 0 (default) keeps the runtime path,
+    // so every non-opting caller is byte-identical. Fields mirror MatmulBlockShape::of.
+    uint32_t c_in0_num_subblocks = 0,
+    uint32_t c_in1_num_subblocks = 0,
+    uint32_t c_out_subblock_h = 0,
+    uint32_t c_out_subblock_w = 0,
+    uint32_t c_in0_block_k = 0,
+    uint32_t c_num_k_blocks = 0,
+    uint32_t c_batch = 1,
+    uint32_t c_last_in1_subblock_w_valid = 0,
+    uint32_t c_in1_per_core_w = 0,
+    uint32_t c_out_row_width = 0,
     typename Buf = ::CircularBuffer>
 ALWI void matmul_block(
     Buf& in0_buf,
