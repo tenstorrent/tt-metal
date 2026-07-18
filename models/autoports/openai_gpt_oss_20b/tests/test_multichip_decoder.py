@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import itertools
 import json
 import math
 import os
@@ -40,10 +41,11 @@ from models.autoports.openai_gpt_oss_20b.tt.multichip_decoder import (
     TP_DEGREE,
     MultichipConfig,
     MultichipDecoder,
+    _validate_ep_decode_geometry,
     _validate_ep_prefill_geometry,
     _validate_qkv_geometry,
 )
-from models.autoports.openai_gpt_oss_20b.tt.optimized_decoder import OptimizedDecoder
+from models.autoports.openai_gpt_oss_20b.tt.optimized_decoder import OptimizationConfig, OptimizedDecoder
 from models.common.lightweightmodule import LightweightModule
 
 FABRIC_DEVICE_PARAMS = {
@@ -65,6 +67,10 @@ def _perf_multichip_config_from_env():
     kwargs = {
         "expert_strategy": strategy,
         "decode_collective": os.environ.get("MULTICHIP_DECODE_COLLECTIVE_AB", MultichipConfig().decode_collective),
+        "use_fused_o_projection_rs": os.environ.get("MULTICHIP_FUSED_O_RS", "0") == "1",
+        "use_fused_o_projection_ag": os.environ.get("MULTICHIP_FUSED_O_AG", "0") == "1",
+        "fused_o_ag_pad_hidden": os.environ.get("MULTICHIP_FUSED_O_AG_PAD_HIDDEN", "1") == "1",
+        "fused_ag_matmul_payload_dtype": os.environ.get("MULTICHIP_FUSED_AG_PAYLOAD_DTYPE", "bfloat16"),
     }
     qkv_candidate = None
     if qkv_ab is not None:
@@ -99,16 +105,90 @@ def _perf_multichip_config_from_env():
             ep_prefill_down_subblock_w=down_subblock,
             active_prefill_chunk_size=chunk,
         )
+    ep_prefill_in0 = os.environ.get("MULTICHIP_EP_PREFILL_IN0")
+    if ep_prefill_in0 is not None:
+        parts = ep_prefill_in0.split(",")
+        if len(parts) != 2:
+            raise ValueError("MULTICHIP_EP_PREFILL_IN0 must be gate_up_in0,down_in0")
+        kwargs["ep_prefill_gate_up_in0_block_w"], kwargs["ep_prefill_down_in0_block_w"] = (int(part) for part in parts)
+    ep_decode_ab = os.environ.get("MULTICHIP_EP_DECODE_AB")
+    if ep_decode_ab is not None:
+        parts = ep_decode_ab.split(",")
+        if len(parts) != 8:
+            raise ValueError(
+                "MULTICHIP_EP_DECODE_AB must be gate_x,gate_y,gate_in0,gate_subblock,"
+                "down_x,down_y,down_in0,down_subblock"
+            )
+        gate_x, gate_y, gate_in0, gate_subblock, down_x, down_y, down_in0, down_subblock = (int(part) for part in parts)
+        kwargs.update(
+            ep_decode_gate_up_cores=(gate_x, gate_y),
+            ep_decode_gate_up_in0_block_w=gate_in0,
+            ep_decode_gate_up_subblock_w=gate_subblock,
+            ep_decode_down_cores=(down_x, down_y),
+            ep_decode_down_in0_block_w=down_in0,
+            ep_decode_down_subblock_w=down_subblock,
+        )
     default_rewrite = "post_sparse_bf16" if MultichipConfig().ep_prefill_post_sparse_bf16 else "baseline"
     rewrite = os.environ.get("MULTICHIP_EP_PREFILL_REWRITE", default_rewrite)
     if rewrite not in ("baseline", "post_sparse_bf16"):
         raise ValueError("MULTICHIP_EP_PREFILL_REWRITE must be baseline or post_sparse_bf16")
     kwargs["ep_prefill_post_sparse_bf16"] = rewrite == "post_sparse_bf16"
+    gate_up = os.environ.get("MULTICHIP_EP_GATE_UP", "split")
+    if gate_up not in ("split", "packed"):
+        raise ValueError("MULTICHIP_EP_GATE_UP must be split or packed")
+    kwargs["ep_pack_gate_up"] = gate_up == "packed"
+    kwargs["ep_packed_gate_up_subblock_w"] = int(os.environ.get("MULTICHIP_EP_PACKED_SUBBLOCK", "2"))
+    selected = MultichipConfig()
+    kwargs["interleaved_attention_weight_dtype"] = os.environ.get(
+        "MULTICHIP_INTERLEAVED_ATTENTION_WEIGHT_DTYPE",
+        selected.interleaved_attention_weight_dtype,
+    )
+    kwargs["ep_activation_dtype"] = os.environ.get("MULTICHIP_EP_ACTIVATION_DTYPE", selected.ep_activation_dtype)
+    kwargs["ep_gate_up_weight_dtype"] = os.environ.get(
+        "MULTICHIP_EP_GATE_UP_WEIGHT_DTYPE", selected.ep_gate_up_weight_dtype
+    )
+    kwargs["ep_down_weight_dtype"] = os.environ.get("MULTICHIP_EP_DOWN_WEIGHT_DTYPE", selected.ep_down_weight_dtype)
+    kwargs["ep_sparse_math_fidelity"] = os.environ.get(
+        "MULTICHIP_EP_SPARSE_MATH_FIDELITY",
+        selected.ep_sparse_math_fidelity,
+    )
     multichip_config = MultichipConfig(**kwargs)
     if qkv_candidate is not None:
         _validate_qkv_geometry(multichip_config, k_tiles=90, n_tiles=40, grid_x=11, grid_y=10)
     _validate_ep_prefill_geometry(multichip_config)
+    _validate_ep_decode_geometry(multichip_config)
     return multichip_config, qkv_candidate
+
+
+def _perf_optimization_config_from_env(multichip_config):
+    attention_dtype = os.environ.get("MULTICHIP_ATTENTION_WEIGHT_DTYPE", "bfloat16")
+    expert_dtype = os.environ.get("MULTICHIP_EXPERT_WEIGHT_DTYPE", "bfloat8_b")
+    kv_dtype = os.environ.get("MULTICHIP_KV_CACHE_DTYPE", "bfloat16")
+    fidelity = os.environ.get("MULTICHIP_MATH_FIDELITY", "hifi4")
+    if attention_dtype not in ("bfloat4_b", "bfloat8_b", "bfloat16"):
+        raise ValueError("MULTICHIP_ATTENTION_WEIGHT_DTYPE must be bfloat4_b, bfloat8_b, or bfloat16")
+    if expert_dtype not in ("bfloat4_b", "bfloat8_b", "bfloat16"):
+        raise ValueError("MULTICHIP_EXPERT_WEIGHT_DTYPE must be bfloat4_b, bfloat8_b, or bfloat16")
+    if kv_dtype not in ("bfloat8_b", "bfloat16"):
+        raise ValueError("MULTICHIP_KV_CACHE_DTYPE must be bfloat8_b or bfloat16")
+    if fidelity not in ("lofi", "hifi2", "hifi4"):
+        raise ValueError("MULTICHIP_MATH_FIDELITY must be lofi, hifi2, or hifi4")
+    return OptimizationConfig().with_changes(
+        use_shard_advisor_layouts=False,
+        use_shard_advisor_attention_layouts=False,
+        use_shard_advisor_moe_layouts=False,
+        use_sparse_experts=True,
+        use_explicit_sliding_mask=not multichip_config.use_native_paged_sliding_attention,
+        use_dram_sharded_attention=os.environ.get("MULTICHIP_DRAM_SHARDED_ATTENTION", "0") == "1",
+        dram_attention_weight_dtype=attention_dtype,
+        expert_weight_dtype=expert_dtype,
+        kv_cache_dtype=kv_dtype,
+        math_fidelity=fidelity,
+        expert_gate_up_cores=multichip_config.expert_gate_up_cores,
+        expert_down_cores=multichip_config.expert_down_cores,
+        expert_gate_up_in0_block_w=multichip_config.expert_gate_up_in0_block_w,
+        expert_down_in0_block_w=multichip_config.expert_down_in0_block_w,
+    )
 
 
 def _mesh_test(function):
@@ -129,6 +209,7 @@ def _decoder(
     max_cache_len=128,
     expert_strategy=None,
     multichip_config=None,
+    optimization_config=None,
 ):
     if os.environ.get("MULTICHIP_TEST_CONFIG_FROM_ENV") == "1":
         env_config, _ = _perf_multichip_config_from_env()
@@ -136,6 +217,7 @@ def _decoder(
             env_config,
             expert_strategy=expert_strategy or env_config.expert_strategy,
         )
+        optimization_config = _perf_optimization_config_from_env(multichip_config)
     return MultichipDecoder.from_state_dict(
         state,
         hf_config=config,
@@ -144,6 +226,7 @@ def _decoder(
         max_cache_len=max_cache_len,
         multichip_config=multichip_config
         or (MultichipConfig() if expert_strategy is None else MultichipConfig(expert_strategy=expert_strategy)),
+        optimization_config=optimization_config,
     )
 
 
@@ -198,7 +281,18 @@ def test_multichip_runtime_contract_and_fallback_audit():
     assert selected.ep_prefill_gate_up_cores == selected.ep_prefill_down_cores == (9, 10)
     assert selected.ep_prefill_gate_up_subblock_w == selected.ep_prefill_down_subblock_w == 1
     assert selected.ep_prefill_post_sparse_bf16
+    assert selected.ep_decode_gate_up_cores == selected.ep_decode_down_cores == (5, 9)
+    assert selected.ep_decode_gate_up_subblock_w == selected.ep_decode_down_subblock_w == 2
+    assert selected.ep_activation_dtype == "bfloat16"
+    assert selected.interleaved_attention_weight_dtype == "bfloat16"
+    assert selected.ep_gate_up_weight_dtype == "bfloat8_b"
+    assert selected.ep_down_weight_dtype == "bfloat4_b"
+    assert selected.ep_sparse_math_fidelity == "lofi"
+    assert not selected.ep_pack_gate_up
+    assert not selected.use_fused_o_projection_rs
+    assert not selected.use_fused_o_projection_ag
     assert _validate_ep_prefill_geometry(selected) == (1, 1)
+    assert _validate_ep_decode_geometry(selected) == (2, 2)
     assert selected.decode_collective == DECODE_COLLECTIVE_ALL_REDUCE
 
     runtime_methods = (
@@ -211,6 +305,7 @@ def test_multichip_runtime_contract_and_fallback_audit():
         MultichipDecoder._ep_active_expert_chunk,
         MultichipDecoder._moe_forward,
         MultichipDecoder._all_reduce,
+        MultichipDecoder._project_o_and_reduce,
         MultichipDecoder.prefill_forward,
         MultichipDecoder.decode_forward,
         MultichipDecoder.forward,
@@ -221,11 +316,13 @@ def test_multichip_runtime_contract_and_fallback_audit():
         assert all(token not in source for token in forbidden), method.__name__
 
     ep_source = inspect.getsource(MultichipDecoder._ep_active_expert_chunk)
-    assert ep_source.count("ttnn.sparse_matmul(") == 3
-    assert ep_source.count("nnz=None") == 3
+    assert ep_source.count("ttnn.sparse_matmul(") == 4
+    assert ep_source.count("nnz=None") == 4
+    assert "ep_pack_gate_up" in ep_source
     assert "ttnn.mesh_partition(" in ep_source
     assert "is_input_a_sparse=True" in ep_source
     assert "is_input_b_sparse=False" in ep_source
+    assert ep_source.count("compute_kernel_config=self.ep_sparse_compute_kernel_config") == 4
 
 
 def test_multichip_perf_candidate_parsing(monkeypatch, expect_error):
@@ -235,6 +332,7 @@ def test_multichip_perf_candidate_parsing(monkeypatch, expect_error):
     assert config.expert_strategy == EXPERT_STRATEGY_EP
     assert candidate == (30, 3, 1, 1)
     assert config.ep_prefill_post_sparse_bf16
+    assert not config.ep_pack_gate_up
     assert _validate_qkv_geometry(config, k_tiles=90, n_tiles=40, grid_x=11, grid_y=10) == (3, 40, 4)
 
     monkeypatch.setenv("MULTICHIP_DECODE_COLLECTIVE_AB", DECODE_COLLECTIVE_RS_AG_PAD64)
@@ -247,6 +345,31 @@ def test_multichip_perf_candidate_parsing(monkeypatch, expect_error):
     assert config.active_prefill_chunk_size == 64
     assert not config.ep_prefill_post_sparse_bf16
     assert _validate_ep_prefill_geometry(config) == (3, 1)
+
+    monkeypatch.setenv("MULTICHIP_EP_GATE_UP", "packed")
+    monkeypatch.setenv("MULTICHIP_EP_PACKED_SUBBLOCK", "2")
+    config, _ = _perf_multichip_config_from_env()
+    assert config.ep_pack_gate_up
+    assert config.ep_packed_gate_up_subblock_w == 2
+
+    monkeypatch.setenv("MULTICHIP_EP_ACTIVATION_DTYPE", "bfloat16")
+    monkeypatch.setenv("MULTICHIP_INTERLEAVED_ATTENTION_WEIGHT_DTYPE", "bfloat4_b")
+    monkeypatch.setenv("MULTICHIP_EP_SPARSE_MATH_FIDELITY", "hifi2")
+    monkeypatch.setenv("MULTICHIP_DRAM_SHARDED_ATTENTION", "1")
+    monkeypatch.setenv("MULTICHIP_ATTENTION_WEIGHT_DTYPE", "bfloat8_b")
+    monkeypatch.setenv("MULTICHIP_EXPERT_WEIGHT_DTYPE", "bfloat4_b")
+    monkeypatch.setenv("MULTICHIP_KV_CACHE_DTYPE", "bfloat8_b")
+    monkeypatch.setenv("MULTICHIP_MATH_FIDELITY", "hifi2")
+    config, _ = _perf_multichip_config_from_env()
+    optimization = _perf_optimization_config_from_env(config)
+    assert config.ep_activation_dtype == "bfloat16"
+    assert config.interleaved_attention_weight_dtype == "bfloat4_b"
+    assert config.ep_sparse_math_fidelity == "hifi2"
+    assert optimization.use_dram_sharded_attention
+    assert optimization.dram_attention_weight_dtype == "bfloat8_b"
+    assert optimization.expert_weight_dtype == "bfloat4_b"
+    assert optimization.kv_cache_dtype == "bfloat8_b"
+    assert optimization.math_fidelity == "hifi2"
 
     monkeypatch.setenv("MULTICHIP_QKV_AB", "30,3,3")
     with expect_error(ValueError, "must be input_cores"):
@@ -652,6 +775,154 @@ def test_decode_collective_candidate_matches_all_reduce(mesh_device, layer_type)
         0.999,
     )
     _assert_replicated(f"collective-rs-ag-pad64-{layer_type}", candidate_output)
+
+
+@_mesh_test
+@pytest.mark.parametrize("seq_len", [32, 128])
+def test_fused_o_projection_reduce_scatter_shape_candidate(mesh_device, seq_len):
+    """Exercise fused MM+RS with the TP4 O-projection's padded physical shape.
+
+    Logical H=2880 is padded to 2944 so TP4 reduce-scatter produces a
+    tile-aligned 736-wide rank-local shard.  Try decode's one physical M tile
+    and the measured S=128 prefill shape.
+    """
+
+    if os.environ.get("RUN_MULTICHIP_FUSED_MM_RS") != "1":
+        pytest.skip("set RUN_MULTICHIP_FUSED_MM_RS=1 for the fused O-projection/RS probe")
+    from tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async import (
+        run_minimal_matmul_strided_reduce_scatter_impl,
+    )
+
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        M=seq_len,
+        K=1024,
+        N=2944,
+        dim=3,
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Ring,
+        mm_block_m=32,
+        mm_block_k=128,
+        mm_block_n=32,
+        subblock_h=1,
+        subblock_w=1,
+        mm_core_grid=ttnn.CoreCoord(4, 4),
+        chunk_width_in_mm_blocks=1,
+        num_workers_per_link=2,
+        rs_mode="fused",
+        cluster_axis=1,
+        allowed_pcc=0.99,
+    )
+
+
+@_mesh_test
+def test_fused_o_projection_all_gather_real_weight_candidate(mesh_device):
+    """Localize attended-AG/local-O correctness before the residual/MLP."""
+
+    if os.environ.get("RUN_MULTICHIP_FUSED_O_AG_ISOLATED") != "1":
+        pytest.skip("set RUN_MULTICHIP_FUSED_O_AG_ISOLATED=1 for the real-weight O-projection probe")
+    payload_name = os.environ.get("MULTICHIP_FUSED_AG_PAYLOAD_DTYPE", "bfloat16")
+    if payload_name not in ("bfloat8_b", "bfloat16"):
+        raise ValueError("MULTICHIP_FUSED_AG_PAYLOAD_DTYPE must be bfloat8_b or bfloat16")
+    pad_hidden = os.environ.get("MULTICHIP_FUSED_O_AG_PAD_HIDDEN", "1") == "1"
+    m = int(os.environ.get("MULTICHIP_FUSED_O_AG_M", "128"))
+    config = _config()
+    state = _real_state_dict()
+    candidate = _decoder(
+        state,
+        config,
+        mesh_device,
+        max_cache_len=max(128, m),
+        multichip_config=replace(
+            MultichipConfig(),
+            use_fused_o_projection_ag=True,
+            fused_o_ag_pad_hidden=pad_hidden,
+            fused_ag_matmul_payload_dtype=payload_name,
+        ),
+    )
+    generator = torch.Generator().manual_seed(8181)
+    attended = torch.randn(1, 1, m, config.num_attention_heads * config.head_dim, generator=generator).to(
+        torch.bfloat16
+    )
+    tt_attended = ttnn.from_torch(
+        attended,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output = candidate._project_o_and_reduce(tt_attended, is_decode=m == 1)
+    ttnn.synchronize_device(mesh_device)
+    o_weight = _require_tensor(state, LAYER_IDX, "self_attn.o_proj.weight")
+    o_bias = _require_tensor(state, LAYER_IDX, "self_attn.o_proj.bias")
+    expected = torch.matmul(attended.float(), o_weight.T.float()) + o_bias.float()
+
+    def pcc(reference, actual):
+        return float(torch.corrcoef(torch.stack([reference.flatten(), actual.float().flatten()]))[0, 1])
+
+    input_chunks = torch.chunk(attended, TP_DEGREE, dim=-1)
+    padded_expected = torch.nn.functional.pad(expected, (0, 64)) if pad_hidden else expected
+    output_chunks = torch.chunk(padded_expected, TP_DEGREE, dim=-1)
+    rank_pcc = []
+    for rank, local in enumerate(_all_device_torch(output)):
+        local = local[..., : config.hidden_size]
+        direct = pcc(expected, local)
+        best_input = (-1.0, None)
+        best_output = (-1.0, None)
+        for order in itertools.permutations(range(TP_DEGREE)):
+            reordered_input = torch.cat([input_chunks[index] for index in order], dim=-1)
+            reordered_expected = torch.matmul(reordered_input.float(), o_weight.T.float()) + o_bias.float()
+            input_pcc = pcc(reordered_expected, local)
+            if input_pcc > best_input[0]:
+                best_input = (input_pcc, order)
+            reordered_output = torch.cat([output_chunks[index] for index in order], dim=-1)[..., : config.hidden_size]
+            output_pcc = pcc(reordered_output, local)
+            if output_pcc > best_output[0]:
+                best_output = (output_pcc, order)
+        print(
+            "FUSED_O_AG_DIAGNOSTIC "
+            f"rank={rank} direct_pcc={direct:.9f} "
+            f"best_input_pcc={best_input[0]:.9f} best_input_order={best_input[1]} "
+            f"best_output_pcc={best_output[0]:.9f} best_output_order={best_output[1]}"
+        )
+        rank_pcc.append(direct)
+    assert min(rank_pcc) >= 0.99, f"fused O AG/local-MM PCC by rank: {rank_pcc}"
+
+
+@_single_chip_test
+def test_fused_moe_compute_ep_local_candidate(mesh_device):
+    """Retry fused GPT-OSS MoE compute with the EP4 rank-local eight experts."""
+
+    if os.environ.get("RUN_MULTICHIP_FUSED_MOE") != "1":
+        pytest.skip("set RUN_MULTICHIP_FUSED_MOE=1 for the rank-local fused MoE retry")
+    from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+    from ttnn.operations.ccl import MoEActivationFunction
+
+    from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_compute_single_card import (
+        _run_moe_compute_single_card_test,
+    )
+
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=(1, 1),
+        experts_per_device=8,
+        tokens_per_device=32,
+        selected_experts_k=4,
+        N=2880,
+        hidden_size=2880,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(2880, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SWIGLU,
+        has_bias=True,
+    )
 
 
 @_mesh_test
@@ -1102,16 +1373,357 @@ def test_sharded_residual_topology_candidate(mesh_device):
         "sharded_reduce_scatter_distributed_norm_gather_ms": sharded_ms,
         "replicated_over_sharded_speedup": sharded_ms / replicated_ms,
         "candidate_stack_contract": "width-sharded residual [1,1,1,720] per device",
-        "candidate_next_consumer": "distributed RMSNorm, row-sharded router and 32-logit all-reduce, then full-hidden gather for TP experts",
+        "candidate_next_consumer": "distributed RMSNorm, row-sharded router and 32-logit all-reduce, then full-hidden gather for each EP rank's whole active experts",
     }
-    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    path = EVIDENCE_DIR / "residual_topology_candidate.json"
+    path = Path(
+        os.environ.get(
+            "MULTICHIP_TOPOLOGY_RESULT_PATH",
+            str(EVIDENCE_DIR / "residual_topology_candidate.json"),
+        )
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(
         "RESIDUAL_TOPOLOGY_RESULT "
         f"replicated_ms={replicated_ms:.6f} sharded_ms={sharded_ms:.6f} "
         f"replicated_over_sharded_speedup={sharded_ms / replicated_ms:.6f} artifact={path}"
     )
+
+
+@_mesh_test
+def test_ep_fractured_residual_to_fused_qkv_candidate(mesh_device):
+    """Carry a real EP down partial into the next packed-QKV consumer.
+
+    The candidate pads H=2880 to 2944, uses persistent minimal RS buffers to
+    produce a 736-wide residual shard, performs distributed RMSNorm, and
+    consumes that shard with fused all-gather + a real layer's packed QKV
+    weight as the modeled downstream consumer.  This is the missing
+    EP-to-next-attention lower-movement
+    family; no replicated residual is restored inside the measured boundary.
+    """
+
+    if os.environ.get("RUN_MULTICHIP_FRACTURED_BOUNDARY") != "1":
+        pytest.skip("set RUN_MULTICHIP_FRACTURED_BOUNDARY=1 for the EP-to-QKV boundary probe")
+    payload_name = os.environ.get("MULTICHIP_FRACTURED_PAYLOAD_DTYPE", "bfloat16")
+    if payload_name not in ("bfloat8_b", "bfloat16"):
+        raise ValueError("MULTICHIP_FRACTURED_PAYLOAD_DTYPE must be bfloat8_b or bfloat16")
+    payload_dtype = {"bfloat8_b": ttnn.bfloat8_b, "bfloat16": ttnn.bfloat16}[payload_name]
+    repeats = int(os.environ.get("MULTICHIP_FRACTURED_TRACE_REPLAYS", "20"))
+
+    config = _config()
+    state = _real_state_dict()
+    decoder = _decoder(state, config, mesh_device, max_cache_len=128)
+    # The retained real-weight fixture contains layer 12 only.  Reuse that
+    # layer's real input-norm/packed-QKV weights as the modeled downstream
+    # consumer; decoder layers share this exact geometry and operation graph.
+    next_consumer_weight_layer_idx = LAYER_IDX
+    hidden_size = int(config.hidden_size)
+    padded_hidden_size = hidden_size + 64
+    local_hidden_size = padded_hidden_size // TP_DEGREE
+
+    # Recreate the downstream layer's packed QKV contract.  The baseline uses
+    # K=2880 BF16; the fractured candidate owns 64 zero K rows and uses the
+    # API-required matched activation/weight payload dtype at K=2944.
+    q_weight = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.q_proj.weight")
+    k_weight = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.k_proj.weight")
+    v_weight = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.v_proj.weight")
+    q_bias = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.q_proj.bias")
+    k_bias = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.k_proj.bias")
+    v_bias = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.v_proj.bias")
+    packed_rank_weights = []
+    packed_rank_biases = []
+    for rank in range(TP_DEGREE):
+        packed_rank_weights.append(
+            torch.cat(
+                [
+                    torch.chunk(q_weight, TP_DEGREE, dim=0)[rank].T,
+                    torch.chunk(k_weight, TP_DEGREE, dim=0)[rank].T,
+                    torch.chunk(v_weight, TP_DEGREE, dim=0)[rank].T,
+                ],
+                dim=-1,
+            )
+        )
+        packed_rank_biases.append(
+            torch.cat(
+                [
+                    torch.chunk(q_bias, TP_DEGREE, dim=0)[rank],
+                    torch.chunk(k_bias, TP_DEGREE, dim=0)[rank],
+                    torch.chunk(v_bias, TP_DEGREE, dim=0)[rank],
+                ],
+                dim=-1,
+            )
+        )
+    packed_qkv = torch.cat(packed_rank_weights, dim=-1).to(torch.bfloat16)
+    packed_qkv_padded = torch.nn.functional.pad(packed_qkv, (0, 0, 0, 64))
+    packed_bias = torch.cat(packed_rank_biases, dim=-1).reshape(1, 1, -1).to(torch.bfloat16)
+    baseline_qkv_weight = ttnn.from_torch(
+        packed_qkv,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    fractured_qkv_weight = ttnn.from_torch(
+        packed_qkv_padded,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        dtype=payload_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    packed_qkv_bias = ttnn.from_torch(
+        packed_bias,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    next_norm = _require_tensor(state, next_consumer_weight_layer_idx, "input_layernorm.weight").to(torch.bfloat16)
+    baseline_norm_weight = ttnn.from_torch(
+        next_norm.reshape(1, 1, 1, hidden_size),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    fractured_norm_weight = ttnn.from_torch(
+        torch.nn.functional.pad(next_norm, (0, 64)).reshape(1, 1, 1, padded_hidden_size),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    rs_intermediate = ttnn.zeros(
+        [1, 1, 1, padded_hidden_size],
+        dtype=payload_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    rs_output = ttnn.zeros(
+        [1, 1, 1, local_hidden_size],
+        dtype=payload_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    qkv_gather = ttnn.zeros(
+        [1, 1, 1, padded_hidden_size],
+        dtype=payload_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    stats_gather = {"buffer": None}
+    generator = torch.Generator().manual_seed(7171)
+    hidden = torch.randn(1, 1, hidden_size, generator=generator).to(torch.bfloat16)
+    tt_hidden = _to_tt(hidden, mesh_device)
+
+    def baseline_boundary():
+        next_hidden = decoder._moe_forward(tt_hidden, 1)
+        normalized = ttnn.rms_norm(
+            next_hidden,
+            epsilon=decoder.eps,
+            weight=baseline_norm_weight,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+        )
+        qkv_input = ttnn.to_memory_config(normalized, decoder.tp_qkv_input_config)
+        qkv = ttnn.linear(
+            qkv_input,
+            baseline_qkv_weight,
+            bias=packed_qkv_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=decoder.tp_qkv_output_config,
+            program_config=decoder.tp_qkv_program_config,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+        )
+        return next_hidden, normalized, qkv
+
+    def fractured_boundary():
+        normalized = decoder._decode_post_attention_norm(tt_hidden)
+        routing = decoder._route(normalized, 1)
+        partial = decoder._ep_active_expert_chunk(normalized, routing, is_decode=True)
+        partial = ttnn.pad(partial, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0)
+        if partial.dtype != payload_dtype:
+            partial = ttnn.typecast(partial, payload_dtype)
+        scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            partial,
+            persistent_output_buffers=[rs_intermediate, rs_output],
+            dim=3,
+            multi_device_global_semaphore=decoder.ccl_manager.get_rs_ping_pong_semaphore(),
+            num_links=decoder.ccl_manager.num_links,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            intermediate_memory_config=ttnn.L1_MEMORY_CONFIG,
+            topology=decoder.ccl_manager.topology,
+            cluster_axis=decoder.mesh_config.tp_axis,
+        )
+        if scattered.dtype != ttnn.bfloat16:
+            scattered = ttnn.typecast(scattered, ttnn.bfloat16)
+        padded_hidden = ttnn.pad(tt_hidden, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0)
+        hidden_shard = ttnn.mesh_partition(
+            padded_hidden,
+            dim=3,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        residual = ttnn.add(hidden_shard, scattered, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        stats = ttnn.rms_norm_pre_all_gather(
+            residual,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+        if stats_gather["buffer"] is None:
+            stats_shape = list(stats.shape)
+            stats_shape[-1] *= TP_DEGREE
+            stats_gather["buffer"] = ttnn.zeros(
+                stats_shape,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        gathered_stats = ttnn.experimental.all_gather_async(
+            stats,
+            persistent_output_buffer=stats_gather["buffer"],
+            dim=3,
+            multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=decoder.ccl_manager.num_links,
+            topology=decoder.ccl_manager.topology,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        # rms_norm_pre_all_gather averages over 23 physical tiles/rank.
+        # Correct the padded 2944-wide denominator back to logical H=2880.
+        gathered_stats = ttnn.mul(gathered_stats, padded_hidden_size / hidden_size)
+        normalized_local = ttnn.rms_norm_post_all_gather(
+            residual,
+            gathered_stats,
+            epsilon=decoder.eps,
+            weight=fractured_norm_weight,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+        qkv_input = normalized_local
+        if qkv_input.dtype != payload_dtype:
+            qkv_input = ttnn.typecast(qkv_input, payload_dtype)
+        qkv = ttnn.experimental.all_gather_minimal_matmul_async(
+            qkv_input,
+            fractured_qkv_weight,
+            bias_tensor=packed_qkv_bias,
+            config=ttnn.MinimalMatmulConfig(
+                M_block_size=1,
+                K_block_size=23,
+                N_block_size=2,
+                subblock_h=1,
+                subblock_w=2,
+                compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            ),
+            multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
+            topology=decoder.ccl_manager.topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+            persistent_output_buffer=qkv_gather,
+            num_links=decoder.ccl_manager.num_links,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            force_transpose=True,
+            num_workers_per_link=4,
+            num_buffers_per_channel=2,
+        )[0]
+        return residual, normalized_local, qkv
+
+    baseline_hidden, baseline_normalized, baseline_qkv = baseline_boundary()
+    candidate_hidden, candidate_normalized, candidate_qkv = fractured_boundary()
+    ttnn.synchronize_device(mesh_device)
+    baseline_hidden_local = ttnn.mesh_partition(
+        ttnn.pad(baseline_hidden, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0),
+        dim=3,
+        cluster_axis=decoder.mesh_config.tp_axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    baseline_normalized_local = ttnn.mesh_partition(
+        ttnn.pad(baseline_normalized, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0),
+        dim=3,
+        cluster_axis=decoder.mesh_config.tp_axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    threshold = 0.999 if payload_name == "bfloat16" else 0.99
+    pcc_values = {"residual": [], "normalized": [], "packed_qkv": []}
+    for rank, (base_h, cand_h, base_n, cand_n, base_q, cand_q) in enumerate(
+        zip(
+            _all_device_torch(baseline_hidden_local),
+            _all_device_torch(candidate_hidden),
+            _all_device_torch(baseline_normalized_local),
+            _all_device_torch(candidate_normalized),
+            _all_device_torch(baseline_qkv),
+            _all_device_torch(candidate_qkv),
+        )
+    ):
+        for name, reference, actual in (
+            ("residual", base_h, cand_h),
+            ("normalized", base_n, cand_n),
+            ("packed_qkv", base_q, cand_q),
+        ):
+            _assert_pcc(f"fractured-{payload_name}-{name}-rank{rank}", reference, actual, threshold)
+            pcc = torch.corrcoef(torch.stack([reference.float().flatten(), actual.float().flatten()]))[0, 1]
+            pcc_values[name].append(float(pcc))
+
+    def traced_ms(function):
+        function()
+        ttnn.synchronize_device(mesh_device)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        function()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        try:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            start = time.perf_counter()
+            for _ in range(repeats):
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            return (time.perf_counter() - start) * 1000.0 / repeats
+        finally:
+            ttnn.release_trace(mesh_device, trace_id)
+
+    baseline_ms = traced_ms(baseline_boundary)
+    fractured_ms = traced_ms(fractured_boundary)
+    result = {
+        "mesh": list(TARGET_MESH_SHAPE),
+        "payload_dtype": payload_name,
+        "logical_hidden_size": hidden_size,
+        "padded_hidden_size": padded_hidden_size,
+        "local_hidden_size": local_hidden_size,
+        "next_consumer_weight_layer_idx": next_consumer_weight_layer_idx,
+        "fixture_reuses_available_layer_weights": True,
+        "packed_qkv_local_width": packed_qkv.shape[-1] // TP_DEGREE,
+        "persistent_buffers": [
+            "reduce_scatter_intermediate",
+            "reduce_scatter_output",
+            "stats_all_gather",
+            "qkv_all_gather",
+        ],
+        "rms_stats_padding_correction": padded_hidden_size / hidden_size,
+        "pcc": {name: min(values) for name, values in pcc_values.items()},
+        "trace_replays": repeats,
+        "baseline_replicated_boundary_ms": baseline_ms,
+        "fractured_boundary_ms": fractured_ms,
+        "baseline_over_fractured_speedup": baseline_ms / fractured_ms,
+        "contract": "EP partial [H=2880] -> pad2944 -> persistent RS -> local736 residual -> distributed RMSNorm -> persistent fused AG+packed-QKV [2944,1280]",
+    }
+    default_path = (
+        Path(__file__).parents[1] / "doc" / "optimized_multichip_decoder" / f"fractured_ep_to_qkv_{payload_name}.json"
+    )
+    path = Path(os.environ.get("MULTICHIP_FRACTURED_RESULT_PATH", str(default_path)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    print(f"FRACTURED_BOUNDARY_RESULT {json.dumps(result, sort_keys=True)} artifact={path}")
 
 
 def _perf_reference_path(seq_len):
@@ -1240,12 +1852,14 @@ def test_multichip_decoder_perf(mesh_device):
     assert reference_path.exists(), "capture the isolated single-chip timing first"
     baseline = json.loads(reference_path.read_text())
     multichip_config, qkv_candidate = _perf_multichip_config_from_env()
+    optimization_config = _perf_optimization_config_from_env(multichip_config)
     decoder = _decoder(
         _real_state_dict(),
         config,
         mesh_device,
         max_cache_len=max(128, seq_len + 1),
         multichip_config=multichip_config,
+        optimization_config=optimization_config,
     )
     page_table = decoder.create_page_table()
     generator = torch.Generator().manual_seed(9191)
@@ -1275,6 +1889,10 @@ def test_multichip_decoder_perf(mesh_device):
         "seq_len": seq_len,
         "expert_strategy": multichip_config.expert_strategy,
         "decode_collective": multichip_config.decode_collective,
+        "fused_o_projection_rs": multichip_config.use_fused_o_projection_rs,
+        "fused_o_projection_ag": multichip_config.use_fused_o_projection_ag,
+        "fused_o_ag_pad_hidden": multichip_config.fused_o_ag_pad_hidden,
+        "fused_ag_matmul_payload_dtype": multichip_config.fused_ag_matmul_payload_dtype,
         "ep_prefill_geometry": {
             "gate_up_cores": list(multichip_config.ep_prefill_gate_up_cores),
             "gate_up_subblock_w": multichip_config.ep_prefill_gate_up_subblock_w,
@@ -1282,6 +1900,28 @@ def test_multichip_decoder_perf(mesh_device):
             "down_subblock_w": multichip_config.ep_prefill_down_subblock_w,
             "chunk_size": multichip_config.active_prefill_chunk_size,
             "post_sparse_bf16": multichip_config.ep_prefill_post_sparse_bf16,
+            "gate_up_topology": "packed" if multichip_config.ep_pack_gate_up else "split",
+            "packed_gate_up_subblock_w": multichip_config.ep_packed_gate_up_subblock_w,
+            "activation_dtype": multichip_config.ep_activation_dtype,
+            "sparse_math_fidelity": multichip_config.ep_sparse_math_fidelity,
+            "gate_up_weight_dtype": multichip_config.ep_gate_up_weight_dtype,
+            "down_weight_dtype": multichip_config.ep_down_weight_dtype,
+            "decode_gate_up_cores": list(multichip_config.ep_decode_gate_up_cores),
+            "decode_gate_up_in0_block_w": multichip_config.ep_decode_gate_up_in0_block_w,
+            "decode_gate_up_subblock_w": multichip_config.ep_decode_gate_up_subblock_w,
+            "decode_down_cores": list(multichip_config.ep_decode_down_cores),
+            "decode_down_in0_block_w": multichip_config.ep_decode_down_in0_block_w,
+            "decode_down_subblock_w": multichip_config.ep_decode_down_subblock_w,
+            "prefill_gate_up_in0_block_w": multichip_config.ep_prefill_gate_up_in0_block_w,
+            "prefill_down_in0_block_w": multichip_config.ep_prefill_down_in0_block_w,
+        },
+        "optimization": {
+            "dram_sharded_attention": optimization_config.use_dram_sharded_attention,
+            "dram_attention_weight_dtype": optimization_config.dram_attention_weight_dtype,
+            "interleaved_attention_weight_dtype": multichip_config.interleaved_attention_weight_dtype,
+            "expert_weight_dtype": optimization_config.expert_weight_dtype,
+            "kv_cache_dtype": optimization_config.kv_cache_dtype,
+            "math_fidelity": optimization_config.math_fidelity,
         },
         "qkv_candidate": qkv_candidate,
         "qkv_geometry": [

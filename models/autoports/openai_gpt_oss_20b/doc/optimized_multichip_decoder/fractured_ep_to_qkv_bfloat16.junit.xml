@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="12.011" timestamp="2026-07-18T16:48:46.158020+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_ep_fractured_residual_to_fused_qkv_candidate[blackhole-mesh_device0-device_params0]" time="11.300"><properties><property name="start_timestamp" value="2026-07-18T16:48:46" /><property name="end_timestamp" value="2026-07-18T16:48:58" /></properties><failure message="KeyError: &quot;Missing GPT-OSS layer tensor 'self_attn.q_proj.weight'; tried: model.layers.13.self_attn.q_proj.weight, model.model.layers.13.self_attn.q_proj.weight, model.language_model.layers.13.self_attn.q_proj.weight, layers.13.self_attn.q_proj.weight, self_attn.q_proj.weight&quot;">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @_mesh_test
+    def test_ep_fractured_residual_to_fused_qkv_candidate(mesh_device):
+        """Carry a real EP down partial into the next packed-QKV consumer.
+
+        The candidate pads H=2880 to 2944, uses persistent minimal RS buffers to
+        produce a 736-wide residual shard, performs distributed RMSNorm, and
+        consumes that shard with fused all-gather + the next layer's real packed
+        QKV weight.  This is the missing EP-to-next-attention lower-movement
+        family; no replicated residual is restored inside the measured boundary.
+        """
+
+        if os.environ.get("RUN_MULTICHIP_FRACTURED_BOUNDARY") != "1":
+            pytest.skip("set RUN_MULTICHIP_FRACTURED_BOUNDARY=1 for the EP-to-QKV boundary probe")
+        payload_name = os.environ.get("MULTICHIP_FRACTURED_PAYLOAD_DTYPE", "bfloat16")
+        if payload_name not in ("bfloat8_b", "bfloat16"):
+            raise ValueError("MULTICHIP_FRACTURED_PAYLOAD_DTYPE must be bfloat8_b or bfloat16")
+        payload_dtype = {"bfloat8_b": ttnn.bfloat8_b, "bfloat16": ttnn.bfloat16}[payload_name]
+        repeats = int(os.environ.get("MULTICHIP_FRACTURED_TRACE_REPLAYS", "20"))
+
+        config = _config()
+        state = _real_state_dict()
+        decoder = _decoder(state, config, mesh_device, max_cache_len=128)
+        next_layer_idx = min(LAYER_IDX + 1, int(config.num_hidden_layers) - 1)
+        hidden_size = int(config.hidden_size)
+        padded_hidden_size = hidden_size + 64
+        local_hidden_size = padded_hidden_size // TP_DEGREE
+
+        # Recreate the actual next layer's packed QKV contract.  The baseline uses
+        # K=2880 BF16; the fractured candidate owns 64 zero K rows and uses the
+        # API-required matched activation/weight payload dtype at K=2944.
+&gt;       q_weight = _require_tensor(state, next_layer_idx, "self_attn.q_proj.weight")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:1430:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+state_dict = {'model.layers.12.input_layernorm.weight': tensor([1.6719, 1.4844, 1.7266,  ..., 1.7109, 1.9609, 1.8359],
+       dtype..., -0.0156],
+         [ 0.0039, -0.0156,  0.0039,  ...,  0.0078,  0.0039,  0.0000]]],
+       dtype=torch.bfloat16), ...}
+layer_idx = 13, suffix = 'self_attn.q_proj.weight'
+
+    def _require_tensor(state_dict: Mapping[str, object], layer_idx: int, suffix: str):
+        value = _find_tensor(state_dict, layer_idx, suffix)
+        if value is None:
+            candidates = ", ".join(_candidate_keys(layer_idx, suffix))
+&gt;           raise KeyError(f"Missing GPT-OSS layer tensor {suffix!r}; tried: {candidates}")
+E           KeyError: "Missing GPT-OSS layer tensor 'self_attn.q_proj.weight'; tried: model.layers.13.self_attn.q_proj.weight, model.model.layers.13.self_attn.q_proj.weight, model.language_model.layers.13.self_attn.q_proj.weight, layers.13.self_attn.q_proj.weight, self_attn.q_proj.weight"
+
+models/autoports/openai_gpt_oss_20b/tt/functional_decoder.py:46: KeyError</failure></testcase></testsuite></testsuites>

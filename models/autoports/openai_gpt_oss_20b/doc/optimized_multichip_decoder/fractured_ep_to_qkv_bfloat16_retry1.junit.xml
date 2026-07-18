@@ -1,0 +1,349 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="15.723" timestamp="2026-07-18T16:50:45.426737+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_ep_fractured_residual_to_fused_qkv_candidate[blackhole-mesh_device0-device_params0]" time="14.776"><properties><property name="start_timestamp" value="2026-07-18T16:50:46" /><property name="end_timestamp" value="2026-07-18T16:51:01" /></properties><failure message="RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/tensor/spec/layout/tensor_layout.cpp:162: !shard_align_error.has_value()&#10;info:&#10;Physical shard shape (1, 2944) must be tile {32, 32} sized!&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x6c6900) [0x7619fa8c6900]&#10; --- tt::tt_metal::TensorLayout::TensorLayout(tt::tt_metal::DataType, tt::tt_metal::PageConfig const&amp;, tt::tt_metal::MemoryConfig const&amp;, tt::tt_metal::Alignment const&amp;)&#10; --- tt::tt_metal::TensorLayout::fromPaddedShape(tt::tt_metal::DataType, tt::tt_metal::PageConfig const&amp;, tt::tt_metal::MemoryConfig const&amp;, tt::tt_metal::Shape const&amp;, tt::tt_metal::Shape const&amp;)&#10; --- ttnn::prim::PadDeviceOperation::compute_output_specs(ttnn::prim::PadParams const&amp;, ttnn::prim::PadInputs const&amp;)&#10; --- ttnn::prim::PadDeviceOperation::create_output_tensors(ttnn::prim::PadParams const&amp;, ttnn::prim::PadInputs const&amp;)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim18PadDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0xdc) [0x7619fc2cbd0c]&#10; --- ttnn::prim::pad(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Shape const&amp;, tt::tt_metal::Shape const&amp;, tt::tt_metal::Shape const&amp;, float, tt::tt_metal::MemoryConfig const&amp;, bool, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- ttnn::operations::data_movement::detail::pad_impl(tt::tt_metal::Tensor const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- ttnn::operations::data_movement::detail::pad_impl(tt::tt_metal::Tensor const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- ttnn::operations::data_movement::detail::pad_impl(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;ttnn::operations::data_movement::PadSpecDim, 8ul&gt;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- ttnn::operations::data_movement::detail::invoke_tile(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;ttnn::operations::data_movement::PadSpecDim, 8ul&gt; const&amp;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- ttnn::pad(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;ttnn::operations::data_movement::PadSpecDim, 8ul&gt; const&amp;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- ttnn::pad(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;std::array&lt;unsigned int, 2ul&gt;, 8ul&gt; const&amp;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9261) [0x7619fdbc9261]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7619fd715575]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x761a43b001ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x761a43b0028b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @_mesh_test
+    def test_ep_fractured_residual_to_fused_qkv_candidate(mesh_device):
+        """Carry a real EP down partial into the next packed-QKV consumer.
+
+        The candidate pads H=2880 to 2944, uses persistent minimal RS buffers to
+        produce a 736-wide residual shard, performs distributed RMSNorm, and
+        consumes that shard with fused all-gather + a real layer's packed QKV
+        weight as the modeled downstream consumer.  This is the missing
+        EP-to-next-attention lower-movement
+        family; no replicated residual is restored inside the measured boundary.
+        """
+
+        if os.environ.get("RUN_MULTICHIP_FRACTURED_BOUNDARY") != "1":
+            pytest.skip("set RUN_MULTICHIP_FRACTURED_BOUNDARY=1 for the EP-to-QKV boundary probe")
+        payload_name = os.environ.get("MULTICHIP_FRACTURED_PAYLOAD_DTYPE", "bfloat16")
+        if payload_name not in ("bfloat8_b", "bfloat16"):
+            raise ValueError("MULTICHIP_FRACTURED_PAYLOAD_DTYPE must be bfloat8_b or bfloat16")
+        payload_dtype = {"bfloat8_b": ttnn.bfloat8_b, "bfloat16": ttnn.bfloat16}[payload_name]
+        repeats = int(os.environ.get("MULTICHIP_FRACTURED_TRACE_REPLAYS", "20"))
+
+        config = _config()
+        state = _real_state_dict()
+        decoder = _decoder(state, config, mesh_device, max_cache_len=128)
+        # The retained real-weight fixture contains layer 12 only.  Reuse that
+        # layer's real input-norm/packed-QKV weights as the modeled downstream
+        # consumer; decoder layers share this exact geometry and operation graph.
+        next_consumer_weight_layer_idx = LAYER_IDX
+        hidden_size = int(config.hidden_size)
+        padded_hidden_size = hidden_size + 64
+        local_hidden_size = padded_hidden_size // TP_DEGREE
+
+        # Recreate the downstream layer's packed QKV contract.  The baseline uses
+        # K=2880 BF16; the fractured candidate owns 64 zero K rows and uses the
+        # API-required matched activation/weight payload dtype at K=2944.
+        q_weight = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.q_proj.weight")
+        k_weight = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.k_proj.weight")
+        v_weight = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.v_proj.weight")
+        q_bias = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.q_proj.bias")
+        k_bias = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.k_proj.bias")
+        v_bias = _require_tensor(state, next_consumer_weight_layer_idx, "self_attn.v_proj.bias")
+        packed_rank_weights = []
+        packed_rank_biases = []
+        for rank in range(TP_DEGREE):
+            packed_rank_weights.append(
+                torch.cat(
+                    [
+                        torch.chunk(q_weight, TP_DEGREE, dim=0)[rank].T,
+                        torch.chunk(k_weight, TP_DEGREE, dim=0)[rank].T,
+                        torch.chunk(v_weight, TP_DEGREE, dim=0)[rank].T,
+                    ],
+                    dim=-1,
+                )
+            )
+            packed_rank_biases.append(
+                torch.cat(
+                    [
+                        torch.chunk(q_bias, TP_DEGREE, dim=0)[rank],
+                        torch.chunk(k_bias, TP_DEGREE, dim=0)[rank],
+                        torch.chunk(v_bias, TP_DEGREE, dim=0)[rank],
+                    ],
+                    dim=-1,
+                )
+            )
+        packed_qkv = torch.cat(packed_rank_weights, dim=-1).to(torch.bfloat16)
+        packed_qkv_padded = torch.nn.functional.pad(packed_qkv, (0, 0, 0, 64))
+        packed_bias = torch.cat(packed_rank_biases, dim=-1).reshape(1, 1, -1).to(torch.bfloat16)
+        baseline_qkv_weight = ttnn.from_torch(
+            packed_qkv,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        fractured_qkv_weight = ttnn.from_torch(
+            packed_qkv_padded,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            dtype=payload_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        packed_qkv_bias = ttnn.from_torch(
+            packed_bias,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        next_norm = _require_tensor(state, next_consumer_weight_layer_idx, "input_layernorm.weight").to(torch.bfloat16)
+        baseline_norm_weight = ttnn.from_torch(
+            next_norm.reshape(1, 1, 1, hidden_size),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        fractured_norm_weight = ttnn.from_torch(
+            torch.nn.functional.pad(next_norm, (0, 64)).reshape(1, 1, 1, padded_hidden_size),
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        rs_intermediate = ttnn.zeros(
+            [1, 1, 1, padded_hidden_size],
+            dtype=payload_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        rs_output = ttnn.zeros(
+            [1, 1, 1, local_hidden_size],
+            dtype=payload_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        qkv_gather = ttnn.zeros(
+            [1, 1, 1, padded_hidden_size],
+            dtype=payload_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        stats_gather = {"buffer": None}
+        generator = torch.Generator().manual_seed(7171)
+        hidden = torch.randn(1, 1, hidden_size, generator=generator).to(torch.bfloat16)
+        tt_hidden = _to_tt(hidden, mesh_device)
+
+        def baseline_boundary():
+            next_hidden = decoder._moe_forward(tt_hidden, 1)
+            normalized = ttnn.rms_norm(
+                next_hidden,
+                epsilon=decoder.eps,
+                weight=baseline_norm_weight,
+                compute_kernel_config=decoder.decode_compute_kernel_config,
+            )
+            normalized = ttnn.to_memory_config(normalized, decoder.tp_qkv_input_config)
+            qkv = ttnn.linear(
+                normalized,
+                baseline_qkv_weight,
+                bias=packed_qkv_bias,
+                dtype=ttnn.bfloat16,
+                memory_config=decoder.tp_qkv_output_config,
+                program_config=decoder.tp_qkv_program_config,
+                compute_kernel_config=decoder.decode_compute_kernel_config,
+            )
+            return next_hidden, normalized, qkv
+
+        def fractured_boundary():
+            normalized = decoder._decode_post_attention_norm(tt_hidden)
+            routing = decoder._route(normalized, 1)
+            partial = decoder._ep_active_expert_chunk(normalized, routing, is_decode=True)
+            partial = ttnn.pad(partial, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0)
+            if partial.dtype != payload_dtype:
+                partial = ttnn.typecast(partial, payload_dtype)
+            scattered = ttnn.experimental.reduce_scatter_minimal_async(
+                partial,
+                persistent_output_buffers=[rs_intermediate, rs_output],
+                dim=3,
+                multi_device_global_semaphore=decoder.ccl_manager.get_rs_ping_pong_semaphore(),
+                num_links=decoder.ccl_manager.num_links,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                intermediate_memory_config=ttnn.L1_MEMORY_CONFIG,
+                topology=decoder.ccl_manager.topology,
+                cluster_axis=decoder.mesh_config.tp_axis,
+            )
+            if scattered.dtype != ttnn.bfloat16:
+                scattered = ttnn.typecast(scattered, ttnn.bfloat16)
+            padded_hidden = ttnn.pad(tt_hidden, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0)
+            hidden_shard = ttnn.mesh_partition(
+                padded_hidden,
+                dim=3,
+                cluster_axis=decoder.mesh_config.tp_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            residual = ttnn.add(hidden_shard, scattered, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            stats = ttnn.rms_norm_pre_all_gather(
+                residual,
+                compute_kernel_config=decoder.decode_compute_kernel_config,
+                dtype=ttnn.bfloat16,
+            )
+            if stats_gather["buffer"] is None:
+                stats_shape = list(stats.shape)
+                stats_shape[-1] *= TP_DEGREE
+                stats_gather["buffer"] = ttnn.zeros(
+                    stats_shape,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            gathered_stats = ttnn.experimental.all_gather_async(
+                stats,
+                persistent_output_buffer=stats_gather["buffer"],
+                dim=3,
+                multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=decoder.ccl_manager.num_links,
+                topology=decoder.ccl_manager.topology,
+                cluster_axis=decoder.mesh_config.tp_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            # rms_norm_pre_all_gather averages over 23 physical tiles/rank.
+            # Correct the padded 2944-wide denominator back to logical H=2880.
+            gathered_stats = ttnn.mul(gathered_stats, padded_hidden_size / hidden_size)
+            normalized_local = ttnn.rms_norm_post_all_gather(
+                residual,
+                gathered_stats,
+                epsilon=decoder.eps,
+                weight=fractured_norm_weight,
+                compute_kernel_config=decoder.decode_compute_kernel_config,
+                dtype=ttnn.bfloat16,
+            )
+            qkv_input = normalized_local
+            if qkv_input.dtype != payload_dtype:
+                qkv_input = ttnn.typecast(qkv_input, payload_dtype)
+            qkv = ttnn.experimental.all_gather_minimal_matmul_async(
+                qkv_input,
+                fractured_qkv_weight,
+                bias_tensor=packed_qkv_bias,
+                config=ttnn.MinimalMatmulConfig(
+                    M_block_size=1,
+                    K_block_size=23,
+                    N_block_size=2,
+                    subblock_h=1,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+                ),
+                multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
+                topology=decoder.ccl_manager.topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=decoder.decode_compute_kernel_config,
+                persistent_output_buffer=qkv_gather,
+                num_links=decoder.ccl_manager.num_links,
+                cluster_axis=decoder.mesh_config.tp_axis,
+                force_transpose=True,
+                num_workers_per_link=4,
+                num_buffers_per_channel=2,
+            )[0]
+            return residual, normalized_local, qkv
+
+        baseline_hidden, baseline_normalized, baseline_qkv = baseline_boundary()
+        candidate_hidden, candidate_normalized, candidate_qkv = fractured_boundary()
+        ttnn.synchronize_device(mesh_device)
+        baseline_hidden_local = ttnn.mesh_partition(
+            ttnn.pad(baseline_hidden, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0),
+            dim=3,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        baseline_normalized_local = ttnn.mesh_partition(
+&gt;           ttnn.pad(baseline_normalized, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            dim=3,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:1659:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.pad', function=&lt;ttnn._ttnn.operations.data_movement.pad_t object at 0x...utputs=&lt;function _postprocess_golden_function_outputs at 0x7619afd4b9c0&gt;, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 1.0859e+00,  5.9814e-02,  ...,  3.2500e+00,  1.1414e-02]]]], sh...2]]]], shape=Shape([1, 1, 1, 2880]), dtype=DataType::BFLOAT16, layout=Layout::TILE), [(0, 0), (0, 0), (0, 0), (0, 64)])
+function_kwargs = {'value': 0.0}, cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/tensor/spec/layout/tensor_layout.cpp:162: !shard_align_error.has_value()
+E               info:
+E               Physical shard shape (1, 2944) must be tile {32, 32} sized!
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x6c6900) [0x7619fa8c6900]
+E                --- tt::tt_metal::TensorLayout::TensorLayout(tt::tt_metal::DataType, tt::tt_metal::PageConfig const&amp;, tt::tt_metal::MemoryConfig const&amp;, tt::tt_metal::Alignment const&amp;)
+E                --- tt::tt_metal::TensorLayout::fromPaddedShape(tt::tt_metal::DataType, tt::tt_metal::PageConfig const&amp;, tt::tt_metal::MemoryConfig const&amp;, tt::tt_metal::Shape const&amp;, tt::tt_metal::Shape const&amp;)
+E                --- ttnn::prim::PadDeviceOperation::compute_output_specs(ttnn::prim::PadParams const&amp;, ttnn::prim::PadInputs const&amp;)
+E                --- ttnn::prim::PadDeviceOperation::create_output_tensors(ttnn::prim::PadParams const&amp;, ttnn::prim::PadInputs const&amp;)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim18PadDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0xdc) [0x7619fc2cbd0c]
+E                --- ttnn::prim::pad(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Shape const&amp;, tt::tt_metal::Shape const&amp;, tt::tt_metal::Shape const&amp;, float, tt::tt_metal::MemoryConfig const&amp;, bool, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E                --- ttnn::operations::data_movement::detail::pad_impl(tt::tt_metal::Tensor const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E                --- ttnn::operations::data_movement::detail::pad_impl(tt::tt_metal::Tensor const&amp;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, std::span&lt;unsigned int const, 18446744073709551615ul&gt;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E                --- ttnn::operations::data_movement::detail::pad_impl(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;ttnn::operations::data_movement::PadSpecDim, 8ul&gt;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E                --- ttnn::operations::data_movement::detail::invoke_tile(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;ttnn::operations::data_movement::PadSpecDim, 8ul&gt; const&amp;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E                --- ttnn::pad(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;ttnn::operations::data_movement::PadSpecDim, 8ul&gt; const&amp;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E                --- ttnn::pad(tt::tt_metal::Tensor const&amp;, ttsl::SmallVector&lt;std::array&lt;unsigned int, 2ul&gt;, 8ul&gt; const&amp;, float, bool, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9261) [0x7619fdbc9261]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7619fd715575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x761a43b001ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x761a43b0028b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure></testcase></testsuite></testsuites>

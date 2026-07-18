@@ -1,0 +1,56 @@
+{
+  "decode_collective": "all_reduce",
+  "decode_efficiency": 0.4001778518846966,
+  "decode_speedup": 1.6007114075387865,
+  "ep_prefill_geometry": {
+    "chunk_size": 128,
+    "down_cores": [
+      9,
+      10
+    ],
+    "down_subblock_w": 1,
+    "gate_up_cores": [
+      9,
+      10
+    ],
+    "gate_up_subblock_w": 1,
+    "gate_up_topology": "split",
+    "packed_gate_up_subblock_w": 2,
+    "post_sparse_bf16": true
+  },
+  "expert_strategy": "ep",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_prefill_ms": 22.62037843465805,
+  "multichip_traced_decode_ms": 0.6096254624426365,
+  "prefill_efficiency": 0.1481878733400585,
+  "prefill_repeats": 20,
+  "prefill_speedup": 0.592751493360234,
+  "qkv_candidate": [
+    30,
+    3,
+    1,
+    1
+  ],
+  "qkv_geometry": [
+    30,
+    3,
+    1,
+    1
+  ],
+  "seq_len": 128,
+  "single_chip": {
+    "mesh": [
+      1,
+      1
+    ],
+    "prefill_ms": 13.408263097517192,
+    "prefill_repeats": 20,
+    "seq_len": 128,
+    "trace_replays": 500,
+    "traced_decode_ms": 0.9758344320580363
+  },
+  "trace_replays": 500
+}

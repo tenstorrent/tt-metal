@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "workload": {
+    "batch": 1,
+    "cache_tokens_read": 128,
+    "decoder_layers_measured": 1,
+    "mesh": [
+      1,
+      4
+    ],
+    "profiled_trace_replays": 3,
+    "seq_len_prefilled": 128
+  },
+  "roofline": {
+    "aggregate_dram_bandwidth_bytes_per_second": 2048000000000,
+    "aggregate_required_bytes_per_token": 143397376,
+    "breakdown_bytes": {
+      "attention_qkv_weights_all_devices": 29491200,
+      "attention_o_weights_all_devices": 23592960,
+      "bias_and_norm_weights": 148992,
+      "kv_cache_reads_all_devices": 262144,
+      "router_weights_all_devices": 737280,
+      "selected_four_experts_gate_up_down_weights": 89164800
+    },
+    "estimate_ms_per_token": 0.07001825,
+    "method": "Exact tile storage: BF16=2048, BFP8_B=1088, BFP4_B=576 bytes per 32x32 tile. Count all TP4 attention/router/norm weights, four globally selected EP experts, and 128 BF16 K/V tokens. Divide aggregate bytes by 4 * 512 GB/s Blackhole DRAM bandwidth.",
+    "source": "python_env/lib/python3.12/site-packages/tt_perf_report/perf_report.py:317-320"
+  },
+  "same_profiled_run": {
+    "device_op_time_ms_per_token": 0.4910623333333333,
+    "device_op_time_us_for_three_replays": 1473.187,
+    "end_to_end_ms_per_token": 0.5740012663106123,
+    "end_to_end_ms_for_three_replays": 1.722003798931837,
+    "named_gap": "0.082939 ms/token (14.45%) between merged device op time and the short three-replay wall window. It contains trace execute/dispatch, start/end synchronization, profiler instrumentation, and host timing. The CSV's merged cross-device op-to-op gaps overlap and are not additive to critical-path device time.",
+    "non_device_or_instrumentation_gap_ms_per_token": 0.082938932977279,
+    "roofline_fraction_of_device_time_percent": 14.25852590336461,
+    "roofline_fraction_of_end_to_end_percent": 12.198274482919112
+  },
+  "separate_unprofiled_headline_run": {
+    "end_to_end_ms_per_token": 0.5032751942053437,
+    "fixed_overhead_amortization_evidence": "The production timing uses 500 warmed trace replays and is only 0.012213 ms above the profiled device-op estimate. It is reported separately and is not substituted into the same-run table.",
+    "trace_replays": 500
+  },
+  "limitations": [
+    "The roofline is a lower bound for compulsory weight and KV reads; it omits activation, CCL, routing, and small-op launch costs.",
+    "Dynamic expert ownership can load-imbalance devices even though the aggregate selected-expert byte count is fixed.",
+    "The three-replay profiler window intentionally limits CSV volume, so its fixed synchronization and instrumentation cost is less amortized than the headline 500-replay run."
+  ]
+}

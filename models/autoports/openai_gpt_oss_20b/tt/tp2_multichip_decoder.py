@@ -478,6 +478,10 @@ class MultichipDecoder(OptimizedDecoder):
 
     def create_kv_cache(self):
         """Allocate rank-local physical pages for four KV heads per device."""
+        cache_dtype = {
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[self.optimization_config.kv_cache_dtype]
         shape = (
             self.num_cache_blocks,
             self.local_num_kv_heads,
@@ -487,14 +491,14 @@ class MultichipDecoder(OptimizedDecoder):
         return (
             ttnn.zeros(
                 shape,
-                dtype=ttnn.bfloat16,
+                dtype=cache_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             ttnn.zeros(
                 shape,
-                dtype=ttnn.bfloat16,
+                dtype=cache_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -513,6 +517,46 @@ class MultichipDecoder(OptimizedDecoder):
             topology=ttnn.Topology.Ring,
             cluster_axis=1,
             memory_config=memory_config,
+        )
+
+    def _project_o_and_reduce(self, attended, *, is_decode):
+        """Apply the row-parallel O projection and restore the replicated stream."""
+
+        dram_layouts = is_decode and self.optimization_config.use_dram_sharded_attention
+        optimized_layouts = is_decode and self.multichip_config.use_optimized_decode_layouts and not dram_layouts
+        if dram_layouts:
+            attended = ttnn.to_memory_config(attended, self.tp_dram_o_input_config)
+        elif optimized_layouts:
+            attended = ttnn.to_memory_config(attended, ttnn.L1_MEMORY_CONFIG)
+        partial = ttnn.linear(
+            attended,
+            self.tp_decode_o_weight if dram_layouts else self.weights["o_weight"],
+            bias=None if dram_layouts else self.weights["o_bias"],
+            dtype=ttnn.bfloat16,
+            memory_config=(
+                self.tp_dram_o_output_config
+                if dram_layouts
+                else self.tp_o_output_config
+                if optimized_layouts
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            program_config=(
+                self.tp_dram_o_program_config
+                if dram_layouts
+                else self.tp_o_program_config
+                if optimized_layouts
+                else None
+            ),
+            compute_kernel_config=self.decode_compute_kernel_config if is_decode else self.compute_kernel_config,
+        )
+        if dram_layouts:
+            partial = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
+            partial = ttnn.add(partial, self.weights["o_bias"], memory_config=ttnn.L1_MEMORY_CONFIG)
+        elif optimized_layouts:
+            partial = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
+        return self._all_reduce(
+            partial,
+            memory_config=ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _prefill_attention(self, hidden_states, key_cache, value_cache, page_table, seq_len):
@@ -545,8 +589,10 @@ class MultichipDecoder(OptimizedDecoder):
         key = ttnn.experimental.rotary_embedding(key, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         query = ttnn.slice(query, [0, 0, 0, 0], [1, self.local_num_heads, seq_len, self.head_dim])
         key = ttnn.slice(key, [0, 0, 0, 0], [1, self.local_num_kv_heads, seq_len, self.head_dim])
-        ttnn.experimental.paged_fill_cache(key_cache, key, page_table, batch_idx=0)
-        ttnn.experimental.paged_fill_cache(value_cache, value, page_table, batch_idx=0)
+        cache_key = ttnn.typecast(key, ttnn.bfloat8_b) if key_cache.dtype == ttnn.bfloat8_b else key
+        cache_value = ttnn.typecast(value, ttnn.bfloat8_b) if value_cache.dtype == ttnn.bfloat8_b else value
+        ttnn.experimental.paged_fill_cache(key_cache, cache_key, page_table, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(value_cache, cache_value, page_table, batch_idx=0)
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -559,15 +605,7 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=self.compute_kernel_config,
         )
         attended = ttnn.transformer.concatenate_heads(attended, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        partial = ttnn.linear(
-            attended,
-            self.weights["o_weight"],
-            bias=self.weights["o_bias"],
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        projected = self._all_reduce(partial, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        projected = self._project_o_and_reduce(attended, is_decode=False)
         return ttnn.add(hidden_states, ttnn.reshape(projected, [1, self.batch, seq_len, self.hidden_size]))
 
     def _decode_attention(
@@ -579,7 +617,8 @@ class MultichipDecoder(OptimizedDecoder):
         cache_position,
         cache_position_tensor,
     ):
-        optimized_layouts = self.multichip_config.use_optimized_decode_layouts
+        dram_layouts = self.optimization_config.use_dram_sharded_attention
+        optimized_layouts = self.multichip_config.use_optimized_decode_layouts and not dram_layouts
         sharded_input_norm = self.multichip_config.use_sharded_decode_input_norm
         norm_input = (
             ttnn.to_memory_config(hidden_states, self.advisor_norm_memory_config)
@@ -593,18 +632,35 @@ class MultichipDecoder(OptimizedDecoder):
             program_config=self.advisor_norm_program_config if sharded_input_norm else None,
             compute_kernel_config=self.decode_compute_kernel_config,
         )
-        if optimized_layouts:
+        if dram_layouts:
+            normalized = ttnn.to_memory_config(normalized, self.tp_dram_qkv_input_config)
+        elif optimized_layouts:
             normalized = ttnn.to_memory_config(normalized, self.tp_qkv_input_config)
         fused = ttnn.linear(
             normalized,
-            self.weights["qkv_weight"],
-            bias=self.weights["qkv_bias"],
+            self.tp_decode_qkv_weight if dram_layouts else self.weights["qkv_weight"],
+            bias=None if dram_layouts else self.weights["qkv_bias"],
             dtype=ttnn.bfloat16,
-            memory_config=self.tp_qkv_output_config if optimized_layouts else ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.tp_qkv_program_config if optimized_layouts else None,
+            memory_config=(
+                self.tp_dram_qkv_output_config
+                if dram_layouts
+                else self.tp_qkv_output_config
+                if optimized_layouts
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            program_config=(
+                self.tp_dram_qkv_program_config
+                if dram_layouts
+                else self.tp_qkv_program_config
+                if optimized_layouts
+                else None
+            ),
             compute_kernel_config=self.decode_compute_kernel_config,
         )
-        if optimized_layouts:
+        if dram_layouts:
+            fused = ttnn.add(fused, self.weights["qkv_bias"], memory_config=self.tp_dram_qkv_output_config)
+            fused = ttnn.to_memory_config(fused, ttnn.L1_MEMORY_CONFIG)
+        elif optimized_layouts:
             fused = ttnn.to_memory_config(fused, ttnn.L1_MEMORY_CONFIG)
         fused = ttnn.reshape(fused, [1, 1, self.batch, -1])
         query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -694,20 +750,7 @@ class MultichipDecoder(OptimizedDecoder):
             [1, 1, 1, 1],
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
-        if optimized_layouts:
-            attended = ttnn.to_memory_config(attended, ttnn.L1_MEMORY_CONFIG)
-        partial = ttnn.linear(
-            attended,
-            self.weights["o_weight"],
-            bias=self.weights["o_bias"],
-            dtype=ttnn.bfloat16,
-            memory_config=self.tp_o_output_config if optimized_layouts else ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.tp_o_program_config if optimized_layouts else None,
-            compute_kernel_config=self.decode_compute_kernel_config,
-        )
-        if optimized_layouts:
-            partial = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
-        projected = self._all_reduce(partial, memory_config=ttnn.L1_MEMORY_CONFIG)
+        projected = self._project_o_and_reduce(attended, is_decode=True)
         projected = ttnn.reshape(projected, [1, self.batch, 1, self.hidden_size])
         return ttnn.add(hidden_states, projected)
 

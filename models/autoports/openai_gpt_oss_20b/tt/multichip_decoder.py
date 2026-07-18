@@ -28,6 +28,11 @@ from models.autoports.openai_gpt_oss_20b.tt.functional_decoder import (
 from models.autoports.openai_gpt_oss_20b.tt.optimized_decoder import OptimizationConfig, OptimizedGPTOSSProgramConfig
 from models.autoports.openai_gpt_oss_20b.tt.tp2_multichip_decoder import MultichipDecoder as _TP2MultichipDecoder
 from models.autoports.openai_gpt_oss_20b.tt.tp2_multichip_decoder import _shard_to_tp, _validate_qkv_geometry
+from models.demos.deepseek_v3.utils.config_helpers import (
+    dram_sharded_weight_config,
+    get_activation_sharding_core_counts_for_dram_matmul,
+    get_dram_sharded_matmul_config,
+)
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.tt.ccl import CCLManager
 from models.demos.gpt_oss.tt.experts import ExpertConfig, Experts
@@ -53,6 +58,10 @@ class MultichipConfig:
     page_block_size: int = PAGE_BLOCK_SIZE
     expert_strategy: str = EXPERT_STRATEGY_EP
     decode_collective: str = DECODE_COLLECTIVE_ALL_REDUCE
+    use_fused_o_projection_rs: bool = False
+    use_fused_o_projection_ag: bool = False
+    fused_o_ag_pad_hidden: bool = True
+    fused_ag_matmul_payload_dtype: str = "bfloat16"
     use_optimized_decode_layouts: bool = True
     use_sharded_decode_input_norm: bool = True
     use_sharded_decode_post_attention_norm: bool = True
@@ -71,13 +80,26 @@ class MultichipConfig:
     prefill_expert_down_cores: tuple[int, int] = (5, 6)
     prefill_expert_gate_up_subblock_w: int = 1
     prefill_expert_down_subblock_w: int = 3
-    ep_decode_gate_up_cores: tuple[int, int] = (9, 10)
-    ep_decode_down_cores: tuple[int, int] = (9, 10)
+    ep_decode_gate_up_cores: tuple[int, int] = (5, 9)
+    ep_decode_down_cores: tuple[int, int] = (5, 9)
+    ep_decode_gate_up_in0_block_w: int = 45
+    ep_decode_down_in0_block_w: int = 45
+    ep_decode_gate_up_subblock_w: int = 2
+    ep_decode_down_subblock_w: int = 2
     ep_prefill_gate_up_cores: tuple[int, int] = (9, 10)
     ep_prefill_down_cores: tuple[int, int] = (9, 10)
+    ep_prefill_gate_up_in0_block_w: int = 45
+    ep_prefill_down_in0_block_w: int = 45
     ep_prefill_gate_up_subblock_w: int = 1
     ep_prefill_down_subblock_w: int = 1
     ep_prefill_post_sparse_bf16: bool = True
+    ep_pack_gate_up: bool = False
+    ep_packed_gate_up_subblock_w: int = 2
+    interleaved_attention_weight_dtype: str = "bfloat16"
+    ep_activation_dtype: str = "bfloat16"
+    ep_gate_up_weight_dtype: str = "bfloat8_b"
+    ep_down_weight_dtype: str = "bfloat4_b"
+    ep_sparse_math_fidelity: str = "lofi"
     active_prefill_chunk_size: int = 128
 
 
@@ -85,19 +107,66 @@ def _validate_ep_prefill_geometry(config: MultichipConfig, *, grid_x: int = 11, 
     """Validate EP sparse-program output blocking for the 90-tile expert width."""
 
     per_core_values = []
-    for name, cores, subblock in (
-        ("gate_up", config.ep_prefill_gate_up_cores, config.ep_prefill_gate_up_subblock_w),
-        ("down", config.ep_prefill_down_cores, config.ep_prefill_down_subblock_w),
+    for name, cores, subblock, in0_block_w in (
+        (
+            "gate_up",
+            config.ep_prefill_gate_up_cores,
+            config.ep_prefill_gate_up_subblock_w,
+            config.ep_prefill_gate_up_in0_block_w,
+        ),
+        (
+            "down",
+            config.ep_prefill_down_cores,
+            config.ep_prefill_down_subblock_w,
+            config.ep_prefill_down_in0_block_w,
+        ),
     ):
         core_x, core_y = cores
         if not 1 <= core_x <= grid_x or not 1 <= core_y <= grid_y:
             raise ValueError(f"EP prefill {name} cores={cores} exceed device grid {grid_x}x{grid_y}")
         if subblock <= 0:
             raise ValueError(f"EP prefill {name} subblock must be positive")
+        if in0_block_w <= 0 or 90 % in0_block_w:
+            raise ValueError(f"EP prefill {name} in0_block_w={in0_block_w} must divide K tiles=90")
         per_core_n = math.ceil((2880 // ttnn.TILE_SIZE) / (core_x * core_y))
         if per_core_n % subblock:
             raise ValueError(
                 f"EP prefill {name} subblock={subblock} must divide per_core_N={per_core_n} for cores={cores}"
+            )
+        per_core_values.append(per_core_n)
+    return tuple(per_core_values)
+
+
+def _validate_ep_decode_geometry(config: MultichipConfig, *, grid_x: int = 11, grid_y: int = 10):
+    """Validate the sparse decode search space before device programs build."""
+
+    per_core_values = []
+    gate_n_tiles = 180 if config.ep_pack_gate_up else 90
+    for name, cores, subblock, in0_block_w, n_tiles in (
+        (
+            "gate_up",
+            config.ep_decode_gate_up_cores,
+            config.ep_packed_gate_up_subblock_w if config.ep_pack_gate_up else config.ep_decode_gate_up_subblock_w,
+            config.ep_decode_gate_up_in0_block_w,
+            gate_n_tiles,
+        ),
+        (
+            "down",
+            config.ep_decode_down_cores,
+            config.ep_decode_down_subblock_w,
+            config.ep_decode_down_in0_block_w,
+            90,
+        ),
+    ):
+        core_x, core_y = cores
+        if not 1 <= core_x <= grid_x or not 1 <= core_y <= grid_y:
+            raise ValueError(f"EP decode {name} cores={cores} exceed device grid {grid_x}x{grid_y}")
+        if in0_block_w <= 0 or 90 % in0_block_w:
+            raise ValueError(f"EP decode {name} in0_block_w={in0_block_w} must divide K tiles=90")
+        per_core_n = math.ceil(n_tiles / (core_x * core_y))
+        if subblock <= 0 or per_core_n % subblock:
+            raise ValueError(
+                f"EP decode {name} subblock={subblock} must divide per_core_N={per_core_n} for cores={cores}"
             )
         per_core_values.append(per_core_n)
     return tuple(per_core_values)
@@ -147,6 +216,12 @@ class MultichipDecoder(_TP2MultichipDecoder):
             DECODE_COLLECTIVE_RS_AG_PAD64,
         ):
             raise ValueError(f"unsupported decode_collective={self.multichip_config.decode_collective!r}")
+        if self.multichip_config.use_fused_o_projection_rs and self.multichip_config.use_fused_o_projection_ag:
+            raise ValueError("fused O-projection/RS and attended-AG/local-O are mutually exclusive A/B families")
+        if (
+            self.multichip_config.use_fused_o_projection_rs or self.multichip_config.use_fused_o_projection_ag
+        ) and self.optimization_config.use_dram_sharded_attention:
+            raise ValueError("fused O-projection CCL candidates and DRAM-sharded attention are mutually exclusive")
         if self.num_heads % TP_DEGREE or self.num_kv_heads % TP_DEGREE:
             raise ValueError("query and KV head counts must divide evenly over TP=4")
         if self.intermediate_size % TP_DEGREE:
@@ -162,7 +237,40 @@ class MultichipDecoder(_TP2MultichipDecoder):
             or self.multichip_config.active_prefill_chunk_size % ttnn.TILE_SIZE
         ):
             raise ValueError("active_prefill_chunk_size must be a positive multiple of 32")
+        if self.multichip_config.ep_packed_gate_up_subblock_w not in (1, 2):
+            raise ValueError("ep_packed_gate_up_subblock_w must be 1 or 2")
+        if self.multichip_config.ep_activation_dtype not in ("bfloat8_b", "bfloat16"):
+            raise ValueError("ep_activation_dtype must be bfloat8_b or bfloat16")
+        if self.multichip_config.interleaved_attention_weight_dtype not in (
+            "bfloat4_b",
+            "bfloat8_b",
+            "bfloat16",
+        ):
+            raise ValueError("interleaved_attention_weight_dtype must be bfloat4_b, bfloat8_b, or bfloat16")
+        if self.multichip_config.fused_ag_matmul_payload_dtype not in ("bfloat8_b", "bfloat16"):
+            raise ValueError("fused_ag_matmul_payload_dtype must be bfloat8_b or bfloat16")
+        if (
+            self.optimization_config.use_dram_sharded_attention
+            and self.multichip_config.interleaved_attention_weight_dtype != "bfloat16"
+        ):
+            raise ValueError(
+                "interleaved_attention_weight_dtype is a final non-DRAM topology control; "
+                "leave it bfloat16 when use_dram_sharded_attention is enabled"
+            )
+        if self.multichip_config.ep_sparse_math_fidelity not in ("lofi", "hifi2", "hifi4"):
+            raise ValueError("ep_sparse_math_fidelity must be lofi, hifi2, or hifi4")
+        for name, dtype in (
+            ("ep_gate_up_weight_dtype", self.multichip_config.ep_gate_up_weight_dtype),
+            ("ep_down_weight_dtype", self.multichip_config.ep_down_weight_dtype),
+        ):
+            if dtype not in ("inherit", "bfloat4_b", "bfloat8_b", "bfloat16"):
+                raise ValueError(f"{name} must be inherit, bfloat4_b, bfloat8_b, or bfloat16")
         _validate_ep_prefill_geometry(
+            self.multichip_config,
+            grid_x=self.mesh_device.compute_with_storage_grid_size().x,
+            grid_y=self.mesh_device.compute_with_storage_grid_size().y,
+        )
+        _validate_ep_decode_geometry(
             self.multichip_config,
             grid_x=self.mesh_device.compute_with_storage_grid_size().x,
             grid_y=self.mesh_device.compute_with_storage_grid_size().y,
@@ -172,6 +280,22 @@ class MultichipDecoder(_TP2MultichipDecoder):
         self.local_num_kv_heads = self.num_kv_heads // TP_DEGREE
         self.local_intermediate_size = self.intermediate_size // TP_DEGREE
         self.local_num_experts = self.num_experts // EP_DEGREE
+        sparse_fidelity = {
+            "lofi": ttnn.MathFidelity.LoFi,
+            "hifi2": ttnn.MathFidelity.HiFi2,
+            "hifi4": ttnn.MathFidelity.HiFi4,
+        }[self.multichip_config.ep_sparse_math_fidelity]
+        # sparse_matmul receives an explicit program config, whose prior
+        # implicit numerical policy was LoFi, exact SFPU math, BF16 DST, and
+        # L1 packer accumulation.  Keep every knob except math fidelity fixed
+        # so this is an isolated, off-by-default fidelity A/B.
+        self.ep_sparse_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=sparse_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
         if self.sliding_window is not None and not self.multichip_config.use_native_paged_sliding_attention:
             self.sliding_sdpa_program_config = (
                 ttnn.SDPAProgramConfig(
@@ -195,6 +319,11 @@ class MultichipDecoder(_TP2MultichipDecoder):
             num_links=self.multichip_config.num_links,
             topology=ttnn.Topology.Ring,
         )
+        # The off-by-default attended-AG/local-O experiment owns a stable
+        # gathered-activation buffer for every logical M it encounters.  Lazy
+        # creation happens during the eager compile/warmup call, before trace
+        # capture, and subsequent calls reuse the same device address.
+        self._fused_o_ag_persistent_buffers = {}
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         batch_grid = ttnn.num_cores_to_corerangeset(
@@ -266,6 +395,40 @@ class MultichipDecoder(_TP2MultichipDecoder):
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
+        )
+
+        def dram_matmul_policy(k, n):
+            max_cores = device_grid.x * device_grid.y
+            input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(k, max_cores))
+            output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(n, max_cores))
+
+            def l1_width_config(width, cores):
+                grid = ttnn.num_cores_to_corerangeset(
+                    cores,
+                    ttnn.CoreCoord(device_grid.x, device_grid.y),
+                    row_wise=True,
+                )
+                return ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, width // cores),
+                    core_grid=grid,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+
+            return (
+                get_dram_sharded_matmul_config(ttnn.TILE_SIZE, k, n, input_cores, output_cores),
+                l1_width_config(k, input_cores),
+                l1_width_config(n, output_cores),
+            )
+
+        (
+            self.tp_dram_qkv_program_config,
+            self.tp_dram_qkv_input_config,
+            self.tp_dram_qkv_output_config,
+        ) = dram_matmul_policy(self.hidden_size, qkv_width)
+        self.tp_dram_o_program_config, self.tp_dram_o_input_config, self.tp_dram_o_output_config = dram_matmul_policy(
+            self.local_num_heads * self.head_dim, self.hidden_size
         )
 
     @classmethod
@@ -363,6 +526,11 @@ class MultichipDecoder(_TP2MultichipDecoder):
         sin = torch.cat([sin_half, sin_half], dim=-1).unsqueeze(1)
 
         norm_shape = (1, 1, hidden_size // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+        interleaved_attention_dtype = {
+            "bfloat4_b": ttnn.bfloat4_b,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[multichip_config.interleaved_attention_weight_dtype]
         weights = {
             "input_norm": _as_replicated_tensor(
                 input_norm.reshape(norm_shape).to(torch.bfloat16),
@@ -374,9 +542,19 @@ class MultichipDecoder(_TP2MultichipDecoder):
                 mesh_device=mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             ),
-            "qkv_weight": _shard_to_tp(qkv_weight, mesh_device=mesh_device, dim=1),
+            "qkv_weight": _shard_to_tp(
+                qkv_weight,
+                mesh_device=mesh_device,
+                dim=1,
+                dtype=interleaved_attention_dtype,
+            ),
             "qkv_bias": _shard_to_tp(qkv_bias, mesh_device=mesh_device, dim=2),
-            "o_weight": _shard_to_tp(o_weight.T.to(torch.bfloat16), mesh_device=mesh_device, dim=0),
+            "o_weight": _shard_to_tp(
+                o_weight.T.to(torch.bfloat16),
+                mesh_device=mesh_device,
+                dim=0,
+                dtype=interleaved_attention_dtype,
+            ),
             "o_bias": _shard_to_tp(rank_selective_o_bias, mesh_device=mesh_device, dim=2),
             "prefill_sinks": _shard_to_tp(prefill_sinks, mesh_device=mesh_device, dim=1),
             "decode_sinks": _shard_to_tp(decode_sinks, mesh_device=mesh_device, dim=0),
@@ -385,6 +563,38 @@ class MultichipDecoder(_TP2MultichipDecoder):
                 router_bias.reshape(1, -1).float(), mesh_device=mesh_device, dtype=ttnn.float32
             ),
         }
+        if multichip_config.use_fused_o_projection_rs:
+            padded_o_weight = torch.nn.functional.pad(o_weight.T.to(torch.bfloat16), (0, 64))
+            padded_rank_biases = [torch.nn.functional.pad(o_bias, (0, 64))] + [
+                torch.zeros(hidden_size + 64, dtype=torch.bfloat16) for _ in range(TP_DEGREE - 1)
+            ]
+            weights["fused_o_weight"] = _shard_to_tp(padded_o_weight, mesh_device=mesh_device, dim=0)
+            weights["fused_o_bias"] = _shard_to_tp(
+                torch.cat(padded_rank_biases, dim=-1).reshape(1, 1, -1),
+                mesh_device=mesh_device,
+                dim=2,
+            )
+        if multichip_config.use_fused_o_projection_ag:
+            # Alternative row-parallel decomposition: gather the TP-fractured
+            # attended input (4 * 1024), then multiply by an output-column
+            # shard.  Padding H=2880 to 2944 gives every rank 736=23*32 output
+            # values and is the compatible form for a carried residual shard.
+            # The natural-width 720 candidate remains available for the
+            # immediate residual-boundary gather control.
+            o_ag_pad = 64 if multichip_config.fused_o_ag_pad_hidden else 0
+            o_ag_weight = torch.nn.functional.pad(o_weight.T.to(torch.bfloat16), (0, o_ag_pad))
+            o_ag_bias = torch.nn.functional.pad(o_bias, (0, o_ag_pad)).reshape(1, 1, -1)
+            o_ag_dtype = {
+                "bfloat8_b": ttnn.bfloat8_b,
+                "bfloat16": ttnn.bfloat16,
+            }[multichip_config.fused_ag_matmul_payload_dtype]
+            weights["fused_o_ag_weight"] = _shard_to_tp(
+                o_ag_weight,
+                mesh_device=mesh_device,
+                dim=1,
+                dtype=o_ag_dtype,
+            )
+            weights["fused_o_ag_bias"] = _shard_to_tp(o_ag_bias, mesh_device=mesh_device, dim=2)
         decoder = cls(
             hf_config=hf_config,
             layer_idx=layer_idx,
@@ -405,6 +615,25 @@ class MultichipDecoder(_TP2MultichipDecoder):
             ttnn.reshape(ttnn.to_layout(decoder.weights["post_attention_norm"], ttnn.TILE_LAYOUT), [hidden_size]),
             decoder.advisor_residual_config,
         )
+        if decoder.optimization_config.use_dram_sharded_attention:
+            attention_dtype = {
+                "bfloat4_b": ttnn.bfloat4_b,
+                "bfloat8_b": ttnn.bfloat8_b,
+                "bfloat16": ttnn.bfloat16,
+            }[decoder.optimization_config.dram_attention_weight_dtype]
+            dram_grid = mesh_device.dram_grid_size()
+            local_qkv_width = (
+                decoder.local_num_heads * decoder.head_dim + 2 * decoder.local_num_kv_heads * decoder.head_dim
+            )
+            local_attention_width = decoder.local_num_heads * decoder.head_dim
+            decoder.tp_decode_qkv_weight = ttnn.to_memory_config(
+                ttnn.typecast(decoder.weights["qkv_weight"], attention_dtype),
+                dram_sharded_weight_config(decoder.hidden_size, local_qkv_width, dram_grid),
+            )
+            decoder.tp_decode_o_weight = ttnn.to_memory_config(
+                ttnn.typecast(decoder.weights["o_weight"], attention_dtype),
+                dram_sharded_weight_config(local_attention_width, decoder.hidden_size, dram_grid),
+            )
 
         expert_state = {
             "gate_up_proj": _dense_expert_weight(state_dict, layer_idx, "gate_up_proj"),
@@ -420,6 +649,21 @@ class MultichipDecoder(_TP2MultichipDecoder):
             swiglu_limit=float(getattr(hf_config, "swiglu_limit", 7.0)),
             alpha=1.703125,
         )
+        expert_weight_dtype = {
+            "bfloat4_b": ttnn.bfloat4_b,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[decoder.optimization_config.expert_weight_dtype]
+        ep_gate_up_weight_dtype = {
+            "bfloat4_b": ttnn.bfloat4_b,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }.get(multichip_config.ep_gate_up_weight_dtype, expert_weight_dtype)
+        ep_down_weight_dtype = {
+            "bfloat4_b": ttnn.bfloat4_b,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }.get(multichip_config.ep_down_weight_dtype, expert_weight_dtype)
         if multichip_config.expert_strategy == EXPERT_STRATEGY_TP:
             program_config = OptimizedGPTOSSProgramConfig(
                 decode_gate_up_cores=decoder.optimization_config.expert_gate_up_cores,
@@ -442,7 +686,7 @@ class MultichipDecoder(_TP2MultichipDecoder):
                 ccl_manager=decoder.ccl_manager,
                 mesh_config=decoder.mesh_config,
                 program_config=program_config,
-                weight_dtype=ttnn.bfloat8_b,
+                weight_dtype=expert_weight_dtype,
             )
         else:
             gate_proj = expert_state["gate_up_proj"][..., ::2].reshape(1, num_experts, hidden_size, intermediate_size)
@@ -451,27 +695,59 @@ class MultichipDecoder(_TP2MultichipDecoder):
             up_bias = expert_state["gate_up_proj_bias"][..., 1::2].reshape(1, num_experts, intermediate_size)
             down_proj = expert_state["down_proj"].reshape(1, num_experts, intermediate_size, hidden_size)
             down_bias = expert_state["down_proj_bias"].reshape(1, num_experts, hidden_size)
+            gate_up_proj = torch.cat([gate_proj, up_proj], dim=-1)
+            gate_up_bias = torch.cat([gate_bias, up_bias], dim=-1)
             ep_weights = ExpertWeights(
-                gate_proj=_shard_experts(gate_proj, mesh_device=mesh_device, dtype=ttnn.bfloat8_b),
-                up_proj=_shard_experts(up_proj, mesh_device=mesh_device, dtype=ttnn.bfloat8_b),
-                down_proj=_shard_experts(down_proj, mesh_device=mesh_device, dtype=ttnn.bfloat8_b),
-                gate_proj_bias=_shard_experts(gate_bias, mesh_device=mesh_device, dtype=ttnn.bfloat16),
-                up_proj_bias=_shard_experts(up_bias, mesh_device=mesh_device, dtype=ttnn.bfloat16),
+                gate_proj=(
+                    None
+                    if multichip_config.ep_pack_gate_up
+                    else _shard_experts(gate_proj, mesh_device=mesh_device, dtype=ep_gate_up_weight_dtype)
+                ),
+                up_proj=(
+                    None
+                    if multichip_config.ep_pack_gate_up
+                    else _shard_experts(up_proj, mesh_device=mesh_device, dtype=ep_gate_up_weight_dtype)
+                ),
+                down_proj=_shard_experts(down_proj, mesh_device=mesh_device, dtype=ep_down_weight_dtype),
+                gate_proj_bias=(
+                    None
+                    if multichip_config.ep_pack_gate_up
+                    else _shard_experts(gate_bias, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+                ),
+                up_proj_bias=(
+                    None
+                    if multichip_config.ep_pack_gate_up
+                    else _shard_experts(up_bias, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+                ),
                 down_proj_bias=_shard_experts(down_bias, mesh_device=mesh_device, dtype=ttnn.bfloat16),
                 intermediate_size_per_device=intermediate_size,
             )
+            if multichip_config.ep_pack_gate_up:
+                ep_weights = SimpleNamespace(
+                    **ep_weights.__dict__,
+                    gate_up_proj=_shard_experts(gate_up_proj, mesh_device=mesh_device, dtype=ep_gate_up_weight_dtype),
+                    gate_up_proj_bias=_shard_experts(gate_up_bias, mesh_device=mesh_device, dtype=ttnn.bfloat16),
+                )
             ep_program_config = OptimizedGPTOSSProgramConfig(
                 decode_gate_up_cores=multichip_config.ep_decode_gate_up_cores,
                 decode_down_cores=multichip_config.ep_decode_down_cores,
                 prefill_gate_up_cores=multichip_config.ep_prefill_gate_up_cores,
                 prefill_down_cores=multichip_config.ep_prefill_down_cores,
-                decode_gate_up_in0_block_w=45,
-                decode_down_in0_block_w=45,
-                prefill_gate_up_in0_block_w=45,
-                prefill_down_in0_block_w=45,
-                decode_gate_up_subblock_w=1,
-                decode_down_subblock_w=1,
-                prefill_gate_up_subblock_w=multichip_config.ep_prefill_gate_up_subblock_w,
+                decode_gate_up_in0_block_w=multichip_config.ep_decode_gate_up_in0_block_w,
+                decode_down_in0_block_w=multichip_config.ep_decode_down_in0_block_w,
+                prefill_gate_up_in0_block_w=multichip_config.ep_prefill_gate_up_in0_block_w,
+                prefill_down_in0_block_w=multichip_config.ep_prefill_down_in0_block_w,
+                decode_gate_up_subblock_w=(
+                    multichip_config.ep_packed_gate_up_subblock_w
+                    if multichip_config.ep_pack_gate_up
+                    else multichip_config.ep_decode_gate_up_subblock_w
+                ),
+                decode_down_subblock_w=multichip_config.ep_decode_down_subblock_w,
+                prefill_gate_up_subblock_w=(
+                    multichip_config.ep_packed_gate_up_subblock_w
+                    if multichip_config.ep_pack_gate_up
+                    else multichip_config.ep_prefill_gate_up_subblock_w
+                ),
                 prefill_down_subblock_w=multichip_config.ep_prefill_down_subblock_w,
             )
             decoder.experts = SimpleNamespace(
@@ -508,6 +784,123 @@ class MultichipDecoder(_TP2MultichipDecoder):
         gathered.deallocate(True)
         return output
 
+    def _project_o_and_reduce(self, attended, *, is_decode):
+        """A/B the two fused row-parallel O decompositions."""
+
+        if self.multichip_config.use_fused_o_projection_ag:
+            attended = ttnn.to_memory_config(attended, ttnn.DRAM_MEMORY_CONFIG)
+            if len(attended.shape) == 3:
+                attended = ttnn.reshape(attended, [1, 1, attended.shape[-2], attended.shape[-1]])
+            payload_dtype = {
+                "bfloat8_b": ttnn.bfloat8_b,
+                "bfloat16": ttnn.bfloat16,
+            }[self.multichip_config.fused_ag_matmul_payload_dtype]
+            if attended.dtype != payload_dtype:
+                attended = ttnn.typecast(attended, payload_dtype)
+
+            gathered_shape = list(attended.shape)
+            gathered_shape[-1] *= TP_DEGREE
+            persistent_key = (tuple(gathered_shape), self.multichip_config.fused_ag_matmul_payload_dtype)
+            persistent_gather = self._fused_o_ag_persistent_buffers.get(persistent_key)
+            if persistent_gather is None:
+                persistent_gather = ttnn.zeros(
+                    gathered_shape,
+                    dtype=payload_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                self._fused_o_ag_persistent_buffers[persistent_key] = persistent_gather
+
+            local_projected = ttnn.experimental.all_gather_minimal_matmul_async(
+                attended,
+                self.weights["fused_o_ag_weight"],
+                bias_tensor=self.weights["fused_o_ag_bias"],
+                config=ttnn.MinimalMatmulConfig(
+                    M_block_size=1,
+                    K_block_size=8,
+                    N_block_size=2,
+                    subblock_h=1,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+                ),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                topology=self.ccl_manager.topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=(self.decode_compute_kernel_config if is_decode else self.compute_kernel_config),
+                persistent_output_buffer=persistent_gather,
+                num_links=self.ccl_manager.num_links,
+                cluster_axis=self.mesh_config.tp_axis,
+                force_transpose=True,
+                num_workers_per_link=4,
+                num_buffers_per_channel=2,
+            )[0]
+            gathered = self.mesh_config.allgather(
+                local_projected,
+                self.ccl_manager,
+                memory_config=ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG,
+                axis=self.mesh_config.tp_axis,
+            )
+            local_projected.deallocate(True)
+            if not self.multichip_config.fused_o_ag_pad_hidden:
+                return gathered
+            output = ttnn.slice(
+                gathered,
+                [0, 0, 0, 0],
+                [gathered.shape[0], gathered.shape[1], gathered.shape[2], self.hidden_size],
+                memory_config=ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG,
+            )
+            gathered.deallocate(True)
+            return output
+
+        if not self.multichip_config.use_fused_o_projection_rs:
+            return super()._project_o_and_reduce(attended, is_decode=is_decode)
+        attended = ttnn.to_memory_config(attended, ttnn.DRAM_MEMORY_CONFIG)
+        if len(attended.shape) == 3:
+            attended = ttnn.reshape(attended, [1, 1, attended.shape[-2], attended.shape[-1]])
+        mm_out, scattered = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+            attended,
+            self.weights["fused_o_weight"],
+            3,
+            self.ccl_manager.get_rs_ping_pong_semaphore(),
+            ttnn.CoreCoord(0, 4),
+            compute_kernel_config=self.decode_compute_kernel_config if is_decode else self.compute_kernel_config,
+            num_links=self.ccl_manager.num_links,
+            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+            rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.mesh_config.tp_axis,
+            bias=self.weights["fused_o_bias"],
+            config=ttnn.MinimalMatmulConfig(
+                M_block_size=1,
+                K_block_size=4,
+                N_block_size=1,
+                subblock_h=1,
+                subblock_w=1,
+                compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            ),
+            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
+            chunk_width_in_mm_blocks=1,
+            num_workers_per_link=2,
+        )
+        mm_out.deallocate(True)
+        gathered = self.mesh_config.allgather(
+            scattered,
+            self.ccl_manager,
+            memory_config=ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG,
+            axis=self.mesh_config.tp_axis,
+        )
+        scattered.deallocate(True)
+        output = ttnn.slice(
+            gathered,
+            [0, 0, 0, 0],
+            [gathered.shape[0], gathered.shape[1], gathered.shape[2], self.hidden_size],
+            memory_config=ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        gathered.deallocate(True)
+        return output
+
     def create_page_table(self, physical_block_ids: Sequence[int] | None = None):
         return super().create_page_table(physical_block_ids)
 
@@ -527,6 +920,15 @@ class MultichipDecoder(_TP2MultichipDecoder):
         local_experts = self.local_num_experts
         memory_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         output_tile = ttnn.Tile([ttnn.TILE_SIZE, ttnn.TILE_SIZE])
+        activation_dtype = {
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[self.multichip_config.ep_activation_dtype]
+        use_prefill_bf16_accumulation = (
+            not is_decode
+            and self.multichip_config.ep_prefill_post_sparse_bf16
+            and self.multichip_config.ep_activation_dtype != "bfloat16"
+        )
 
         token_major = ttnn.reshape(
             normalized,
@@ -546,48 +948,90 @@ class MultichipDecoder(_TP2MultichipDecoder):
             ttnn.ROW_MAJOR_LAYOUT,
         )
         local_routing = ttnn.to_layout(local_routing_rm, ttnn.TILE_LAYOUT)
+        gate_up_width = 2 * self.intermediate_size if self.multichip_config.ep_pack_gate_up else self.intermediate_size
         gate_up_config = (
-            program_config.get_decode_gate_up_config(1, self.intermediate_size, k=self.hidden_size)
+            program_config.get_decode_gate_up_config(1, gate_up_width, k=self.hidden_size)
             if is_decode
-            else program_config.get_prefill_gate_up_config(1, self.intermediate_size, k=self.hidden_size)
+            else program_config.get_prefill_gate_up_config(1, gate_up_width, k=self.hidden_size)
         )
-        gate = ttnn.sparse_matmul(
-            token_major,
-            weights.gate_proj,
-            sparsity=gate_up_sparsity,
-            nnz=None,
-            memory_config=memory_config,
-            output_tile=output_tile,
-            program_config=gate_up_config,
-            dtype=ttnn.bfloat8_b,
-        )
-        if not is_decode and self.multichip_config.ep_prefill_post_sparse_bf16:
-            gate = ttnn.typecast(gate, ttnn.bfloat16)
-        gate = ttnn.reshape(gate, [seq_len, local_experts, self.intermediate_size])
-        gate = ttnn.add(
-            gate,
-            ttnn.reshape(weights.gate_proj_bias, [1, local_experts, self.intermediate_size]),
-            output_tensor=gate,
-        )
-        up = ttnn.sparse_matmul(
-            token_major,
-            weights.up_proj,
-            sparsity=gate_up_sparsity,
-            nnz=None,
-            memory_config=memory_config,
-            output_tile=output_tile,
-            program_config=gate_up_config,
-            dtype=ttnn.bfloat8_b,
-        )
-        token_major.deallocate(True)
-        if not is_decode and self.multichip_config.ep_prefill_post_sparse_bf16:
-            up = ttnn.typecast(up, ttnn.bfloat16)
-        up = ttnn.reshape(up, [seq_len, local_experts, self.intermediate_size])
-        up = ttnn.add(
-            up,
-            ttnn.reshape(weights.up_proj_bias, [1, local_experts, self.intermediate_size]),
-            output_tensor=up,
-        )
+        if self.multichip_config.ep_pack_gate_up:
+            # Graph rewrite: gate and up consume the same token-major activation
+            # and use the same sparsity.  Pack their weights once at load time,
+            # run one wider sparse projection, then split on device.  The
+            # GPT-OSS-specific clamped SwiGLU remains unchanged below.
+            gate_up = ttnn.sparse_matmul(
+                token_major,
+                weights.gate_up_proj,
+                sparsity=gate_up_sparsity,
+                nnz=None,
+                memory_config=memory_config,
+                output_tile=output_tile,
+                program_config=gate_up_config,
+                dtype=activation_dtype,
+                compute_kernel_config=self.ep_sparse_compute_kernel_config,
+            )
+            token_major.deallocate(True)
+            if use_prefill_bf16_accumulation:
+                gate_up = ttnn.typecast(gate_up, ttnn.bfloat16)
+            gate_up = ttnn.reshape(gate_up, [seq_len, local_experts, 2 * self.intermediate_size])
+            gate_up = ttnn.add(
+                gate_up,
+                ttnn.reshape(weights.gate_up_proj_bias, [1, local_experts, 2 * self.intermediate_size]),
+                output_tensor=gate_up,
+            )
+            gate = ttnn.slice(
+                gate_up,
+                [0, 0, 0],
+                [seq_len, local_experts, self.intermediate_size],
+                [1, 1, 1],
+            )
+            up = ttnn.slice(
+                gate_up,
+                [0, 0, self.intermediate_size],
+                [seq_len, local_experts, 2 * self.intermediate_size],
+                [1, 1, 1],
+            )
+            gate_up.deallocate(True)
+        else:
+            gate = ttnn.sparse_matmul(
+                token_major,
+                weights.gate_proj,
+                sparsity=gate_up_sparsity,
+                nnz=None,
+                memory_config=memory_config,
+                output_tile=output_tile,
+                program_config=gate_up_config,
+                dtype=activation_dtype,
+                compute_kernel_config=self.ep_sparse_compute_kernel_config,
+            )
+            if use_prefill_bf16_accumulation:
+                gate = ttnn.typecast(gate, ttnn.bfloat16)
+            gate = ttnn.reshape(gate, [seq_len, local_experts, self.intermediate_size])
+            gate = ttnn.add(
+                gate,
+                ttnn.reshape(weights.gate_proj_bias, [1, local_experts, self.intermediate_size]),
+                output_tensor=gate,
+            )
+            up = ttnn.sparse_matmul(
+                token_major,
+                weights.up_proj,
+                sparsity=gate_up_sparsity,
+                nnz=None,
+                memory_config=memory_config,
+                output_tile=output_tile,
+                program_config=gate_up_config,
+                dtype=activation_dtype,
+                compute_kernel_config=self.ep_sparse_compute_kernel_config,
+            )
+            token_major.deallocate(True)
+            if use_prefill_bf16_accumulation:
+                up = ttnn.typecast(up, ttnn.bfloat16)
+            up = ttnn.reshape(up, [seq_len, local_experts, self.intermediate_size])
+            up = ttnn.add(
+                up,
+                ttnn.reshape(weights.up_proj_bias, [1, local_experts, self.intermediate_size]),
+                output_tensor=up,
+            )
         down_input = apply_swiglu(gate, up, self.experts.config)
         down_input = ttnn.reshape(down_input, [seq_len, local_experts, 1, self.intermediate_size])
         down_sparsity = ttnn.reshape(gate_up_sparsity, [1, 1, seq_len, local_experts])
@@ -606,10 +1050,11 @@ class MultichipDecoder(_TP2MultichipDecoder):
             memory_config=memory_config,
             output_tile=output_tile,
             program_config=down_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=activation_dtype,
+            compute_kernel_config=self.ep_sparse_compute_kernel_config,
         )
         down_input.deallocate(True)
-        if not is_decode and self.multichip_config.ep_prefill_post_sparse_bf16:
+        if use_prefill_bf16_accumulation:
             down = ttnn.typecast(down, ttnn.bfloat16)
         down = ttnn.reshape(down, [seq_len, local_experts, self.hidden_size])
         down = ttnn.add(
@@ -623,7 +1068,7 @@ class MultichipDecoder(_TP2MultichipDecoder):
             output_tensor=down,
         )
         down = ttnn.sum(down, dim=1)
-        if not is_decode and self.multichip_config.ep_prefill_post_sparse_bf16:
+        if use_prefill_bf16_accumulation:
             down = ttnn.typecast(down, ttnn.bfloat8_b)
         return ttnn.reshape(down, [1, 1, seq_len, self.hidden_size])
 
@@ -668,4 +1113,5 @@ __all__ = [
     "TP_DEGREE",
     "_validate_qkv_geometry",
     "_validate_ep_prefill_geometry",
+    "_validate_ep_decode_geometry",
 ]

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="12.980" timestamp="2026-07-18T16:42:49.942320+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_fused_o_projection_all_gather_real_weight_candidate[blackhole-mesh_device0-device_params0]" time="12.269"><properties><property name="start_timestamp" value="2026-07-18T16:42:50" /><property name="end_timestamp" value="2026-07-18T16:43:02" /></properties><failure message="AssertionError: fused O AG/local-MM PCC by rank: [0.999997079372406, 0.999997079372406, 0.999997079372406, 0.9826170802116394]&#10;assert 0.9826170802116394 &gt;= 0.99&#10; +  where 0.9826170802116394 = min([0.999997079372406, 0.999997079372406, 0.999997079372406, 0.9826170802116394])">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @_mesh_test
+    def test_fused_o_projection_all_gather_real_weight_candidate(mesh_device):
+        """Localize attended-AG/local-O correctness before the residual/MLP."""
+
+        if os.environ.get("RUN_MULTICHIP_FUSED_O_AG_ISOLATED") != "1":
+            pytest.skip("set RUN_MULTICHIP_FUSED_O_AG_ISOLATED=1 for the real-weight O-projection probe")
+        payload_name = os.environ.get("MULTICHIP_FUSED_AG_PAYLOAD_DTYPE", "bfloat16")
+        if payload_name not in ("bfloat8_b", "bfloat16"):
+            raise ValueError("MULTICHIP_FUSED_AG_PAYLOAD_DTYPE must be bfloat8_b or bfloat16")
+        pad_hidden = os.environ.get("MULTICHIP_FUSED_O_AG_PAD_HIDDEN", "1") == "1"
+        m = int(os.environ.get("MULTICHIP_FUSED_O_AG_M", "128"))
+        config = _config()
+        state = _real_state_dict()
+        candidate = _decoder(
+            state,
+            config,
+            mesh_device,
+            max_cache_len=max(128, m),
+            multichip_config=replace(
+                MultichipConfig(),
+                use_fused_o_projection_ag=True,
+                fused_o_ag_pad_hidden=pad_hidden,
+                fused_ag_matmul_payload_dtype=payload_name,
+            ),
+        )
+        generator = torch.Generator().manual_seed(8181)
+        attended = torch.randn(1, 1, m, config.num_attention_heads * config.head_dim, generator=generator).to(
+            torch.bfloat16
+        )
+        tt_attended = ttnn.from_torch(
+            attended,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output = candidate._project_o_and_reduce(tt_attended, is_decode=m == 1)
+        ttnn.synchronize_device(mesh_device)
+        o_weight = _require_tensor(state, LAYER_IDX, "self_attn.o_proj.weight")
+        o_bias = _require_tensor(state, LAYER_IDX, "self_attn.o_proj.bias")
+        expected = torch.matmul(attended.float(), o_weight.T.float()) + o_bias.float()
+
+        def pcc(reference, actual):
+            return float(torch.corrcoef(torch.stack([reference.flatten(), actual.float().flatten()]))[0, 1])
+
+        input_chunks = torch.chunk(attended, TP_DEGREE, dim=-1)
+        padded_expected = torch.nn.functional.pad(expected, (0, 64)) if pad_hidden else expected
+        output_chunks = torch.chunk(padded_expected, TP_DEGREE, dim=-1)
+        rank_pcc = []
+        for rank, local in enumerate(_all_device_torch(output)):
+            local = local[..., : config.hidden_size]
+            direct = pcc(expected, local)
+            best_input = (-1.0, None)
+            best_output = (-1.0, None)
+            for order in itertools.permutations(range(TP_DEGREE)):
+                reordered_input = torch.cat([input_chunks[index] for index in order], dim=-1)
+                reordered_expected = torch.matmul(reordered_input.float(), o_weight.T.float()) + o_bias.float()
+                input_pcc = pcc(reordered_expected, local)
+                if input_pcc &gt; best_input[0]:
+                    best_input = (input_pcc, order)
+                reordered_output = torch.cat([output_chunks[index] for index in order], dim=-1)[..., : config.hidden_size]
+                output_pcc = pcc(reordered_output, local)
+                if output_pcc &gt; best_output[0]:
+                    best_output = (output_pcc, order)
+            print(
+                "FUSED_O_AG_DIAGNOSTIC "
+                f"rank={rank} direct_pcc={direct:.9f} "
+                f"best_input_pcc={best_input[0]:.9f} best_input_order={best_input[1]} "
+                f"best_output_pcc={best_output[0]:.9f} best_output_order={best_output[1]}"
+            )
+            rank_pcc.append(direct)
+&gt;       assert min(rank_pcc) &gt;= 0.99, f"fused O AG/local-MM PCC by rank: {rank_pcc}"
+E       AssertionError: fused O AG/local-MM PCC by rank: [0.999997079372406, 0.999997079372406, 0.999997079372406, 0.9826170802116394]
+E       assert 0.9826170802116394 &gt;= 0.99
+E        +  where 0.9826170802116394 = min([0.999997079372406, 0.999997079372406, 0.999997079372406, 0.9826170802116394])
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:903: AssertionError</failure></testcase></testsuite></testsuites>

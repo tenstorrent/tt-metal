@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="23.620" timestamp="2026-07-18T15:36:18.404174+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0]" time="11.673"><properties><property name="start_timestamp" value="2026-07-18T15:36:19" /><property name="end_timestamp" value="2026-07-18T15:36:30" /></properties><failure message="AssertionError: 0.8121110958793449&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), expert_strategy = 'ep'
+layer_type = 'sliding_attention'
+
+    @_mesh_test
+    @pytest.mark.parametrize("expert_strategy", [EXPERT_STRATEGY_TP, EXPERT_STRATEGY_EP])
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_real_weight_prefill_decode_matches_single_chip_optimized(mesh_device, expert_strategy, layer_type):
+        reference_path = _real_reference_path(layer_type)
+        assert reference_path.exists(), "run the isolated real-weight optimized baseline capture first"
+        reference = torch.load(reference_path, map_location="cpu", weights_only=True)
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        decoder = _decoder(_real_state_dict(), config, mesh_device, max_cache_len=256, expert_strategy=expert_strategy)
+        page_table = decoder.create_page_table(list(reversed(range(decoder.num_cache_blocks))))
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_len = config.sliding_window
+        prefill_hidden = reference["prefill_hidden"]
+        output = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+        )
+        _assert_pcc(f"{expert_strategy}-{layer_type}-prefill", reference["prefill"], _to_torch(output), 0.99)
+        _assert_replicated(f"{expert_strategy}-{layer_type}-prefill", output)
+
+        last_output = None
+        for position in range(prefill_len, prefill_len + 3):
+            hidden = reference[f"hidden_{position}"]
+            attention = decoder._decode_attention(
+                _to_tt(hidden, mesh_device),
+                key_cache,
+                value_cache,
+                page_table,
+                position,
+                _position_tensor(position, mesh_device),
+            )
+            _assert_pcc(
+                f"{expert_strategy}-{layer_type}-attention-{position}",
+                reference[f"attention_{position}"],
+                _to_torch(attention),
+                0.99,
+            )
+            normalized = decoder._decode_post_attention_norm(attention)
+            routing = decoder._route(normalized, 1)
+            if expert_strategy == EXPERT_STRATEGY_TP:
+                last_output = decoder._sparse_moe_forward(attention, normalized, routing, 1)
+            else:
+                partial = decoder._ep_active_expert_chunk(normalized, routing, is_decode=True)
+                last_output = ttnn.add(attention, decoder._all_reduce(partial, memory_config=ttnn.L1_MEMORY_CONFIG))
+&gt;           _assert_pcc(
+                f"{expert_strategy}-{layer_type}-routing-{position}",
+                reference[f"routing_{position}"],
+                _to_torch(routing),
+                0.99,
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:654:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'ep-sliding_attention-routing-130'
+reference = tensor([0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.2910,
+        0.0000, 0.0000, 0.0000, 0.0000... 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
+        0.0000, 0.0000, 0.2031, 0.0000, 0.0000], dtype=torch.bfloat16)
+actual = tensor([0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.2051, 0.0000, 0.0000, 0.2891,
+        0.0000, 0.0000, 0.0000, 0.0000... 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
+        0.0000, 0.0000, 0.0000, 0.0000, 0.0000], dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+&gt;       assert passed, message
+E       AssertionError: 0.8121110958793449
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0]" time="11.234"><properties><property name="start_timestamp" value="2026-07-18T15:36:30" /><property name="end_timestamp" value="2026-07-18T15:36:42" /></properties></testcase></testsuite></testsuites>

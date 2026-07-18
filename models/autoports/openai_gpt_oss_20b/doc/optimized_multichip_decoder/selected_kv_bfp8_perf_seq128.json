@@ -1,0 +1,75 @@
+{
+  "decode_collective": "all_reduce",
+  "decode_efficiency": 0.38306575481551175,
+  "decode_speedup": 1.532263019262047,
+  "ep_prefill_geometry": {
+    "activation_dtype": "bfloat8_b",
+    "chunk_size": 128,
+    "decode_down_cores": [
+      5,
+      9
+    ],
+    "decode_down_in0_block_w": 45,
+    "decode_down_subblock_w": 2,
+    "decode_gate_up_cores": [
+      5,
+      9
+    ],
+    "decode_gate_up_in0_block_w": 45,
+    "decode_gate_up_subblock_w": 2,
+    "down_cores": [
+      9,
+      10
+    ],
+    "down_subblock_w": 1,
+    "down_weight_dtype": "bfloat4_b",
+    "gate_up_cores": [
+      9,
+      10
+    ],
+    "gate_up_subblock_w": 1,
+    "gate_up_topology": "split",
+    "gate_up_weight_dtype": "bfloat8_b",
+    "packed_gate_up_subblock_w": 2,
+    "post_sparse_bf16": true,
+    "prefill_down_in0_block_w": 45,
+    "prefill_gate_up_in0_block_w": 45
+  },
+  "expert_strategy": "ep",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_prefill_ms": 21.571312472224236,
+  "multichip_traced_decode_ms": 0.636858306825161,
+  "optimization": {
+    "attention_weight_dtype": "bfloat16",
+    "dram_sharded_attention": false,
+    "expert_weight_dtype": "bfloat8_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "math_fidelity": "hifi4"
+  },
+  "prefill_efficiency": 0.15539461396683685,
+  "prefill_repeats": 15,
+  "prefill_speedup": 0.6215784558673474,
+  "qkv_candidate": null,
+  "qkv_geometry": [
+    10,
+    9,
+    2,
+    2
+  ],
+  "seq_len": 128,
+  "single_chip": {
+    "mesh": [
+      1,
+      1
+    ],
+    "prefill_ms": 13.408263097517192,
+    "prefill_repeats": 20,
+    "seq_len": 128,
+    "trace_replays": 500,
+    "traced_decode_ms": 0.9758344320580363
+  },
+  "trace_replays": 400
+}

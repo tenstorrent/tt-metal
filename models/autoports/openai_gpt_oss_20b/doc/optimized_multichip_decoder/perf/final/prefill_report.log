@@ -1,0 +1,21 @@
+Script started on 2026-07-18 16:00:06+00:00 [COMMAND="tt-perf-report models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/perf/final/ops.csv --start-signpost PERF_PREFILL_MULTICHIP_EP --end-signpost PERF_PREFILL_MULTICHIP_EP_END --active-experts 4 --csv models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/perf/final/prefill_report.csv --summary-file models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/perf/final/prefill_summary.csv --no-color" <not executed on terminal>]
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL_MULTICHIP_EP'.
+Using operations until 'PERF_PREFILL_MULTICHIP_EP_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/perf/final/prefill_report.csv
+Overall DRAM roofline (modeled ops): 100.5% (515 GB/s)
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MeshPartitionDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/perf/final/prefill_summary.csv.csv
+Plotting PNG stacked report to models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/perf/final/prefill_summary.csv.png
+
+Script done on 2026-07-18 16:00:07+00:00 [COMMAND_EXIT_CODE="0"]

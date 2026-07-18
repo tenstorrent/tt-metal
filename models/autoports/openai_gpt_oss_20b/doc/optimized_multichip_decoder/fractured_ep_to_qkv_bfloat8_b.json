@@ -1,0 +1,30 @@
+{
+  "baseline_over_fractured_speedup": 0.8606454108822595,
+  "baseline_replicated_boundary_ms": 0.4528896836563945,
+  "contract": "EP partial [H=2880] -> pad2944 -> persistent RS -> local736 residual -> distributed RMSNorm -> persistent fused AG+packed-QKV [2944,1280]",
+  "fixture_reuses_available_layer_weights": true,
+  "fractured_boundary_ms": 0.5262209940701723,
+  "local_hidden_size": 736,
+  "logical_hidden_size": 2880,
+  "mesh": [
+    1,
+    4
+  ],
+  "next_consumer_weight_layer_idx": 12,
+  "packed_qkv_local_width": 1280,
+  "padded_hidden_size": 2944,
+  "payload_dtype": "bfloat8_b",
+  "pcc": {
+    "normalized": 0.9998775124549866,
+    "packed_qkv": 0.9998594522476196,
+    "residual": 0.9998984932899475
+  },
+  "persistent_buffers": [
+    "reduce_scatter_intermediate",
+    "reduce_scatter_output",
+    "stats_all_gather",
+    "qkv_all_gather"
+  ],
+  "rms_stats_padding_correction": 1.0222222222222221,
+  "trace_replays": 100
+}

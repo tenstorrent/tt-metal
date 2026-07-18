@@ -1,0 +1,13 @@
+{
+  "boundary": "O projection -> residual -> post-attention RMSNorm -> router -> sparse-expert input",
+  "candidate_next_consumer": "distributed RMSNorm, row-sharded router and 32-logit all-reduce, then full-hidden gather for each EP rank's whole active experts",
+  "candidate_stack_contract": "width-sharded residual [1,1,1,720] per device",
+  "mesh": [
+    1,
+    4
+  ],
+  "repeats": 50,
+  "replicated_all_reduce_ms": 0.5934600345790386,
+  "replicated_over_sharded_speedup": 2.180949785762551,
+  "sharded_reduce_scatter_distributed_norm_gather_ms": 1.2943065352737904
+}

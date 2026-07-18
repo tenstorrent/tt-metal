@@ -1,0 +1,232 @@
+Script started on 2026-07-18 16:32:23+00:00 [COMMAND="pytest -q models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py -k 'test_real_weight_prefill_decode_matches_single_chip_optimized and ep' --junitxml=models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/interleaved_attention_bfp8_pcc_ep.junit.xml -s" <not executed on terminal>]
+[32m2026-07-18 16:32:24.981[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 
+collecting 26 items                                                            
+collected 26 items / 24 deselected / 2 selected
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0] [90m2026-07-18 16:32:26.513[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:228)[0m
+[90m2026-07-18 16:32:26.513[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor started.[0m [90m(cluster.cpp:348)[0m
+[90m2026-07-18 16:32:26.513[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating TopologyDiscovery for architecture: blackhole[0m [90m(topology_discovery.cpp:91)[0m
+[90m2026-07-18 16:32:26.513[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting topology discovery.[0m [90m(topology_discovery.cpp:110)[0m
+[90m2026-07-18 16:32:26.515[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.8.0[0m [90m(topology_discovery.cpp:569)[0m
+[90m2026-07-18 16:32:26.515[0m | [32minfo    [m | [35m            UMD[0m | [37mFirmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported.[0m [90m(topology_discovery.cpp:601)[0m
+[90m2026-07-18 16:32:26.519[0m | [32minfo    [m | [35m            UMD[0m | [37mCompleted topology discovery.[0m [90m(topology_discovery.cpp:114)[0m
+[90m2026-07-18 16:32:26.740[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {}[0m [90m(cluster.cpp:168)[0m
+[90m2026-07-18 16:32:26.740[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:142)[0m
+[90m2026-07-18 16:32:26.740[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.8.0[0m [90m(cluster.cpp:145)[0m
+[90m2026-07-18 16:32:26.740[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor completed.[0m [90m(cluster.cpp:520)[0m
+[90m2026-07-18 16:32:26.742[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:1024)[0m
+[90m2026-07-18 16:32:26.896[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster completed.[0m [90m(cluster.cpp:1032)[0m
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.26fc0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17489920 B
+--------------------------------------------------------------------------
+[32m2026-07-18 16:32:27.021[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 16:32:27.021[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 16:32:27.021[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 16:32:27.021[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 16:32:27.021[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.021[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.021[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.021[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.021[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.022[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.022[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.022[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:27.022[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 16:32:27.022[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 16:32:27.027[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:27.027[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:27.027[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:27.027[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:27.062[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 16:32:27.087[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:27.088[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:27.089[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:27.090[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:27.090[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 16:32:27.090[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[90m2026-07-18 16:32:27.129[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 16:32:27.129[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 16:32:27.129[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 16:32:27.129[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-18 16:32:27.708[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=13314061203901 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 16:32:27.709[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=13281176072559 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 16:32:27.709[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=13296532962742 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[90m2026-07-18 16:32:27.711[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=13332898013403 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[32m2026-07-18 16:32:27.740[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+PCC_RESULT path=ep-sliding_attention-prefill threshold=0.99 0.9902772359763576
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/1474736035318926406/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/1474736035318926406/brisc/brisck.1142916022184897951.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/1474736035318926406/brisc/brisck.1142916022184897951.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/1474736035318926406/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_BIAS='1' -DOUT_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,40,360,2,2,9,18,10,1,1,0,0,0,0,3600,1,1,0,0,1,40,2,40,2,40,2,1,2,40,1,0,0,2,1088,0,0,1,2048,1,20,40,2,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:205:16: warning: variable 's' set but not used [-Wunused-but-set-variable]
+  205 |     const auto s = TensorAccessor(out_args, out_tensor_addr);
+      |                ^
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14588454313684038024/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14588454313684038024/brisc/brisck.1142916022184897951.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14588454313684038024/brisc/brisck.1142916022184897951.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/14588454313684038024/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_BIAS='1' -DOUT_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,90,720,1,1,8,8,4,1,1,0,0,0,0,2880,1,1,0,0,1,90,1,90,1,90,1,1,1,90,1,0,0,2,1088,0,0,1,2048,1,90,90,1,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,50921993,84476937,118031881,185141769,218696713,34210058,2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:205:16: warning: variable 's' set but not used [-Wunused-but-set-variable]
+  205 |     const auto s = TensorAccessor(out_args, out_tensor_addr);
+      |                ^
+PCC_RESULT path=ep-sliding_attention-attention-128 threshold=0.99 0.9997017717251578
+PCC_RESULT path=ep-sliding_attention-routing-128 threshold=0.99 0.9999675037200467
+PCC_RESULT path=ep-sliding_attention-decode-128 threshold=0.99 0.994142376535794
+PCC_RESULT path=ep-sliding_attention-attention-129 threshold=0.99 0.999596003173566
+PCC_RESULT path=ep-sliding_attention-routing-129 threshold=0.99 0.9999823946687018
+PCC_RESULT path=ep-sliding_attention-decode-129 threshold=0.99 0.9935868934767428
+PCC_RESULT path=ep-sliding_attention-attention-130 threshold=0.99 0.999354064450286
+PCC_RESULT path=ep-sliding_attention-routing-130 threshold=0.99 0.9999296893940649
+PCC_RESULT path=ep-sliding_attention-decode-130 threshold=0.99 0.9947266734554863
+PASSED
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0] [32m2026-07-18 16:32:40.186[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-18 16:32:40.186[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-18 16:32:40.186[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane[0m [90m(metal_env.cpp:281)[0m
+[90m2026-07-18 16:32:40.186[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-18 16:32:40.186[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-18 16:32:40.186[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-18 16:32:40.186[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-18 16:32:40.199[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:40.200[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:40.201[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:40.202[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-18 16:32:40.233[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:288)[0m
+[90m2026-07-18 16:32:40.243[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:40.244[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:40.244[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:40.245[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:429)[0m
+[90m2026-07-18 16:32:40.245[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 4 devices[0m [90m(fabric_firmware_initializer.cpp:435)[0m
+[90m2026-07-18 16:32:40.245[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_1D_RING[0m [90m(fabric_firmware_initializer.cpp:305)[0m
+[32m2026-07-18 16:32:40.298[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 4 devices is created[0m
+PCC_RESULT path=ep-full_attention-prefill threshold=0.99 0.9850718356532775
+FAILED[32m2026-07-18 16:32:50.826[0m | [1mINFO    [0m | [36mconftest[0m:[36mpytest_runtest_teardown[0m:[36m1140[0m - [1mIn custom teardown, open device ids: {0, 1, 2, 3}[0m
+
+
+=================================== FAILURES ===================================
+_ test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices), expert_strategy = 'ep'
+layer_type = 'full_attention'
+
+    @_mesh_test
+    @pytest.mark.parametrize("expert_strategy", [EXPERT_STRATEGY_TP, EXPERT_STRATEGY_EP])
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_real_weight_prefill_decode_matches_single_chip_optimized(mesh_device, expert_strategy, layer_type):
+        reference_path = _real_reference_path(layer_type)
+        assert reference_path.exists(), "run the isolated real-weight optimized baseline capture first"
+        reference = torch.load(reference_path, map_location="cpu", weights_only=True)
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        decoder = _decoder(_real_state_dict(), config, mesh_device, max_cache_len=256, expert_strategy=expert_strategy)
+        page_table = decoder.create_page_table(list(reversed(range(decoder.num_cache_blocks))))
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_len = config.sliding_window
+        prefill_hidden = reference["prefill_hidden"]
+        output = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+        )
+>       _assert_pcc(f"{expert_strategy}-{layer_type}-prefill", reference["prefill"], _to_torch(output), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:659:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'ep-full_attention-prefill'
+reference = tensor([[[-10.3750,   4.5938, -12.8125,  ...,  -5.3125,   0.3984,  10.8750],
+         [  9.5625,  -3.8906, -11.6250,  ...  -8.5000],
+         [ -8.8750,  -2.0781, -18.7500,  ...,   9.5625,  24.7500,  17.8750]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ -9.6250,   5.9062, -12.4375,  ...,  -4.6875,   0.7578,   8.1250],
+         [  5.9062,  -6.1875,  -4.0625,  ...  -8.9375],
+         [ -9.1250,  -2.1094, -18.8750,  ...,   5.7500,  26.7500,  16.6250]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+>       assert passed, message
+E       AssertionError: 0.9850718356532775
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/interleaved_attention_bfp8_pcc_ep.junit.xml -
+============================== slowest durations ===============================
+12.10s call     models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0]
+10.37s call     models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0]
+1.43s setup    models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0]
+0.33s setup    models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0]
+0.13s teardown models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0]
+0.13s teardown models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-sliding_attention-ep-mesh_device0-device_params0]
+FAILED models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_real_weight_prefill_decode_matches_single_chip_optimized[blackhole-full_attention-ep-mesh_device0-device_params0]
+================= 1 failed, 1 passed, 24 deselected in 25.18s ==================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7daafc945f68 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7daafc3a8288 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "element_size"
+ - leaked function ""
+ - leaked function "clear_program_cache"
+ - leaked function "is_sharded"
+ - leaked function "to_json"
+ - leaked function "worker_core_from_logical_core"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html[90m2026-07-18 16:32:52.550[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT cache stats: 393/422 hits (93.1%) [393 cached, 462 build-once dedup, 0 merged artifacts, 0 merged genfiles][0m [90m(build_cache_telemetry.cpp:207)[0m
+[90m2026-07-18 16:32:52.550[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT telemetry: 3 registered TelemetryTokens[0m [90m(build_cache_telemetry.cpp:230)[0m
+[90m2026-07-18 16:32:52.563[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:512)[0m
+[90m2026-07-18 16:32:52.564[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1037)[0m
+[90m2026-07-18 16:32:53.080[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster completed.[0m [90m(cluster.cpp:1046)[0m
+[90m2026-07-18 16:32:53.080[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor started.[0m [90m(cluster.cpp:754)[0m
+[90m2026-07-18 16:32:53.080[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor completed.[0m [90m(cluster.cpp:757)[0m
+
+Script done on 2026-07-18 16:32:53+00:00 [COMMAND_EXIT_CODE="1"]

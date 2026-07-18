@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "hf_model": "openai/gpt-oss-20b",
-  "stage": "multichip_decoder",
+  "stage": "optimized_multichip_decoder",
   "hf_advertised_context": 131072,
   "current_supported_context": 131072,
   "limiting_reason": "none_on_target_mesh",
@@ -15,10 +15,10 @@
     "expert_parallel_degree": 4,
     "residual_layout": "replicated BF16 [1,1,S,2880] on all devices",
     "attention_partition": "16 of 64 Q heads and 2 of 8 KV heads per device; local SDPA; row-parallel O with one ring all-reduce",
-    "expert_partition": "eight complete experts per device; global gate-selected top-4 only; three sparse matmuls with runtime-inferred rank-local nnz; 9x10/subblock-1 prefill programs; sparse outputs immediately BF16; local weighted sum returned to BFP8 for one ring all-reduce",
+    "expert_partition": "eight complete experts per device; global gate-selected top-4 only; three sparse matmuls with runtime-inferred rank-local nnz; 9x10/subblock-1 prefill and 5x9/subblock-2 decode programs; explicit sparse LoFi exact math with BF16 destinations; BF16 activations/CCL, BFP8 gate/up weights, and BFP4 down weights",
     "rejected_expert_alternative": "TP4 all-expert fracture is implemented with logical intermediate 720 padded to physical 736 per device, but EP4 is faster in both full-layer prefill and traced decode",
     "collective_topology": "FABRIC_1D_RING / Ring / cluster axis 1 / one link; production uses two ring all-reduces per layer",
-    "rejected_decode_collective": "persistent-semaphore minimal-async reduce-scatter plus async all-gather with 2880-to-2944 padding is correct and trace-safe but 6.7% slower at 500 replays; fused matmul plus minimal RS is disabled on Blackhole for GPT-OSS race #46181",
+    "rejected_decode_collective": "the final replicated boundary measures 0.503275 ms. Persistent-semaphore minimal-async reduce-scatter plus async all-gather with 2880-to-2944 padding is correct and trace-safe but measures 0.533814 ms; exact-shape fused O matmul+RS is correct after owned padding/reshape but measures 0.656537 ms. Natural720 fused attended-AG plus local O passes both layer kinds but measures 0.642176 ms. Carrying the EP partial through persistent RS, local736 residual, distributed RMSNorm, and fused AG plus real packed QKV is correct at BF16/BFP8 but its measured boundary is 19.19%/16.19% slower than the replicated boundary",
     "dram_view_gib_per_device": 31.875,
     "page_block_size": 64,
     "global_kv_heads": 8,
@@ -33,18 +33,19 @@
     "key_or_value_cache_bytes_per_device_per_layer": 33554432,
     "combined_kv_cache_bytes_per_device_per_layer": 67108864,
     "combined_kv_cache_gib_per_device_for_24_layers": 1.5,
-    "estimated_tp_ep_layer_weights_gib_per_device_for_24_layers": 5.04,
+    "estimated_tp_ep_layer_weights_gib_per_device_for_24_layers": 4.30,
+    "mixed_expert_down_bfp4_savings_gib_per_device_for_24_layers": 0.74,
     "replicated_prefill_and_decode_rope_gib_per_device_for_24_layers": 1.5,
     "embedding_and_head_allowance_gib_per_device": 1.2,
     "runtime_trace_activation_and_fragmentation_reserve_gib_per_device": 4.0,
-    "estimated_total_gib_per_device": 13.24,
+    "estimated_total_gib_per_device": 12.50,
     "largest_supported_cache_length": 131072,
     "largest_validated_cache_position": 131071,
     "validation": "RUN_MULTICHIP_CONTEXT=1 test_full_context_cache_allocation_and_last_page_update allocates both paged two-local-KV-head caches per rank and executes a synchronized selected-default EP4 decode update at position 131071 through a reversed page table",
     "prior_single_chip_limit": 21248,
     "prior_limit_status": "superseded: TP4 KV-head partitioning and EP4 weight partitioning fit the full HF-advertised cache contract with explicit reserve"
   },
-  "notes": "The fixed 1x4 P300 path restores and retains the HF-advertised 131072-token cache contract. Capacity evidence validates physical paged-cache allocation and the final logical position, not a single 131072-token prefill invocation. Public logical sequence lengths remain unaligned: internal tile/page padding and 128-token active-expert chunking are not exposed. Exact prefill executes four token-specific expert routes; per-rank EP ownership means the local active count is data dependent from zero through four. Full Ethernet watcher is physically unavailable because instrumentation grows ACTIVE_ETH to 27920 bytes versus the 25600-byte kernel-config buffer; the worker/Tensix watcher passes both layer kinds after reset and mesh reopen.",
+  "notes": "The optimized fixed 1x4 P300 path retains the HF-advertised 131072-token cache contract. KV dtype/layout and the replicated BF16 inter-layer residual are unchanged; BFP4 down weights reduce per-device weight memory by about 0.74 GiB over 24 layers, so context does not regress. Capacity evidence validates physical paged-cache allocation and the final logical position, not a single 131072-token prefill invocation. Public logical sequence lengths remain unaligned: internal tile/page padding and 128-token active-expert chunking are not exposed. Exact prefill executes four token-specific expert routes; per-rank EP ownership means the local active count is data dependent from zero through four. Full Ethernet watcher is physically unavailable because instrumentation grows ACTIVE_ETH to 27920 bytes versus the 25600-byte kernel-config buffer; the worker/Tensix watcher passes both layer kinds after reset and mesh reopen.",
   "paths": {
     "prefill": {
       "status": "implemented",
@@ -60,7 +61,7 @@
       "current_supported_context": 131072,
       "capacity_status": "paged-cache capacity validated at 131072; full-length prefill compute was not run",
       "cache_behavior": "fills two-local-KV-head paged key/value caches through an arbitrary page-table mapping and returns the exact logical sequence length",
-      "expert_behavior": "pads internally to 32, chunks at 128, uses 9x10/subblock-1 gate/up and down programs, executes exactly four token-specific global active experts through three sparse matmuls, converts sparse results immediately to BF16, ring-reduces BFP8 EP4 local weighted sums, and slices back to logical S",
+      "expert_behavior": "pads internally to 32, chunks at 128, uses 9x10/subblock-1 gate/up and down programs, executes exactly four token-specific global active experts through three explicit-LoFi sparse matmuls, uses BF16 activations/CCL with BFP8 gate/up and BFP4 down weights, and slices back to logical S",
       "input_output_layout": "replicated BF16 [1,1,S,2880] suitable for direct decoder stacking"
     },
     "decode": {
@@ -78,7 +79,7 @@
       "largest_capacity_validated_cache_position": 131071,
       "current_supported_cache_length": 131072,
       "cache_behavior": "updates the rank-local physical page selected by the replicated page table; eager and traced reverse-page-table physical cache pages are bit-identical on all four ranks",
-      "decode_layout": "10-core [32,288] QKV input shards, 20-core [32,64] QKV output shards, 10-core input/post-attention RMSNorms, replicated [1,1,1,2880] output; production ring all-reduce selected over a correct persistent RS+AG candidate",
+      "decode_layout": "10-core [32,288] QKV input shards, 20-core [32,64] QKV output shards, 10-core input/post-attention RMSNorms, 5x9/subblock-2 explicit-LoFi active expert matmuls, replicated [1,1,1,2880] output; production ring all-reduce selected over correct persistent RS+AG, fused MM+RS, fused attended-AG/local-O, and fractured-residual-to-packed-QKV candidates",
       "trace_behavior": "warmed capture/replay with mutable position tensor; five replay determinism coverage; both sliding and full attention; page-table contents are capture-static, so a validated future-block allocation update releases, warms, and recaptures before replay (PCC 1.0 at position 192)"
     }
   }
