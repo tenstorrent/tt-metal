@@ -76,6 +76,7 @@ void kernel_main() {
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
+    constexpr uint32_t retained_input_dst = 3;
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
@@ -90,28 +91,39 @@ void kernel_main() {
             reconfig_data_format_srca(dfb_in);
             transpose_init(dfb_in);
             tile_regs_acquire();
-            two_pass_stats_init();
+            two_pass_stats_init_shifted();
 
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 dfb_in_obj.wait_front(onetile);
-                transpose_tile(dfb_in, 0, input_dst);
+                const uint32_t stats_input_dst = wt < 3 ? (wt == 0 ? retained_input_dst : wt) : input_dst;
+                transpose_tile(dfb_in, 0, stats_input_dst);
                 dfb_in_obj.pop_front(onetile);
                 if (wt == 0) {
-                    two_pass_stats_set_anchor(input_dst);
+                    two_pass_stats_update_shifted_rows<false, true>(
+                        stats_input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
+                } else {
+                    two_pass_stats_update_shifted_rows<false>(
+                        stats_input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
                 }
-                two_pass_stats_update_shifted_rows<false>(input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
             }
             two_pass_stats_finish_shifted_mean(two_pass_mean_reciprocal);
 
-            if constexpr (Wt == 1) {
-                two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
-            } else {
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
+            // Keep the first three tiles in otherwise idle DEST slots and the
+            // final pass-one tile in input_dst. Replay them in their original
+            // order, using the now-free retained slot for any middle tiles.
+            constexpr uint32_t num_front_retained = Wt < 3 ? Wt : 3;
+            for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
+                const uint32_t stats_input_dst = wt == 0 ? retained_input_dst : wt;
+                two_pass_stats_update_rows<true>(stats_input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
+            }
+            if constexpr (Wt > num_front_retained) {
+                for (uint32_t wt = num_front_retained; wt < Wt - 1; ++wt) {
                     dfb_in_obj.wait_front(onetile);
-                    transpose_tile(dfb_in, 0, input_dst);
+                    transpose_tile(dfb_in, 0, retained_input_dst);
                     dfb_in_obj.pop_front(onetile);
-                    two_pass_stats_update_rows<true>(input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
+                    two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_width);
                 }
+                two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
             }
             two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
             tile_regs_commit();

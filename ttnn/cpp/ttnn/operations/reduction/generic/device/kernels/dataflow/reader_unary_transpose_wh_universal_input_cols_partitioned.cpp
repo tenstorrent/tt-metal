@@ -78,10 +78,14 @@ void kernel_main() {
         uint32_t reset_w = w;
         uint32_t reset_col_start = col_start_tile_id;
 
-        constexpr uint32_t num_passes = sfpu_two_pass && Ht > 1 ? 2 : 1;
+        constexpr uint32_t num_passes = sfpu_two_pass && Ht > 4 ? 2 : 1;
         for (uint32_t pass = 0; pass < num_passes; ++pass) {
-            uint32_t curr_id = reset_curr_id;
-            for (uint32_t j = 0; j < Ht; ++j) {
+            // Two-pass compute retains the first three tiles and the final
+            // tile in DEST, so pass two only streams the middle tiles.
+            const uint32_t pass_start = pass == 0 ? 0 : std::min(Ht, static_cast<uint32_t>(3));
+            const uint32_t pass_end = pass == 0 ? Ht : Ht - 1;
+            uint32_t curr_id = reset_curr_id + pass_start * Wt;
+            for (uint32_t j = pass_start; j < pass_end; ++j) {
                 w = reset_w;
                 col_start_tile_id = reset_col_start;
                 for (uint32_t k = i; k < chunk_end; ++k) {

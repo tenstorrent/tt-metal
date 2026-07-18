@@ -73,6 +73,7 @@ void kernel_main() {
 
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
+    constexpr uint32_t retained_input_dst = 3;
 
     // Valid rows in the last H tile (for padding exclusion).
     constexpr uint32_t last_tile_rows = ((H % tile_height) == 0) ? tile_height : (H % tile_height);
@@ -96,29 +97,37 @@ void kernel_main() {
                 if constexpr (sfpu_two_pass) {
                     copy_init(dfb_in);
                     tile_regs_acquire();
-                    two_pass_stats_init();
+                    two_pass_stats_init_shifted();
 
                     for (uint32_t ht = 0; ht < Ht; ++ht) {
                         dfb_in_obj.wait_front(onetile);
-                        copy_tile(dfb_in, 0, input_dst);
+                        const uint32_t stats_input_dst = ht < 3 ? (ht == 0 ? retained_input_dst : ht) : input_dst;
+                        copy_tile(dfb_in, 0, stats_input_dst);
                         dfb_in_obj.pop_front(onetile);
                         if (ht == 0) {
-                            two_pass_stats_set_anchor(input_dst);
+                            two_pass_stats_update_shifted_rows<false, true>(
+                                stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+                        } else {
+                            two_pass_stats_update_shifted_rows<false>(
+                                stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
                         }
-                        two_pass_stats_update_shifted_rows<false>(
-                            input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
                     }
                     two_pass_stats_finish_shifted_mean(two_pass_mean_reciprocal);
 
-                    if constexpr (Ht == 1) {
-                        two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
-                    } else {
-                        for (uint32_t ht = 0; ht < Ht; ++ht) {
+                    constexpr uint32_t num_front_retained = Ht < 3 ? Ht : 3;
+                    for (uint32_t ht = 0; ht < num_front_retained; ++ht) {
+                        const uint32_t stats_input_dst = ht == 0 ? retained_input_dst : ht;
+                        two_pass_stats_update_rows<true>(
+                            stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+                    }
+                    if constexpr (Ht > num_front_retained) {
+                        for (uint32_t ht = num_front_retained; ht < Ht - 1; ++ht) {
                             dfb_in_obj.wait_front(onetile);
-                            copy_tile(dfb_in, 0, input_dst);
+                            copy_tile(dfb_in, 0, retained_input_dst);
                             dfb_in_obj.pop_front(onetile);
-                            two_pass_stats_update_rows<true>(input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+                            two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_height);
                         }
+                        two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
                     }
                     two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
                     tile_regs_commit();

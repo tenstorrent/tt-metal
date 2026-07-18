@@ -34,9 +34,14 @@ void kernel_main() {
     const std::uint32_t num_rows = num_tiles / Wt;
     for (std::uint32_t row = 0; row < num_rows; ++row) {
         const std::uint32_t row_start_id = start_id + row * Wt;
-        constexpr std::uint32_t num_passes = Wt == 1 ? 1 : 2;
+        constexpr std::uint32_t num_passes = Wt <= 4 ? 1 : 2;
         for (std::uint32_t pass = 0; pass < num_passes; ++pass) {
-            for (std::uint32_t wt = 0; wt < Wt; ++wt) {
+            // Compute retains the first three transposed tiles and the final
+            // tile in DEST across passes, so only stream the middle tiles on
+            // pass two. Tile order remains unchanged.
+            const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Wt, static_cast<std::uint32_t>(3));
+            const std::uint32_t pass_end = pass == 0 ? Wt : Wt - 1;
+            for (std::uint32_t wt = pass_start; wt < pass_end; ++wt) {
                 cb_in0.reserve_back(onetile);
                 noc.async_read(
                     tensor_accessor, cb_in0, tile_bytes, {.page_id = row_start_id + wt}, {.offset_bytes = 0});
