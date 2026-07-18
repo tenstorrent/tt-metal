@@ -1,0 +1,8 @@
+﻿ttnn.transformer.chunk\_gated\_delta\_rule
+==========================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.chunk_gated_delta_rule:
+
+.. autooperation:: ttnn.transformer.chunk_gated_delta_rule

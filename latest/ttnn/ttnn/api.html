@@ -450,6 +450,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#transformer">Transformer</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.attention_softmax.html">ttnn.transformer.attention_softmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.attention_softmax_.html">ttnn.transformer.attention_softmax_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.chunk_gated_delta_rule.html">ttnn.transformer.chunk_gated_delta_rule</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.chunked_flash_mla_prefill.html">ttnn.transformer.chunked_flash_mla_prefill</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.chunked_scaled_dot_product_attention.html">ttnn.transformer.chunked_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.concatenate_heads.html">ttnn.transformer.concatenate_heads</a></li>
@@ -2178,78 +2179,82 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <td><p>In-Place divides <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> by the square root of <code class="xref py py-attr docutils literal notranslate"><span class="pre">head_size</span></code>, adds <code class="xref py py-attr docutils literal notranslate"><span class="pre">attention_mask</span></code> (optionally) and computes softmax.</p></td>
 </tr>
 <tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.transformer.chunk_gated_delta_rule.html#ttnn.transformer.chunk_gated_delta_rule" title="ttnn.transformer.chunk_gated_delta_rule"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.chunk_gated_delta_rule</span></code></a></p></td>
+<td><p>Standalone chunked Gated Delta Rule forward (flash-linear-attention algorithm).</p></td>
+</tr>
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.chunked_flash_mla_prefill.html#ttnn.transformer.chunked_flash_mla_prefill" title="ttnn.transformer.chunked_flash_mla_prefill"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.chunked_flash_mla_prefill</span></code></a></p></td>
 <td><p>Chunked causal scaled dot product attention for processing long sequences in chunks.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.chunked_scaled_dot_product_attention.html#ttnn.transformer.chunked_scaled_dot_product_attention" title="ttnn.transformer.chunked_scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.chunked_scaled_dot_product_attention</span></code></a></p></td>
 <td><p>Chunked causal scaled dot product attention for paged KV cache and long sequences.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.concatenate_heads.html#ttnn.transformer.concatenate_heads" title="ttnn.transformer.concatenate_heads"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.concatenate_heads</span></code></a></p></td>
 <td><p>Takes in a tensor of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">num_heads,</span> <span class="pre">sequence_size,</span> <span class="pre">head_size]</span></code>, concatenates heads back along the width dimension and returns the tensor of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">num_heads</span> <span class="pre">*</span> <span class="pre">head_size]</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.flash_mla_prefill.html#ttnn.transformer.flash_mla_prefill" title="ttnn.transformer.flash_mla_prefill"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.flash_mla_prefill</span></code></a></p></td>
 <td><p>Causal MLA attention."</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.flash_multi_latent_attention_decode.html#ttnn.transformer.flash_multi_latent_attention_decode" title="ttnn.transformer.flash_multi_latent_attention_decode"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.flash_multi_latent_attention_decode</span></code></a></p></td>
 <td><p>A version of scaled dot product attention specifically for decode.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.gated_delta_attn_seq.html#ttnn.transformer.gated_delta_attn_seq" title="ttnn.transformer.gated_delta_attn_seq"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.gated_delta_attn_seq</span></code></a></p></td>
 <td><p>Gated DeltaNet attention — sequential inter-chunk scan (Path A).</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.joint_scaled_dot_product_attention.html#ttnn.transformer.joint_scaled_dot_product_attention" title="ttnn.transformer.joint_scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.joint_scaled_dot_product_attention</span></code></a></p></td>
 <td><p>JointAttention operation that efficiently performs non-causal attention over two sets of query, key, and value tensors.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.paged_flash_multi_latent_attention_decode.html#ttnn.transformer.paged_flash_multi_latent_attention_decode" title="ttnn.transformer.paged_flash_multi_latent_attention_decode"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.paged_flash_multi_latent_attention_decode</span></code></a></p></td>
 <td><p>A version of scaled dot product attention specifically for decode.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.paged_scaled_dot_product_attention_decode.html#ttnn.transformer.paged_scaled_dot_product_attention_decode" title="ttnn.transformer.paged_scaled_dot_product_attention_decode"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.paged_scaled_dot_product_attention_decode</span></code></a></p></td>
 <td><p>A version of scaled dot product attention specifically for decode.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.ring_distributed_scaled_dot_product_attention.html#ttnn.transformer.ring_distributed_scaled_dot_product_attention" title="ttnn.transformer.ring_distributed_scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.ring_distributed_scaled_dot_product_attention</span></code></a></p></td>
 <td><p>Ring-distributed causal scaled dot product attention for multi-device execution.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.ring_joint_scaled_dot_product_attention.html#ttnn.transformer.ring_joint_scaled_dot_product_attention" title="ttnn.transformer.ring_joint_scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.ring_joint_scaled_dot_product_attention</span></code></a></p></td>
 <td><p>RingJointAttention operation supports both:</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.ring_mla.html#ttnn.transformer.ring_mla" title="ttnn.transformer.ring_mla"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.ring_mla</span></code></a></p></td>
 <td><p>Causal Ring MLA attention over a single KV tensor.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention.html#ttnn.transformer.scaled_dot_product_attention" title="ttnn.transformer.scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.scaled_dot_product_attention</span></code></a></p></td>
 <td><p>Causal scaled dot product attention.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention_decode.html#ttnn.transformer.scaled_dot_product_attention_decode" title="ttnn.transformer.scaled_dot_product_attention_decode"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.scaled_dot_product_attention_decode</span></code></a></p></td>
 <td><p>A version of scaled dot product attention specifically for decode.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.sparse_sdpa.html#ttnn.transformer.sparse_sdpa" title="ttnn.transformer.sparse_sdpa"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.sparse_sdpa</span></code></a></p></td>
 <td><p>Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.sparse_sdpa_msa.html#ttnn.transformer.sparse_sdpa_msa" title="ttnn.transformer.sparse_sdpa_msa"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.sparse_sdpa_msa</span></code></a></p></td>
 <td><p>MSA block-sparse prefill (MiniMax Sparse Attention), Blackhole single-chip.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.split_query_key_value_and_split_heads.html#ttnn.transformer.split_query_key_value_and_split_heads" title="ttnn.transformer.split_query_key_value_and_split_heads"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.split_query_key_value_and_split_heads</span></code></a></p></td>
 <td><p>Splits <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">3</span> <span class="pre">*</span> <span class="pre">hidden_size]</span></code> into 3 tensors (Query, Key, Value) of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">hidden_size]</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.experimental.indexer_score_dsa.html#ttnn.experimental.indexer_score_dsa" title="ttnn.experimental.indexer_score_dsa"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.indexer_score_dsa</span></code></a></p></td>
 <td><p>DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.experimental.indexer_score_msa.html#ttnn.experimental.indexer_score_msa" title="ttnn.experimental.indexer_score_msa"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.indexer_score_msa</span></code></a></p></td>
 <td><p>MiniMax-M3 MSA lightning-indexer scorer.</p></td>
 </tr>
