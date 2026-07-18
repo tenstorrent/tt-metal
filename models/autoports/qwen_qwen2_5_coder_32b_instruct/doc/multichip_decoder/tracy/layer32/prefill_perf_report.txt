@@ -1,0 +1,36 @@
+tt-perf-report: selected TP4 prefill, batch 32 x sequence 17
+==============================================================
+
+Window: MULTICHIP_PREFILL .. MULTICHIP_PREFILL_END
+Input format: v2.1, Blackhole, 110 worker cores, four devices merged
+Selected policy: attention BFP8/HiFi2, packed MLP BFP4/LoFi, BF16 Ring CCL
+
+Aggregate
+---------
+
+| Metric | Value |
+| --- | ---: |
+| device operations | 222 |
+| merged device-op time | 2,006 us |
+| warmed wall time (final reproduced median) | 3,294 us |
+| modeled overall DRAM bandwidth | 61 GB/s |
+| modeled DRAM roofline | 11.8% |
+
+Dominant compute and communication rows
+---------------------------------------
+
+| Role / tt-perf-report op | Shape or payload | Device time | DRAM / modeled peak |
+| --- | --- | ---: | ---: |
+| packed QKV matmul | 544x5120x2048, BF16xBFP8 HiFi2 | 76 us | 240 GB/s / 46.8% |
+| O matmul | 544x1280x5120, BF16xBFP8 HiFi2 | 60 us | 225 GB/s / 43.9% |
+| packed gate/up matmul | 544x5120x14336, BF16xBFP4 LoFi | 356 us | 163 GB/s / 31.8% |
+| down matmul | 544x7168x5120, BF16xBFP4 LoFi | 185 us | 171 GB/s / 33.4% |
+| Ring all-gather 1 / 2 | sharded to full residual | 83 / 82 us | unmodeled CCL |
+| Ring reduce-scatter 1 / 2 | full partial to local residual | 89 / 90 us | unmodeled CCL |
+| KV cache updates | 32 users x key/value | about 2 us each | BFP8 cache traffic |
+
+The raw per-op table is retained as `prefill_perf_report.csv`. Prefill is less
+DRAM-roofline-efficient than decode because the 17-token public input is
+flattened to 544 rows, incurs 64 per-user cache updates, head transforms, and
+four CCL phases. Packed gate/up remains the largest compute/DRAM row; row-
+parallel reduction happens before chunk concatenation, bounding the live set.

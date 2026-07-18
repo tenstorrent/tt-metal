@@ -1,0 +1,35 @@
+{
+  "logical_sequence_length": 31,
+  "mesh": [
+    1,
+    4
+  ],
+  "page_block_size": 64,
+  "pcc": {
+    "decode": 0.9964471637865149,
+    "decode_key": 0.9998326430579074,
+    "decode_value": 0.9998392664721436,
+    "paged_logical_key": 1.0,
+    "paged_logical_value": 1.0,
+    "paged_vs_contiguous_decode": 1.0,
+    "paged_vs_contiguous_prefill": 1.0,
+    "prefill": 0.996551766287699,
+    "prefill_key": 0.9997821500539391,
+    "prefill_value": 0.9997891786591586,
+    "stacked_decode_handoff": 0.9907389800213178,
+    "stacked_decode_key": 0.9963248864040649,
+    "stacked_decode_value": 0.9962209508982794,
+    "stacked_handoff": 0.9911854143183458,
+    "trace_key_position_32": 0.9998319932191652,
+    "trace_key_position_33": 0.9998315491227406,
+    "trace_position_32": 0.9964421457082964,
+    "trace_position_33": 0.9964446145864462,
+    "trace_repeat": 1.0,
+    "trace_value_position_32": 0.999841448330578,
+    "trace_value_position_33": 0.999841448330578
+  },
+  "policy": "mlp_bfp4_lofi",
+  "public_sequence_alignment": "none",
+  "trace_bitwise_deterministic": true,
+  "trace_replays_same_position": 10
+}

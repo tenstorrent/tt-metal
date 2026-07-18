@@ -1,0 +1,93 @@
+{
+  "hardware": "4x Blackhole p300c, MeshShape(1,4), FABRIC_1D_RING, two links",
+  "hf_model": "Qwen/Qwen2.5-Coder-32B-Instruct",
+  "hf_snapshot_revision": "381fc969f78efac66bc87ff7ddeadb7e73c218a7",
+  "selected": {
+    "grid": [10, 10],
+    "in0_block_w_limit": 10,
+    "reason": "The 21-trial confirmation is faster than block limit 16; the shape-aligned 8x10 candidates are slower; larger blocks regress or exceed L1.",
+    "actual_role_configs": {
+      "qkv": {"k_tiles": 160, "n_tiles": 64, "in0_block_w": 10, "per_core_n": 7, "out_subblock": [1, 1]},
+      "o": {"k_tiles": 40, "n_tiles": 160, "in0_block_w": 10, "per_core_n": 16, "out_subblock": [1, 4]},
+      "packed_gate_up": {"k_tiles": 160, "n_tiles": 448, "in0_block_w": 10, "per_core_n": 45, "out_subblock": [1, 3]},
+      "down": {"k_tiles": 224, "n_tiles": 160, "in0_block_w": 8, "per_core_n": 16, "out_subblock": [1, 4]}
+    }
+  },
+  "protocol": {
+    "primary": "one warmup, seven synchronized warmed prefill samples, plus seven groups of 100 traced decode replays; real layer-32 weights and fixed baseline activation",
+    "confirmation": "one warmup and 21 synchronized warmed prefill samples for the two closest 10x10 candidates; one group of 10 decode replays was retained only as a correctness guard and was not used for selection",
+    "pcc_gate": 0.99,
+    "physical_graph": {"qkv_local_width": 2048, "mlp_local_width": 7168}
+  },
+  "candidates": [
+    {
+      "grid": [10, 10],
+      "in0_block_w_limit": 10,
+      "result": "selected",
+      "primary_prefill_median_ms": 3.322598058730364,
+      "confirmation_21trial_prefill_median_ms": 3.233756870031357,
+      "prefill_pcc": 0.9933917028430788,
+      "artifacts": ["candidate_prefill_grid10x10_bw10.json", "candidate_prefill_grid10x10_bw10_21trial.json"]
+    },
+    {
+      "grid": [10, 10],
+      "in0_block_w_limit": 16,
+      "result": "rejected_slower_confirmation",
+      "primary_prefill_median_ms": 3.288672771304846,
+      "confirmation_21trial_prefill_median_ms": 3.2953149639070034,
+      "confirmation_regression_percent": 1.9036092183098985,
+      "prefill_pcc": 0.9933355703526503,
+      "artifacts": ["candidate_prefill_grid10x10_bw16.json", "candidate_prefill_grid10x10_bw16_21trial.json"]
+    },
+    {
+      "grid": [10, 10],
+      "in0_block_w_limit": 20,
+      "result": "rejected_slower",
+      "primary_prefill_median_ms": 3.3811600878834724,
+      "prefill_pcc": 0.9932787816819001,
+      "artifact": "candidate_prefill_grid10x10_bw20.json"
+    },
+    {
+      "grid": [10, 10],
+      "in0_block_w_limit": 32,
+      "result": "rejected_l1",
+      "failed_role": "packed_gate_up",
+      "static_circular_buffer_bytes": 2216704,
+      "maximum_l1_bytes": 1572864
+    },
+    {
+      "grid": [8, 10],
+      "in0_block_w_limit": 10,
+      "result": "rejected_slower",
+      "primary_prefill_median_ms": 3.4897071309387684,
+      "prefill_pcc": 0.9933917028430788,
+      "artifact": "candidate_prefill_grid8x10_bw10.json",
+      "actual_output_subblocks": {"qkv": [1, 4], "o": [1, 4], "packed_gate_up": [1, 4], "down": [1, 4]}
+    },
+    {
+      "grid": [8, 10],
+      "in0_block_w_limit": 16,
+      "result": "rejected_slower",
+      "primary_prefill_median_ms": 3.560581710189581,
+      "prefill_pcc": 0.9933355703526503,
+      "artifact": "candidate_prefill_grid8x10_bw16.json"
+    },
+    {
+      "grid": [8, 10],
+      "in0_block_w_limit": 20,
+      "result": "rejected_l1",
+      "failed_role": "packed_gate_up",
+      "static_circular_buffer_bytes": 1794816,
+      "maximum_l1_bytes": 1572864
+    },
+    {
+      "grid": [8, 10],
+      "in0_block_w_limit": 32,
+      "result": "rejected_l1",
+      "failed_role": "packed_gate_up",
+      "static_circular_buffer_bytes": 2667264,
+      "maximum_l1_bytes": 1572864
+    }
+  ],
+  "failure_command_template": "QWEN2_5_CODER_32B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/hub/models--Qwen--Qwen2.5-Coder-32B-Instruct/snapshots/381fc969f78efac66bc87ff7ddeadb7e73c218a7 QWEN2_5_CODER_32B_MULTICHIP_BASELINE_PATH=/tmp/qwen2_5_coder_32b_optimized_baseline.pt QWEN2_5_CODER_32B_MULTICHIP_RUN_PERF=multichip QWEN2_5_CODER_32B_MULTICHIP_PREFILL_GRID_X=<8-or-10> QWEN2_5_CODER_32B_MULTICHIP_PREFILL_GRID_Y=10 QWEN2_5_CODER_32B_MULTICHIP_PREFILL_IN0_BLOCK_W=<20-or-32> python_env/bin/python -m pytest models/autoports/qwen_qwen2_5_coder_32b_instruct/tests/test_multichip_decoder.py::test_real_multichip_warmed_prefill_and_traced_decode_perf -q -s"
+}

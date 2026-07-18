@@ -1,0 +1,26 @@
+{
+  "disabled_features": [
+    "ETH"
+  ],
+  "coverage_status": "partial_eth_gate_exception",
+  "enabled": "10",
+  "eth_disable_reason": "full Watcher instrumentation exceeds the active-Ethernet ring kernel-config buffer",
+  "gate_exception": {
+    "accepted_scope": "worker and dispatch kernels",
+    "excluded_scope": "active Ethernet firmware instrumentation",
+    "runtime_limit_bytes": 25600,
+    "active_ethernet_program_bytes": 27920,
+    "reason": "the instrumented active-Ethernet Ring program cannot fit the runtime kernel-config buffer; this is an instrumentation limit, not a model failure"
+  },
+  "fault_patterns": [
+    "error",
+    "assert",
+    "hang",
+    "stuck",
+    "timeout"
+  ],
+  "log_path": "models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/multichip_decoder/results/watcher_clean.log",
+  "log_sha256": "2932c0b68f98e778b902ee446b14efa8fc0d97d13d4a42b6f8823c77995c0036",
+  "matches": [],
+  "test": "real layer-32 prefill/decode versus optimized TTNN baseline"
+}

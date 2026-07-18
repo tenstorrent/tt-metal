@@ -1,0 +1,238 @@
+{
+  "all_global_k_rank_permutations": [
+    {
+      "k_rank_order": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "pcc": 0.08513949553423501
+    },
+    {
+      "k_rank_order": [
+        0,
+        1,
+        3,
+        2
+      ],
+      "pcc": 0.044019932497508595
+    },
+    {
+      "k_rank_order": [
+        0,
+        2,
+        1,
+        3
+      ],
+      "pcc": 0.2494606719176402
+    },
+    {
+      "k_rank_order": [
+        0,
+        2,
+        3,
+        1
+      ],
+      "pcc": 0.08917991633928804
+    },
+    {
+      "k_rank_order": [
+        0,
+        3,
+        1,
+        2
+      ],
+      "pcc": 0.20140293373838503
+    },
+    {
+      "k_rank_order": [
+        0,
+        3,
+        2,
+        1
+      ],
+      "pcc": 0.08853160040066822
+    },
+    {
+      "k_rank_order": [
+        1,
+        0,
+        2,
+        3
+      ],
+      "pcc": 0.015244113904834251
+    },
+    {
+      "k_rank_order": [
+        1,
+        0,
+        3,
+        2
+      ],
+      "pcc": -0.02929991034141488
+    },
+    {
+      "k_rank_order": [
+        1,
+        2,
+        0,
+        3
+      ],
+      "pcc": 0.003892435817676337
+    },
+    {
+      "k_rank_order": [
+        1,
+        2,
+        3,
+        0
+      ],
+      "pcc": -0.02318536977129718
+    },
+    {
+      "k_rank_order": [
+        1,
+        3,
+        0,
+        2
+      ],
+      "pcc": -0.04229582929989353
+    },
+    {
+      "k_rank_order": [
+        1,
+        3,
+        2,
+        0
+      ],
+      "pcc": -0.024960737145921525
+    },
+    {
+      "k_rank_order": [
+        2,
+        0,
+        1,
+        3
+      ],
+      "pcc": 0.16005848732177055
+    },
+    {
+      "k_rank_order": [
+        2,
+        0,
+        3,
+        1
+      ],
+      "pcc": -0.0017278032153592857
+    },
+    {
+      "k_rank_order": [
+        2,
+        1,
+        0,
+        3
+      ],
+      "pcc": -0.014371045834132084
+    },
+    {
+      "k_rank_order": [
+        2,
+        1,
+        3,
+        0
+      ],
+      "pcc": -0.041013436160911035
+    },
+    {
+      "k_rank_order": [
+        2,
+        3,
+        0,
+        1
+      ],
+      "pcc": -0.015463362376527871
+    },
+    {
+      "k_rank_order": [
+        2,
+        3,
+        1,
+        0
+      ],
+      "pcc": 0.11834809884676466
+    },
+    {
+      "k_rank_order": [
+        3,
+        0,
+        1,
+        2
+      ],
+      "pcc": 0.12307524634935813
+    },
+    {
+      "k_rank_order": [
+        3,
+        0,
+        2,
+        1
+      ],
+      "pcc": 0.008374810050542188
+    },
+    {
+      "k_rank_order": [
+        3,
+        1,
+        0,
+        2
+      ],
+      "pcc": -0.04847399566956636
+    },
+    {
+      "k_rank_order": [
+        3,
+        1,
+        2,
+        0
+      ],
+      "pcc": -0.031034206558005078
+    },
+    {
+      "k_rank_order": [
+        3,
+        2,
+        0,
+        1
+      ],
+      "pcc": -0.0028778687071747827
+    },
+    {
+      "k_rank_order": [
+        3,
+        2,
+        1,
+        0
+      ],
+      "pcc": 0.12890048544487143
+    }
+  ],
+  "best_global_k_rank_permutation": [
+    0,
+    2,
+    1,
+    3
+  ],
+  "best_global_k_rank_permutation_pcc": 0.2494606719176402,
+  "logical_transform": "AG local attention [32,1280] to [32,5120], then column-sharded O [5120,1280]",
+  "op_contract_blocker": "all_gather_matmul_async exposes a rank-relative gathered K order for this Ring shape, while one ShardTensorToMesh column-sharded weight has one shared K-row packing across ranks; the required per-output-rank K permutations are not expressible by that shared mesh tensor contract",
+  "pcc_vs_selected_row_parallel_o_reduce_scatter": 0.08513949553423501,
+  "required_pcc": 0.99,
+  "selection": "rejected before latency measurement because no globally packed TP weight is numerically equivalent",
+  "shape_probe_history": [
+    "local-width shard shape rejected: gathered width needs 32 shards on 8 cores",
+    "full-gather shard shape executed but did not preserve shared rank/head ordering",
+    "all 24 shared K-rank weight packings were executed; none can compensate a rank-relative gather order across every output device"
+  ],
+  "status": "rejected_rank_relative_gather_contract"
+}

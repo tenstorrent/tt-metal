@@ -1,0 +1,39 @@
+tt-perf-report: selected TP4 traced decode
+==========================================
+
+Window: MULTICHIP_DECODE .. MULTICHIP_DECODE_END
+Input format: v2.1, Blackhole, 110 worker cores, four devices merged
+Selected policy: attention BFP8/HiFi2, MLP BFP4/LoFi, BF16 Ring CCL
+
+Aggregate
+---------
+
+| Metric | Value |
+| --- | ---: |
+| device operations | 70 |
+| merged device-op time | 630 us |
+| warmed traced wall time (independent 7x100 run) | 791.8 us |
+| modeled overall DRAM bandwidth | 114 GB/s |
+| modeled DRAM roofline | 22.4% |
+
+Dominant compute and communication rows
+---------------------------------------
+
+| Role / tt-perf-report op | Shape or payload | Device time | DRAM / modeled peak |
+| --- | --- | ---: | ---: |
+| QKV matmul | 32x5120x2048, BF16xBFP8 HiFi2 | 41 us | 255 GB/s / 49.8% |
+| O matmul | 32x1280x5120, BF16xBFP8 HiFi2 | 27 us | 239 GB/s / 46.6% |
+| gate matmul | 32x5120x7168, BF16xBFP4 LoFi | 68 us | 270 GB/s / 52.7% |
+| up matmul | 32x5120x7168, BF16xBFP4 LoFi | 68 us | 270 GB/s / 52.7% |
+| down matmul | 32x7168x5120, BF16xBFP4 LoFi | 67 us | 272 GB/s / 53.2% |
+| decode SDPA | 10 logical Q / 2 KV heads per rank | 22 us | unmodeled |
+| Ring all-gather 1 / 2 | 81,920 to 327,680 BF16 bytes/rank | 11 / 12 us | unmodeled CCL |
+| Ring reduce-scatter 1 / 2 | 327,680 to 81,920 BF16 bytes/rank | 24 / 21 us | unmodeled CCL |
+
+The raw per-op table is retained as `decode_perf_report.csv`. The apparent
+8.25 ms merged op-to-op gap in the full table is cross-device timestamp merge
+skew; it is inconsistent with both 630 us merged device-op work and the
+independent 791.8 us trace measurement, and is not treated as dispatch time.
+The table also exposes the explicit head pad/slice/concat traffic; these small
+data-movement kernels and the 68 us of Ring collectives are the remaining
+non-matmul decode costs.

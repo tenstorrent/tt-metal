@@ -1,0 +1,29 @@
+{
+  "batch": 32,
+  "decode_replays_per_trial": 100,
+  "decode_trace_median_ms": 1.9308121595531702,
+  "decode_trace_samples_ms": [
+    1.9309831829741597,
+    1.9301230367273092,
+    1.9308121595531702,
+    1.930861952714622,
+    1.9303567940369248,
+    1.9308417104184628,
+    1.9306940212845802
+  ],
+  "decoder": "OptimizedDecoder",
+  "hardware": "one Blackhole p300c",
+  "prefill_median_ms": 9.997219778597355,
+  "prefill_samples_ms": [
+    10.02022484317422,
+    9.993132203817368,
+    9.966631885617971,
+    10.000957641750574,
+    9.995386935770512,
+    9.997219778597355,
+    10.005376301705837
+  ],
+  "profile": "advisor_packed_bfp8_hifi2_1d",
+  "sequence_length": 17,
+  "trace_bitwise_deterministic": true
+}

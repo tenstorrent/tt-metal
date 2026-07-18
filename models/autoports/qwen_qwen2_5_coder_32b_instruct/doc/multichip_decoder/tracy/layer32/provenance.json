@@ -1,0 +1,29 @@
+{
+  "hardware": "4x Blackhole p300c, MeshShape(1,4), FABRIC_1D_RING, two links",
+  "hf_model": "Qwen/Qwen2.5-Coder-32B-Instruct",
+  "hf_snapshot_revision": "381fc969f78efac66bc87ff7ddeadb7e73c218a7",
+  "hf_snapshot_path": "/home/mvasiljevic/hf-cache/hub/models--Qwen--Qwen2.5-Coder-32B-Instruct/snapshots/381fc969f78efac66bc87ff7ddeadb7e73c218a7",
+  "capture_utc": "2026-07-18T03:11:27Z",
+  "capture_name": "selected_mixed",
+  "command": "QWEN2_5_CODER_32B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/hub/models--Qwen--Qwen2.5-Coder-32B-Instruct/snapshots/381fc969f78efac66bc87ff7ddeadb7e73c218a7 QWEN2_5_CODER_32B_MULTICHIP_RUN_PROFILE=1 python_env/bin/python -m tracy -r -p -v -o models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/multichip_decoder/tracy/layer32 -n selected_mixed -m pytest models/autoports/qwen_qwen2_5_coder_32b_instruct/tests/test_multichip_decoder.py::test_profile_selected_multichip_decoder -q -s",
+  "tt_perf_report_windows": {
+    "decode": ["MULTICHIP_DECODE", "MULTICHIP_DECODE_END"],
+    "prefill": ["MULTICHIP_PREFILL", "MULTICHIP_PREFILL_END"]
+  },
+  "capture_source_sha256": {
+    "multichip_decoder.py": "17c0370c74d3502f27fe30110846c9c39c4b1d60fd0161e4129aa613566c1606",
+    "test_multichip_decoder.py": "edd8cb59f1e4eae7fc61cdc4e2d4329a7a04c8fcb84895b340393161e67f316d",
+    "raw_ops_csv": "117e71af0a5067e7712ffe536e38c455c87aa99bd82887eb55a4d3bd92cc6482"
+  },
+  "reviewed_current_source_sha256": {
+    "multichip_decoder.py": "859f618b012242e6b31b9625fd2e3d7c5e1db82d33c9692eae9f0d6f2589d11d",
+    "test_multichip_decoder.py": "c8e7077e6bc755c8dc404797ca60d335769d00538341c1be6284d82e9bd95a71",
+    "note": "The retained capture predates public-forward trace plumbing, strict cache-allocator checks, stack-shared RoPE/position/CCL ownership, persistent provenance CCL buffers, allocator-faithful capacity evidence, review-evidence test expansion, and exposed prefill-program sweep controls. The focused sweep retained the captured 10x10 grid with in0_block_w=10, so the selected single-layer device math, precision policy, sharding, and exact captured program configuration are unchanged."
+  },
+  "compact_report_sha256": {
+    "decode_perf_report.csv": "63a7e185557a2524c0466a7d9e6a07249976822dd05091a8790b091219c25131",
+    "prefill_perf_report.csv": "53fb68c0bfdf413ac22d136a7a9a3aa2d8dc4f02279017fc4e4805715d39ce9b"
+  },
+  "raw_artifacts": "Raw Tracy databases, device logs, and the 3.3 MB combined ops CSV were removed after deterministic reduction; rerun the capture command to reproduce them.",
+  "report_tool": "tt-perf-report, CSV format v2.1, architecture auto-detected as blackhole, 110 worker cores"
+}

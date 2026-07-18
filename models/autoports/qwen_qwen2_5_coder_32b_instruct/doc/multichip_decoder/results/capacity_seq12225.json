@@ -1,0 +1,56 @@
+{
+  "accounting": {
+    "bfp8_kv_bytes_per_device_per_physical_token": 1114112,
+    "duplicated_projection_weight_bytes_per_device": 10244587520,
+    "duplicated_qkv_bias_bytes_per_device": 16777216,
+    "embedding_local_vocab": 38016,
+    "future_tp4_embedding_lm_head_final_norm_bytes_per_device": 438691840,
+    "lm_head_padded_local_vocab": 38144,
+    "norm_weight_bytes_per_device": 41943040,
+    "prefill_peak_live_bytes_per_device_per_logical_token": 671744,
+    "shared_bf16_rope_bytes_per_device_per_logical_token": 1024,
+    "shared_decode_position_payload_bytes_per_device": 16640,
+    "shared_persistent_ccl_dram_bytes_per_device": 1310720,
+    "shared_persistent_ccl_l1_bytes_per_device": 163840,
+    "trace_region_size_parameter_bytes_per_bank": 200000000,
+    "trace_reserved_bytes_per_device": 1600000000
+  },
+  "batch": 32,
+  "error": "TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false\ninfo:\nOut of Memory: Not enough space to allocate 1606418432 B DRAM buffer across 8 banks, where each bank needs to store 200802304 B, but bank size is 4072341376 B (allocated: 3881069312 B, free: 191272064 B, largest free block: 191272064 B)",
+  "failed_stage": "prefill_live_set",
+  "page_block_size": 64,
+  "physical_cache_length": 12288,
+  "result": "expected_out_of_memory",
+  "selected_precision": "attention BFP8/HiFi2; MLP BFP4/LoFi; KV BFP8",
+  "sequence_length": 12225,
+  "snapshots": {
+    "at_failure": {
+      "allocated_bytes": 31048554496,
+      "free_bytes": 1530176512,
+      "largest_contiguous_bytes_free_per_bank": 191272064,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    },
+    "full_stack_static": {
+      "allocated_bytes": 24422078464,
+      "free_bytes": 8156652544,
+      "largest_contiguous_bytes_free_per_bank": 1019581568,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    },
+    "mesh_open": {
+      "allocated_bytes": 0,
+      "free_bytes": 32578731008,
+      "largest_contiguous_bytes_free_per_bank": 4072341376,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    },
+    "persistent_ccl_l1": {
+      "allocated_bytes": 901120,
+      "free_bytes": 159864320,
+      "largest_contiguous_bytes_free_per_bank": 1453312,
+      "num_banks": 110,
+      "total_bytes": 160765440
+    }
+  }
+}

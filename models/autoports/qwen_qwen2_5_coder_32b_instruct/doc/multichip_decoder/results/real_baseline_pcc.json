@@ -1,0 +1,23 @@
+{
+  "baseline_capture_sha256": "d2f971a6b8dfa6db679b7112695f6d724d4dace170e6d7f6a3875c5c0b0254e3",
+  "decode_position": 17,
+  "hf_model": "Qwen/Qwen2.5-Coder-32B-Instruct",
+  "hf_snapshot_revision": "381fc969f78efac66bc87ff7ddeadb7e73c218a7",
+  "layer": 32,
+  "layer_kind": "homogeneous dense Qwen2 decoder",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_policy": "mlp_bfp4_lofi",
+  "pcc": {
+    "decode": 0.9940058709727738,
+    "decode_key": 0.9999099060149316,
+    "decode_value": 0.9998141979534605,
+    "prefill": 0.9933917028430788,
+    "prefill_key": 0.9998382660895279,
+    "prefill_value": 0.9996616267450059
+  },
+  "prefill_sequence_length": 17,
+  "single_chip_baseline": "advisor_packed_bfp8_hifi2_1d"
+}
