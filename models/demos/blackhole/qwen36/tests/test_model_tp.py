@@ -462,19 +462,24 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
         for la in model.layers
         if not la.is_full_attention
     ]
-    # A few eager decode steps for a per-user decode-correctness baseline.
+    # A few eager decode steps for a per-user decode-correctness baseline. Both paths decode from the
+    # SAME greedy token sequence (fed_ref, eager's argmax): when a user's top-2 prefill logits are
+    # near-tied, the tiny eager-vs-traced numerical delta can flip the argmax, so feeding each path
+    # its own argmax would decode divergent continuations and make the decode-PCC comparison
+    # meaningless (a false failure). Production greedily decodes its own argmax per request and both
+    # paths are individually correct; sharing the seed here isolates decode-compute equivalence.
     eager_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [[int(torch.argmax(eager_pf_torch[u]))] for u in range(B)]
+    fed_ref = [[int(torch.argmax(eager_pf_torch[u]))] for u in range(B)]
     for step in range(N_DEC):
-        tokens_step = torch.tensor([[fed[u][step]] for u in range(B)], dtype=torch.int32)
+        tokens_step = torch.tensor([[fed_ref[u][step]] for u in range(B)], dtype=torch.int32)
         pos_t = torch.tensor(pos, dtype=torch.int32)
         dev = model.prepare_inputs_decode(tokens_step, pos_t, page_table)
         out, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         logits_step = model.process_output_decode(out, B)
         for u in range(B):
             eager_dec[u].append(logits_step[u, 0, :vocab_ref].float())
-            fed[u].append(int(torch.argmax(logits_step[u, 0, :vocab_ref])))
+            fed_ref[u].append(int(torch.argmax(logits_step[u, 0, :vocab_ref])))
         pos = [p + 1 for p in pos]
     model.free_kv_caches()
     del model
@@ -496,18 +501,17 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
     ]
     # release_prefill_trace_bucket restores the batched GDN bindings the decode trace reads.
     model.release_prefill_trace_bucket()
+    # Decode the SAME token sequence eager used (fed_ref) — see the note at the eager decode loop.
     traced_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [[int(torch.argmax(traced_pf_torch[u]))] for u in range(B)]
     for step in range(N_DEC):
-        tokens_step = torch.tensor([[fed[u][step]] for u in range(B)], dtype=torch.int32)
+        tokens_step = torch.tensor([[fed_ref[u][step]] for u in range(B)], dtype=torch.int32)
         pos_t = torch.tensor(pos, dtype=torch.int32)
         dev = model.prepare_inputs_decode(tokens_step, pos_t, page_table)
         out, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         logits_step = model.process_output_decode(out, B)
         for u in range(B):
             traced_dec[u].append(logits_step[u, 0, :vocab_ref].float())
-            fed[u].append(int(torch.argmax(logits_step[u, 0, :vocab_ref])))
         pos = [p + 1 for p in pos]
     model.free_kv_caches()
     del model
