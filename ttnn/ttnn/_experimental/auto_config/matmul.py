@@ -35,12 +35,14 @@ _MAX_MINIMAL_CANDIDATES = 4
 # execution mode; invalid ones for a given shape self-eliminate during the
 # on-device benchmark loop, so we generate broadly and let measured latency pick.
 _MAX_PROGRAM_CONFIG_CANDIDATES = 6
-# Minimum correlation a tuned candidate's output must have with the trusted
-# reference (default-config) output to be eligible for selection.  Different but
-# valid configs agree to well above this; a config that is invalid for the shape
-# (yet still runs) produces uncorrelated garbage and is rejected here.  This
-# guards selection so we never pick a faster-but-wrong config.
-_CORRECTNESS_PCC_THRESHOLD = 0.99
+# Maximum relative L2 error a tuned candidate's output may have versus the
+# trusted reference (default-config) output to be eligible for selection.
+# Different but valid configs differ only by bf16 rounding (well under this);
+# a config that is invalid for the shape (yet still runs) is off by O(1) and is
+# rejected here.  This guards selection so we never pick a faster-but-wrong
+# config.  Size-independent, unlike correlation which is degenerate for the tiny
+# logical outputs many matmuls produce.
+_CORRECTNESS_REL_ERR_THRESHOLD = 0.05
 _CACHE_FILE_SUFFIX = ".json"
 _DEFAULT_CCL_CHUNKS_PER_SYNC = 10
 _DEFAULT_CCL_NUM_WORKERS_PER_LINK = 2
@@ -1773,28 +1775,36 @@ def _result_to_torch(result: Any) -> Any:
         return None
 
 
-def _output_pcc(reference: Any, candidate: Any) -> float:
-    """Pearson correlation between two flattened host tensors (-1.0 on any issue)."""
+def _outputs_match(reference: Any, candidate: Any) -> bool:
+    """Size-independent correctness check via relative L2 error.
+
+    Correlation (PCC) is unusable here because many matmuls have tiny logical
+    outputs (e.g. a (1,2)·(2,2) matmul yields 2 elements) and correlation over
+    2 points is always ±1.  Relative L2 error works for any size: a valid config
+    differs from the reference only by bf16 rounding (well under the threshold),
+    while a config that is invalid-but-runs is off by O(1)."""
     if reference is None or candidate is None:
-        return -1.0
+        return False
     try:
         import torch
     except Exception:
-        return -1.0
+        return False
     if reference.numel() == 0 or reference.numel() != candidate.numel():
-        return -1.0
-    if torch.allclose(reference, candidate, rtol=1e-2, atol=1e-2):
-        return 1.0
-    # Constant tensors have zero variance; correlation is undefined, so fall back
-    # to the allclose verdict above (which already returned if they matched).
-    if reference.std() == 0 or candidate.std() == 0:
-        return -1.0
-    corr = torch.corrcoef(torch.stack([reference, candidate]))[0, 1].item()
-    return -1.0 if math.isnan(corr) else corr
+        return False
+    ref = reference.to(torch.float32)
+    cand = candidate.to(torch.float32)
+    if torch.isnan(cand).any() or torch.isinf(cand).any():
+        return False
+    ref_norm = torch.linalg.vector_norm(ref).item()
+    diff_norm = torch.linalg.vector_norm(cand - ref).item()
+    if ref_norm <= 1e-8:
+        # Reference is ~zero; the candidate must be ~zero too.
+        return diff_norm <= 1e-6
+    return (diff_norm / ref_norm) <= _CORRECTNESS_REL_ERR_THRESHOLD
 
 
 def _candidate_matches_reference(candidate: Candidate, device: Any, reference_torch: Any) -> bool:
-    """Run a candidate once and check its output correlates with the reference."""
+    """Run a candidate once and check its output matches the reference."""
     try:
         _sync_device(device)
         output = candidate.run()
@@ -1805,7 +1815,7 @@ def _candidate_matches_reference(candidate: Candidate, device: Any, reference_to
         candidate_torch = _result_to_torch(output)
     finally:
         _deallocate_result(output)
-    return _output_pcc(reference_torch, candidate_torch) >= _CORRECTNESS_PCC_THRESHOLD
+    return _outputs_match(reference_torch, candidate_torch)
 
 
 def _compute_reference_output(candidates: list[Candidate], device: Any) -> Any:
