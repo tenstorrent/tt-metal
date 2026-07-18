@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 
+#include <tt-logger/tt-logger.hpp>  // [DIAG avgpool x1.15] remove after
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -174,6 +175,20 @@ Tensor reduce(
                                                                   reduce_math == tt::tt_metal::ReduceOpMath::AVG)));
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
+
+    // [DIAG avgpool x1.15 -- remove after] Why is the Quasar SUM/AVG post-mul not engaging? Print the
+    // decisive values. tt::ARCH::QUASAR==4. If arch!=4 here, the arch gate is the bug (half-done arch
+    // enablement); if arch==4 but use_post_mul=0, the reduce_math/scaler is unexpected.
+    log_warning(
+        tt::LogOp,
+        "QSR_REDUCE_DIAG arch={} is_quasar={} reduce_math={} scaler={} use_post_mul={} reduce_scaler={} post_mul={}",
+        static_cast<int>(arch),
+        is_quasar,
+        static_cast<int>(reduce_math),
+        scaler,
+        use_post_mul,
+        reduce_scaler,
+        post_mul);
 
     // External-negate fallback for the H step: the fused-negate compute kernel is unported on Quasar
     // (negative_tile stub) and removed, so MIN H-reduce always takes this path. Computes
