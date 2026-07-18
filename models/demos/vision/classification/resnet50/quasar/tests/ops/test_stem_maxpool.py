@@ -87,7 +87,10 @@ def test_quasar_stem_maxpool(mesh_device, input_h, input_w, sid):
         use_height_and_width_as_shard_shape=True,
     )
 
-    x = ttnn.from_torch(x_nhwc.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # ROW_MAJOR (the pool's natural input layout, as the model + standard max_pool2d tests use).
+    # TILE_LAYOUT would force a 32-multiple shard-height constraint that non-tile-aligned N*H*W
+    # (e.g. 28x28 = 784) violates on a single-core height shard -- a test-config artifact, not an op bug.
+    x = ttnn.from_torch(x_nhwc.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     x = x.to(device, mem_config)
 
     out = ttnn.experimental.quasar.max_pool2d(
