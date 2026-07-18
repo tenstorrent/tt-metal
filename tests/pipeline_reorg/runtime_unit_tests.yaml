@@ -185,7 +185,7 @@
 # --- IOMMU PinnedMemory Tests (SD + FD) ---
 - name: runtime_iommu_pinned_memory
   cmd: |
-    python3 -c "import pathlib,re; text=pathlib.Path('/sys/module/tenstorrent/version').read_text().strip(); match=re.match(r'(\d+)\.(\d+)\.(\d+)', text); assert match and tuple(map(int, match.groups())) >= (2, 9, 0), f'KMD 2.9.0+ required, found {text}'"
+    python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text().strip(); match=re.match(sys.argv[2],text); assert match and tuple(map(int,match.groups())) >= (2,9,0), sys.argv[3]+text' /sys/module/tenstorrent/version '(\d+)\.(\d+)\.(\d+)' 'KMD 2.9.0+ required, found '
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter='*PinnedMemory*'
     ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*PinnedMemory*'
     ./build/test/tt_metal/unit_tests_tensor --gtest_filter='*ReadOnly*:*UniformCopyToDevice_ReusesPinnedMemoryCacheEntries:*UniformCopyToHost_ReusesPinnedMemoryCacheEntries'
