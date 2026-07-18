@@ -370,8 +370,9 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
                 md.append(f"pytest {rel}/tests/e2e/{perf_test.name} -svv")
             md.append("```")
             md.append("")
-        from ..run_report import upsert_report_section
+        from ..run_report import refresh_bringup_section, upsert_report_section
 
+        refresh_bringup_section(demo_dir, model_id)
         upsert_report_section(demo_dir, "emit-e2e", "\n".join(md))
         try:
             (demo_dir / "E2E_REPORT.md").unlink()  # consolidated into RUN_REPORT.md — drop the standalone

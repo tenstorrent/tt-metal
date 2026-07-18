@@ -104,6 +104,42 @@ def emit_run_report(
         return None
 
 
+def refresh_bringup_section(demo_dir, model_id: Optional[str] = None) -> None:
+    """Re-render ONLY the bring-up section of ``RUN_REPORT.md`` in the current
+    format, from on-disk state.
+
+    A later phase (emit-e2e, optimize) calls this before writing its own
+    section so a report assembled across tool versions can never show a stale
+    old-format bring-up block next to a fresh section. It bypasses the
+    emit-once guard, derives the outcome from the persisted categorization, and
+    recovers ``model_id`` from the existing report title when not supplied.
+    Best-effort: never raises.
+    """
+    demo_dir = Path(demo_dir)
+    if model_id is None:
+        try:
+            for _ln in (demo_dir / "RUN_REPORT.md").read_text().splitlines():
+                if _ln.lstrip().startswith("# Bring-up run report") and "`" in _ln:
+                    model_id = _ln.split("`")[1]
+                    break
+        except Exception:
+            model_id = None
+        if not model_id:
+            model_id = demo_dir.name
+    try:
+        _emit_run_report_impl(
+            model_id,
+            demo_dir,
+            converged=None,
+            iterations_run=None,
+            demo_emit_status=None,
+            demo_pytest_status=None,
+            echo_terminal=False,
+        )
+    except Exception:
+        pass
+
+
 def _emit_run_report_impl(
     model_id: str,
     demo_dir: Path,
@@ -130,12 +166,13 @@ def _emit_run_report_impl(
     lines.append("")
     lines.append("## Outcome")
     lines.append("")
+    if converged is None:
+        converged = not cat_report.pending and not cat_report.kernel_missing
+    _iters = f"{iterations_run} iteration(s)" if iterations_run else "bring-up"
     if converged is True:
-        lines.append(f"**Converged** after {iterations_run or '?'} iteration(s).")
-    elif converged is False:
-        lines.append(f"**Did not converge** after {iterations_run or '?'} iteration(s).")
+        lines.append(f"**Converged** after {_iters}.")
     else:
-        lines.append("Run state: report generated outside the auto-iterate loop.")
+        lines.append(f"**Did not converge** after {_iters}.")
     if stop_reason:
         lines.append(f"- Run ended: {stop_reason}")
     if demo_emit_status:

@@ -1004,6 +1004,12 @@ def _emit_summary(
             _demo = None
         if _demo and str(_demo):
             when = f"Final end-of-run summary: {time.strftime('%Y-%m-%d %H:%M:%S %Z')} (adds committed wins, full-pipeline e2e, roofline residual)"
+            try:
+                from scripts.tt_hw_planner.run_report import refresh_bringup_section
+
+                refresh_bringup_section(_demo)
+            except Exception:
+                pass
             mod.upsert_report_section(_demo, "optimize", mod.optimize_block(_demo, 0, text, when))
             print(f"  [optimize/cc] report updated: {_demo / 'RUN_REPORT.md'} (optimize section)")
             _prune_legacy_reports(_demo)
