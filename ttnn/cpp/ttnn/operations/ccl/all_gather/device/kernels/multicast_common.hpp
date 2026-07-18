@@ -45,14 +45,16 @@ public:
         chunk_sizes.fill(page_size);
         uint8_t starts[1] = {1};
 
-        fabric_api::fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+        fabric_api::fabric_multicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             fabric_connection,
             scatter_route_id_1,
 #ifndef FABRIC_2D
             starts,
 #endif
             ranges,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet),
+            payload_size);
 
         fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             fabric_connection,
@@ -67,14 +69,16 @@ public:
         //    forward worker alternates between 4 hops and 3 hops (in that order).
         //    backward worker alternates between 3 hops and 4 hops (in that order).
         if constexpr (alternate_routes) {
-            fabric_api::fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+            fabric_api::fabric_multicast_noc_scatter_write_set_state<
+                UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
                 fabric_connection,
                 scatter_route_id_2,
 #ifndef FABRIC_2D
                 starts,
 #endif
                 ranges_alt,
-                NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+                NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet),
+                payload_size);
 
             fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
                 fabric_connection,
