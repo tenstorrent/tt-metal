@@ -190,8 +190,15 @@ def test_sparse_sdpa_determinism(device, q_dtype, kv_dtype):
         return ttnn.to_layout(o, ttnn.TILE_LAYOUT)
 
     ref, marker = None, None
+    kv_format = (
+        ttnn.transformer.SparseKVFormat.BF16 if kv_dtype == ttnn.bfloat16 else ttnn.transformer.SparseKVFormat.FP8_E4M3
+    )
     for _ in range(iters):
-        cur = comparable(ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=K_DIM**-0.5, k_chunk_size=kc))
+        cur = comparable(
+            ttnn.transformer.sparse_sdpa(
+                tt_q, tt_kv, tt_idx, V_DIM, kv_format=kv_format, scale=K_DIM**-0.5, k_chunk_size=kc
+            )
+        )
         if ref is None:
             ref = cur
         else:
@@ -239,6 +246,7 @@ def _run_sparse_sdpa_perf(device, H, S, T, TOPK, kc, nv, cache_format):
             tt_packed,
             tt_indices,
             V_DIM,
+            kv_format=ttnn.transformer.SparseKVFormat.SCALED_FP8,
             scale=K_DIM**-0.5,
             k_chunk_size=kc,
         )

@@ -68,7 +68,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
 
     // Element sizes come from the tensors (no hardcoded byte counts); passed to the kernels as compile args.
     const uint32_t q_elem_bytes = t.q.element_size();
-    const bool scaled_kv = t.has_scaled_kv();
+    const bool scaled_kv = attrs.has_scaled_kv();
     const uint32_t kv_elem_bytes = t.kv.element_size();
     const uint32_t idx_elem_bytes = t.indices.element_size();  // uint32 -> 4
     const uint32_t out_elem_bytes = output.element_size();
@@ -220,7 +220,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     writer_ct.insert(
         writer_ct.end(),
-        {static_cast<uint32_t>(scaled_kv), k_dim, kv_elem_bytes, cb_k_rm, cb_idx, cb_kreq, cb_kack, packed_page_bytes});
+        {static_cast<uint32_t>(scaled_kv), k_dim, kv_elem_bytes, cb_idx, cb_kreq, cb_kack, packed_page_bytes});
     TT_FATAL(
         writer_ct.size() == ::sparse_sdpa::writer_ct_arg::END,
         "sparse_sdpa writer compile-time argument layout is out of sync");

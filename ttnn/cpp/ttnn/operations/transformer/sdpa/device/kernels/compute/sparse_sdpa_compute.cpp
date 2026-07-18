@@ -172,14 +172,23 @@ void kernel_main() {
                 // separate BF16 tiled buffer, avoiding both a full BF16 K and the RoPE copy into it.
                 constexpr uint32_t latent_DHt = vDHt;
                 constexpr uint32_t rope_DHt = DHt - vDHt;
+                constexpr uint32_t latent_width = latent_DHt * tt::constants::TILE_WIDTH;
+                static_assert(
+                    sparse_sdpa::SCALE_BLOCK_WIDTH % tt::constants::TILE_WIDTH == 0,
+                    "scaled KV scale blocks must span an exact number of tiles");
                 constexpr uint32_t tiles_per_scale_block = sparse_sdpa::SCALE_BLOCK_WIDTH / tt::constants::TILE_WIDTH;
-                constexpr uint32_t scale_blocks = latent_DHt / tiles_per_scale_block;
+                constexpr uint32_t scale_blocks = sparse_sdpa::scale_block_count(latent_width);
+                constexpr uint32_t scale_bytes = sparse_sdpa::scaled_kv_scale_bytes(latent_width);
+                static_assert(
+                    sparse_sdpa::scaled_kv_rope_offset_is_aligned(latent_width),
+                    "scaled KV scale/RoPE boundary must be addressable in 16-byte units");
+                static_assert(
+                    packed_row_bytes % (tt::constants::TILE_WIDTH * sizeof(uint16_t)) == 0,
+                    "scaled KV physical row stride must be an exact number of BF16 tile rows");
                 constexpr uint32_t latent_physical_ct = packed_row_bytes / tt::constants::TILE_WIDTH;
                 constexpr uint32_t rope_physical_ct = packed_row_bytes / (tt::constants::TILE_WIDTH * sizeof(uint16_t));
-                constexpr uint32_t scale_bytes = scale_blocks * sizeof(float);
-                constexpr uint32_t unpack_address_unit_bytes = 16;
                 constexpr uint32_t rope_offset_16b =
-                    (vDHt * tt::constants::TILE_WIDTH + scale_bytes) / unpack_address_unit_bytes;
+                    (latent_width + scale_bytes) / sparse_sdpa::PACKED_FIELD_ADDRESS_UNIT_BYTES;
 
                 k_in_cb.reserve_back(Skt * vDHt);
                 for (uint32_t row_tile = 0; row_tile < Skt; ++row_tile) {

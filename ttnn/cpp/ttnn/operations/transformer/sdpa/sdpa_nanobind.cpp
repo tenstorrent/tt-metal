@@ -283,6 +283,11 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
 }  // namespace
 
 void bind_sdpa(nb::module_& mod) {
+    nb::enum_<ttnn::transformer::SparseKVFormat>(mod, "SparseKVFormat")
+        .value("BF16", ttnn::transformer::SparseKVFormat::BF16)
+        .value("FP8_E4M3", ttnn::transformer::SparseKVFormat::FP8_E4M3)
+        .value("SCALED_FP8", ttnn::transformer::SparseKVFormat::SCALED_FP8);
+
     const auto* const doc =
         R"doc(
         Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
@@ -340,13 +345,15 @@ void bind_sdpa(nb::module_& mod) {
 
         Args:
             q (ttnn.Tensor):       [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)
-            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16/raw fp8, or one packed scaled-FP8 row per token.
+            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16/raw fp8, or one packed scaled-FP8 row per token;
+                                   interpretation is selected only by `kv_format`, never inferred from width.
                                    The packed DSA row is [512 FP8 | 4 FP32 scales | 64 BF16 RoPE] = 656 bytes.
                                    When cache_batch_idx is set, B may exceed 1 and kv may be ND-sharded.
             indices (ttnn.Tensor): [1, 1, S, TOPK] uint32
             v_dim (int):           width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
 
         Keyword args:
+            kv_format (SparseKVFormat): explicit physical/logical format of `kv`.
             scale (float, optional): defaults to K_DIM**-0.5.
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
@@ -370,6 +377,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("indices").noconvert(),
         nb::arg("v_dim"),
         nb::kw_only(),
+        nb::arg("kv_format"),
         nb::arg("scale") = nb::none(),
         nb::arg("k_chunk_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),

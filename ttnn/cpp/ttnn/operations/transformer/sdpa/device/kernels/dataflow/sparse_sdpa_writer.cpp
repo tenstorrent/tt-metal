@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr bool scaled_kv = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::SCALED_KV) != 0;
     constexpr uint32_t k_dim = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::K_DIM);
     constexpr uint32_t kv_elem_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::KV_ELEM_BYTES);
-    constexpr uint32_t cb_k_rm = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_K_RM);
     constexpr uint32_t cb_idx = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_IDX);
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KACK);
@@ -70,7 +69,7 @@ void kernel_main() {
     constexpr uint32_t latent_row_bytes = vDHt * tt::constants::TILE_WIDTH;
     constexpr uint32_t scale_blocks = sparse_sdpa::scale_block_count(latent_row_bytes);
     const auto kv = TensorAccessor(kv_args, kv_addr);
-    experimental::CB k_cb(cb_k_rm), idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
+    experimental::CB idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
 
     // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
@@ -110,13 +109,10 @@ void kernel_main() {
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
                 base = request[sparse_sdpa::gather_request::BASE];
                 split = request[sparse_sdpa::gather_request::SPLIT];
+                last = request[sparse_sdpa::gather_request::IS_LAST] != 0;
+                dst_l1 = request[sparse_sdpa::gather_request::DST_L1];
                 if constexpr (scaled_kv) {
-                    last = request[sparse_sdpa::gather_request::IS_LAST] != 0;
-                    dst_l1 = request[sparse_sdpa::gather_request::DST_L1];
                     scale_dst_l1 = request[sparse_sdpa::gather_request::SCALE_DST_L1];
-                } else {
-                    last = request[sparse_sdpa::gather_request::IS_LAST] != 0;
-                    dst_l1 = request[sparse_sdpa::gather_request::DST_L1];
                 }
             }
             kreq_cb.pop_front(1);

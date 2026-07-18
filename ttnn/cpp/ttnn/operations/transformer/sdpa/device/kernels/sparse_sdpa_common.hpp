@@ -11,6 +11,7 @@
 namespace sparse_sdpa {
 
 constexpr uint32_t SCALE_BLOCK_WIDTH = 128;
+constexpr uint32_t PACKED_FIELD_ADDRESS_UNIT_BYTES = 16;
 constexpr uint32_t CB_PAGE_ALIGNMENT = 16;
 constexpr uint32_t CB_DOUBLE_BUFFER_DEPTH = 2;
 
@@ -20,8 +21,16 @@ constexpr uint32_t align_cb_page(uint32_t bytes) {
 
 constexpr uint32_t scale_block_count(uint32_t latent_width) { return latent_width / SCALE_BLOCK_WIDTH; }
 
-constexpr uint32_t packed_kv_width(uint32_t k_dim, uint32_t latent_width) {
-    return latent_width + scale_block_count(latent_width) * sizeof(float) + (k_dim - latent_width) * sizeof(uint16_t);
+constexpr uint32_t scaled_kv_scale_bytes(uint32_t latent_width) {
+    return scale_block_count(latent_width) * sizeof(float);
+}
+
+constexpr bool scaled_kv_rope_offset_is_aligned(uint32_t latent_width) {
+    return (latent_width + scaled_kv_scale_bytes(latent_width)) % PACKED_FIELD_ADDRESS_UNIT_BYTES == 0;
+}
+
+constexpr uint32_t packed_kv_payload_bytes(uint32_t k_dim, uint32_t latent_width) {
+    return latent_width + scaled_kv_scale_bytes(latent_width) + (k_dim - latent_width) * sizeof(uint16_t);
 }
 
 // Reader -> writer dual-NoC gather request. SCALE_DST_L1 is used only by the scaled-cache path.
@@ -95,7 +104,6 @@ enum : uint32_t {
     SCALED_KV,
     K_DIM,
     KV_ELEM_BYTES,
-    CB_K_RM,
     CB_IDX,
     CB_KREQ,
     CB_KACK,

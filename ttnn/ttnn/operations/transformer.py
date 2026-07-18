@@ -7,6 +7,7 @@ from typing import Optional
 import ttnn
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
+SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
 
 
 def _golden_function(

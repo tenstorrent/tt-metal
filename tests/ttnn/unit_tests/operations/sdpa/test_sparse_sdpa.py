@@ -25,11 +25,22 @@ from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
 K_DIM = 576  # head dim (q/kv width)
 V_DIM = 512  # V width / output width (op arg)
 SCALE_BLOCK_WIDTH = 128
+BF16_KV = ttnn.transformer.SparseKVFormat.BF16
+FP8_KV = ttnn.transformer.SparseKVFormat.FP8_E4M3
+SCALED_FP8_KV = ttnn.transformer.SparseKVFormat.SCALED_FP8
 
 # Open the device ONCE per module (not per test) — all tests share one device config, so this avoids the
 # ~1.7s open/close on every test. The program cache persists across tests, which is fine: the recompile and
 # indexed tests clear_program_cache() at their start, and the hash keeps distinct configs separate.
 pytestmark = pytest.mark.use_module_device
+
+
+def test_sparse_kv_format_api_is_explicit(expect_error):
+    assert ttnn.transformer.SparseKVFormat.BF16.name == "BF16"
+    assert ttnn.transformer.SparseKVFormat.FP8_E4M3.name == "FP8_E4M3"
+    assert ttnn.transformer.SparseKVFormat.SCALED_FP8.name == "SCALED_FP8"
+    with expect_error(TypeError, "kv_format"):
+        ttnn.transformer.sparse_sdpa(None, None, None, V_DIM)
 
 
 def make_scaled_kv_cache(device, batch, T, seed, round_scale):
@@ -99,6 +110,7 @@ def test_sparse_sdpa_scaled_fp8_kv(device, S, T, TOPK, kc, all_valid, round_scal
         tt_packed,
         tt_idx,
         V_DIM,
+        kv_format=SCALED_FP8_KV,
         scale=K_DIM**-0.5,
         k_chunk_size=kc,
         **block_cyclic_args,
@@ -132,6 +144,7 @@ def test_sparse_sdpa_scaled_fp8_kv_multi_query_tile(device):
         tt_packed,
         to_dev(indices.to(torch.int32), device, ttnn.uint32),
         V_DIM,
+        kv_format=SCALED_FP8_KV,
         scale=K_DIM**-0.5,
         k_chunk_size=kc,
     )
@@ -154,6 +167,28 @@ def test_sparse_sdpa_scaled_fp8_rejects_malformed_packed_width(device, expect_er
             malformed,
             to_dev(indices.to(torch.int32), device, ttnn.uint32),
             V_DIM,
+            kv_format=SCALED_FP8_KV,
+        )
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_scaled_fp8_rejects_unaligned_rope_offset(device, expect_error):
+    """Scaled rows require the latent+scale prefix to be addressable in the kernel's 16-byte units."""
+    H, S, T, TOPK = 32, 32, 128, 32
+    k_dim, v_dim = 192, 128
+    scale_bytes = (v_dim // SCALE_BLOCK_WIDTH) * 4
+    packed_width = v_dim + scale_bytes + (k_dim - v_dim) * 2
+    q, _, indices = make_inputs(H, S, T, TOPK, k_dim, lambda s: TOPK)
+    packed = to_dev(torch.randn(1, 1, T, packed_width), device, ttnn.fp8_e4m3)
+
+    with expect_error(RuntimeError, "scale/RoPE boundary"):
+        ttnn.transformer.sparse_sdpa(
+            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            packed,
+            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            v_dim,
+            kv_format=SCALED_FP8_KV,
+            k_chunk_size=TOPK,
         )
 
 
@@ -167,6 +202,30 @@ def test_sparse_sdpa_rejects_v_dim_larger_than_k_dim(device, expect_error):
             to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),
             to_dev(indices.to(torch.int32), device, ttnn.uint32),
             K_DIM + 32,
+            kv_format=BF16_KV,
+        )
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "kv_dtype,kv_format,message",
+    [
+        (ttnn.bfloat16, FP8_KV, "requires fp8_e4m3 storage"),
+        (ttnn.fp8_e4m3, BF16_KV, "requires bfloat16 storage"),
+    ],
+)
+def test_sparse_sdpa_rejects_kv_format_storage_mismatch(device, expect_error, kv_dtype, kv_format, message):
+    H, S, T, TOPK = 32, 32, 128, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
+    kv_host = kv.to(torch.bfloat16) if kv_dtype == ttnn.bfloat16 else kv
+    with expect_error(RuntimeError, message):
+        ttnn.transformer.sparse_sdpa(
+            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(kv_host, device, kv_dtype),
+            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            V_DIM,
+            kv_format=kv_format,
+            k_chunk_size=TOPK,
         )
 
 
@@ -180,7 +239,9 @@ def test_sparse_sdpa_output_dtype(device, q_dtype):
     tt_q = to_dev(q_host, device, q_dtype)
     tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-    out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=K_DIM**-0.5, k_chunk_size=kc)
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=K_DIM**-0.5, k_chunk_size=kc
+    )
     assert out.dtype == q_dtype, f"output dtype {out.dtype} != q dtype {q_dtype}"
 
 
@@ -245,7 +306,9 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
             indices[0, 0, s, :] = torch.randperm(valid_len, generator=gen)[:TOPK]
         tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
         tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-        tt_out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc)
+        tt_out = ttnn.transformer.sparse_sdpa(
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc
+        )
         p = pcc(ttnn.to_torch(tt_out), golden(q, kv, indices, scale, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (valid_len={valid_len})"
     n = device.num_program_cache_entries()  # reusing the same oversized buffer must not realloc/recompile
@@ -276,6 +339,7 @@ def test_sparse_sdpa_block_cyclic_sp1_identity(device):
             to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),  # sp=1 => block-cyclic order == natural
             to_dev(indices.to(torch.int32), device, ttnn.uint32),
             V_DIM,
+            kv_format=BF16_KV,
             scale=K_DIM**-0.5,
             k_chunk_size=kc,
             block_cyclic_sp_axis=0,
@@ -300,6 +364,7 @@ def test_sparse_sdpa_block_cyclic_chunk_local_rejected(device, expect_error):
             to_dev(kv_nat.to(torch.bfloat16), device, ttnn.bfloat16),
             to_dev(indices.to(torch.int32), device, ttnn.uint32),
             V_DIM,
+            kv_format=BF16_KV,
             scale=K_DIM**-0.5,
             k_chunk_size=kc,
             block_cyclic_sp_axis=0,
@@ -331,7 +396,7 @@ def test_sparse_sdpa_indexed_kv_cache(device):
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
     for cb in range(B):
         tt_out = ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
         )
         p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))  # golden uses slot cb
         assert p >= 0.99, f"PCC {p:.5f} (cache_batch_idx={cb})"
@@ -370,7 +435,7 @@ def test_sparse_sdpa_indexed_nd_sharded_kv(device):
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
     for cb in range(B):
         tt_out = ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
         )
         p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (nd-sharded, cache_batch_idx={cb})"
@@ -393,6 +458,7 @@ def test_sparse_sdpa_scaled_fp8_indexed_nd_sharded_kv(device):
             tt_packed,
             tt_idx,
             V_DIM,
+            kv_format=SCALED_FP8_KV,
             scale=scale,
             k_chunk_size=kc,
             cache_batch_idx=cache_batch_idx,
@@ -424,7 +490,7 @@ def test_sparse_sdpa_nd_sharded_kv_len_change(device):
             memory_config=nd_cfg,
         )
         tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-        out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc)
+        out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc)
         p = pcc(ttnn.to_torch(out), golden(q, kv, indices, scale, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (nd-sharded, T={T})"
     assert device.num_program_cache_entries() == 2, "sharded kv must recompile per shape (2 distinct T -> 2 entries)"
@@ -441,11 +507,13 @@ def test_sparse_sdpa_indexed_oob_rejected_on_hit(device, expect_error):
     tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-    ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=0)  # miss: builds
+    ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc, cache_batch_idx=0
+    )  # miss: builds
     assert device.num_program_cache_entries() == 1
     # cache HIT, slot B is out of range [0,B) -> rejected by the hit validator
     with expect_error(RuntimeError, "cache_batch_idx"):
-        ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=B)
+        ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc, cache_batch_idx=B)
 
 
 # ---- q/indices layout/memory are NOT in the program hash, so an incompatible (e.g. TILE-layout) q with the
@@ -459,8 +527,10 @@ def test_sparse_sdpa_bad_layout_rejected_on_hit(device, expect_error):
     tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-    ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)  # miss: builds the row-major program
+    ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc
+    )  # miss: builds the row-major program
     assert device.num_program_cache_entries() == 1
     tt_q_tile = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)  # same shape+dtype (same hash) but wrong layout -> HIT
     with expect_error(RuntimeError, "ROW_MAJOR"):
-        ttnn.transformer.sparse_sdpa(tt_q_tile, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)
+        ttnn.transformer.sparse_sdpa(tt_q_tile, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc)

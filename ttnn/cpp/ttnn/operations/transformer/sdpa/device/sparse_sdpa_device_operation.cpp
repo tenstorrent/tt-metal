@@ -44,8 +44,8 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     const auto kvs = kv.logical_shape();
     // kv is [B,1,T,K_DIM]: B == 1 normally; when indexed (cache_batch_idx set) B is the cache's batch slots
     // and cache_batch_idx selects one. q is always batch-1, so the selected slot serves the whole query.
-    const uint32_t packed_kv_width = ::sparse_sdpa::packed_kv_width(K_DIM, attrs.v_dim);
-    const uint32_t expected_kv_width = t.has_scaled_kv() ? packed_kv_width : K_DIM;
+    const uint32_t expected_kv_width =
+        attrs.has_scaled_kv() ? ::sparse_sdpa::packed_kv_payload_bytes(K_DIM, attrs.v_dim) : K_DIM;
     TT_FATAL(
         kvs.rank() == 4 && kvs[1] == 1 && kvs[3] == expected_kv_width,
         "kv must be [B,1,T,{}] (got {})",
@@ -83,12 +83,27 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
     TT_FATAL(q.dtype() == DataType::BFLOAT16 || q_is_fp8, "q must be bf16 or fp8_e4m3");
     TT_FATAL(kv.dtype() == DataType::BFLOAT16 || kv_is_fp8, "kv must be bf16 or fp8_e4m3");
-    if (t.has_scaled_kv()) {
-        TT_FATAL(kv_is_fp8, "packed scaled KV must use fp8_e4m3 byte storage");
+    switch (attrs.kv_format) {
+        case transformer::SparseKVFormat::BF16:
+            TT_FATAL(kv.dtype() == DataType::BFLOAT16, "BF16 sparse KV format requires bfloat16 storage");
+            break;
+        case transformer::SparseKVFormat::FP8_E4M3:
+            TT_FATAL(kv_is_fp8, "FP8_E4M3 sparse KV format requires fp8_e4m3 storage");
+            break;
+        case transformer::SparseKVFormat::SCALED_FP8:
+            TT_FATAL(kv_is_fp8, "SCALED_FP8 sparse KV format requires fp8_e4m3 byte storage");
+            break;
+    }
+    if (attrs.has_scaled_kv()) {
         TT_FATAL(
             attrs.v_dim % ::sparse_sdpa::SCALE_BLOCK_WIDTH == 0,
             "scaled KV v_dim must be divisible by {}",
             ::sparse_sdpa::SCALE_BLOCK_WIDTH);
+        TT_FATAL(
+            ::sparse_sdpa::scaled_kv_rope_offset_is_aligned(attrs.v_dim),
+            "scaled KV scale/RoPE boundary must be {}-byte aligned (got v_dim={})",
+            ::sparse_sdpa::PACKED_FIELD_ADDRESS_UNIT_BYTES,
+            attrs.v_dim);
     }
     TT_FATAL(idx.dtype() == DataType::UINT32, "indices must be uint32");
 
@@ -159,7 +174,7 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // matches q (compute_output_specs), so its row width uses q's element size.
     const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
     TT_FATAL((K_DIM * q.element_size()) % dram_align == 0, "Q row bytes must be {}B aligned", dram_align);
-    if (!t.has_scaled_kv()) {
+    if (!attrs.has_scaled_kv()) {
         TT_FATAL(
             (kv.logical_shape()[3] * kv.element_size()) % dram_align == 0,
             "K row bytes must be {}B aligned",
@@ -197,8 +212,9 @@ SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_te
 }
 
 ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
-    // dtypes + compute_kernel_config MUST be in the hash: q/kv may be bf16 or fp8_e4m3 (different CB
-    // formats, row byte widths, fp32-dest/unpack modes, and output dtype), and fp32_dest_acc_en changes
+    // kv_format + dtypes + compute_kernel_config MUST be in the hash: q/kv may be bf16 or fp8_e4m3 (different CB
+    // formats, row byte widths, fp32-dest/unpack modes, and output dtype), scaled FP8 changes row interpretation,
+    // and fp32_dest_acc_en changes
     // the program. Same-shape-different-dtype (or -config) calls otherwise alias to one program and the
     // second silently reuses the first's kernel (wrong results).
     //
@@ -211,12 +227,12 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
     return tt::tt_metal::operation::hash_operation<SparseSDPAOperation>(
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.v_dim,
+        attrs.kv_format,
         attrs.k_chunk_size,
         attrs.compute_kernel_config,
         t.q.logical_shape(),
         t.q.dtype(),
         t.kv.dtype(),
-        t.has_scaled_kv(),
         // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
         // interleaved one, so they must be distinct programs.
         t.kv.memory_config(),
@@ -282,6 +298,7 @@ Tensor sparse_sdpa(
     const Tensor& indices,
     float scale,
     uint32_t v_dim,
+    transformer::SparseKVFormat kv_format,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
@@ -291,6 +308,7 @@ Tensor sparse_sdpa(
         OperationType::operation_attributes_t{
             .scale = scale,
             .v_dim = v_dim,
+            .kv_format = kv_format,
             .k_chunk_size = k_chunk_size,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
