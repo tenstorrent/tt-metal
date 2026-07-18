@@ -195,9 +195,98 @@ def _pending_shard_component(comps: list[str]) -> str | None:
     return None
 
 
+def _declared_components() -> list[str]:
+    """The gate's universe: components DECLARED in bringup_status.json (status
+    NEW/ADAPT/REUSE), minus the legitimately-excluded set (no_emit).
+
+    This is deliberately NOT keyed off which per-component PCC test files happen
+    to exist on disk. Keying the universe off emitted test files let a declared
+    component whose test was never written (scaffold gap, promote resume, a
+    post-scaffold addition) slip out of the universe entirely — so it was never
+    attempted AND did not block can_stop (the gate reported "all graduated" over
+    a component it never saw). Enumerating the DECLARED set closes that hole:
+    the missing-test state is handled below (auto-emit) instead of vanishing."""
+    try:
+        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
+    except Exception:
+        return []
+    try:
+        from scripts.tt_hw_planner.overlay_manager import load_no_emit_tests
+
+        no_emit = set(load_no_emit_tests(_MODEL_ID).keys())
+    except Exception:
+        no_emit = set()
+    out: list[str] = []
+    for c in data.get("components", []) or []:
+        if c.get("status") not in ("NEW", "ADAPT", "REUSE"):
+            continue
+        name = str(c.get("name", "")).strip()
+        if name and name not in no_emit:
+            out.append(name)
+    return sorted(set(out))
+
+
+def _repo_root_for_demo() -> Path:
+    d = _DEMO_DIR.resolve()
+    for p in d.parents:
+        if p.name == "models":
+            return p.parent
+    return d
+
+
+def _ensure_component_tests() -> list[str]:
+    """Emit tests/pcc/test_<name>.py for any DECLARED component that is missing
+    it, using the same deterministic scaffolder the bring-up loop uses.
+
+    This is the self-heal both auto-up and promote get for free (both obey this
+    gate): a declared component can never stay test-less and therefore
+    unattended. Best-effort per component; returns the names it emitted."""
+    try:
+        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
+    except Exception:
+        return []
+    try:
+        from scripts.tt_hw_planner.overlay_manager import load_no_emit_tests
+
+        no_emit = set(load_no_emit_tests(_MODEL_ID).keys())
+    except Exception:
+        no_emit = set()
+    try:
+        from scripts.tt_hw_planner.bringup_loop import _emit_pcc_template, _safe_id
+    except Exception:
+        return []
+    pcc_dir = _DEMO_DIR / "tests" / "pcc"
+    repo_root = _repo_root_for_demo()
+    emitted: list[str] = []
+    for c in data.get("components", []) or []:
+        if c.get("status") not in ("NEW", "ADAPT", "REUSE"):
+            continue
+        name = str(c.get("name", "")).strip()
+        if not name or name in no_emit:
+            continue
+        if (pcc_dir / f"test_{_safe_id(name)}.py").is_file():
+            continue
+        try:
+            _emit_pcc_template(
+                demo_dir=_DEMO_DIR,
+                component_name=name,
+                model_id=_MODEL_ID,
+                hf_reference=c.get("hf_reference") or "",
+                new_shape=c.get("new_shape") or {},
+                repo_root=repo_root,
+                overwrite=False,
+                discovered_submodule_path=c.get("submodule_path"),
+            )
+            if (pcc_dir / f"test_{_safe_id(name)}.py").is_file():
+                emitted.append(name)
+        except Exception:
+            pass
+    return emitted
+
+
 def _components() -> list[str]:
     try:
-        return [_component_of(t) for t in _cli._list_component_pcc_tests(_DEMO_DIR)]
+        return _declared_components()
     except Exception:
         return []
 
@@ -782,6 +871,7 @@ def termination_check() -> dict:
     the failure verdict warrants it and it hasn't been decomposed -> decompose, else -> fallback. Uses
     the extracted bringup_ladder cap rule. Agent may NOT declare done."""
     st = _load_state()
+    _ensure_component_tests()
     comps = _components()
     if not comps:
         return {"can_stop": True, "halt": False, "next_target": None, "reason": "no components to bring up"}
@@ -877,6 +967,16 @@ def termination_check() -> dict:
                 f"Mamba). Then run_component('{c}', mode='shard') and record_result(mode='shard'); a "
                 f"gathered-PCC>={_PCC} pass writes .py.last_good_sharded. Math unchanged: gathered output == "
                 f"golden.",
+            }
+        elif _test_file_for(c) is None:
+            nxt = {
+                "unit": c,
+                "rung": "emit",
+                "reason": f"component '{c}' is DECLARED but has no tests/pcc/test_{c}.py and the "
+                f"deterministic scaffolder could not auto-emit one. It MUST have a PCC test to be brought "
+                f"up on device — create tests/pcc/test_{c}.py mirroring a sibling per-component test "
+                f"(reuse tests/pcc/conftest.py's _make_arg_for; see _captured/{c}/ for real shapes), then "
+                f"edit _stubs/{c}.py to a native ttnn forward and run_component. Do NOT leave it test-less.",
             }
         else:
             rung = "emit" if attempts == 0 else "repair"
