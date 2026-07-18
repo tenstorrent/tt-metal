@@ -35,6 +35,12 @@ _MAX_MINIMAL_CANDIDATES = 4
 # execution mode; invalid ones for a given shape self-eliminate during the
 # on-device benchmark loop, so we generate broadly and let measured latency pick.
 _MAX_PROGRAM_CONFIG_CANDIDATES = 6
+# Minimum correlation a tuned candidate's output must have with the trusted
+# reference (default-config) output to be eligible for selection.  Different but
+# valid configs agree to well above this; a config that is invalid for the shape
+# (yet still runs) produces uncorrelated garbage and is rejected here.  This
+# guards selection so we never pick a faster-but-wrong config.
+_CORRECTNESS_PCC_THRESHOLD = 0.99
 _CACHE_FILE_SUFFIX = ".json"
 _DEFAULT_CCL_CHUNKS_PER_SYNC = 10
 _DEFAULT_CCL_NUM_WORKERS_PER_LINK = 2
@@ -1748,6 +1754,82 @@ def _build_candidates(
     return candidates
 
 
+def _result_to_torch(result: Any) -> Any:
+    """Convert a candidate output (ttnn.Tensor, or first element of a tuple) to a
+    flattened float32 host torch tensor for correctness comparison, or None."""
+    if isinstance(result, (list, tuple)):
+        result = result[0] if result else None
+    if result is None:
+        return None
+    try:
+        import torch
+    except Exception:
+        return None
+    ttnn = _ttnn()
+    try:
+        host = ttnn.to_torch(result)
+        return host.detach().to(torch.float32).flatten()
+    except Exception:
+        return None
+
+
+def _output_pcc(reference: Any, candidate: Any) -> float:
+    """Pearson correlation between two flattened host tensors (-1.0 on any issue)."""
+    if reference is None or candidate is None:
+        return -1.0
+    try:
+        import torch
+    except Exception:
+        return -1.0
+    if reference.numel() == 0 or reference.numel() != candidate.numel():
+        return -1.0
+    if torch.allclose(reference, candidate, rtol=1e-2, atol=1e-2):
+        return 1.0
+    # Constant tensors have zero variance; correlation is undefined, so fall back
+    # to the allclose verdict above (which already returned if they matched).
+    if reference.std() == 0 or candidate.std() == 0:
+        return -1.0
+    corr = torch.corrcoef(torch.stack([reference, candidate]))[0, 1].item()
+    return -1.0 if math.isnan(corr) else corr
+
+
+def _candidate_matches_reference(candidate: Candidate, device: Any, reference_torch: Any) -> bool:
+    """Run a candidate once and check its output correlates with the reference."""
+    try:
+        _sync_device(device)
+        output = candidate.run()
+        _sync_device(device)
+    except Exception:
+        return False
+    try:
+        candidate_torch = _result_to_torch(output)
+    finally:
+        _deallocate_result(output)
+    return _output_pcc(reference_torch, candidate_torch) >= _CORRECTNESS_PCC_THRESHOLD
+
+
+def _compute_reference_output(candidates: list[Candidate], device: Any) -> Any:
+    """Compute the trusted reference output from the default-config candidate.
+
+    The default candidate runs the stock ttnn.matmul/linear with no program
+    config, which is the ground truth every tuned candidate must match.  Returns
+    a flattened host torch tensor, or None if unavailable (correctness gating is
+    then skipped and selection falls back to latency-only)."""
+    default_candidate = next((c for c in candidates if str(c.descriptor.get("kind", "")).startswith("default")), None)
+    if default_candidate is None:
+        return None
+    try:
+        _sync_device(device)
+        output = default_candidate.run()
+        _sync_device(device)
+    except Exception:
+        return None
+    try:
+        return _result_to_torch(output)
+    finally:
+        _deallocate_result(output)
+
+
 def _benchmark_candidate_eager(candidate: Candidate, device: Any) -> tuple[float, list[float], str]:
     _sync_device(device)
     warmup_output = candidate.run()
@@ -1950,7 +2032,23 @@ def _select_candidate(
     queue_id = int(kwargs["queue_id"] if "queue_id" in kwargs else (kwargs.get("cq_id") or 0))
     benchmark_accepts_queue_id = _callable_accepts_keyword(_benchmark_candidate, "queue_id")
 
+    # Trusted reference output (default config).  Any tuned candidate whose result
+    # doesn't correlate with it is rejected before selection, so we never pick a
+    # faster-but-numerically-wrong config for a shape it happens to run on.
+    reference_torch = _compute_reference_output(candidates, device)
+
     for candidate in candidates:
+        is_default = str(candidate.descriptor.get("kind", "")).startswith("default")
+        if reference_torch is not None and not is_default:
+            if not _candidate_matches_reference(candidate, device, reference_torch):
+                candidate_timings.append(
+                    {
+                        "descriptor": candidate.descriptor,
+                        "status": "incorrect",
+                    }
+                )
+                continue
+
         try:
             if benchmark_accepts_queue_id:
                 avg_us, samples_us, benchmark_mode = _benchmark_candidate(candidate, device, queue_id=queue_id)
