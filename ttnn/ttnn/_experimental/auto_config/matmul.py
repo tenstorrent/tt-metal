@@ -1026,6 +1026,13 @@ def _supports_program_config_sweep(signature: AutoMatmulSignature) -> bool:
         return False
     if any(int(dim) != 1 for dim in rhs_shape[:-2]):
         return False
+    # Single-output-tile matmuls (both M and N fit in one 32x32 tile) cannot be
+    # distributed across the core grid, so the 2D/1D multicast configs are
+    # degenerate: they add rounding error without any parallelism benefit.  Leave
+    # these to the default heuristic / minimal-matmul families.
+    m_tiles, _, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+    if m_tiles <= 1 and n_tiles <= 1:
+        return False
     return True
 
 
