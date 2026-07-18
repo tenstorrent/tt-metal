@@ -55,6 +55,12 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_arg.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
+    // Keep one complete W-reduction row in L1 when it fits within a conservative
+    // per-core budget. The SFPU two-pass kernel can then replay the same CB pages for
+    // variance instead of issuing a second set of DRAM reads. The lower tile threshold
+    // is selected below after work has been split across cores.
+    constexpr std::uint32_t two_pass_l1_replay_max_bytes = 512 * 1024;
+
     // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
     // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
     // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
@@ -168,6 +174,17 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_work_units);
     }
 
+    // Indexed CB replay has a small fixed cost. With one reduction per core it pays
+    // off at 24 tiles; when any core processes multiple reductions, eliminating the
+    // second DRAM traversal pays off from 8 tiles onward. Four or fewer tiles are
+    // already retained entirely in DEST and never need replay.
+    const bool multiple_work_units_per_core =
+        num_work_units_per_core_group_1 > 1 || num_work_units_per_core_group_2 > 1;
+    const std::uint32_t two_pass_l1_replay_min_tiles = multiple_work_units_per_core ? 8 : 24;
+    const bool two_pass_l1_replay =
+        sfpu_two_pass && reduce_w && Wt >= two_pass_l1_replay_min_tiles &&
+        static_cast<std::uint64_t>(Wt) * input_single_tile_size <= two_pass_l1_replay_max_bytes;
+
     ProgramDescriptor desc;
 
     // Input CB c_0. The unpack_to_dest_mode flag below makes c_0 UnpackToDestFp32 for FP32
@@ -176,7 +193,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // truncate FP32 to TF32). The user scalar is applied as an SFPU post-multiplication on
     // the reduced output, not by pre-scaling the input -- see post_mul_scaler below.
     CBIndex input_cb_index = CBIndex::c_0;
-    uint32_t input_tiles_per_cb = 2;
+    std::uint32_t input_tiles_per_cb = two_pass_l1_replay ? Wt : 2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_tiles_per_cb * input_single_tile_size,
         .core_ranges = all_cores,
@@ -296,6 +313,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // reader/writer ignore it.
     if (use_post_mul) {
         reduce_defines["WELFORD_POST_MUL"] = "1";
+    }
+    if (two_pass_l1_replay) {
+        reduce_defines["WELFORD_TWO_PASS_L1_REPLAY"] = "1";
     }
 
     // welford_fp32_input gates the transpose re-init / welford PreserveStats recovery in the

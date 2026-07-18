@@ -94,10 +94,18 @@ void kernel_main() {
             two_pass_stats_init_shifted();
 
             for (uint32_t wt = 0; wt < Wt; ++wt) {
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+                // Do not pop pass-one tiles: the enlarged CB holds the complete
+                // reduction row so pass two can index the same L1 pages directly.
+                dfb_in_obj.wait_front(wt + 1);
+                transpose_tile(dfb_in, wt, input_dst);
+                constexpr uint32_t stats_input_dst = input_dst;
+#else
                 dfb_in_obj.wait_front(onetile);
                 const uint32_t stats_input_dst = wt < 3 ? (wt == 0 ? retained_input_dst : wt) : input_dst;
                 transpose_tile(dfb_in, 0, stats_input_dst);
                 dfb_in_obj.pop_front(onetile);
+#endif
                 if (wt == 0) {
                     two_pass_stats_update_shifted_rows<false, true>(
                         stats_input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
@@ -108,6 +116,13 @@ void kernel_main() {
             }
             two_pass_stats_finish_shifted_mean(two_pass_mean_reciprocal);
 
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                transpose_tile(dfb_in, wt, input_dst);
+                two_pass_stats_update_rows<true>(input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
+            }
+            dfb_in_obj.pop_front(Wt);
+#else
             // Keep the first three tiles in otherwise idle DEST slots and the
             // final pass-one tile in input_dst. Replay them in their original
             // order, using the now-free retained slot for any middle tiles.
@@ -125,6 +140,7 @@ void kernel_main() {
                 }
                 two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
             }
+#endif
             two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
             tile_regs_commit();
         } else {

@@ -34,13 +34,24 @@ void kernel_main() {
     const std::uint32_t num_rows = num_tiles / Wt;
     for (std::uint32_t row = 0; row < num_rows; ++row) {
         const std::uint32_t row_start_id = start_id + row * Wt;
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+        // The compute kernel keeps this complete row in the enlarged input CB and
+        // indexes it twice, so DRAM is traversed only once.
+        constexpr std::uint32_t num_passes = 1;
+#else
         constexpr std::uint32_t num_passes = Wt <= 4 ? 1 : 2;
+#endif
         for (std::uint32_t pass = 0; pass < num_passes; ++pass) {
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+            constexpr std::uint32_t pass_start = 0;
+            constexpr std::uint32_t pass_end = Wt;
+#else
             // Compute retains the first three transposed tiles and the final
             // tile in DEST across passes, so only stream the middle tiles on
             // pass two. Tile order remains unchanged.
             const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Wt, static_cast<std::uint32_t>(3));
             const std::uint32_t pass_end = pass == 0 ? Wt : Wt - 1;
+#endif
             for (std::uint32_t wt = pass_start; wt < pass_end; ++wt) {
                 cb_in0.reserve_back(onetile);
                 noc.async_read(
