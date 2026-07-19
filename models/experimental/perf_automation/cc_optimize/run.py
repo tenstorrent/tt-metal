@@ -1123,7 +1123,7 @@ def _run_device_proc(
         else:
             proc.wait(timeout=timeout_s)
             rc = proc.returncode
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as _te:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except Exception:  # noqa: BLE001
@@ -1133,8 +1133,10 @@ def _run_device_proc(
         except Exception:  # noqa: BLE001
             pass
         tail = _reclaim_device(devices) if reset_on_timeout else "process group killed"
+        _lim = int(getattr(_te, "timeout", None) or timeout_s)
+        _why = "no-progress stall" if _lim < timeout_s else "hard limit"
         print(
-            f"  [optimize/cc] {label or 'device subprocess'} TIMED OUT after {timeout_s}s "
+            f"  [optimize/cc] {label or 'device subprocess'} KILLED after {_lim}s ({_why}) "
             f"(likely a device wedge / leaked mesh) -- killed the whole process group + {tail}"
         )
         return None, ""
