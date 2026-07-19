@@ -89,7 +89,24 @@ template <
     uint32_t out_subblock_num_tiles,
     uint32_t out_block_num_tiles,
     bool apply_silu_on_final>
-FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
+FORCE_INLINE void matmul_phase(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t partials_cb_id,
+    uint32_t final_cb_id,
+    [[maybe_unused]] uint32_t m_subblocks) {
+    // NOTE: the DOWN matmul keeps FULL per_core_M work under RE_MSKIP. Its
+    // PACKER_L1_ACC discipline drains the partials ring every K-block and relies
+    // on push==drain==out_block_num_tiles so the write pointer wraps back to
+    // block 0's slots for cross-K-block accumulation; a shrunk (m_valid) count
+    // would land block N+1 in the wrong L1 slots and corrupt the accumulation.
+    // So m_subblocks is used here only to skip the MAC for invalid rows (below);
+    // the count-sparsity win comes from the
+    // gate/up + multiply phases (reserve-once, safe to shrink). The writer skips
+    // OOB output rows via its row<count_tiles guard, so the extra rows the down
+    // matmul computes here are simply never written.
+    constexpr uint32_t EFF_M = in0_num_subblocks;
+    constexpr uint32_t EFF_OUT = out_block_num_tiles;
     // Reconfig packer for partials format (previous phase's final_cb format
     // would otherwise leak). pack_reconfig_data_format (the reconfig variant)
     // does NOT reset L1_ACC — we do that explicitly below.
@@ -126,7 +143,7 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
         in1_cb.wait_front(in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
-        for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
+        for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
                 tile_regs_acquire();
@@ -135,16 +152,29 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
                 uint32_t in0_index = in0_index_subblock_offset;
                 uint32_t in1_index = in1_index_subblock_offset;
                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                    matmul_block(
-                        in0_cb_id,
-                        in1_cb_id,
-                        in0_index,
-                        in1_index,
-                        dst_index,
-                        /*transpose=*/0,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
+#ifndef RE_SKIP_MATMUL
+                    // RE_SKIP_MATMUL (perf-investigation only): drop the MAC so the
+                    // kernel still cycles all CB handshakes / packs but does no matmul
+                    // compute, isolating the DRAM-I/O floor. Output is garbage.
+#ifdef RE_MSKIP
+                    // RE_MSKIP: rows [m_subblocks, per_core_M) of cb_in0_down_full are
+                    // NOT written by the reader's (bounded) activated mcast, so skip the
+                    // MAC for them rather than feed the down matmul stale/uninitialized
+                    // L1. The partials/drain stay FULL (below) for L1_ACC alignment; the
+                    // skipped rows' output is discarded by the writer's row<count guard.
+                    if (sb_m < m_subblocks)
+#endif
+                        matmul_block(
+                            in0_cb_id,
+                            in1_cb_id,
+                            in0_index,
+                            in1_index,
+                            dst_index,
+                            /*transpose=*/0,
+                            out_subblock_w,
+                            out_subblock_h,
+                            in0_block_w);
+#endif
                     in0_index += 1;
                     in1_index += in1_per_core_w;
                 }
@@ -176,7 +206,7 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
         // the write pointer back to block 0's slots. The last block's output is
         // left pushed for the second-pass copy below.
         if (block + 1 < num_blocks) {
-            for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+            for (uint32_t s = 0; s < EFF_OUT; s += out_subblock_num_tiles) {
                 partials_cb.wait_front(out_subblock_num_tiles);
                 partials_cb.pop_front(out_subblock_num_tiles);
             }
@@ -197,7 +227,7 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
     // partials so copy_tile reads partials.
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
 
-    for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
+    for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_cb.wait_front(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
@@ -255,7 +285,20 @@ FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t partials_gu_cb_id,
     uint32_t partials_up_cb_id,
     uint32_t gate_intermed_cb_id,
-    uint32_t up_intermed_cb_id) {
+    uint32_t up_intermed_cb_id,
+    [[maybe_unused]] uint32_t m_subblocks) {
+    // RE_MSKIP (count-sparsity): bound the M-subblock work and the single-block
+    // partials/intermed CB counts by the runtime valid-row count m_subblocks.
+    // x_cb / weight CBs keep FULL per-K-block counts (double-buffered whole-block
+    // rings must stay slot-aligned, see design review). OFF => EFF_* are the
+    // compile-time constants => byte-identical baseline.
+#ifdef RE_MSKIP
+    const uint32_t EFF_M = m_subblocks;
+    const uint32_t EFF_OUT = m_subblocks * in1_num_subblocks * out_subblock_num_tiles;
+#else
+    constexpr uint32_t EFF_M = in0_num_subblocks;
+    constexpr uint32_t EFF_OUT = out_block_num_tiles;
+#endif
     PACK((pack_reconfig_data_format(partials_gu_cb_id)));
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -268,13 +311,16 @@ FORCE_INLINE void matmul_phase_fused_gu(
     CircularBuffer partials_up_cb(partials_up_cb_id);
     CircularBuffer gate_intermed_cb(gate_intermed_cb_id);
 
-    // Reserve both partials CBs once for the full per-core block. pack_tile
+    // Reserve both partials CBs once for the (effective) per-core block. pack_tile
     // with output_tile_index writes to absolute slots; WrPtr doesn't advance
     // until cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land
     // back in the SAME L1 slots — accumulating physically — which is what
-    // we want. No per-K-block pop+repush needed.
-    partials_gu_cb.reserve_back(out_block_num_tiles);
-    partials_up_cb.reserve_back(out_block_num_tiles);
+    // we want. No per-K-block pop+repush needed. Guarded by EFF_M>0 so an
+    // empty row (m_subblocks==0) never issues a 0-count reserve/push.
+    if (EFF_M > 0) {
+        partials_gu_cb.reserve_back(EFF_OUT);
+        partials_up_cb.reserve_back(EFF_OUT);
+    }
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         x_cb.wait_front(in0_block_num_tiles);
@@ -283,7 +329,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
-        for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
+        for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
                 // --- Gate matmul: x * gate -> partials_gu ---
@@ -292,6 +338,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                     uint32_t in0_index = in0_index_subblock_offset;
                     uint32_t in1_index = in1_index_subblock_offset;
                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+#ifndef RE_SKIP_MATMUL
                         matmul_block(
                             x_cb_id,
                             gate_cb_id,
@@ -302,6 +349,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
+#endif
                         in0_index += 1;
                         in1_index += in1_per_core_w;
                     }
@@ -319,6 +367,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                     uint32_t in0_index = in0_index_subblock_offset;
                     uint32_t in1_index = in1_index_subblock_offset;
                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+#ifndef RE_SKIP_MATMUL
                         matmul_block(
                             x_cb_id,
                             up_cb_id,
@@ -329,6 +378,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
+#endif
                         in0_index += 1;
                         in1_index += in1_per_core_w;
                     }
@@ -357,8 +407,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
         up_cb.pop_front(in1_block_num_tiles);
     }
     // Make the accumulated partials visible to the second-pass copy loops.
-    partials_gu_cb.push_back(out_block_num_tiles);
-    partials_up_cb.push_back(out_block_num_tiles);
+    if (EFF_M > 0) {
+        partials_gu_cb.push_back(EFF_OUT);
+        partials_up_cb.push_back(EFF_OUT);
+    }
 
     // After K-loop: partials_gu holds gate-matmul accumulator,
     // partials_up holds up-matmul accumulator. Copy each to its intermed
@@ -388,7 +440,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
     // to partials_gu so copy_tile reads the accumulator.
     copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
-    for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
+    for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_gu_cb.wait_front(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
@@ -441,7 +493,19 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // granularity here is free and need not match out_subblock_num_tiles.
 template <uint32_t out_block_num_tiles>
 FORCE_INLINE void swiglu_oai_activation_phase(
-    uint32_t prev_srcA_cb_id, uint32_t gate_partials_cb_id, uint32_t up_partials_cb_id, uint32_t activated_cb_id) {
+    uint32_t prev_srcA_cb_id,
+    uint32_t gate_partials_cb_id,
+    uint32_t up_partials_cb_id,
+    uint32_t activated_cb_id,
+    [[maybe_unused]] uint32_t eff_out_tiles) {
+#ifdef RE_MSKIP
+    const uint32_t EFF_OUT = eff_out_tiles;
+    if (EFF_OUT == 0) {
+        return;
+    }
+#else
+    constexpr uint32_t EFF_OUT = out_block_num_tiles;
+#endif
     // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
     // it and the SFPU op's fp32-dest template below stay in sync with the
     // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
@@ -455,8 +519,8 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     CircularBuffer up_partials_cb(up_partials_cb_id);
     CircularBuffer activated_cb(activated_cb_id);
 
-    gate_partials_cb.wait_front(out_block_num_tiles);
-    up_partials_cb.wait_front(out_block_num_tiles);
+    gate_partials_cb.wait_front(EFF_OUT);
+    up_partials_cb.wait_front(EFF_OUT);
 
     PACK((pack_reconfig_data_format(activated_cb_id)));
     // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
@@ -466,8 +530,8 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     // as the "old" operand would no-op the reconfig and leave SrcA on bf4.)
     copy_tile_to_dst_init_short_with_dt(prev_srcA_cb_id, gate_partials_cb_id);
 
-    for (uint32_t base = 0; base < out_block_num_tiles; base += kActChunk) {
-        const uint32_t remaining = out_block_num_tiles - base;
+    for (uint32_t base = 0; base < EFF_OUT; base += kActChunk) {
+        const uint32_t remaining = EFF_OUT - base;
         const uint32_t c = remaining < kActChunk ? remaining : kActChunk;
         tile_regs_acquire();
         // gate -> dst[0..c), up -> dst[c..2c)
@@ -489,19 +553,34 @@ FORCE_INLINE void swiglu_oai_activation_phase(
         activated_cb.push_back(c);
         tile_regs_release();
     }
-    gate_partials_cb.pop_front(out_block_num_tiles);
-    up_partials_cb.pop_front(out_block_num_tiles);
+    gate_partials_cb.pop_front(EFF_OUT);
+    up_partials_cb.pop_front(EFF_OUT);
 }
 #endif
 
+// eff_out_tiles = number of valid output tiles this core produces this chunk
+// (= m_valid * per_core_N_gu under RE_MSKIP; == out_block_num_tiles otherwise).
+// Precomputed by the caller so multiply_phase needs no per_core_M/N template info.
 template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
-FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id) {
+FORCE_INLINE void multiply_phase(
+    uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id, [[maybe_unused]] uint32_t eff_out_tiles) {
     CircularBuffer gate_cb(gate_cb_id);
     CircularBuffer up_cb(up_cb_id);
     CircularBuffer activated_cb(activated_cb_id);
 
-    gate_cb.wait_front(out_block_num_tiles);
-    up_cb.wait_front(out_block_num_tiles);
+#ifdef RE_MSKIP
+    const uint32_t EFF_OUT = eff_out_tiles;
+#else
+    constexpr uint32_t EFF_OUT = out_block_num_tiles;
+#endif
+    // Empty row (no valid tiles): gate_intermed / partials_up were not pushed, so
+    // there is nothing to wait on or drain.
+    if (EFF_OUT == 0) {
+        return;
+    }
+
+    gate_cb.wait_front(EFF_OUT);
+    up_cb.wait_front(EFF_OUT);
 
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
@@ -514,7 +593,7 @@ FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_
     reconfig_data_format(gate_cb_id, up_cb_id);
     mul_tiles_init(gate_cb_id, up_cb_id);
 
-    constexpr uint32_t num_subblocks = out_block_num_tiles / out_subblock_num_tiles;
+    const uint32_t num_subblocks = EFF_OUT / out_subblock_num_tiles;
     uint32_t base = 0;
     for (uint32_t sb = 0; sb < num_subblocks; ++sb) {
         tile_regs_acquire();
@@ -531,8 +610,8 @@ FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_
         tile_regs_release();
         base += out_subblock_num_tiles;
     }
-    gate_cb.pop_front(out_block_num_tiles);
-    up_cb.pop_front(out_block_num_tiles);
+    gate_cb.pop_front(EFF_OUT);
+    up_cb.pop_front(EFF_OUT);
 }
 
 }  // namespace
@@ -627,6 +706,15 @@ void kernel_main() {
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
 
+#ifdef RE_MSKIP
+    // Count-sparsity: this core's M-row index (my_mt) + spread mapping give a
+    // runtime valid-row count per chunk. per_core_M == g_in0_num_subblocks
+    // (gu_out_subblock_h == 1); GRID_Y == chunk_M_tiles / per_core_M.
+    const uint32_t re_my_mt = get_arg_val<uint32_t>(0);
+    constexpr uint32_t re_per_core_M = g_in0_num_subblocks;
+    const uint32_t re_grid_y = chunk_M_tiles / re_per_core_M;
+#endif
+
     // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
     // between copy_tile and pack_tile — not packer-fused via
     // apply_activation_from_pack. Empirically the packer-fused variant
@@ -644,6 +732,25 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        // Count-sparsity: valid rows this core owns in this chunk (SPREAD map).
+        // OFF => compile-time full per_core_M (phases ignore the runtime arg).
+#ifdef RE_MSKIP
+        uint32_t re_m_valid;
+        {
+            const uint32_t re_base = chunk * chunk_M_tiles + re_my_mt;
+            if (re_base < count_tiles) {
+                const uint32_t re_budget = count_tiles - re_base;
+                const uint32_t re_mv = (re_budget + re_grid_y - 1) / re_grid_y;
+                re_m_valid = re_mv < re_per_core_M ? re_mv : re_per_core_M;
+            } else {
+                re_m_valid = 0;
+            }
+        }
+        const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
+#else
+        constexpr uint32_t re_m_valid = g_in0_num_subblocks;
+        constexpr uint32_t re_eff_out_gu = gu_out_block_num_tiles;
+#endif
         // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
         // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
         // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
@@ -675,7 +782,14 @@ void kernel_main() {
             gu_out_subblock_w,
             gu_out_subblock_num_tiles,
             gu_out_block_num_tiles>(
-            cb_in0_x, cb_in1_gate, cb_in1_up, cb_partials_gu, cb_partials_up, cb_gate_intermed, cb_up_intermed);
+            cb_in0_x,
+            cb_in1_gate,
+            cb_in1_up,
+            cb_partials_gu,
+            cb_partials_up,
+            cb_gate_intermed,
+            cb_up_intermed,
+            re_m_valid);
 
 #ifdef SWIGLU_OAI
         // Phase 3 (SwiGLU-OAI): fused clamp + alpha-sigmoid + (up+1) directly on
@@ -683,7 +797,8 @@ void kernel_main() {
         // gate-silu pass (skipped above) and the plain multiply_phase. cb_in1_up is
         // the unpacker's last SrcA operand (up matmul in1), passed so the partials
         // reconfig (weights df -> Float16_b) actually fires.
-        swiglu_oai_activation_phase<gu_out_block_num_tiles>(cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated);
+        swiglu_oai_activation_phase<gu_out_block_num_tiles>(
+            cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu);
         (void)cb_gate_intermed;
         (void)cb_up_intermed;
 #else
@@ -693,7 +808,7 @@ void kernel_main() {
         // multiply_phase — both unpacker srcs get reset to the input CB
         // formats.
         multiply_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
-            cb_gate_intermed, cb_partials_up, cb_activated);
+            cb_gate_intermed, cb_partials_up, cb_activated, re_eff_out_gu);
         (void)cb_up_intermed;
 #endif
 
@@ -722,6 +837,6 @@ void kernel_main() {
             d_out_subblock_w,
             d_out_subblock_num_tiles,
             d_out_block_num_tiles,
-            /*apply_silu_on_final=*/false>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out);
+            /*apply_silu_on_final=*/false>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out, re_m_valid);
     }  // end chunk loop
 }

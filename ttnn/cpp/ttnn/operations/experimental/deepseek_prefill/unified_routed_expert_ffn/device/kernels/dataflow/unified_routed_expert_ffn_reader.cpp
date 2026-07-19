@@ -285,8 +285,28 @@ void kernel_main() {
     // so this expert only does work proportional to its actual token count,
     // not the max-tokens-padded shape of the input. Eliminates the host-side
     // count read that previously had to narrow the input tensor.
+#ifdef RE_MSKIP
+    // Count-sparsity: GRID_Y and the spread base. per_core_M/chunk_M_tiles are
+    // compile-time; GRID_Y = chunk_M_tiles / per_core_M.
+    constexpr uint32_t re_grid_y = chunk_M_tiles / per_core_M;
+#endif
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
+#ifdef RE_MSKIP
+        // SPREAD row map: this core (gy=my_mt) owns rows { chunk*chunk_M + gy +
+        // m*GRID_Y : m<per_core_M }; valid rows are the prefix m<re_m_valid.
+        const uint32_t re_spread_base = chunk * chunk_M_tiles + my_mt;
+        uint32_t re_m_valid;
+        {
+            if (re_spread_base < count_tiles) {
+                const uint32_t re_budget = count_tiles - re_spread_base;
+                const uint32_t re_mv = (re_budget + re_grid_y - 1) / re_grid_y;
+                re_m_valid = re_mv < per_core_M ? re_mv : per_core_M;
+            } else {
+                re_m_valid = 0;
+            }
+        }
+#endif
 
         // Pre-zero both DB slots of cb_in0_x for this chunk IFF this core
         // (as in0 sender) has any M-rows past M_bound. The K-loop below
@@ -361,6 +381,29 @@ void kernel_main() {
 
                 uint32_t l1_x = cb_in0_x_obj.get_write_ptr();
                 const uint32_t block_start = l1_x;
+#ifdef RE_MSKIP
+                // SPREAD + count-sparsity: read only the re_m_valid valid rows
+                // (row = re_spread_base + m*GRID_Y, all < count_tiles) into the
+                // first re_m_valid CB slots. cb_in0_x push stays FULL below; the
+                // remaining slots are stale but compute never reads them (its
+                // M-subblock loop is bounded by the same re_m_valid).
+                for (uint32_t m = 0; m < re_m_valid; ++m) {
+                    const uint32_t row = re_spread_base + m * re_grid_y;
+                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                        const uint32_t col = kb * in0_block_w_gu + k;
+                        const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
+#ifndef RE_SKIP_WEIGHT_READ
+                        // RE_SKIP_WEIGHT_READ composes with RE_MSKIP: strip the DRAM read
+                        // (keep the pointer advance + mcast) for the read-bound ceiling.
+                        noc_read.async_read(
+                            x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
+#endif
+                        l1_x += x_tile_bytes;
+                    }
+                }
+                noc_read.async_read_barrier();
+                const uint32_t block_bytes = re_m_valid * in0_block_w_gu * x_tile_bytes;
+#else
                 for (uint32_t m = 0; m < per_core_M; ++m) {
                     const uint32_t row = this_core_first_row + m;
                     // count_tiles is the runtime tile-row count for this expert.
@@ -378,8 +421,13 @@ void kernel_main() {
                             // x_start_tile_idx offsets into this expert's region
                             // of a shared buffer (0 when x is per-expert).
                             const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
+#ifndef RE_SKIP_WEIGHT_READ
+                            // RE_SKIP_WEIGHT_READ (perf-investigation only): skip the DRAM
+                            // read but keep the pointer advance + mcast so the read-bound
+                            // ceiling can be measured. Data is stale.
                             noc_read.async_read(
                                 x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
+#endif
                             l1_x += x_tile_bytes;
                         }
                     } else {
@@ -390,6 +438,7 @@ void kernel_main() {
                 noc_read.async_read_barrier();
 
                 const uint32_t block_bytes = g_in0_block_num_tiles * x_tile_bytes;
+#endif
                 // linked=true keeps the multicast path RESERVED so the in0_valid
                 // sem multicast below travels the SAME path and is delivered
                 // AFTER the data at every receiver. With linked=false the path is
@@ -400,18 +449,24 @@ void kernel_main() {
                 // matmul output for that core (rare, timing-dependent). A write
                 // barrier does NOT fix this on Blackhole (multicast writes are
                 // posted; no completion ack). Mirrors the phase-4 activated mcast.
-                noc.async_write_multicast(
-                    CoreLocalMem<uint32_t>(block_start),
-                    MulticastEndpoint{},
-                    block_bytes,
-                    in0_num_receivers,
-                    {.offset_bytes = 0},
-                    {.noc_x_start = in0_mcast_nx_start,
-                     .noc_y_start = in0_mcast_ny_start,
-                     .noc_x_end = in0_mcast_nx_end,
-                     .noc_y_end = in0_mcast_ny_end,
-                     .addr = block_start},
-                    /*linked=*/true);
+#ifdef RE_MSKIP
+                // Empty row (re_m_valid==0) => nothing to mcast; still push the
+                // FULL cb_in0_x slot and set the valid sem so compute (which waits
+                // the FULL block) and receivers stay balanced.
+                if (block_bytes > 0)
+#endif
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(block_start),
+                        MulticastEndpoint{},
+                        block_bytes,
+                        in0_num_receivers,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = in0_mcast_nx_start,
+                         .noc_y_start = in0_mcast_ny_start,
+                         .noc_x_end = in0_mcast_nx_end,
+                         .noc_y_end = in0_mcast_ny_end,
+                         .addr = block_start},
+                        /*linked=*/true);
                 cb_in0_x_obj.push_back(g_in0_block_num_tiles);
 
                 noc.async_writes_flushed();
@@ -433,12 +488,14 @@ void kernel_main() {
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
+#ifndef RE_SKIP_WEIGHT_READ
                             noc_read.async_read(
                                 gate_acc,
                                 CoreLocalMem<uint32_t>(l1_w_gate),
                                 gate_tile_bytes,
                                 {.page_id = tile_idx},
                                 {});
+#endif
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
                             for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
@@ -616,8 +673,10 @@ void kernel_main() {
                         const uint32_t col = my_nt_d * per_core_N_d + n;
                         if (row < K_down_tiles && col < N_down_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
+#ifndef RE_SKIP_WEIGHT_READ
                             noc_read.async_read(
                                 down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
+#endif
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
                             for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
@@ -633,13 +692,24 @@ void kernel_main() {
             // act_sender starts as soon as compute pushes cb_activated AND
             // the ready acks are in (already done in step 1).
             if (is_act_sender) {
-                cb_activated_obj.wait_front(d_in0_block_num_tiles);
+                // RE_MSKIP: cb_activated holds only re_m_valid*in0_block_w_d valid
+                // tiles (compute pushed the sparse block); read/mcast/pop exactly
+                // that many. cb_in0_down_full push stays FULL below (double-buffered
+                // whole-block ring). OFF => full d_in0_block_num_tiles.
+#ifdef RE_MSKIP
+                const uint32_t re_act_tiles = re_m_valid * in0_block_w_d;
+#else
+                const uint32_t re_act_tiles = d_in0_block_num_tiles;
+#endif
+                if (re_act_tiles > 0) {
+                    cb_activated_obj.wait_front(re_act_tiles);
+                }
                 act_ready_sem.wait(GRID_X_NOC - 1);
                 act_ready_sem.set(0);
 
                 const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
                 const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
-                const uint32_t mcast_bytes = d_in0_block_num_tiles * intermed_tile_bytes;
+                const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
                 // delivered AFTER the data at every receiver. With linked=false
@@ -652,25 +722,29 @@ void kernel_main() {
                 // wait on) — only path-linking orders the sem behind the data.
                 // Mirrors the canonical matmul in0 sender
                 // (reader_bmm_tile_layout_in0_sender_padding.cpp).
-                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                    CoreLocalMem<uint32_t>(src_l1),
-                    MulticastEndpoint{},
-                    mcast_bytes,
-                    GRID_X_NOC,
-                    {.offset_bytes = 0},
-                    {.noc_x_start = mrow_first_nx,
-                     .noc_y_start = mrow_first_ny,
-                     .noc_x_end = mrow_last_nx,
-                     .noc_y_end = mrow_last_ny,
-                     .addr = dst_l1},
-                    /*linked=*/true);
+                if (mcast_bytes > 0) {
+                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                        CoreLocalMem<uint32_t>(src_l1),
+                        MulticastEndpoint{},
+                        mcast_bytes,
+                        GRID_X_NOC,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = mrow_first_nx,
+                         .noc_y_start = mrow_first_ny,
+                         .noc_x_end = mrow_last_nx,
+                         .noc_y_end = mrow_last_ny,
+                         .addr = dst_l1},
+                        /*linked=*/true);
+                }
                 noc.async_writes_flushed();
 
                 act_valid_sem.set(ACT_VALID);
                 act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                     noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
 
-                cb_activated_obj.pop_front(d_in0_block_num_tiles);
+                if (re_act_tiles > 0) {
+                    cb_activated_obj.pop_front(re_act_tiles);
+                }
             }
 
             // Step 4: in1_down sender finishes — barrier on DRAM reads (NoC 0,

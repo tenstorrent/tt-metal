@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -26,6 +27,18 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 
 namespace {
 constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
+
+// Perf-investigation toggles (env-var gated, default off). These strip work
+// from the JIT-compiled kernels to isolate DRAM I/O from compute:
+//   RE_SKIP_MATMUL      -> compute kernel skips the matmul MAC inner loops
+//                          (keeps all CB handshakes/packs), leaving the I/O floor.
+//   RE_SKIP_OUTPUT_WRITE -> writer skips the output DRAM write (keeps cb_out
+//                          drain), isolating the down-matmul write-bandwidth cost.
+// Both produce incorrect output and must never be set in production runs.
+bool env_flag_set(const char* name) {
+    const char* v = std::getenv(name);
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
 
 // CB index allocation (kept stable across kernels via named compile-time args).
 constexpr uint32_t CB_IN0_X = tt::CBIndex::c_0;
@@ -183,7 +196,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // per_core_N_gu has a large (<=8) output-subblock divisor — gx 5/6/7
         // give per_core_N_gu with only divisor 1, forcing 1-wide pack subblocks
         // that erase the saving.
-        const uint32_t gx_candidates[] = {8, kMaxGridX, 4};
+        uint32_t gx_candidates[] = {8, kMaxGridX, 4};
+        // Perf-investigation override: RE_FORCE_GRIDX pins the short-seq GRID_X
+        // (more N-columns => more parallel weight-read cores). Only 4/8/11 are
+        // valid short-seq grids; ignored otherwise.
+        if (const char* fg = std::getenv("RE_FORCE_GRIDX"); fg != nullptr) {
+            const uint32_t forced = static_cast<uint32_t>(std::atoi(fg));
+            if (forced == 4 || forced == 8 || forced == kMaxGridX) {
+                gx_candidates[0] = forced;
+                gx_candidates[1] = forced;
+                gx_candidates[2] = forced;
+            }
+        }
         for (uint32_t gx : gx_candidates) {
             if (found) {
                 break;
@@ -650,12 +674,22 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // (unread when read_x_at_offset is 0), keeping the CT-arg layout stable.
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
+    // Perf-investigation toggle (see env_flag_set): skip weight DRAM reads to
+    // quantify the read-bound ceiling (reads stripped, mcasts/handshakes kept).
+    const bool skip_weight_read = env_flag_set("RE_SKIP_WEIGHT_READ");
+    std::map<std::string, std::string> reader_defines{};
+    if (skip_weight_read) {
+        reader_defines["RE_SKIP_WEIGHT_READ"] = "1";
+    }
+    if (env_flag_set("RE_MSKIP")) {
+        reader_defines["RE_MSKIP"] = "1";
+    }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_reader.cpp",
         core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args, reader_defines));
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
@@ -704,12 +738,24 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
 
+    // Perf-investigation toggles (see env_flag_set): strip the output DRAM write
+    // and/or the `up` weight DRAM read (the latter for the read-bound ceiling).
+    std::map<std::string, std::string> writer_defines{};
+    if (env_flag_set("RE_SKIP_OUTPUT_WRITE")) {
+        writer_defines["RE_SKIP_OUTPUT_WRITE"] = "1";
+    }
+    if (skip_weight_read) {
+        writer_defines["RE_SKIP_WEIGHT_READ"] = "1";
+    }
+    if (env_flag_set("RE_MSKIP")) {
+        writer_defines["RE_MSKIP"] = "1";
+    }
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_writer.cpp",
         core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args, writer_defines));
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
@@ -786,6 +832,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
+    }
+    // Perf-investigation toggle (see env_flag_set): strip the matmul MAC.
+    const bool skip_matmul = env_flag_set("RE_SKIP_MATMUL");
+    if (skip_matmul) {
+        compute_defines["RE_SKIP_MATMUL"] = "1";
+    }
+    // RE_MSKIP (count-sparsity optimization): spread valid token-rows across GRID_Y
+    // cores (round-robin) and bound each core's M-subblock work by its runtime
+    // valid-row count, so a sparse chunk costs ~ceil(count/GRID_Y) rows instead of
+    // per_core_M. Weights stay M-independent (mcast unchanged). Default OFF =
+    // byte-identical baseline. Enabled in reader/compute/writer together.
+    const bool mskip = env_flag_set("RE_MSKIP");
+    if (mskip) {
+        compute_defines["RE_MSKIP"] = "1";
     }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -941,6 +1001,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             up_done_sem_id,                        // 8
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+
+        // RE_MSKIP: the compute kernel needs this core's M-row index (my_mt) to
+        // compute its runtime valid-row count for the spread row mapping. Only
+        // set when enabled so the default program is byte-identical.
+        if (mskip) {
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {my_mt});
+        }
     }
 
     return cached_program_t{

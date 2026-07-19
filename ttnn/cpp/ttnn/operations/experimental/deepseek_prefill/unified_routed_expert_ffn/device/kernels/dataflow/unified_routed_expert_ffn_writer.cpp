@@ -144,6 +144,13 @@ void kernel_main() {
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
 
+#ifdef RE_MSKIP
+    // Count-sparsity: drain only the re_m_valid output rows compute produced, at
+    // their SPREAD token positions. GRID_Y = chunk_M_tiles / per_core_M. Assumes
+    // d_out_subblock_h == 1 (rows == M-subblocks), which the program factory sets.
+    constexpr uint32_t re_grid_y = chunk_M_tiles / per_core_M;
+#endif
+
     // Destination tile-row offset for direct-write mode. In direct-write
     // mode the output buffer is a SHARED buffer and this expert's slice
     // begins at start[global_expert_id] (token row); convert to tile rows.
@@ -200,8 +207,12 @@ void kernel_main() {
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
+#ifndef RE_SKIP_WEIGHT_READ
+                                // RE_SKIP_WEIGHT_READ (perf-investigation only): skip the
+                                // DRAM read, keep pointer advance for the read-bound ceiling.
                                 noc_up.async_read(
                                     up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
+#endif
                             } else {
                                 volatile tt_l1_ptr uint64_t* p =
                                     reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
@@ -221,13 +232,27 @@ void kernel_main() {
         // ---- Drain cb_out (down matmul output) to DRAM ----
         const uint32_t row0 = chunk * chunk_M_tiles + my_mt * per_core_M;
         const uint32_t col0 = my_nt_d * per_core_N_d;
-        for (uint32_t sb_m = 0; sb_m < d_in1_num_subblocks_M; ++sb_m) {
+        // The DOWN matmul computes and pushes FULL per_core_M rows (its L1_ACC needs
+        // full-ring cycling), so drain FULL regardless of RE_MSKIP; rows whose
+        // (spread) token index >= count_tiles are skipped by the row<count_tiles guard.
+        const uint32_t sb_m_bound = d_in1_num_subblocks_M;
+#ifdef RE_MSKIP
+        // SPREAD base for the output row map (row = re_spread_base + sb_m*GRID_Y).
+        const uint32_t re_spread_base = chunk * chunk_M_tiles + my_mt;
+#endif
+        for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
                 cb_out_buf.wait_front(d_out_subblock_num_tiles);
                 uint32_t subblock_tile_offset = 0;
                 for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
                     for (uint32_t j = 0; j < d_out_subblock_w; ++j) {
+#ifdef RE_MSKIP
+                        // SPREAD: the sb_m-th valid row maps to token-row
+                        // base + sb_m*GRID_Y (d_out_subblock_h==1 so i==0).
+                        const uint32_t row = re_spread_base + sb_m * re_grid_y + i;
+#else
                         const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
+#endif
                         const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
                         // `row` indexes the FFN *input* (x) tile-rows; the
                         // destination tile-row adds the per-expert region
@@ -256,12 +281,18 @@ void kernel_main() {
                             ASSERT(dst_row < dst_M_tiles);
                             if (dst_row < dst_M_tiles) {
                                 const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
+#ifndef RE_SKIP_OUTPUT_WRITE
+                                // RE_SKIP_OUTPUT_WRITE (perf-investigation only): drop the
+                                // output DRAM write while still draining cb_out (below), so
+                                // the down matmul's write-bandwidth cost is isolated. Output
+                                // in DRAM is left stale.
                                 noc.async_write(
                                     cb_out_buf,
                                     out_acc,
                                     out_tile_bytes,
                                     {.offset_bytes = subblock_tile_offset},
                                     {.page_id = tile_idx});
+#endif
                             }
                         }
                         subblock_tile_offset += out_tile_bytes;
