@@ -685,6 +685,92 @@ def check_pcc() -> dict:
     return res
 
 
+def _pg_cpu_jiffies(pgid):
+    total = 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0
+    target = str(pgid)
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open("/proc/%s/stat" % entry) as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        if len(fields) > 12 and fields[2] == target:
+            try:
+                total += int(fields[11]) + int(fields[12])
+            except ValueError:
+                pass
+    return total
+
+
+class _AdaptiveResult:
+    def __init__(self, returncode, stdout):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None):
+    import threading as _th
+    import time as _t
+
+    stall_s = int(stall_s if stall_s is not None else os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600")
+    backstop = int(backstop if backstop is not None else os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600")
+    proc = _sp.Popen(
+        list(cmd), cwd=str(cwd), env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, start_new_session=True
+    )
+    buf = []
+    act = [_t.monotonic()]
+
+    def _pump():
+        try:
+            for ln in proc.stdout:
+                buf.append(ln)
+                act[0] = _t.monotonic()
+        except Exception:  # noqa: BLE001
+            pass
+
+    pt = _th.Thread(target=_pump, daemon=True)
+    pt.start()
+    pgid = proc.pid
+    start = _t.monotonic()
+    last_progress = start
+    last_cpu = _pg_cpu_jiffies(pgid)
+    max_gap = 0.0
+    while proc.poll() is None:
+        _t.sleep(5)
+        now = _t.monotonic()
+        cpu = _pg_cpu_jiffies(pgid)
+        moved = cpu > last_cpu + 10 or act[0] > last_progress
+        last_cpu = cpu
+        if moved:
+            max_gap = max(max_gap, now - last_progress)
+            last_progress = now
+        limit = max(stall_s, int(3 * max_gap))
+        if now - last_progress >= limit or now - start >= backstop:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:  # noqa: BLE001
+                proc.kill()
+            try:
+                proc.communicate(timeout=30)
+            except Exception:  # noqa: BLE001
+                pass
+            raise _sp.TimeoutExpired(cmd, limit if now - last_progress >= limit else backstop)
+    rc = proc.returncode
+    pt.join(timeout=30)
+    return _AdaptiveResult(rc, "".join(buf))
+
+
 def _run_full_pipeline_ms():
     ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
     node = ptr.get("path")
@@ -722,7 +808,7 @@ def _run_full_pipeline_ms():
     last_err = None
     for _ in range(_FULLPIPE_SAMPLES):
         try:
-            r = _sp.run(cmd, cwd=repo, capture_output=True, text=True, timeout=5400, env=env)
+            r = _adaptive_run(cmd, repo, env, "full-pipeline")
         except Exception as exc:  # noqa: BLE001
             last_err = f"run failed: {str(exc)[-400:]}"
             continue
@@ -968,7 +1054,7 @@ def _full_depth_op_probe():
     if case:
         cmd.append(case)
     try:
-        r = _sp.run(cmd, cwd=repo, env=env, capture_output=True, text=True, timeout=1800)
+        r = _adaptive_run(cmd, repo, env, "op-sig probe")
     except Exception as exc:  # noqa: BLE001
         return None, "probe failed: %s" % str(exc)[-300:]
     out = (r.stdout or "") + "\n" + (r.stderr or "")
