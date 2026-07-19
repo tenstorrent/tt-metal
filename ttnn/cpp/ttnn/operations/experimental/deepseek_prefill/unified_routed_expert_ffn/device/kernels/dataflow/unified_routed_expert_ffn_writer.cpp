@@ -62,9 +62,9 @@ void kernel_main() {
     // up_done = up landed.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(7);
     const uint32_t up_done_sem_id = get_arg_val<uint32_t>(8);
-    // X_SPLIT: writer reads the first x_split_rows M-rows of the row-major x on
-    // NoC 1 (see reader). x_addr = x base; is_in0_sender gates it; x_go/x_done =
-    // same-core handshake with the reader.
+    // X_SPLIT: writer reads the first x_split_sticks token-row sticks of the
+    // row-major x on NoC 1 (see reader). x_addr = x base; is_in0_sender gates it;
+    // x_go/x_done = same-core handshake with the reader.
     const uint32_t x_addr = get_arg_val<uint32_t>(9);
     const bool is_in0_sender = get_arg_val<uint32_t>(10) != 0;
     const uint32_t x_go_sem_id = get_arg_val<uint32_t>(11);
@@ -192,12 +192,15 @@ void kernel_main() {
     Semaphore<> up_done_sem(up_done_sem_id);
     uint32_t up_seq = 0;
 
-    // X_SPLIT setup (see reader): writer reads M-rows [0, x_split_rows) of x on
+    // X_SPLIT setup (see reader): writer reads sticks [0, x_split_sticks) of x on
     // NoC 1 (reuses noc_up) into cb_x_rm. x_seq lockstep with the reader's.
     Semaphore<> x_go_sem(x_go_sem_id);
     Semaphore<> x_done_sem(x_done_sem_id);
     constexpr bool x_split = (x_is_row_major != 0) && (per_core_M >= 2);
-    constexpr uint32_t x_split_rows = x_split ? (per_core_M / 2) : 0;
+    // Stick-granular 50/50 split with the reader (see reader): writer reads
+    // sticks [0, x_split_sticks), reader reads the rest.
+    constexpr uint32_t x_total_sticks = per_core_M * TILE_HEIGHT;
+    constexpr uint32_t x_split_sticks = x_split ? (x_total_sticks / 2) : 0;
     uint32_t x_seq = 0;
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
@@ -232,29 +235,31 @@ void kernel_main() {
                     if (is_in0_sender) {
                         ++x_seq;
                         x_go_sem.wait_min(x_seq);
-                        uint32_t l1_x = xrm_base + ((x_seq - 1) % 2u) * xrm_slot_bytes;
+                        const uint32_t l1_slot = xrm_base + ((x_seq - 1) % 2u) * xrm_slot_bytes;
                         constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
                         const uint32_t col_off_bytes = kb * rm_kblock_bytes;
-                        DeviceZoneScopedN("X-READ-WR");
-                        for (uint32_t m = 0; m < x_split_rows; ++m) {
-                            const uint32_t tile_row = this_core_first_row + m;
-                            if (tile_row < count_tiles) {
-                                for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                        {
+                            DeviceZoneScopedN("X-READ-WR");
+                            // Writer reads sticks [0, x_split_sticks); reader reads the rest.
+                            // Index by absolute stick so both target the same L1 slots.
+                            for (uint32_t s = 0; s < x_split_sticks; ++s) {
+                                const uint32_t m = s / TILE_HEIGHT;
+                                const uint32_t r = s % TILE_HEIGHT;
+                                const uint32_t tile_row = this_core_first_row + m;
+                                if (tile_row < count_tiles) {
                                     const uint32_t stick = x_start_stick + tile_row * TILE_HEIGHT + r;
                                     noc_up.async_read(
                                         x_acc,
-                                        CoreLocalMem<uint32_t>(l1_x),
+                                        CoreLocalMem<uint32_t>(l1_slot + s * rm_kblock_bytes),
                                         rm_kblock_bytes,
                                         {.page_id = stick, .offset_bytes = col_off_bytes},
                                         {});
-                                    l1_x += rm_kblock_bytes;
                                 }
-                            } else {
-                                l1_x += TILE_HEIGHT * rm_kblock_bytes;
+                                // Invalid row: skip; L1 slot at s*rm_kblock_bytes keeps stale content.
                             }
+                            noc_up.async_read_barrier();
+                            x_done_sem.set(x_seq);
                         }
-                        noc_up.async_read_barrier();
-                        x_done_sem.set(x_seq);
                     }
                 }
                 if constexpr (writer_split_up) {
@@ -262,31 +267,33 @@ void kernel_main() {
                         ++up_seq;
                         up_go_sem.wait_min(up_seq);
                         uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % 2u) * up_slot_bytes;
-                        DeviceZoneScopedN("UP-READ");
-                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                                const uint32_t row = kb * in0_block_w_gu + k;
-                                const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                                if (col < N_gate_tiles_full) {
-                                    const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                    noc_up.async_read(
-                                        up_acc,
-                                        CoreLocalMem<uint32_t>(l1_w_up),
-                                        up_tile_bytes,
-                                        {.page_id = tile_idx},
-                                        {});
-                                } else {
-                                    volatile tt_l1_ptr uint64_t* p =
-                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                        p[i] = 0;
+                        {
+                            DeviceZoneScopedN("UP-READ");
+                            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                                for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+                                    const uint32_t row = kb * in0_block_w_gu + k;
+                                    const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                                    if (col < N_gate_tiles_full) {
+                                        const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                                        noc_up.async_read(
+                                            up_acc,
+                                            CoreLocalMem<uint32_t>(l1_w_up),
+                                            up_tile_bytes,
+                                            {.page_id = tile_idx},
+                                            {});
+                                    } else {
+                                        volatile tt_l1_ptr uint64_t* p =
+                                            reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
+                                        for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
+                                            p[i] = 0;
+                                        }
                                     }
+                                    l1_w_up += up_tile_bytes;
                                 }
-                                l1_w_up += up_tile_bytes;
                             }
+                            noc_up.async_read_barrier();
+                            up_done_sem.set(up_seq);
                         }
-                        noc_up.async_read_barrier();
-                        up_done_sem.set(up_seq);
                     }
                 }
             }

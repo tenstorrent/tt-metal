@@ -323,12 +323,14 @@ void kernel_main() {
     // UP_SPLIT handshake counter, kept in lockstep with the writer's.
     uint32_t up_seq = 0;
 
-    // X_SPLIT: on the row-major path, hand the first x_split_rows M-rows of each
-    // K-block's x DRAM read to the writer (NoC 1); the reader reads the remaining
-    // rows on NoC 0. Rebalances the NoC-0-heavy x+gate read onto the slack NoC 1.
+    // X_SPLIT: on the row-major path, hand the first x_split_sticks token-row
+    // sticks of each K-block's x DRAM read to the writer (NoC 1); the reader reads
+    // the rest on NoC 0. Stick-granularity (not row) so the split is a true 50/50
+    // of the x bytes, balancing the NoC-0-heavy x+gate against the slack NoC 1.
     uint32_t x_seq = 0;
     constexpr bool x_split = (x_is_row_major != 0) && (per_core_M >= 2);
-    constexpr uint32_t x_split_rows = x_split ? (per_core_M / 2) : 0;
+    constexpr uint32_t x_total_sticks = per_core_M * TILE_HEIGHT;
+    constexpr uint32_t x_split_sticks = x_split ? (x_total_sticks / 2) : 0;
 
     // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
     // so this expert only does work proportional to its actual token count,
@@ -417,30 +419,27 @@ void kernel_main() {
                         // column window within the emb-wide stick.
                         constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
                         const uint32_t col_off_bytes = kb * rm_kblock_bytes;
-                        // X_SPLIT: the writer reads M-rows [0, x_split_rows) on NoC 1
-                        // into the same L1 block; skip past them so this NoC-0 read
-                        // fills only rows [x_split_rows, per_core_M).
-                        l1_x += x_split_rows * TILE_HEIGHT * rm_kblock_bytes;
-                        for (uint32_t m = x_split_rows; m < per_core_M; ++m) {
+                        // X_SPLIT: the writer reads sticks [0, x_split_sticks) on NoC 1
+                        // into this same L1 block; the reader reads sticks
+                        // [x_split_sticks, x_total_sticks) on NoC 0. Index by absolute
+                        // stick so both sides target the same contiguous L1 slots; the
+                        // per-stick row (s / TILE_HEIGHT) drives the invalid-row skip.
+                        for (uint32_t s = x_split_sticks; s < x_total_sticks; ++s) {
+                            const uint32_t m = s / TILE_HEIGHT;
+                            const uint32_t r = s % TILE_HEIGHT;
                             const uint32_t tile_row = this_core_first_row + m;
                             if (tile_row < count_tiles) {
-                                for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
-                                    // x_start_stick offsets into this expert's region
-                                    // of the shared row-major buffer (0 when x is a
-                                    // standalone per-expert buffer).
-                                    const uint32_t stick = x_start_stick + tile_row * TILE_HEIGHT + r;
-                                    noc_read.async_read(
-                                        x_acc_rm,
-                                        CoreLocalMem<uint32_t>(l1_x),
-                                        rm_kblock_bytes,
-                                        {.page_id = stick, .offset_bytes = col_off_bytes},
-                                        {});
-                                    l1_x += rm_kblock_bytes;
-                                }
-                            } else {
-                                // Invalid row: skip the read, L1 keeps stale content. Just advance.
-                                l1_x += TILE_HEIGHT * rm_kblock_bytes;
+                                // x_start_stick offsets into this expert's region of the
+                                // shared row-major buffer (0 for a standalone buffer).
+                                const uint32_t stick = x_start_stick + tile_row * TILE_HEIGHT + r;
+                                noc_read.async_read(
+                                    x_acc_rm,
+                                    CoreLocalMem<uint32_t>(block_start + s * rm_kblock_bytes),
+                                    rm_kblock_bytes,
+                                    {.page_id = stick, .offset_bytes = col_off_bytes},
+                                    {});
                             }
+                            // Invalid row: skip; the L1 slot at s*rm_kblock_bytes keeps stale content.
                         }
                     } else {
                         for (uint32_t m = 0; m < per_core_M; ++m) {
@@ -465,7 +464,7 @@ void kernel_main() {
                     noc_read.async_read_barrier();
                 }  // end TEMP XREAD profiling zone
 
-                // X_SPLIT: the writer's M-rows [0, x_split_rows) must have landed
+                // X_SPLIT: the writer's sticks [0, x_split_sticks) must have landed
                 // in cb_x_rm on NoC 1 before this core multicasts the full block.
                 if constexpr (x_split) {
                     x_done_sem.wait_min(x_seq);
@@ -579,14 +578,11 @@ void kernel_main() {
                 }
                 noc_read.async_read_barrier();
 
-                // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
-                if constexpr (up_split) {
-                    DeviceZoneScopedN("UP-DONE-WAITING");
-                    up_done_sem.wait_min(up_seq);
-                }
-
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                 // locally-read weights go straight to compute via cb_push_back.
+                // GATE first (needs no `up`), so the reader issues the gate mcast
+                // immediately and the up_done wait below overlaps the writer's
+                // NoC-1 up read.
                 if (in1_num_receivers > 0) {
                     const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
                     // The LAST in1 data multicast before the in1_valid sem must
@@ -597,11 +593,8 @@ void kernel_main() {
                     // receiver pushes cb_in1_{gate,up} and compute reads STALE
                     // weights -> wrong matmul output (rare, timing-dependent;
                     // a flush/barrier does not fix posted multicast writes on
-                    // Blackhole). Mirrors the phase-4 activated mcast. When `up`
-                    // is mcast (LEGACY/UP_SPLIT) it is the last write, so gate
-                    // links into it and up holds the path for the sem; in the
-                    // retired UP_WRITER_MCAST mode (no up mcast) gate is last and
-                    // holds the path itself.
+                    // Blackhole). gate links into up (issued next, after the
+                    // up_done wait) and up holds the path for the sem.
                     {
                         DeviceZoneScopedN("GATE-MULTICAST");
 
@@ -618,7 +611,21 @@ void kernel_main() {
                              .addr = gate_block_start},
                             /*linked=*/true);
                     }
+                }
 
+                // UP_SPLIT: gate is already issued on NoC 0; NOW wait for the
+                // writer's NoC-1 up read to land before touching cb_in1_up. After
+                // the gate mcast so the wait overlaps the writer's up read;
+                // unconditional (outside the receivers guard) so GRID_Y==1 — which
+                // pushes cb_in1_up straight to compute below without an mcast —
+                // still gates on up_done. A semaphore poll issues no NoC op, so the
+                // gate mcast's linked path stays reserved for the up mcast.
+                if constexpr (up_split) {
+                    DeviceZoneScopedN("UP-DONE-WAITING");
+                    up_done_sem.wait_min(up_seq);
+                }
+
+                if (in1_num_receivers > 0) {
                     if constexpr (reader_mcasts_up) {
                         DeviceZoneScopedN("UP-MULTICAST");
                         const uint32_t up_block_bytes = g_in1_block_num_tiles * up_tile_bytes;
