@@ -589,6 +589,34 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInDifferentWorkUnitsSuccee
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
+TEST_F(ProgramSpecTestQuasar, MultiBindingFlagOnGen2Fails) {
+    // allow_instance_multi_binding is a Gen1-only escape hatch. Setting it on a Gen2 target is a hard
+    // error regardless of whether any instance is actually multi-bound — here the DFB is a plain
+    // single-producer/single-consumer buffer that would otherwise be perfectly valid.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_instance_multi_binding = true;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
+}
+
 TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
@@ -3191,6 +3219,94 @@ TEST_F(ProgramSpecTestGen1, TwoDMKernelsDifferentProcessorsSucceeds) {
 
     spec.kernels = {k0, k1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBMultipleProducersOnSameNodeFailsWithoutFlag) {
+    // Baseline: without allow_instance_multi_binding, two producer instances on one node are rejected
+    // by the per-node census even on Gen1. This is the counterpart the escape-hatch test unlocks.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "multi_producer";
+
+    auto producer1 = MakeMinimalGen1DMKernel("producer1", DataMovementProcessor::RISCV_0);
+    auto producer2 = MakeMinimalGen1DMKernel("producer2", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBMultipleProducersOnSameNodeSucceedsWithFlag) {
+    // The allow_instance_multi_binding escape hatch: on Gen1 a DFB lowers to a plain circular buffer,
+    // so one node may host more than one producer instance — here a RISCV_0 and a RISCV_1 DM kernel
+    // both feeding one DFB, drained by a compute consumer. Identical to the FailsWithoutFlag case
+    // except for the flag, which is what makes the per-node census accept the second producer.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "multi_producer";
+
+    auto producer1 = MakeMinimalGen1DMKernel("producer1", DataMovementProcessor::RISCV_0);
+    auto producer2 = MakeMinimalGen1DMKernel("producer2", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_instance_multi_binding = true;
+
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBMultipleConsumersOnSameNodeSucceedsWithFlag) {
+    // Mirror of the multi-producer escape-hatch case: a compute producer feeding two DM consumers
+    // (RISCV_0 and RISCV_1) on one node. (Two DM consumers exhaust both DM processors, so the
+    // producer must be the compute engine.) Unlocked by the flag.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "multi_consumer";
+
+    auto producer = MakeMinimalGen1ComputeKernel("producer");
+    auto consumer1 = MakeMinimalGen1DMKernel("consumer1", DataMovementProcessor::RISCV_0);
+    auto consumer2 = MakeMinimalGen1DMKernel("consumer2", DataMovementProcessor::RISCV_1);
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_instance_multi_binding = true;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer1.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    consumer2.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer1, consumer2};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer1", "consumer2"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }

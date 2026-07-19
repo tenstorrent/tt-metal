@@ -1243,6 +1243,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             dfb.unique_id);
     }
 
+    // The allow_instance_multi_binding escape hatch is Gen1-only. On Gen2 the DFB's per-RISC
+    // tile-counter / remapper machinery is driven by the producer/consumer masks, so a multi-bound
+    // instance cannot be lowered. Reject the flag itself on Gen2, independent of whether any instance
+    // is actually multi-bound — a Gen2 spec carrying it is never valid.
+    if (is_gen2_arch()) {
+        for (const auto& dfb : spec.dataflow_buffers) {
+            TT_FATAL(
+                !dfb.advanced_options.allow_instance_multi_binding,
+                "DFB '{}' sets allow_instance_multi_binding, which is only supported on Gen1 (WH/BH) "
+                "architectures. On Gen2 a DFB instance must have exactly one producer and one consumer.",
+                dfb.unique_id);
+        }
+    }
+
     // Validate local DFB endpoint placement and multi-binding consistency.
     //
     // The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
@@ -1354,12 +1368,21 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             return names;
         };
 
+        // Normally each node must host *exactly* one producer and one consumer (the local-DFB FIFO
+        // safety invariant). The allow_instance_multi_binding escape hatch (Gen1-only; the flag is
+        // rejected on Gen2 earlier in this function) relaxes the upper bound to permit legacy
+        // multi-producer / multi-consumer circular-buffer patterns, so a node may host more than one
+        // instance of a role. The connectivity requirement stays: every node must still host at least
+        // one producer AND at least one consumer, or the FIFO is half-wired.
+        const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
         for (const NodeCoord& node : footprint) {
             auto p_it = producers_on_node.find(node);
             auto c_it = consumers_on_node.find(node);
             const size_t num_producers = p_it == producers_on_node.end() ? 0 : p_it->second.size();
             const size_t num_consumers = c_it == consumers_on_node.end() ? 0 : c_it->second.size();
-            if (num_producers == 1 && num_consumers == 1) {
+            const bool node_ok =
+                allow_multi ? (num_producers >= 1 && num_consumers >= 1) : (num_producers == 1 && num_consumers == 1);
+            if (node_ok) {
                 continue;
             }
             std::string_view guidance;
@@ -2848,6 +2871,16 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     //   are deterministic from num_threads, which is uniform per role. So on Gen2 the uniformity
     //   property is guaranteed by construction; the check is retained as a defensive assertion.
     for (const auto& dfb : spec.dataflow_buffers) {
+        // Instance-multi-binding (Gen1-only) intentionally binds same-role kernels on distinct RISCs
+        // (e.g. a BRISC producer and an NCRISC producer on one node), so their risc_masks differ by
+        // design and the uniform-mask requirement does not apply. On Gen1 the DFB lowers to a plain
+        // circular buffer where the mask is inert (it never reaches the device blob), so the single
+        // representative mask MakeDataflowBufferConfig takes from the first binding is harmless. (The
+        // flag is rejected on Gen2 in ValidateProgramSpec, so under normal validation any DFB reaching
+        // here with it set is Gen1.)
+        if (dfb.advanced_options.allow_instance_multi_binding) {
+            continue;
+        }
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
         auto check_uniform_mask = [&](const auto& records, std::string_view role) {
             if (records.size() < 2) {
