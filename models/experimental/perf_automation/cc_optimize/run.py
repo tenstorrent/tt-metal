@@ -609,7 +609,15 @@ def _first_block_map(seq):
 
 
 def _bridge_depth_env(
-    repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int, full_hint: int = 0, full_blocks: int = 0
+    repo_root: Path,
+    mcp_env: dict,
+    devices: str,
+    node,
+    case,
+    cov: int,
+    full_hint: int = 0,
+    full_blocks: int = 0,
+    knob=None,
 ) -> dict:
     if not node or os.environ.get("PERF_MCP_DEPTH_BRIDGE", "1") != "1":
         return {}
@@ -631,11 +639,14 @@ def _bridge_depth_env(
         print("  [optimize/cc] depth-knob bridge: full-model work-signal is 0 (probe empty); skipping")
         _depth_cache_put(repo_root, node, {})
         return {}
-    env = _llm_depth_env(model_root, cov)
+    env = dict(knob) if knob else _llm_depth_env(model_root, cov)
     if not env:
         print(f"  [optimize/cc] depth-knob bridge: no depth knob found (work-signal {full_op})")
         _depth_cache_put(repo_root, node, {})
         return {}
+    _numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
+    if _numkey:
+        env[_numkey] = str(cov)
     probe_env = dict(mcp_env)
     probe_env.update(env)
     _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
@@ -654,9 +665,10 @@ def _bridge_depth_env(
     return env
 
 
-def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root):
-    base = _llm_depth_env(model_root, 2) if model_root is not None else {}
+def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root, base_knob=None):
+    base = dict(base_knob) if base_knob else (_llm_depth_env(model_root, 2) if model_root is not None else {})
     if not base:
+        print("  [optimize/cc] coverage measurement skipped: no depth knob")
         return None
     numkey = next((k for k, v in base.items() if str(v).isdigit()), None)
     want = set(full_types or [])
@@ -672,6 +684,7 @@ def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_
         penv.update(env)
         sigs_d, _, _ = _run_op_sigs(repo_root, penv, devices, node, case, d)
         if not sigs_d:
+            print(f"  [optimize/cc] coverage measurement inconclusive: depth-{d} probe returned no ops")
             return None
         got = set(sigs_d)
         if want <= got:
@@ -688,6 +701,7 @@ def _coverage_layers(
     n_layers: int = 52,
     model_name: str = "",
     config_ref: str = "",
+    depth_knob=None,
 ):
     """MODEL-AGNOSTIC profiling-window sizing. One all-layers probe (TT_PERF_LAYERS=0, no tracy)
     enumerates EVERY distinct op across all layers (overflow-safe: host-side op wrapping, no marker
@@ -709,7 +723,9 @@ def _coverage_layers(
         facts["all_ops"] = sorted(sigs)
         facts["full_signal"] = _work_signal(seq)
         facts["full_blocks"] = _blocks_ran(seq)
-        measured = _measure_cov(repo_root, mcp_env, devices, node, case, sigs, _model_root_from_node(repo_root, node))
+        measured = _measure_cov(
+            repo_root, mcp_env, devices, node, case, sigs, _model_root_from_node(repo_root, node), base_knob=depth_knob
+        )
         if measured is not None:
             _cov, deep, blk_source = measured
         elif _signposts_agree(seq):

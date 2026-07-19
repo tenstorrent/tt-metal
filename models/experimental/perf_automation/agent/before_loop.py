@@ -482,8 +482,15 @@ def before_loop(
     run.manifest.write(manifest)
 
     try:
-        from models.experimental.perf_automation.cc_optimize.run import _bridge_depth_env, _coverage_layers
+        from models.experimental.perf_automation.cc_optimize.run import (
+            _bridge_depth_env,
+            _coverage_layers,
+            _llm_depth_env,
+            _model_root_from_node,
+        )
 
+        _bl_mr = _model_root_from_node(tt_root, perf_rel)
+        _bl_knob = _llm_depth_env(_bl_mr, 2) if _bl_mr is not None else {}
         _bl_cov, _bl_facts = _coverage_layers(
             tt_root,
             sub_env,
@@ -492,19 +499,28 @@ def before_loop(
             case,
             model_name=str(config.get("model_name") or ""),
             config_ref=str(config.get("config_ref") or ""),
+            depth_knob=_bl_knob,
         )
         if not _bl_cov:
             _bl_cov = int(os.environ.get("PERF_MCP_DEPTH_DEFAULT_LAYERS", "4"))
         _bl_full = int((_bl_facts or {}).get("full_signal") or 0)
         _bl_blocks = int((_bl_facts or {}).get("full_blocks") or 0)
         print(
-            f"      depth-bridge: node={perf_rel} case={case} cov={_bl_cov} full_signal={_bl_full} full_blocks={_bl_blocks}",
+            f"      depth-bridge: node={perf_rel} case={case} cov={_bl_cov} full_signal={_bl_full} full_blocks={_bl_blocks} knob={bool(_bl_knob)}",
             file=sys.stderr,
             flush=True,
         )
         os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
         _bl_depth = _bridge_depth_env(
-            tt_root, sub_env, devices, perf_rel, case, _bl_cov, full_hint=_bl_full, full_blocks=_bl_blocks
+            tt_root,
+            sub_env,
+            devices,
+            perf_rel,
+            case,
+            _bl_cov,
+            full_hint=_bl_full,
+            full_blocks=_bl_blocks,
+            knob=_bl_knob,
         )
         if _bl_depth:
             os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
