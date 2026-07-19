@@ -207,7 +207,22 @@ def _rebuild_optimize_report(model_root=None) -> None:
             f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {len(attempts)} lever attempt(s) so far — "
             "each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed."
         )
-        mod.upsert_report_section(root, "optimize", mod.optimize_block(root, len(attempts), text, when))
+        _key = os.environ.get("PERF_MCP_REPORT_KEY", "optimize")
+        _module = os.environ.get("PERF_MCP_REPORT_MODULE")
+        if _module:
+            _block = mod.module_optimize_block(
+                root,
+                len(attempts),
+                text,
+                when,
+                module=_module,
+                index=os.environ.get("PERF_MCP_REPORT_INDEX", ""),
+                pcc_gate=os.environ.get("PERF_MCP_REPORT_PCC", ""),
+                outcome="optimizing…",
+            )
+        else:
+            _block = mod.optimize_block(root, len(attempts), text, when)
+        mod.upsert_report_section(root, _key, _block)
     except Exception as exc:  # noqa: BLE001
         print(f"  [perf-report] render failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 

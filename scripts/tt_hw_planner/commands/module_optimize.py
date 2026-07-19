@@ -110,19 +110,27 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
             rows.append((m, "no-pcc-test", None))
             continue
         print("\n  [optimize/module] === %d/%d module: %s (pcc %s) ===" % (i, len(mods), m, node))
-        result = run_cc(
-            demo_dir,
-            repo_root,
-            devices=args.devices,
-            metric=args.metric,
-            pcc_test=node,
-            max_rounds=getattr(args, "max_rounds", 3),
-            model_id_hint=getattr(args, "target", None),
-            hitl=getattr(args, "hitl", False),
-        )
+        os.environ["PERF_MCP_REPORT_KEY"] = "module:%s" % m
+        os.environ["PERF_MCP_REPORT_MODULE"] = m
+        os.environ["PERF_MCP_REPORT_PCC"] = node
+        os.environ["PERF_MCP_REPORT_INDEX"] = "%d/%d" % (i, len(mods))
+        try:
+            result = run_cc(
+                demo_dir,
+                repo_root,
+                devices=args.devices,
+                metric=args.metric,
+                pcc_test=node,
+                max_rounds=getattr(args, "max_rounds", 3),
+                model_id_hint=getattr(args, "target", None),
+                hitl=getattr(args, "hitl", False),
+            )
+        finally:
+            for _k in ("PERF_MCP_REPORT_KEY", "PERF_MCP_REPORT_MODULE", "PERF_MCP_REPORT_PCC", "PERF_MCP_REPORT_INDEX"):
+                os.environ.pop(_k, None)
         status = _module_status(result)
         rows.append((m, status, result))
-        _rekey_module_section(demo_dir, m, node, status, upsert_report_section)
+        _rekey_module_section(demo_dir, m, node, status, upsert_report_section, index="%d/%d" % (i, len(mods)))
 
     _write_rollup(demo_dir, rows, upsert_report_section)
 
@@ -140,11 +148,26 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
     return 0
 
 
-def _rekey_module_section(demo_dir, module, node, status, upsert):
-    detail = _read_section(demo_dir, "optimize") or "(no optimize detail recorded)"
-    block = "## Module: `%s`\n\n- pcc gate: `%s`\n- outcome: **%s**\n\n%s" % (module, node, status, detail)
+def _rekey_module_section(demo_dir, module, node, status, upsert, index=""):
+    """Finalize the module's section. The live optimize detail is written in-place
+    into ``module:<module>`` during the run (so it renders in the module's own
+    section, labelled, correctly positioned). Here we just flip the transient
+    ``optimizing…`` outcome to the final status. When the run recorded no detail
+    (0 attempts), re-seed the placeholder so the section still names the module."""
+    section = _read_section(demo_dir, "module:%s" % module)
+    if section and "# Optimize (perf)" in section:
+        section = re.sub(r"- outcome: \*\*[^*]*\*\*", "- outcome: **%s**" % status, section, count=1)
+        upsert(demo_dir, "module:%s" % module, section)
+        return
+    idx = (" — %s" % index) if index else ""
+    block = "## Module: `%s`%s\n\n- pcc gate: `%s`\n- outcome: **%s**\n\n%s" % (
+        module,
+        idx,
+        node,
+        status,
+        "(no optimize detail recorded)",
+    )
     upsert(demo_dir, "module:%s" % module, block)
-    upsert(demo_dir, "optimize", "")
 
 
 def _write_rollup(demo_dir, rows, upsert):

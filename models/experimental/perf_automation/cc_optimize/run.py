@@ -1029,8 +1029,23 @@ def _emit_summary(
                 refresh_bringup_section(_demo)
             except Exception:
                 pass
-            mod.upsert_report_section(_demo, "optimize", mod.optimize_block(_demo, 0, text, when))
-            print(f"  [optimize/cc] report updated: {_demo / 'RUN_REPORT.md'} (optimize section)")
+            _key = os.environ.get("PERF_MCP_REPORT_KEY", "optimize")
+            _module = os.environ.get("PERF_MCP_REPORT_MODULE")
+            if _module:
+                _block = mod.module_optimize_block(
+                    _demo,
+                    0,
+                    text,
+                    when,
+                    module=_module,
+                    index=os.environ.get("PERF_MCP_REPORT_INDEX", ""),
+                    pcc_gate=os.environ.get("PERF_MCP_REPORT_PCC", ""),
+                    outcome="optimizing…",
+                )
+            else:
+                _block = mod.optimize_block(_demo, 0, text, when)
+            mod.upsert_report_section(_demo, _key, _block)
+            print(f"  [optimize/cc] report updated: {_demo / 'RUN_REPORT.md'} ({_key} section)")
             _prune_legacy_reports(_demo)
         try:
             (md.parent / "summary.md").unlink()

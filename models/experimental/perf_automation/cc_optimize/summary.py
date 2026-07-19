@@ -43,6 +43,27 @@ def optimize_block(model_root, attempts_len: int, text: str, when_note: str) -> 
     )
 
 
+def module_optimize_block(
+    model_root,
+    attempts_len: int,
+    text: str,
+    when_note: str,
+    *,
+    module: str,
+    index: str = "",
+    pcc_gate: str = "",
+    outcome: str = "optimizing…",
+) -> str:
+    """Per-module optimize block for module-level runs: the standard optimize
+    block wrapped in the module's ``## Module:`` header, so it renders INSIDE
+    that module's own (pre-seeded, correctly-positioned) section and is labelled
+    with the module name — instead of a single floating global block that stays
+    pinned under whichever module was optimized first."""
+    idx = f" — {index}" if index else ""
+    head = f"## Module: `{module}`{idx}\n\n- pcc gate: `{pcc_gate}`\n- outcome: **{outcome}**\n\n"
+    return head + optimize_block(model_root, attempts_len, text, when_note)
+
+
 def _level_of(kind: str) -> str:
     k = (kind or "").lower()
     if k in ("grid", "dtype", "tt-lang", "cpp"):
