@@ -928,6 +928,8 @@ def _stub_body_is_native(stub_path: Path) -> bool:
             return False
         if "self._torch_module" in head or "_coerce_to_torch" in head or "throw_exception_on_fallback" in head:
             return False
+        if re.search(r"\.to_torch\s*\(", text) and re.search(r"\btorch\.[A-Za-z_]\w*\s*\(", text):
+            return False
         return True
 
     forbidden_calls = {"_get_torch_submodule", "_coerce_to_torch"}
@@ -997,6 +999,16 @@ def _stub_body_is_native(stub_path: Path) -> bool:
                 return False
             if _calls_fallback(node) and node.name not in helper_function_names:
                 return False
+
+    compute = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != "__init__":
+            seg = ast.get_source_segment(text, node)
+            if seg:
+                compute.append(seg)
+    compute_src = "\n".join(compute)
+    if re.search(r"\.to_torch\s*\(", compute_src) and re.search(r"\btorch\.[A-Za-z_]\w*\s*\(", compute_src):
+        return False
     return True
 
 
