@@ -66,6 +66,7 @@ class Box:
     notes: str = ""
     eth_link_gbps: float = 0.0
     default_mesh: Optional[Tuple[int, int]] = None
+    board_types: Tuple[str, ...] = ()
 
     @property
     def total_hbm_gb(self) -> float:
@@ -104,6 +105,7 @@ HARDWARE: List[Box] = [
         mesh_shapes=[(1, 1)],
         eth_link_gbps=0.0,
         notes="Single Wormhole. Sub-6B LLMs, small CNNs, embeddings.",
+        board_types=("n150",),
     ),
     Box(
         name="N300",
@@ -113,6 +115,7 @@ HARDWARE: List[Box] = [
         mesh_shapes=[(1, 1), (1, 2), (2, 1)],
         eth_link_gbps=100.0,
         notes="Dual Wormhole. Sub-12B LLMs, most STT, most embeddings.",
+        board_types=("n300",),
     ),
     Box(
         name="T3K",
@@ -122,6 +125,7 @@ HARDWARE: List[Box] = [
         mesh_shapes=[(1, 1), (1, 2), (2, 1), (1, 4), (2, 2), (4, 1), (1, 8), (2, 4), (4, 2), (8, 1)],
         eth_link_gbps=100.0,
         notes="8x Wormhole eth-mesh (LoudBox). Mature LLM box; canonical TP=[1,8].",
+        board_types=(),
     ),
     Box(
         name="QB2",
@@ -134,9 +138,10 @@ HARDWARE: List[Box] = [
         notes="4x Blackhole (p150c), 128 GB. Physical fabric is 2x2 (8 QSFP-DD, "
         "2 links/chip); (1,1) is available for single-chip bring-up on one of "
         "the 4 chips.",
+        board_types=("p150c",),
     ),
     Box(
-        name="Galaxy",
+        name="GalaxyWH",
         arch="Wormhole",
         chips=32,
         hbm_per_chip_gb=12.0,
@@ -161,6 +166,7 @@ HARDWARE: List[Box] = [
         default_mesh=(4, 8),
         eth_link_gbps=100.0,
         notes="32x Wormhole. Needed for 70B+ dense, large MoE, or video gen. " "Canonical large-scale shape is [4,8].",
+        board_types=("tt-galaxy-wh", "ubb_wormhole"),
     ),
     Box(
         name="GalaxyBH",
@@ -189,6 +195,37 @@ HARDWARE: List[Box] = [
         eth_link_gbps=100.0,
         notes="32x Blackhole (BHGLX). Blackhole counterpart of the Wormhole Galaxy; "
         "1024 GB total (32 GB/chip). Canonical large-scale shape is [4,8].",
+        board_types=("tt-galaxy-bh", "ubb_blackhole"),
+    ),
+    Box(
+        name="P100",
+        arch="Blackhole",
+        chips=1,
+        hbm_per_chip_gb=32.0,
+        mesh_shapes=[(1, 1)],
+        eth_link_gbps=0.0,
+        notes="Single Blackhole (p100).",
+        board_types=("p100", "p100a"),
+    ),
+    Box(
+        name="P150",
+        arch="Blackhole",
+        chips=1,
+        hbm_per_chip_gb=32.0,
+        mesh_shapes=[(1, 1)],
+        eth_link_gbps=0.0,
+        notes="Single Blackhole (p150).",
+        board_types=("p150", "p150a", "p150b"),
+    ),
+    Box(
+        name="P300",
+        arch="Blackhole",
+        chips=2,
+        hbm_per_chip_gb=32.0,
+        mesh_shapes=[(1, 1), (1, 2), (2, 1)],
+        eth_link_gbps=0.0,
+        notes="Dual Blackhole (p300).",
+        board_types=("p300", "p300a"),
     ),
 ]
 

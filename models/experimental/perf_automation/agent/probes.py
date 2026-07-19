@@ -29,22 +29,19 @@ from .environment import EnvironmentError_
 # 7.1 environment probe — `tt-smi -s` (TBD(env-script): CLOSED)
 # ---------------------------------------------------------------------------
 
-# board_type prefix -> arch token understood by environment.ARCH_FACTS
-BOARD_ARCH_PREFIXES: tuple[tuple[str, str], ...] = (
-    ("n150", "wormhole"),
-    ("n300", "wormhole"),
-    ("galaxy", "wormhole"),
-    ("p100", "blackhole"),
-    ("p150", "blackhole"),
-    ("p300", "blackhole"),
-)
-
 
 def board_to_arch(board_type: str) -> str | None:
     b = (board_type or "").strip().lower()
-    for prefix, arch in BOARD_ARCH_PREFIXES:
-        if b.startswith(prefix):
-            return arch
+    if not b:
+        return None
+    try:
+        from scripts.tt_hw_planner.hardware import HARDWARE
+    except Exception:
+        return None
+    for box in HARDWARE:
+        for bt in box.board_types:
+            if bt and b.startswith(bt.lower()):
+                return box.arch.lower()
     return None
 
 
