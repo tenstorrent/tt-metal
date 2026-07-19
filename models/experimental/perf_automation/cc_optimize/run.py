@@ -523,18 +523,31 @@ def _model_root_from_node(repo_root: Path, node):
 _KNOB_CACHE_FILE = Path(tempfile.gettempdir()) / "perf_mcp_knob_cache.json"
 
 
+def _knob_key(model_root) -> str:
+    p = str(model_root).replace("\\", "/")
+    i = p.find("models/")
+    return p[i:] if i >= 0 else p
+
+
 def _knob_fingerprint(model_root) -> str:
     try:
+        import hashlib
+
         tt = Path(model_root) / "tt"
-        mt = max((f.stat().st_mtime for f in tt.rglob("*.py")), default=0.0)
-        return str(int(mt))
+        h = hashlib.sha256()
+        for f in sorted(tt.rglob("*.py")):
+            try:
+                h.update(f.read_bytes())
+            except Exception:  # noqa: BLE001
+                pass
+        return h.hexdigest()[:16]
     except Exception:  # noqa: BLE001
         return ""
 
 
 def _knob_cache_get(model_root):
     try:
-        entry = json.loads(_KNOB_CACHE_FILE.read_text()).get(str(model_root))
+        entry = json.loads(_KNOB_CACHE_FILE.read_text()).get(_knob_key(model_root))
         if entry and entry.get("fp") == _knob_fingerprint(model_root):
             return dict(entry["env"])
     except Exception:  # noqa: BLE001
@@ -545,7 +558,7 @@ def _knob_cache_get(model_root):
 def _knob_cache_put(model_root, env) -> None:
     try:
         data = json.loads(_KNOB_CACHE_FILE.read_text()) if _KNOB_CACHE_FILE.is_file() else {}
-        data[str(model_root)] = {"env": dict(env), "fp": _knob_fingerprint(model_root)}
+        data[_knob_key(model_root)] = {"env": dict(env), "fp": _knob_fingerprint(model_root)}
         _KNOB_CACHE_FILE.write_text(json.dumps(data))
     except Exception:  # noqa: BLE001
         pass
