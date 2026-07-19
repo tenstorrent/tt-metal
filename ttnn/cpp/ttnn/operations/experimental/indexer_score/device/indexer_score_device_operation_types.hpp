@@ -24,6 +24,13 @@ struct IndexerScoreProgramConfig {
     std::size_t q_chunk_size = 32;
     std::size_t k_chunk_size = 32;
     std::size_t head_group_size = 1;  // heads resident at once; 1 always fits L1, raise for perf (0 = all)
+    // Benchmarking-only caps on the compute rectangle (0 = use the full device compute grid). The classic
+    // (unfused) factory clamps grid_x/grid_y to these, so a standalone indexer can be pinned to the SAME core
+    // budget the fused ring op leaves after reserving its AG column (e.g. cap grid_x to 10 on an 11x10 grid to
+    // match the fused op's 100-core compute rectangle for an apples-to-apples AG-hiding measurement). Hashed via
+    // reflection on this struct, so a capped and an uncapped program never collide. Ignored by the fused factory.
+    std::size_t max_core_grid_x = 0;
+    std::size_t max_core_grid_y = 0;
 };
 
 // Resolve head_group_size to a concrete head count (0 = all Hi). Single-sourced so validate and the

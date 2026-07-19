@@ -137,7 +137,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC)
     const auto grid = q.device()->compute_with_storage_grid_size();
-    const uint32_t grid_x = grid.x, grid_y = grid.y;
+    // Benchmarking caps (0 = full grid): pin the compute rectangle to a smaller core budget so a standalone
+    // indexer can match the fused ring op's post-reservation grid (see IndexerScoreProgramConfig).
+    uint32_t grid_x = grid.x, grid_y = grid.y;
+    if (cfg.max_core_grid_x != 0) {
+        grid_x = std::min<uint32_t>(grid_x, static_cast<uint32_t>(cfg.max_core_grid_x));
+    }
+    if (cfg.max_core_grid_y != 0) {
+        grid_y = std::min<uint32_t>(grid_y, static_cast<uint32_t>(cfg.max_core_grid_y));
+    }
 
     const uint32_t group_rows = rows_for_groups(group_count, grid_y);
     const uint32_t cols_used = cols_for_bands(band_count, grid_x);

@@ -15,14 +15,18 @@ namespace ttnn::operations::experimental::indexer_score::detail {
 void bind_indexer_score(nb::module_& mod) {
     nb::class_<IndexerScoreProgramConfig>(mod, "IndexerScoreProgramConfig")
         .def(
-            nb::init<std::size_t, std::size_t, std::size_t>(),
+            nb::init<std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
             nb::kw_only(),
             nb::arg("q_chunk_size") = 32,
             nb::arg("k_chunk_size") = 32,
-            nb::arg("head_group_size") = 1)
+            nb::arg("head_group_size") = 1,
+            nb::arg("max_core_grid_x") = 0,
+            nb::arg("max_core_grid_y") = 0)
         .def_rw("q_chunk_size", &IndexerScoreProgramConfig::q_chunk_size)
         .def_rw("k_chunk_size", &IndexerScoreProgramConfig::k_chunk_size)
-        .def_rw("head_group_size", &IndexerScoreProgramConfig::head_group_size);
+        .def_rw("head_group_size", &IndexerScoreProgramConfig::head_group_size)
+        .def_rw("max_core_grid_x", &IndexerScoreProgramConfig::max_core_grid_x)
+        .def_rw("max_core_grid_y", &IndexerScoreProgramConfig::max_core_grid_y);
 
     ttnn::bind_function<"indexer_score_dsa", "ttnn.experimental.">(
         mod,
