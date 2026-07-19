@@ -73,7 +73,8 @@
 #define CONS(h) (STAGECTL + (uint64_t)(h) * 64 + 8)
 
 #define NRISC 5
-#define RING_CAP 512u /* worker L1 ring depth, words */
+#define RING_CAP 512u                /* worker L1 ring depth, words */
+#define ADAPT_THRESH (4u * RING_CAP) /* adaptive: bulk-read a core once >= 4 rings' worth of data pending */
 #define WRITE_WIN_BASE 200u
 
 static inline uint64_t rdcycle(void) {
@@ -136,7 +137,8 @@ static void reader_run(
     uint64_t nread,
     uint64_t read_noc,
     uint64_t fullread,
-    uint64_t bulkcore) {
+    uint64_t bulkcore,
+    uint64_t adaptive) {
     uint64_t q = (num_cores + nread - 1) / nread;
     uint64_t lo = hartid * q, hi = lo + q;
     if (hi > num_cores) {
@@ -172,9 +174,10 @@ static void reader_run(
         }
     }
     uint64_t sbase = STAGE_BASE + hartid * STAGE_STRIDE; /* this reader's LIM SPSC ring */
-    uint32_t stage_words = bulkcore ? STAGE_WORDS_BULK : STAGE_WORDS_NORMAL; /* bigger SPSC for bulk cores */
-    uint32_t swm = stage_words - 1u;                                         /* power-of-2 mask */
-    uint32_t prod = 0; /* LOCAL word count; only WRITTEN to LIM for the relay, never re-read */
+    uint32_t stage_words = (bulkcore || adaptive) ? STAGE_WORDS_BULK : STAGE_WORDS_NORMAL; /* big SPSC if bulk */
+    uint32_t swm = stage_words - 1u;                                                       /* power-of-2 mask */
+    uint64_t nbulk = 0; /* PROFILE: # cores drained via bulk (vs per-risc) -- shows the adaptive switch */
+    uint32_t prod = 0;  /* LOCAL word count; only WRITTEN to LIM for the relay, never re-read */
     uint64_t total = 0;
     w32(PROD(hartid), 0);
     fence_();
@@ -189,7 +192,20 @@ static void reader_run(
             uint64_t rbufs = cbase + 128;
             uint32_t tails[NRISC];
             read_tails(cbase + 5u * 4, tails); /* all 5 RISC tails in one NoC read */
-            if (bulkcore) {
+            /* ADAPTIVE SWITCH: the tails are already in hand, so decide per-core whether to do one bulk read
+             * (amortized, best when the core is mostly full) or per-risc drains (efficient at light load,
+             * skips empty riscs). A single dynamic switch, not separate modes. Threshold = ADAPT_THRESH words
+             * of pending data across the 5 riscs. `--bulkcore` forces bulk always; plain mode forces per-risc. */
+            uint32_t do_bulk = bulkcore;
+            if (adaptive) {
+                uint32_t full = 0;
+                for (uint32_t r = 0; r < NRISC; r++) {
+                    full += (uint32_t)(tails[r] - heads[c * NRISC + r]);
+                }
+                do_bulk = full >= (uint32_t)ADAPT_THRESH;
+            }
+            if (do_bulk) {
+                nbulk++;
                 /* ONE bulk NoC read of the WHOLE core: its 5 RISC rings are contiguous in L1 (ring r @
                  * rbufs + r*2048), so 5*RING_CAP = 2560 words in a single streaming read -> amortizes the NoC
                  * round-trip like the rdrbench large-K regime (>2 GB/s), and drops the per-risc tail
@@ -307,6 +323,7 @@ static void reader_run(
     w64(RES_SLOT(hartid) + 0x20, t_wait);  /* RES_TWAIT */
     w64(RES_SLOT(hartid) + 0x28, visits);  /* # drains */
     w64(RES_SLOT(hartid) + 0x30, polls);   /* # tail reads */
+    w64(RES_SLOT(hartid) + 0x38, nbulk);   /* # cores drained via bulk (adaptive switch) */
     w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
     fence_();
 }
@@ -602,6 +619,7 @@ int main(uint64_t hartid) {
     uint64_t fullread = (r64(P_NONCE) >> 13) & 1ull; /* NONCE bit 13: reader always drains a FULL buffer (bench) */
     uint64_t bulkcore = (r64(P_NONCE) >> 14) & 1ull; /* NONCE bit 14: one bulk NoC read per core (all 5 rings) */
     uint64_t dualrelay = (r64(P_NONCE) >> 15) & 1ull; /* NONCE bit 15: one relay hart PER READER (decouple halves) */
+    uint64_t adaptive = (r64(P_NONCE) >> 16) & 1ull;  /* NONCE bit 16: per-core adaptive bulk-vs-per-risc switch */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -638,12 +656,13 @@ int main(uint64_t hartid) {
         uint64_t eff_noc = splitnoc ? (hartid & 1ull) : read_noc; /* split reads across NoC0/NoC1 per hart */
         drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, eff_noc, wnoc);
     } else if (hartid < nread) {
-        reader_run(hartid, num_cores, prof_l1, nread, read_noc, fullread, bulkcore);
+        reader_run(hartid, num_cores, prof_l1, nread, read_noc, fullread, bulkcore, adaptive);
     } else {
         uint64_t hri = hartid - nread; /* relay index 0..nrelay-1 */
         uint64_t rlo = (nrelay == 1) ? 0 : hri;
         uint64_t rhi = (nrelay == 1) ? nread : (hri + 1); /* one relay per reader when dualrelay */
-        relay_run(hartid, host_base, rlo, rhi, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull, bulkcore);
+        relay_run(
+            hartid, host_base, rlo, rhi, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull, bulkcore || adaptive);
     }
 
     if (hartid == 0) {

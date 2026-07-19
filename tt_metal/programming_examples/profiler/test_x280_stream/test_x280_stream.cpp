@@ -93,6 +93,7 @@ int main(int argc, char** argv) {
     bool bulkcore = false;     // --bulkcore: one bulk NoC read of the whole core (all 5 rings, 2560 words) --
                                // amortizes NoC latency (rdrbench >2GB/s regime), drops per-risc round-robin. LOSSY.
     bool dualrelay = false;    // --dualrelay: one relay hart PER reader (decouple the two chip halves)
+    bool adaptive = false;     // --adaptive: per-core switch -- bulk read when the core is mostly full, else per-risc
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -145,6 +146,8 @@ int main(int argc, char** argv) {
             fullread = true;  // bulkcore is inherently a full-buffer read
         } else if (a == "--dualrelay") {
             dualrelay = true;
+        } else if (a == "--adaptive") {
+            adaptive = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -270,8 +273,7 @@ int main(int argc, char** argv) {
         0x30,
         read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) | (wnoc1 ? 0x800ull : 0ull) |
             (nodrain ? 0x1000ull : 0ull) | (fullread ? 0x2000ull : 0ull) | (bulkcore ? 0x4000ull : 0ull) |
-            (dualrelay ? 0x8000ull
-                       : 0ull));  // 8=direct 9=splitnoc 11=wnoc1 12=nohostfc 13=fullread 14=bulkcore 15=dualrelay
+            (dualrelay ? 0x8000ull : 0ull) | (adaptive ? 0x10000ull : 0ull));  // ...15=dualrelay 16=adaptive
     pack<uint64_t>(params, 0x38, direct ? ndrain : nread);                // P_NREAD = drain-hart count in direct mode
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
     uint64_t nrelay = dualrelay ? nread : 1;
@@ -560,7 +562,7 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> rs(0x40);
         drv.read_block(rs.data(), 0x40, 0x08011040ULL + h * 0x40);
         const uint64_t* v = reinterpret_cast<const uint64_t*>(rs.data());
-        uint64_t bytes = v[0], t_copy = v[1], t_total = v[2], aux1 = v[4], aux2 = v[5], breach = v[6];
+        uint64_t bytes = v[0], t_copy = v[1], t_total = v[2], aux1 = v[4], aux2 = v[5], breach = v[6], nbulk = v[7];
         uint64_t words = bytes / 4 + 1;
         double busy = t_total ? 100.0 * (double)t_copy / (double)t_total : 0.0;
         if (direct) {
@@ -585,10 +587,10 @@ int main(int argc, char** argv) {
                 (unsigned long long)aux2,
                 (unsigned long long)breach);
         } else {
-            uint64_t visits = aux2, polls = breach;  // reader: v[5]=visits (drains), v[6]=polls (tail reads)
+            uint64_t visits = aux2, polls = breach;  // reader: v[5]=visits (drains), v[6]=polls, v[7]=bulk cores
             printf(
                 "  reader%llu: %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  spsc-wait=%lluM  "
-                "visits=%lluk avg-run=%llu words  polls=%lluk (%.0f%% empty)\n",
+                "visits=%lluk avg-run=%llu  polls=%lluk (%.0f%% empty)  bulk=%llu cores\n",
                 (unsigned long long)h,
                 (unsigned long long)(bytes / 1024),
                 (unsigned long long)(t_total / 1000000),
@@ -598,7 +600,8 @@ int main(int argc, char** argv) {
                 (unsigned long long)(visits / 1000),
                 (unsigned long long)(visits ? words / visits : 0),
                 (unsigned long long)(polls / 1000),
-                polls ? 100.0 * (double)(polls - visits) / (double)polls : 0.0);
+                polls ? 100.0 * (double)(polls - visits) / (double)polls : 0.0,
+                (unsigned long long)nbulk);
         }
     }
     printf(
