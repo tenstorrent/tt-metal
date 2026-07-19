@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ckernel.h"
 
 #include "sort_dataflow_common.hpp"
 
@@ -107,6 +108,17 @@ void kernel_main() {
                     for (uint32_t c = 0; c < tile_width; c++) {
                         p[c] = static_cast<uint16_t>(idx_base + c);
                     }
+                }
+                // The index buffer above is filled with baby-RISCV stores; the noc.async_write below reads
+                // it as its source. A baby-RISCV store can retire before its write-request lands in L1, and
+                // the RISCV core and NoC are different L1 clients with no program-order guarantee between
+                // them (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). load_blocking the 32-bit word
+                // holding the last filled byte (blocking load + memory clobber) to drain the fill so the
+                // NoC write cannot source a stale index buffer. See issue #50154 (finding #27).
+                {
+                    const uint32_t idx_bytes = tile_width * (is_32_bit_data ? sizeof(uint32_t) : sizeof(uint16_t));
+                    (void)ckernel::load_blocking(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx) + (idx_bytes - 1) / sizeof(uint32_t));
                 }
                 for (uint32_t row = 0; row < TILE_H; row++) {
                     noc.async_write(
