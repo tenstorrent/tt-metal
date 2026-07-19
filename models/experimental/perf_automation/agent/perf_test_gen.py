@@ -358,27 +358,6 @@ _COMPONENT_WEDGE_REASON = (
 )
 
 
-def _eager_terminal_ok(out_path: Path, task: str) -> bool:
-    """Run the generated component test with tracing OFF and accept its eager FORWARD_WALL_MS as the
-    terminal perf number when the module cannot be trace-captured. Records an eager-terminal caps sidecar
-    so the downstream reader treats it like the pipeline's TRACE_NOT_TRACE_CAPABLE fallback."""
-    vt = int(os.environ.get("PERF_MCP_VALIDATE_TIMEOUT", "900") or "900")
-    rc0, out0 = _run_perf_node(f"{out_path}::test_{task}_perf", {"TT_PERF_TRACE": "0"}, timeout_s=vt)
-    if rc0 == 0 and "FORWARD_WALL_MS=" in out0:
-        _write_trace_caps(
-            out_path,
-            {
-                "trace_1cq": False,
-                "trace_1cq_path": None,
-                "trace_2cq": False,
-                "trace_2cq_path": None,
-                "eager_terminal": True,
-            },
-        )
-        return True
-    return False
-
-
 # Lines from a failing pytest run that are NOISE, not the real error: nanobind/UMD teardown chatter,
 # raw backtraces, python-internal frames. Feeding these back to the LLM as "the error" wastes the
 # correction (verified: a failing run's last 1800 chars were "leaked function" x10, zero error lines).
@@ -518,7 +497,7 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
                 },
             )
             return "ok_1cq", ""
-        if rc1 == 0 and has_eager and _is_eager_terminal(out1):
+        if os.environ.get("TT_PERF_TRACE") == "0" and rc1 == 0 and has_eager:
             _write_trace_caps(
                 out_path,
                 {
@@ -534,8 +513,7 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
             return "invalid", "WEDGE: " + (_extract_error(out1) or "device hung capturing the module's forward")
         return "invalid", (
             _extract_error(out1)
-            or "module perf test produced FORWARD_WALL_MS but no TRACE_PER_TOKEN_MS and did not declare "
-            "TRACE_NOT_TRACE_CAPABLE=1"
+            or "module perf test produced no TRACE_PER_TOKEN_MS (trace required; eager only via TT_PERF_TRACE=0)"
         )
     rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "1"}, timeout_s=vt)
     if rc1 is None:
@@ -1000,11 +978,6 @@ def generate_perf_test(
                 if _verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
                     print(f"      auto-gen perf from pcc (agentic) -> {node}", file=sys.stderr, flush=True)
                     return node
-                if _eager_terminal_ok(out_path, task):
-                    print(
-                        f"      auto-gen perf from pcc (agentic, eager terminal) -> {node}", file=sys.stderr, flush=True
-                    )
-                    return node
             print(
                 "      · agentic builder did not converge; falling back to one-shot generator",
                 file=sys.stderr,
@@ -1102,13 +1075,6 @@ def generate_perf_test(
                 flush=True,
             )
             if trace_wedges >= _TRACE_WEDGE_LIMIT:
-                if _eager_terminal_ok(out_path, task):
-                    print(
-                        f"      · trace hung {_TRACE_WEDGE_LIMIT}x -> eager FORWARD_WALL_MS terminal",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    return node
                 return None
             feedback = _correction_feedback(_COMPONENT_WEDGE_REASON, failure, prev_draft)
             continue
@@ -1125,19 +1091,12 @@ def generate_perf_test(
             "engage so the optimize bookend doesn't silently downgrade"
             if "degraded to 1cq" in failure
             else (
-                "the module perf test produced FORWARD_WALL_MS but no TRACE_PER_TOKEN_MS and did not declare "
-                "TRACE_NOT_TRACE_CAPABLE=1 — implement the trace-replay block, or declare the module "
-                "non-capturable"
+                "the module perf test produced no TRACE_PER_TOKEN_MS — implement the trace-replay block so "
+                "it captures a REAL device trace (trace required; eager is only enabled by the operator via "
+                "TT_PERF_TRACE=0, never as a fallback)"
                 if _component
                 else "the test did not run the full pipeline / errored"
             )
         )
         feedback = _correction_feedback(reason, failure, prev_draft)
-    if _component and _eager_terminal_ok(out_path, task):
-        print(
-            "      · exhausted trace retries -> eager FORWARD_WALL_MS terminal",
-            file=sys.stderr,
-            flush=True,
-        )
-        return node
     return None
