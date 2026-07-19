@@ -62,6 +62,13 @@ void kernel_main() {
     // up_done = up landed.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(7);
     const uint32_t up_done_sem_id = get_arg_val<uint32_t>(8);
+    // X_SPLIT: writer reads the first x_split_rows M-rows of the row-major x on
+    // NoC 1 (see reader). x_addr = x base; is_in0_sender gates it; x_go/x_done =
+    // same-core handshake with the reader.
+    const uint32_t x_addr = get_arg_val<uint32_t>(9);
+    const bool is_in0_sender = get_arg_val<uint32_t>(10) != 0;
+    const uint32_t x_go_sem_id = get_arg_val<uint32_t>(11);
+    const uint32_t x_done_sem_id = get_arg_val<uint32_t>(12);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(2);
@@ -97,6 +104,10 @@ void kernel_main() {
     constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(21);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(22);
     constexpr uint32_t writer_split_up = get_compile_time_arg_val(23);
+    // X_SPLIT compile args (writer's half of the row-major x DRAM read).
+    constexpr uint32_t X_RM_ELEM_BYTES = get_compile_time_arg_val(24);
+    constexpr uint32_t x_is_row_major = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_x_rm = get_compile_time_arg_val(26);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
@@ -113,7 +124,8 @@ void kernel_main() {
     // out, then start (direct-write), then up (UP_SPLIT). The accessors are
     // constructed unconditionally; start_acc is used only when direct_write,
     // up_acc only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 24;
+    // Accessor stream starts after the X_SPLIT scalar compile args (24..26).
+    constexpr uint32_t out_accessor_offset = 27;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -124,6 +136,12 @@ void kernel_main() {
     constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
     const auto up_acc = TensorAccessor(up_args, up_addr, get_tile_size(cb_in1_up));
+
+    // Row-major x accessor (X_SPLIT): one page = one token-row stick = emb elems
+    // = K_gate_tiles * TILE_HEIGHT * X_RM_ELEM_BYTES bytes. Matches the reader's.
+    constexpr uint32_t x_accessor_offset = up_args.next_compile_time_args_offset();
+    constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
+    const auto x_acc = TensorAccessor(x_args, x_addr, K_gate_tiles * TILE_HEIGHT * X_RM_ELEM_BYTES);
 
     const uint32_t out_tile_bytes = cb_out_buf.get_tile_size();
 
@@ -149,6 +167,8 @@ void kernel_main() {
     // begins at start[global_expert_id] (token row); convert to tile rows.
     // Mirrors ttnn::insert's writer: start_tile_row = start_value / TILE.
     uint32_t row_offset_tiles = 0;
+    // X_SPLIT: token-row offset into x, matching the reader's x_start_stick.
+    uint32_t x_start_stick = 0;
     if constexpr (direct_write != 0) {
         const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
         const uint32_t start_page_size = start_acc.get_aligned_page_size();
@@ -157,6 +177,7 @@ void kernel_main() {
         const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
         const uint32_t start_value = start_ptr[global_expert_id];
         row_offset_tiles = start_value / TILE_HEIGHT;
+        x_start_stick = start_value;
     }
 
     // ---- UP_SPLIT up-weight read setup ----
@@ -171,50 +192,102 @@ void kernel_main() {
     Semaphore<> up_done_sem(up_done_sem_id);
     uint32_t up_seq = 0;
 
+    // X_SPLIT setup (see reader): writer reads M-rows [0, x_split_rows) of x on
+    // NoC 1 (reuses noc_up) into cb_x_rm. x_seq lockstep with the reader's.
+    Semaphore<> x_go_sem(x_go_sem_id);
+    Semaphore<> x_done_sem(x_done_sem_id);
+    constexpr bool x_split = (x_is_row_major != 0) && (per_core_M >= 2);
+    constexpr uint32_t x_split_rows = x_split ? (per_core_M / 2) : 0;
+    uint32_t x_seq = 0;
+
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
-        // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
-        // Runs before the cb_out drain.
+        // ---- Phase 1/2 weight feed on NoC 1 ----
+        // Per K-block: UP read (up-sender cores) and the writer's half of the x
+        // read (in0-sender cores), interleaved in ONE loop. Core (0,0) is BOTH
+        // senders — separate loops would deadlock against the reader's per-K-block
+        // up_done/x_done waits, so both run per K-block here. Only NoC-1 DRAM
+        // reads (fabric-safe); the reader owns the cb_in1_up / cb_x_rm push.
+        const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
+        uint32_t up_cb_base = 0, up_slot_bytes = 0;
         if constexpr (writer_split_up) {
-            // UP_SPLIT: only gy=0 in1-sender cores read `up`. Per K-block: wait
-            // for the reader to reserve the slot (up_go), read this column's
-            // `up` slice on NoC 1 into it, then signal up_done so the reader
-            // mcasts on NoC 0. Only a NoC-1 DRAM read here (fabric-safe); the
-            // reader owns cb_in1_up reserve/push.
             if (is_up_sender) {
-                // The CB write pointer is PER-RISC and the reader owns push, so
-                // the writer's get_write_ptr never advances. Replicate the
-                // reader's cadence: cb_in1_up is double-buffered, one push per
-                // K-block, so the live slot is base + (up_seq-1)%2 * slot.
-                constexpr uint32_t kUpNumSlots = 2;
                 CircularBuffer cb_in1_up_buf(cb_in1_up);
-                const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
-                const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
-                for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
-                    ++up_seq;
-                    up_go_sem.wait_min(up_seq);
-                    uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
-                    DeviceZoneScopedN("UP-READ");
-                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                            const uint32_t row = kb * in0_block_w_gu + k;
-                            const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                            if (col < N_gate_tiles_full) {
-                                const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_up.async_read(
-                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
-                            } else {
-                                volatile tt_l1_ptr uint64_t* p =
-                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
+                up_cb_base = cb_in1_up_buf.get_write_ptr();
+                up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
+            }
+        }
+        uint32_t xrm_base = 0, xrm_slot_bytes = 0;
+        if constexpr (x_split) {
+            CircularBuffer cb_x_rm_buf(cb_x_rm);
+            xrm_base = cb_x_rm_buf.get_write_ptr();
+            xrm_slot_bytes = per_core_M * in0_block_w_gu * get_tile_size(cb_x_rm);
+        }
+        if constexpr (writer_split_up || x_split) {
+            for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+                // X read FIRST: the reader consumes x (in0 sender) before gate
+                // (in1 sender), so producing x_done early matches its order and
+                // avoids the reader stalling on x_done while the writer is still
+                // on UP. Then UP read while the reader reads GATE.
+                if constexpr (x_split) {
+                    if (is_in0_sender) {
+                        ++x_seq;
+                        x_go_sem.wait_min(x_seq);
+                        uint32_t l1_x = xrm_base + ((x_seq - 1) % 2u) * xrm_slot_bytes;
+                        constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+                        const uint32_t col_off_bytes = kb * rm_kblock_bytes;
+                        DeviceZoneScopedN("X-READ-WR");
+                        for (uint32_t m = 0; m < x_split_rows; ++m) {
+                            const uint32_t tile_row = this_core_first_row + m;
+                            if (tile_row < count_tiles) {
+                                for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                                    const uint32_t stick = x_start_stick + tile_row * TILE_HEIGHT + r;
+                                    noc_up.async_read(
+                                        x_acc,
+                                        CoreLocalMem<uint32_t>(l1_x),
+                                        rm_kblock_bytes,
+                                        {.page_id = stick, .offset_bytes = col_off_bytes},
+                                        {});
+                                    l1_x += rm_kblock_bytes;
                                 }
+                            } else {
+                                l1_x += TILE_HEIGHT * rm_kblock_bytes;
                             }
-                            l1_w_up += up_tile_bytes;
                         }
+                        noc_up.async_read_barrier();
+                        x_done_sem.set(x_seq);
                     }
-                    noc_up.async_read_barrier();
-                    up_done_sem.set(up_seq);
+                }
+                if constexpr (writer_split_up) {
+                    if (is_up_sender) {
+                        ++up_seq;
+                        up_go_sem.wait_min(up_seq);
+                        uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % 2u) * up_slot_bytes;
+                        DeviceZoneScopedN("UP-READ");
+                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+                                const uint32_t row = kb * in0_block_w_gu + k;
+                                const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                                if (col < N_gate_tiles_full) {
+                                    const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                                    noc_up.async_read(
+                                        up_acc,
+                                        CoreLocalMem<uint32_t>(l1_w_up),
+                                        up_tile_bytes,
+                                        {.page_id = tile_idx},
+                                        {});
+                                } else {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
+                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
+                                }
+                                l1_w_up += up_tile_bytes;
+                            }
+                        }
+                        noc_up.async_read_barrier();
+                        up_done_sem.set(up_seq);
+                    }
                 }
             }
         }

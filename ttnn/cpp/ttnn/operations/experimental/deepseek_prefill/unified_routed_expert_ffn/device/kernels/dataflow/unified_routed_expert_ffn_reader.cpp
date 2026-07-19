@@ -85,6 +85,15 @@ void kernel_main() {
     Semaphore<> up_go_sem(up_go_sem_id);
     Semaphore<> up_done_sem(up_done_sem_id);
 
+    // X_SPLIT handshake (reader <-> writer, in0-sender cores): x_go = x slot
+    // reserved, x_done = the writer's half of this K-block's x landed in cb_x_rm.
+    // Appended after the M-row NoC table (2*GRID_X, compile arg 21) AND start_addr,
+    // so at 33 + 2*GRID_X + 1 (x_go) and + 2 (x_done).
+    const uint32_t x_go_sem_id = get_arg_val<uint32_t>(34 + 2 * get_compile_time_arg_val(21));
+    const uint32_t x_done_sem_id = get_arg_val<uint32_t>(35 + 2 * get_compile_time_arg_val(21));
+    Semaphore<> x_go_sem(x_go_sem_id);
+    Semaphore<> x_done_sem(x_done_sem_id);
+
     // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 33.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
     constexpr uint32_t M_ROW_NOC_RT_OFFSET = 33;
@@ -314,6 +323,13 @@ void kernel_main() {
     // UP_SPLIT handshake counter, kept in lockstep with the writer's.
     uint32_t up_seq = 0;
 
+    // X_SPLIT: on the row-major path, hand the first x_split_rows M-rows of each
+    // K-block's x DRAM read to the writer (NoC 1); the reader reads the remaining
+    // rows on NoC 0. Rebalances the NoC-0-heavy x+gate read onto the slack NoC 1.
+    uint32_t x_seq = 0;
+    constexpr bool x_split = (x_is_row_major != 0) && (per_core_M >= 2);
+    constexpr uint32_t x_split_rows = x_split ? (per_core_M / 2) : 0;
+
     // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
     // so this expert only does work proportional to its actual token count,
     // not the max-tokens-padded shape of the input. Eliminates the host-side
@@ -347,6 +363,15 @@ void kernel_main() {
                 if (is_in1_sender) {
                     ++up_seq;
                     up_go_sem.set(up_seq);
+                }
+            }
+
+            // X_SPLIT: slot reserved above -> release the writer to read its
+            // M-rows of x on NoC 1, concurrent with the reader's NoC-0 reads.
+            if constexpr (x_split) {
+                if (is_in0_sender) {
+                    ++x_seq;
+                    x_go_sem.set(x_seq);
                 }
             }
 
@@ -392,7 +417,11 @@ void kernel_main() {
                         // column window within the emb-wide stick.
                         constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
                         const uint32_t col_off_bytes = kb * rm_kblock_bytes;
-                        for (uint32_t m = 0; m < per_core_M; ++m) {
+                        // X_SPLIT: the writer reads M-rows [0, x_split_rows) on NoC 1
+                        // into the same L1 block; skip past them so this NoC-0 read
+                        // fills only rows [x_split_rows, per_core_M).
+                        l1_x += x_split_rows * TILE_HEIGHT * rm_kblock_bytes;
+                        for (uint32_t m = x_split_rows; m < per_core_M; ++m) {
                             const uint32_t tile_row = this_core_first_row + m;
                             if (tile_row < count_tiles) {
                                 for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
@@ -435,6 +464,12 @@ void kernel_main() {
                     }
                     noc_read.async_read_barrier();
                 }  // end TEMP XREAD profiling zone
+
+                // X_SPLIT: the writer's M-rows [0, x_split_rows) must have landed
+                // in cb_x_rm on NoC 1 before this core multicasts the full block.
+                if constexpr (x_split) {
+                    x_done_sem.wait_min(x_seq);
+                }
 
                 {
                     DeviceZoneScopedN("IN0-MULTICAST");

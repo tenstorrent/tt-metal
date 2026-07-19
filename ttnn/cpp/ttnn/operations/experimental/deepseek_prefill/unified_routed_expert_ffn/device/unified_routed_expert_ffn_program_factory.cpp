@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -217,6 +218,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
         GRID_X = best_gx;
         in0_block_w_gu = best_ibw;
+        // TEMP perf-sweep knob: force the gate/up K-block width, bypassing the
+        // L1-fit search. Must divide K_gate_tiles. May overflow L1 (loud TT_FATAL
+        // at CB creation) — that failure is itself the datapoint.
+        if (const char* ibw = std::getenv("TT_ROUTED_EXPERT_IBW_GU")) {
+            const uint32_t v = static_cast<uint32_t>(std::atoi(ibw));
+            if (v >= 1 && v <= K_gate_tiles && (K_gate_tiles % v) == 0) {
+                in0_block_w_gu = v;
+            }
+        }
     }
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
@@ -502,6 +512,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // slot reserved) and up_done (writer -> reader: up in L1). Monotonic.
     const uint32_t up_go_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_done_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    // X_SPLIT same-core handshake sems (row-major x only): x_go (reader -> writer:
+    // x slot reserved) and x_done (writer -> reader: writer's x rows in L1).
+    const bool x_split_en = op.x_is_row_major;
+    const uint32_t x_go_sem_id = x_split_en ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t x_done_sem_id = x_split_en ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -749,13 +764,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 21
         K_gate_tiles,                         // 22
         static_cast<uint32_t>(up_mode == 2),  // 23 writer_split_up
+        // X_SPLIT: writer reads M-rows [0, per_core_M/2) of the row-major x on
+        // NoC 1 into CB_X_RM. Values match the reader's x row-major args.
+        tt::datum_size(tt::DataFormat::Float16_b),  // 24 X_RM_ELEM_BYTES
+        static_cast<uint32_t>(op.x_is_row_major),   // 25 x_is_row_major
+        CB_X_RM,                                    // 26 cb_x_rm
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
-    // out, then start (direct-write), then up (UP_SPLIT).
+    // out, then start (direct-write), then up (UP_SPLIT), then x (X_SPLIT).
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    // x accessor follows up; used only when the writer reads part of x (X_SPLIT).
+    tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(writer_ct_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -976,9 +998,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
-        // start_addr — last reader arg (see layout comment). Same buffer the
-        // writer gets; read by the reader only when read_x_at_offset.
+        // start_addr — see layout comment. Same buffer the writer gets; read by
+        // the reader only when read_x_at_offset.
         reader_args.push_back(start_buffer->address());
+        // X_SPLIT handshake sems — appended after start_addr (indexed off GRID_X
+        // in the reader). 0 when x is not row-major.
+        reader_args.push_back(x_go_sem_id);
+        reader_args.push_back(x_done_sem_id);
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
@@ -997,6 +1023,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             static_cast<uint32_t>(is_in1_sender),  // 6 is_up_sender
             up_go_sem_id,                          // 7
             up_done_sem_id,                        // 8
+            // X_SPLIT: writer reads M-rows [0, per_core_M/2) of x on NoC 1.
+            x_buffer->address(),                   // 9  x_addr
+            static_cast<uint32_t>(is_in0_sender),  // 10 is_in0_sender
+            x_go_sem_id,                           // 11
+            x_done_sem_id,                         // 12
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }
@@ -1038,13 +1069,15 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
-        // start_addr is the last reader arg (after the M-row NoC table).
-        reader_args[reader_args.size() - 1] = start_addr;
+        // start_addr sits after the M-row NoC table, followed by the two
+        // X_SPLIT sem ids (fixed, not refreshed here), so it is 3rd from the end.
+        reader_args[reader_args.size() - 3] = start_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
         writer_args[3] = start_addr;
         writer_args[4] = up_addr;  // two-RISC up-weight read base address
+        writer_args[9] = x_addr;   // X_SPLIT x base address
     }
 }
 
