@@ -701,9 +701,15 @@ def test_sort_multi_row_multi_core_no_deadlock(descending, device):
     That race is latent (the exact-match poll normally out-races the NoC atomics, so
     it needs timing pressure to surface), so this test does not deterministically
     reproduce the hang.  What it *does* guarantee is that the multi-core Ht >= 2 path
-    -- otherwise only exercised at Ht == 1 -- runs to completion with correct output,
-    and, via the worker-thread watchdog + pytest-timeout, that a regression which
-    makes it deadlock FAILS with an assertion instead of hanging the test session.
+    -- otherwise only exercised at Ht == 1 -- runs to completion with correct output.
+
+    The worker-thread watchdog + pytest-timeout are a best-effort regression guard,
+    not a clean recovery mechanism: a genuine deadlock wedges the device (which needs
+    a reset regardless), so the join times out and the assertion below fires, but the
+    function-scoped `device` fixture teardown (close_device) may then block until the
+    process-level pytest-timeout terminates the run.  The guarantee is only that a
+    regression surfaces as a CI *failure* (never a silent pass); cleanly isolating a
+    hang from teardown would require running the op in a killable subprocess.
 
     The multi-core factory is only selected when the (power-of-two padded) tile width
     exceeds total_cores * 128, so the width is sized from the device grid.
