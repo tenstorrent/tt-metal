@@ -5,7 +5,7 @@ import pytest
 import torch
 
 import ttnn
-import ttnn.operations.matmul as matmul_ops
+from ttnn._experimental.auto_config import _install as install_ops
 from ttnn._experimental.auto_config import matmul as auto_matmul
 
 from models.common.utility_functions import torch_random
@@ -27,17 +27,17 @@ def _ok_candidate_entries(result):
 
 def test_slow_dispatch_mode_helper_respects_env(monkeypatch):
     monkeypatch.delenv("TT_METAL_SLOW_DISPATCH_MODE", raising=False)
-    assert matmul_ops._slow_dispatch_mode_enabled() is False
+    assert install_ops._slow_dispatch_mode_enabled() is False
 
     monkeypatch.setenv("TT_METAL_SLOW_DISPATCH_MODE", "1")
-    assert matmul_ops._slow_dispatch_mode_enabled() is True
+    assert install_ops._slow_dispatch_mode_enabled() is True
 
 
 def test_install_slow_dispatch_wrapper_preserves_doc_and_golden_function():
     def wrapper():
         return None
 
-    wrapped = matmul_ops._install_slow_dispatch_wrapper(
+    wrapped = install_ops._install_slow_dispatch_wrapper(
         wrapper,
         doc="slow-dispatch-doc",
         golden_function=_ok_candidate_entries,
@@ -59,7 +59,7 @@ def test_matmul_wrapper_impl_prefers_queue_id_over_cq_id(monkeypatch):
 
     monkeypatch.setattr(auto_matmul_module, "dispatch_matmul", fake_dispatch_matmul)
 
-    result = matmul_ops._matmul_wrapper_impl("lhs", "rhs", queue_id=3, cq_id=7)
+    result = install_ops._matmul_wrapper_impl("lhs", "rhs", queue_id=3, cq_id=7)
 
     assert result == "result"
     assert captured_kwargs["queue_id"] == 3

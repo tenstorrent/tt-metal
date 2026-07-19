@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
-#
+
 # SPDX-License-Identifier: Apache-2.0
 
-import os
+import math
+from typing import Optional, Tuple
 
 import ttnn
-from ttnn.decorators import REGISTERED_OPERATIONS
+from ttnn.decorators import get_golden_function
 from ttnn.operations.activations import get_golden_function_for_activation
 
 MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig
@@ -26,7 +27,7 @@ create_matmul_attributes = ttnn._ttnn.operations.matmul.create_matmul_attributes
 matmul_select_program_factory = ttnn._ttnn.operations.matmul.matmul_select_program_factory
 
 
-def _matmul_golden_function(
+def _golden_function(
     input_tensor_a,
     input_tensor_b,
     transpose_a=False,
@@ -59,10 +60,13 @@ def _matmul_golden_function(
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn.matmul, golden_function=_matmul_golden_function)
+ttnn.attach_golden_function(
+    ttnn.matmul,
+    golden_function=_golden_function,
+)
 
 
-def _linear_golden_function(
+def _golden_function(
     input_tensor_a,
     input_tensor_b,
     transpose_a=False,
@@ -102,176 +106,29 @@ def _linear_golden_function(
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn.linear, golden_function=_linear_golden_function)
+ttnn.attach_golden_function(
+    ttnn.linear,
+    golden_function=_golden_function,
+)
 
 
-def _addmm_golden_function(input_tensor, mat1_tensor, mat2_tensor, alpha=1.0, beta=1.0, out_tensor=None, **kwargs):
+def _golden_function(input_tensor, mat1_tensor, mat2_tensor, alpha=1.0, beta=1.0, out_tensor=None, **kwargs):
     import torch
 
     return torch.addmm(input_tensor, mat1_tensor, mat2_tensor, alpha=alpha, beta=beta, out=out_tensor)
 
 
-ttnn.attach_golden_function(ttnn.addmm, golden_function=_addmm_golden_function)
+ttnn.attach_golden_function(
+    ttnn.addmm,
+    golden_function=_golden_function,
+)
 
+# Route the public matmul / linear entrypoints through measured auto-configuration.
+# The selector, tuning, caching, and wrapper installation all live in the
+# experimental auto_config package, so this module stays a thin integration point.
+from ttnn._experimental.auto_config import install_public_wrappers
 
-_CPP_MATMUL = ttnn.matmul
-_CPP_LINEAR = ttnn.linear
-_AUTO_CONFIG_DOC_SUFFIX = """
-
-Additional Keyword Args:
-    auto_config (bool, optional): Enables measured auto-selection and persistent caching for matmul recipes.
-        Defaults to `True`. If explicit low-level placement/program configuration arguments such as
-        `program_config`, `core_grid`, `compute_kernel_config`, or `output_tile` are supplied,
-        auto-configuration is bypassed and the requested configuration is used directly.
-"""
-_MATMUL_DOC = f"{_CPP_MATMUL.__doc__}{_AUTO_CONFIG_DOC_SUFFIX}"
-_LINEAR_DOC = f"{_CPP_LINEAR.__doc__}{_AUTO_CONFIG_DOC_SUFFIX}"
-
-
-def _slow_dispatch_mode_enabled() -> bool:
-    return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
-
-
-def _matmul_wrapper_impl(
-    input_tensor_a,
-    input_tensor_b,
-    *,
-    transpose_a=False,
-    transpose_b=False,
-    memory_config=None,
-    dtype=None,
-    program_config=None,
-    activation=None,
-    compute_kernel_config=None,
-    core_grid=None,
-    output_tile=None,
-    optional_output_tensor=None,
-    global_cb=None,
-    sub_device_id=None,
-    auto_config=True,
-    queue_id=None,
-    cq_id=None,
-):
-    from ttnn._experimental.auto_config.matmul import dispatch_matmul
-
-    dispatch_kwargs = {}
-    if queue_id is not None:
-        dispatch_kwargs["queue_id"] = queue_id
-    elif cq_id is not None:
-        dispatch_kwargs["cq_id"] = cq_id
-
-    return dispatch_matmul(
-        base_operation=_CPP_MATMUL,
-        input_tensor_a=input_tensor_a,
-        input_tensor_b=input_tensor_b,
-        bias=None,
-        is_linear=False,
-        auto_config=auto_config,
-        transpose_a=transpose_a,
-        transpose_b=transpose_b,
-        memory_config=memory_config,
-        dtype=dtype,
-        program_config=program_config,
-        activation=activation,
-        compute_kernel_config=compute_kernel_config,
-        core_grid=core_grid,
-        output_tile=output_tile,
-        optional_output_tensor=optional_output_tensor,
-        global_cb=global_cb,
-        sub_device_id=sub_device_id,
-        **dispatch_kwargs,
-    )
-
-
-def _linear_wrapper_impl(
-    input_tensor_a,
-    input_tensor_b,
-    *,
-    bias=None,
-    transpose_a=False,
-    transpose_b=False,
-    memory_config=None,
-    dtype=None,
-    program_config=None,
-    activation=None,
-    compute_kernel_config=None,
-    core_grid=None,
-    output_tile=None,
-    optional_output_tensor=None,
-    global_cb=None,
-    sub_device_id=None,
-    auto_config=True,
-    queue_id=None,
-    cq_id=None,
-):
-    from ttnn._experimental.auto_config.matmul import dispatch_matmul
-
-    dispatch_kwargs = {}
-    if queue_id is not None:
-        dispatch_kwargs["queue_id"] = queue_id
-    elif cq_id is not None:
-        dispatch_kwargs["cq_id"] = cq_id
-
-    return dispatch_matmul(
-        base_operation=_CPP_LINEAR,
-        input_tensor_a=input_tensor_a,
-        input_tensor_b=input_tensor_b,
-        bias=bias,
-        is_linear=True,
-        auto_config=auto_config,
-        transpose_a=transpose_a,
-        transpose_b=transpose_b,
-        memory_config=memory_config,
-        dtype=dtype,
-        program_config=program_config,
-        activation=activation,
-        compute_kernel_config=compute_kernel_config,
-        core_grid=core_grid,
-        output_tile=output_tile,
-        optional_output_tensor=optional_output_tensor,
-        global_cb=global_cb,
-        sub_device_id=sub_device_id,
-        **dispatch_kwargs,
-    )
-
-
-def _install_slow_dispatch_wrapper(function, *, doc, golden_function):
-    function.__doc__ = doc
-    ttnn.attach_golden_function(function, golden_function=golden_function)
-    return function
-
-
-if _slow_dispatch_mode_enabled():
-    # Keep the public matmul/linear API available, but avoid wrapping the call
-    # in another registered TTNN operation. Tracy slow-dispatch profiling joins
-    # host/device data using the kernel-backed op identity, so the underlying C++
-    # op must remain the top-level tracked operation.
-    _matmul_wrapper = _install_slow_dispatch_wrapper(
-        _matmul_wrapper_impl,
-        doc=_MATMUL_DOC,
-        golden_function=_matmul_golden_function,
-    )
-    _linear_wrapper = _install_slow_dispatch_wrapper(
-        _linear_wrapper_impl,
-        doc=_LINEAR_DOC,
-        golden_function=_linear_golden_function,
-    )
-    ttnn.matmul = _matmul_wrapper
-    ttnn.linear = _linear_wrapper
-else:
-    REGISTERED_OPERATIONS.operations.discard(_CPP_MATMUL)
-    REGISTERED_OPERATIONS.operations.discard(_CPP_LINEAR)
-    _matmul_wrapper = ttnn.register_python_operation(
-        name="ttnn.matmul",
-        golden_function=_matmul_golden_function,
-        doc=_MATMUL_DOC,
-    )(_matmul_wrapper_impl)
-    _linear_wrapper = ttnn.register_python_operation(
-        name="ttnn.linear",
-        golden_function=_linear_golden_function,
-        doc=_LINEAR_DOC,
-    )(_linear_wrapper_impl)
-
+install_public_wrappers()
 
 ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: ttnn.matmul(self, *args, **kwargs)
 

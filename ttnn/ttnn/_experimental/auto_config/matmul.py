@@ -67,8 +67,8 @@ def _ttnn():
 
 
 def _get_cpp_base_operation(is_linear: bool) -> Any:
-    matmul_module = importlib.import_module("ttnn.operations.matmul")
-    return matmul_module._CPP_LINEAR if is_linear else matmul_module._CPP_MATMUL
+    install_module = importlib.import_module("ttnn._experimental.auto_config._install")
+    return install_module._CPP_LINEAR if is_linear else install_module._CPP_MATMUL
 
 
 def _load_tt_dit_matmul_helpers() -> Any | None:
