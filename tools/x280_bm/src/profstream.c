@@ -362,7 +362,8 @@ static void drain_direct(
     uint64_t host_base,
     uint64_t hring_words,
     uint64_t pcie_enc,
-    uint64_t read_noc) {
+    uint64_t read_noc,
+    uint64_t wnoc) {
     uint64_t q = (num_cores + ndrain - 1) / ndrain; /* contiguous core slice for this hart */
     uint64_t lo = hartid * q, hi = lo + q;
     if (hi > num_cores) {
@@ -402,7 +403,7 @@ static void drain_direct(
     wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
     wt.x_start = (uint32_t)(pcie_enc & 0x3f);
     wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
-    wt.noc_selector = 0;
+    wt.noc_selector = (uint32_t)wnoc; /* route the posted PCIe write over NoC0 (0) or NoC1 (1) */
     wt.posted = 1;
     (void)noc_configure_tlb_2m_ext(win_p, &wt, 0);
     fence_();
@@ -468,8 +469,8 @@ static void drain_direct(
                 hsent += run;
                 total += run;
                 heads[L] = tail;
-                w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks */
-                fence_();                 /* ring payload issued before the sent notify */
+                w32(cbase + r * 4, tail);  /* advance worker head -> producer unblocks */
+                fence_();                  /* ring payload issued before the sent notify */
                 w32(HSENT(hartid), hsent); /* publish to the host */
                 t_copy += rdcycle() - tc;
             }
@@ -502,6 +503,7 @@ int main(uint64_t hartid) {
     uint64_t read_noc = r64(P_NONCE) & 1ull;
     uint64_t direct = (r64(P_NONCE) >> 8) & 1ull;   /* NONCE bit 8: DIRECT drain (no reader/relay split) */
     uint64_t splitnoc = (r64(P_NONCE) >> 9) & 1ull; /* NONCE bit 9: each drain hart reads over NoC (hartid&1) */
+    uint64_t wnoc = (r64(P_NONCE) >> 11) & 1ull;    /* NONCE bit 11: route the posted PCIe write over NoC1 */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -535,7 +537,7 @@ int main(uint64_t hartid) {
 
     if (direct) {
         uint64_t eff_noc = splitnoc ? (hartid & 1ull) : read_noc; /* split reads across NoC0/NoC1 per hart */
-        drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, eff_noc);
+        drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, eff_noc, wnoc);
     } else if (hartid < nread) {
         reader_run(hartid, num_cores, prof_l1, nread, read_noc);
     } else {

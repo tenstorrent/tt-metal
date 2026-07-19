@@ -85,6 +85,7 @@ int main(int argc, char** argv) {
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
+    bool wnoc1 = false;        // --wnoc1: route the posted PCIe write over NoC1 (reads stay NoC0)
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -124,6 +125,9 @@ int main(int argc, char** argv) {
             rr_consumer = true;
         } else if (a == "--splitnoc") {
             split_noc = true;
+            direct = true;
+        } else if (a == "--wnoc1") {
+            wnoc1 = true;
             direct = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
@@ -247,7 +251,8 @@ int main(int argc, char** argv) {
     pack<uint64_t>(
         params,
         0x30,
-        read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull));  // bit8=direct bit9=splitnoc
+        read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) |
+            (wnoc1 ? 0x800ull : 0ull));                                   // bit8=direct bit9=splitnoc bit11=wnoc1
     pack<uint64_t>(params, 0x38, direct ? ndrain : nread);                // P_NREAD = drain-hart count in direct mode
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
     uint64_t nharts = direct ? ndrain : nread + 1;

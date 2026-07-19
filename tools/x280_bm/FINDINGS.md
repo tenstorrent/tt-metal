@@ -883,7 +883,15 @@ per-visit relay bookkeeping (the head-advance is itself a NoC write back to work
 tail-poll loop), and **+2.0** for the PCIe posted write of the data. The write is ~31 % (not half — a posted
 write is cheaper per word than a NoC read round-trip); bookkeeping ~15 %; read ~54 %. 2 harts don't double
 because only the read half is parallel — the +2.0 write half funnels through the one shared PCIe endpoint.
-Levers: fewer bytes/marker cuts all three; a coarser relay (fewer per-visit fences/head-writes) trims the +1.0.
+Levers: fewer bytes/marker cuts all three. Two lever attempts, both MEASURED and REJECTED:
+- **Batched publish** (fence + HSENT notify only every ~½ ring, not per visit): DID cut copy-cost 6.5→6.1
+  cyc/word (the +0.4 fence saving is real) but EXPLODED the wall 21M→92M (host-wait 3M→74M) — the HSENT
+  notify is the pipeline heartbeat, so publishing in bursts lets the host's 200µs idle-sleep kick in, the
+  ring backs up, and the drainer stalls on flow control. Net ~4× worse. The per-visit publish's real job is
+  keeping the consumer fed; can't batch it without starving the host. Reverted.
+- **Write over NoC1** (`--wnoc1`, posted PCIe store on NoC1 instead of NoC0): NO-OP — 6.5 cyc/word single
+  hart, 9.3 two harts, bit-identical to NoC0. The write cost is L2CPU store-issue + the PCIe endpoint, not
+  the NoC path; and 2 harts still funnel to the same PCIe tile regardless of NoC. Flag kept (setup-only).
 
 **2-hart scaling levers (all measured, all closed):** `--ndrain 2` (independent slice/ring/HSENT-HACKED/heads
 per hart, zero shared LIM) is 550/550 lossless but SUBLINEAR — per-hart 6.5→~9 cyc/word, eff BW ~411→~539
