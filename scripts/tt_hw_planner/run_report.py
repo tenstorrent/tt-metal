@@ -18,6 +18,7 @@ blocks the run.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -256,7 +257,8 @@ def _emit_run_report_impl(
         lines.append("")
 
     try:
-        from .family_backends import all_backends, rank_backends
+        from .family_backends import all_backends
+        from .sibling_ranker import rank_siblings
 
         _bs3 = {}
         _bs3_path = demo_dir / "bringup_status.json"
@@ -265,11 +267,16 @@ def _emit_run_report_impl(
         _picked = (_bs3.get("backend") or {}).get("name")
         _cat = _bs3.get("category") or next((b.category for b in all_backends() if b.name == _picked), None)
         if _cat:
-            _ranked = rank_backends(
+            _use_llm = os.environ.get("TT_HW_PLANNER_LLM_SIBLINGS", "1") != "0"
+            _ranked = rank_siblings(
+                model_id=_bs3.get("model_id") or model_id or "",
                 category=_cat,
                 model_type=_bs3.get("new_model_type"),
                 pipeline_tag=_bs3.get("pipeline_tag"),
-                top_n=5,
+                architectures=_bs3.get("architectures"),
+                notes=_bs3.get("notes") or "",
+                top_n=3,
+                use_llm=_use_llm,
             )
             if _ranked:
                 lines.append("## Sibling candidates (ranked)")

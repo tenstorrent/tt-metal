@@ -367,6 +367,68 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
         return None
 
 
+def _read_model_card_frontmatter(model_dir: str) -> dict:
+    """Parse ``pipeline_tag`` and ``tags`` from a local repo's ``README.md`` YAML
+    frontmatter — the model-card metadata that HF ships in-repo. ``config.json``
+    never carries ``pipeline_tag`` (it is hub/model-card metadata), so a local
+    probe must read the card. Returns ``{}`` when absent or unparseable."""
+    path = os.path.join(model_dir, "README.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return {}
+    if not text.lstrip().startswith("---"):
+        return {}
+    start = text.index("---") + 3
+    end = text.find("\n---", start)
+    if end == -1:
+        return {}
+    block = text[start:end]
+    try:
+        import yaml
+
+        meta = yaml.safe_load(block)
+        if isinstance(meta, dict):
+            tags = meta.get("tags")
+            if isinstance(tags, str):
+                tags = [tags]
+            return {
+                "pipeline_tag": meta.get("pipeline_tag"),
+                "tags": list(tags) if isinstance(tags, list) else [],
+            }
+    except Exception:
+        pass
+    return _parse_frontmatter_lines(block)
+
+
+def _parse_frontmatter_lines(block: str) -> dict:
+    """Dependency-free fallback parser for a README frontmatter block: pulls the
+    ``pipeline_tag`` scalar and a block/inline ``tags`` list."""
+    pipeline_tag = None
+    tags: List[str] = []
+    in_tags = False
+    for raw in block.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("pipeline_tag:"):
+            pipeline_tag = line.split(":", 1)[1].strip().strip("'\"") or None
+            in_tags = False
+        elif line.startswith("tags:"):
+            rest = line.split(":", 1)[1].strip()
+            if rest.startswith("[") and rest.endswith("]"):
+                tags = [t.strip().strip("'\"") for t in rest[1:-1].split(",") if t.strip()]
+                in_tags = False
+            else:
+                in_tags = True
+        elif in_tags and line.lstrip().startswith("- "):
+            tags.append(line.lstrip()[2:].strip().strip("'\""))
+        elif not line.startswith((" ", "\t", "-")):
+            in_tags = False
+    return {"pipeline_tag": pipeline_tag, "tags": tags}
+
+
 def _probe_local_model(model_id: str) -> ModelProbe:
     """Build a ModelProbe from a local directory (bypasses the HF Hub API)."""
     weight_exts_legacy = (".bin", ".pt", ".pth", ".ckpt", ".msgpack", ".nemo")
@@ -384,9 +446,11 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     weight_bytes = sf_bytes if sf_bytes > 0 else legacy_bytes
 
     cfg = _maybe_fetch_config(model_id) or {}
-    pipeline_tag = cfg.get("pipeline_tag")
-    library = "transformers"
-    category = _classify_category(pipeline_tag, [], library)
+    card = _read_model_card_frontmatter(model_id)
+    pipeline_tag = cfg.get("pipeline_tag") or card.get("pipeline_tag")
+    card_tags = card.get("tags") or []
+    library = cfg.get("library_name") or card.get("library_name") or "transformers"
+    category = _classify_category(pipeline_tag, card_tags, library)
     model_type_category = _category_from_model_type(str(cfg.get("model_type", "")))
     if model_type_category:
         category = model_type_category
