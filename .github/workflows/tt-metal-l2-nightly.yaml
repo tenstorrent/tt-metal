@@ -123,7 +123,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   generate-arch-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       l2-nightly-skus: ${{ steps.parse.outputs.l2-nightly-skus }}
     steps:

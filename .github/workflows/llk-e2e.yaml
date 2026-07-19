@@ -31,7 +31,7 @@ jobs:
     if: always()
     needs:
       - llk-e2e-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Check e2e test results
         uses: re-actors/alls-green@release/v1
@@ -40,7 +40,7 @@ jobs:
 
   report-status:
     name: "Report status"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: always()
     needs: llk-e2e-summary
     steps:

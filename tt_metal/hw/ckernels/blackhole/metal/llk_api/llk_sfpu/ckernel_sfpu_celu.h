@@ -6,10 +6,13 @@
 
 #include <cstdint>
 
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
 
 namespace ckernel::sfpu {
+
+inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
