@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -370,6 +371,8 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
         }
     }
 }
+
+inline void power_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 /**
  * @brief Compute power operation

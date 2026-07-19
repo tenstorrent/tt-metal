@@ -397,6 +397,13 @@ template <
     DataFormat TYPECAST_OUT = DataFormat::Invalid>
 void call_unary_sfpu_operation_init()
 {
+    // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
+    // full-init entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common); this standalone
+    // LLK harness bypasses those, so it must run the once-init itself. Ops migrated to the self-contained
+    // per-op init (SFPU_UNARY_INIT_SC*) rely on this running first; unmigrated ops still carry the invariant
+    // inside their _llk_math_eltwise_unary_sfpu_init_ but re-running it here is harmless (idempotent).
+    llk_math_sfpu_init_once();
+
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_inverse_hyperbolic<APPROX_MODE, is_fp32_dest_acc_en>);
