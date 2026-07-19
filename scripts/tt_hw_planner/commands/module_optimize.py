@@ -63,6 +63,48 @@ def _read_section(demo_dir, key: str):
     return txt[i + len(begin) : j].strip()
 
 
+_OPT_STATE_NAME = ".module_optimize_state.json"
+
+
+def _opt_state_path(demo_dir):
+    return Path(demo_dir) / _OPT_STATE_NAME
+
+
+def _load_optimized(demo_dir) -> dict:
+    try:
+        data = json.loads(_opt_state_path(demo_dir).read_text())
+        return data.get("optimized", {}) or {}
+    except Exception:
+        return {}
+
+
+def _mark_optimized(demo_dir, module, status, result) -> None:
+    p = _opt_state_path(demo_dir)
+    try:
+        data = json.loads(p.read_text()) if p.is_file() else {}
+    except Exception:
+        data = {}
+    opt = data.get("optimized") or {}
+    rounds = None
+    if result:
+        res = result.get("results") or []
+        if res:
+            rounds = ",".join(str(r.get("rounds", "?")) for r in res)
+    opt[module] = {"status": status, "rounds": rounds}
+    data["optimized"] = opt
+    try:
+        p.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+
+def _clear_optimized(demo_dir) -> None:
+    try:
+        _opt_state_path(demo_dir).unlink()
+    except Exception:
+        pass
+
+
 def _module_status(result) -> str:
     if not result:
         return "failed"
@@ -98,6 +140,23 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
     if not mods:
         print("  [optimize/module] nothing to optimize after filtering.")
         return 1
+
+    reverify = bool(getattr(args, "reverify", False))
+    if reverify:
+        _clear_optimized(demo_dir)
+    else:
+        done = _load_optimized(demo_dir)
+        skip = [m for m in mods if m in done]
+        if skip:
+            print(
+                "  [optimize/module] skipping %d already-optimized module(s) (pass --reverify to redo): %s"
+                % (len(skip), skip)
+            )
+        mods = [m for m in mods if m not in done]
+    if not mods:
+        print("  [optimize/module] all target modules already optimized (pass --reverify to redo).")
+        _write_rollup(demo_dir, [], upsert_report_section)
+        return 0
 
     os.environ["TT_PERF_MODULE_LEVEL"] = "1"
     os.environ.setdefault("PERF_MCP_VALIDATE_STALL_SEC", "120")
@@ -137,6 +196,8 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
                 os.environ.pop(_k, None)
         status = _module_status(result)
         rows.append((m, status, result))
+        if status in ("converged", "ran"):
+            _mark_optimized(demo_dir, m, status, result)
         _rekey_module_section(demo_dir, m, node, status, upsert_report_section, index="%d/%d" % (i, len(mods)))
 
     _write_rollup(demo_dir, rows, upsert_report_section)

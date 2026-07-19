@@ -11065,6 +11065,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         dest="then_e2e",
         help="after --module-level, run one full-pipeline pass to confirm the per-module wins survive " "composition.",
     )
+    popt.add_argument(
+        "--reverify",
+        action="store_true",
+        help="re-optimize modules already marked optimized in a prior --module-level run "
+        "(default: skip them, so a restart resumes at the next unoptimized module). Mirrors auto-up --reverify.",
+    )
     popt.set_defaults(func=cmd_optimize)
 
     pao = sub.add_parser(
