@@ -23,13 +23,23 @@ PERF_RUN_TOOL = "mcp__perfrun__run_perf_test"
 
 _COMPONENT_RUN_TIMEOUT_S = int(os.environ.get("PERF_MCP_COMPONENT_RUN_TIMEOUT_S", "240"))
 _TIMEOUT_CODES = {124, 137, 143, -9, -15}
+_TRACE_WEDGE_LIMIT = int(os.environ.get("PERF_MCP_TRACE_WEDGE_LIMIT", "10") or "10")
 
-_WEDGE_GUIDANCE = (
-    "The trace capture HUNG the device (it timed out; the harness already reset the device). This is a "
-    "DEVICE WEDGE, not a code bug you can fix by editing the trace: this module's forward has an "
-    "irreducible host op that a trace cannot record. STOP trying to make the trace work. Make the test "
-    "EAGER-ONLY: drop the trace-replay block (or guard it so it does not run) and print "
-    "TRACE_NOT_TRACE_CAPABLE=1, so the eager FORWARD_WALL_MS is the result. That returns VERDICT=PASS_EAGER."
+_WEDGE_RETRY_GUIDANCE = (
+    "The trace capture HUNG the device (timed out; the harness reset it). The code BETWEEN "
+    "ttnn.begin_trace_capture and ttnn.end_trace_capture touched the HOST — a trace records only pure "
+    "device-op dispatch. RESTRUCTURE so the captured region is host-free: build the module and ALL its "
+    "inputs / masks / constants ONCE, resident on device, BEFORE begin_trace_capture; nothing between "
+    "begin/end may call ttnn.from_torch / ttnn.to_torch / .item() / .cpu() / torch construction / python "
+    "shape or control-flow. If one op inside is the host bit, move it OUT of the captured region or "
+    "replace it with a device-only equivalent. Then call run_perf_test again — keep trying to make the "
+    "TRACE hold; do NOT go eager yet."
+)
+
+_WEDGE_EAGER_GUIDANCE = (
+    "The trace has hung %d times (the trace-attempt limit) — this module's forward has an irreducible "
+    "host op that cannot be traced. Only NOW: make the test EAGER-ONLY — drop the trace-replay block and "
+    "print TRACE_NOT_TRACE_CAPABLE=1 so the eager FORWARD_WALL_MS is the result (VERDICT=PASS_EAGER)."
 )
 
 
@@ -58,20 +68,20 @@ def _bound_output(out: str, limit: int = 16000) -> str:
     return out[-limit:]
 
 
-def _run_and_format(node_abs: str) -> str:
+def _run_and_format(node_abs: str, wedges: list | None = None) -> str:
     from .perf_test_gen import _run_perf_node
 
+    if wedges is None:
+        wedges = [0]
     rc, out = _run_perf_node(
         node_abs, {"TT_PERF_TRACE": "1", "TT_PERF_NUM_CQ": "1"}, timeout_s=_COMPONENT_RUN_TIMEOUT_S
     )
     verdict = _judge_output(rc, out)
     if verdict == "WEDGE":
-        eager_note = (
-            "\n(the eager FORWARD_WALL_MS already printed — you only need to remove the trace block.)"
-            if "FORWARD_WALL_MS=" in (out or "")
-            else ""
-        )
-        return f"VERDICT=WEDGE\nrc={rc}\n{_WEDGE_GUIDANCE}{eager_note}"
+        wedges[0] += 1
+        if wedges[0] >= _TRACE_WEDGE_LIMIT:
+            return f"VERDICT=WEDGE\nrc={rc}\n{_WEDGE_EAGER_GUIDANCE % wedges[0]}"
+        return f"VERDICT=WEDGE\nrc={rc}\n(trace hang {wedges[0]}/{_TRACE_WEDGE_LIMIT}) {_WEDGE_RETRY_GUIDANCE}"
     return f"VERDICT={verdict}\nrc={rc}\n----- raw test output -----\n{_bound_output(out)}"
 
 
@@ -81,18 +91,21 @@ def _make_perf_run_server(node_abs: str):
     except Exception:  # noqa: BLE001
         return None
 
+    wedges = [0]
+
     @tool(
         "run_perf_test",
         "Run the perf test you have written on the device and return its RAW output. It routes "
         "through the harness runner, which handles ALL device execution and recovery (reset, "
         "cooldown) for you — you must NEVER run pytest/tt-smi/kill or open a device yourself. Read "
         "the returned output: the first line is VERDICT=PASS_TRACE / PASS_EAGER / WEDGE / FAIL. On FAIL "
-        "the raw traceback + the input the test built follow — fix your file and call again. On WEDGE the "
-        "trace HUNG the device (no fixable error) — go eager-only per the instructions and call again.",
+        "the raw traceback + the input the test built follow — fix and call again. On WEDGE the trace "
+        "hung — follow the returned instructions: restructure the captured region to be host-free and "
+        "retry the trace; only go eager when it tells you the trace-attempt limit is reached.",
         {},
     )
     async def run_perf_test(args):  # noqa: ANN001
-        text = await asyncio.to_thread(_run_and_format, node_abs)
+        text = await asyncio.to_thread(_run_and_format, node_abs, wedges)
         return {"content": [{"type": "text", "text": text}]}
 
     return create_sdk_mcp_server(PERF_RUN_SERVER, tools=[run_perf_test])
@@ -102,10 +115,11 @@ _SYSTEM = (
     "You write ONE single-component performance test for a TTNN model, then stop. Workflow: write "
     "the test file with Write/Edit, RUN it by calling the run_perf_test tool, READ the raw output "
     "(the real traceback AND the input the test built), fix your file, and repeat until run_perf_test "
-    "returns VERDICT=PASS_TRACE — or VERDICT=PASS_EAGER when the module's own forward has an "
-    "irreducible host op that cannot be traced. If run_perf_test returns VERDICT=WEDGE, the trace HUNG "
-    "the device (not a fixable error): immediately go eager-only (drop the trace block, print "
-    "TRACE_NOT_TRACE_CAPABLE=1) — do NOT keep editing the trace. Edit ONLY the one perf test file named in the task. "
+    "returns VERDICT=PASS_TRACE — a real trace is strongly preferred. VERDICT=WEDGE means the trace hung "
+    "because the captured region touched the host: RESTRUCTURE it to be host-free (build inputs/constants "
+    "resident once before the capture) and retry the trace — keep trying to make the trace hold. Only "
+    "fall back to eager (VERDICT=PASS_EAGER: drop the trace block, print TRACE_NOT_TRACE_CAPABLE=1) once "
+    "run_perf_test tells you the trace-attempt limit is reached. Edit ONLY the one perf test file named in the task. "
     "NEVER run pytest, tt-smi, kill, fuser, or open/close a device yourself — the run_perf_test tool "
     "and the harness own all device execution and recovery; doing it yourself breaks the run. Do not "
     "repeat an approach that already failed the same way — change the approach. Keep your final "
@@ -142,10 +156,11 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
 
     prompt = (
         prompt_body + f"\n\nWrite the test file at `{out_rel}` (relative to your working directory) with the Write "
-        "tool. Then CALL run_perf_test, read its raw output, and iterate (Edit -> run_perf_test) until "
-        "it returns VERDICT=PASS_TRACE, or VERDICT=PASS_EAGER if the module genuinely cannot be "
-        "trace-captured (VERDICT=WEDGE = the trace hung the device: switch to eager-only immediately, do "
-        "not keep editing the trace). Do NOT finish until run_perf_test passes."
+        "tool. Then CALL run_perf_test, read its raw output, and iterate (Edit -> run_perf_test) until it "
+        "returns VERDICT=PASS_TRACE (strongly preferred). On VERDICT=WEDGE the trace hung — restructure "
+        "the captured region to be host-free and retry the trace; only fall back to eager "
+        "(VERDICT=PASS_EAGER) once run_perf_test says the trace-attempt limit is reached. Do NOT finish "
+        "until run_perf_test passes."
     )
     opts = ClaudeAgentOptions(
         model=get_edit_model(0, resolved),

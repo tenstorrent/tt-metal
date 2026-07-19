@@ -343,7 +343,7 @@ def _write_trace_caps(out_path: Path, caps: dict) -> None:
 # progress this many consecutive times, give up rather than spin forever on a pipeline it can't fix.
 _STALL_LIMIT = 6
 
-_TRACE_WEDGE_LIMIT = int(os.environ.get("PERF_MCP_TRACE_WEDGE_LIMIT", "3") or "3")
+_TRACE_WEDGE_LIMIT = int(os.environ.get("PERF_MCP_TRACE_WEDGE_LIMIT", "10") or "10")
 
 _COMPONENT_WEDGE_REASON = (
     "your trace capture HUNG the device (execute_trace blocked) — the timed forward contains HOST work "
@@ -1093,25 +1093,26 @@ def generate_perf_test(
         verdict, failure = validate_generated_perf_test(out_path, task, component=_component)
         if verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
             return node
-        stall += 1
         if _component and "WEDGE" in failure:
             trace_wedges += 1
             print(
-                f"      · perf-test regen {stall}/{_STALL_LIMIT} (trace wedge {trace_wedges}/{_TRACE_WEDGE_LIMIT}): "
-                "device hung capturing this module's forward — reset + regenerating",
+                f"      · trace wedge {trace_wedges}/{_TRACE_WEDGE_LIMIT}: device hung capturing this "
+                "module's forward — reset + retrying the TRACE",
                 file=sys.stderr,
                 flush=True,
             )
-            if trace_wedges >= _TRACE_WEDGE_LIMIT and _eager_terminal_ok(out_path, task):
-                print(
-                    f"      · module not trace-capturable after {_TRACE_WEDGE_LIMIT} attempts -> "
-                    "eager FORWARD_WALL_MS terminal",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                return node
+            if trace_wedges >= _TRACE_WEDGE_LIMIT:
+                if _eager_terminal_ok(out_path, task):
+                    print(
+                        f"      · trace hung {_TRACE_WEDGE_LIMIT}x -> eager FORWARD_WALL_MS terminal",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return node
+                return None
             feedback = _correction_feedback(_COMPONENT_WEDGE_REASON, failure, prev_draft)
             continue
+        stall += 1
         if "WEDGE" in failure:
             _why = "device wedged on a non-capturable step — reset + regenerating"
         elif "degraded to 1cq" in failure:
