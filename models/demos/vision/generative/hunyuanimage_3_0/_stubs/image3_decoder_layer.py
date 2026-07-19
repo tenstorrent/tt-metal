@@ -73,9 +73,18 @@ _DECODE_MM_CFG = ttnn.WormholeComputeKernelConfig(
 )
 
 
+def _host_of(dtype):
+    # P1 host pre-cast: cast bf16 weights on HOST before from_torch so the
+    # fp32->bf16 cast happens once at build (host side), not as a recurring
+    # on-device Tilize+Typecast on the lazily-materialized fp32 upload. bfloat8_b/
+    # bfloat4_b have no host torch equivalent -> stay fp32 (packed on device at
+    # build). Mirrors the optimized mo_e.py (_host_of).
+    return torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+
+
 def _to_ttnn(t: torch.Tensor, device, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     return ttnn.from_torch(
-        t.to(torch.float32),
+        t.to(_host_of(dtype)),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -159,7 +168,7 @@ class _TtDecoderLayer:
     def _repl(self, t, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
         """Upload REPLICATED onto every device of the mesh."""
         return ttnn.from_torch(
-            t.to(torch.float32),
+            t.to(_host_of(dtype)),
             dtype=dtype,
             layout=layout,
             device=self.device,
@@ -173,7 +182,7 @@ class _TtDecoderLayer:
         dims = [None, None]
         dims[self.tp_axis] = dim
         return ttnn.from_torch(
-            t.to(torch.float32),
+            t.to(_host_of(dtype)),
             dtype=dtype,
             layout=layout,
             device=self.device,
