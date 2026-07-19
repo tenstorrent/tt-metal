@@ -798,7 +798,18 @@ def test_{component_safe}(device_params, device):
         ttnn_extra_kwargs = {{
             k: v for k, v in sample_kwargs.items() if k != primary_name
         }}
-        ttnn_out = ttnn_module(ttnn_input, **ttnn_extra_kwargs)
+        import pathlib as _pathlib
+
+        from models.common.native_probe import run_native_probe as _run_native_probe
+
+        _stub_for_probe = _pathlib.Path(__file__).resolve().parents[2] / "_stubs" / (COMPONENT_NAME + ".py")
+        ttnn_out, _np = _run_native_probe(
+            _stub_for_probe, lambda: ttnn_module(ttnn_input, **ttnn_extra_kwargs)
+        )
+        print(
+            f"[bringup] native_probe ttnn_dispatch={{_np['ttnn_dispatch']}} torch_ops={{_np['torch_ops']}}",
+            flush=True,
+        )
     finally:
         _clear_stage_timeout()
     if isinstance(ttnn_out, tuple) and ttnn_out:
@@ -918,9 +929,21 @@ def _stub_body_is_native(stub_path: Path) -> bool:
     device (`.to_torch(`). Weight prep in __init__ (torch.cat/detach/float staged via ttnn.from_torch) is
     allowed; isinstance/type refs are not calls and are allowed. Host reimplementation — torch math or a
     device->host readback anywhere in the forward — is rejected even at PCC 1.0. Does NOT check for a
-    snapshot — compose with the caller's snapshot check."""
+    snapshot — compose with the caller's snapshot check.
+
+    A fresh runtime probe (written by the PCC run: it counts torch ops vs ttnn dispatches that ACTUALLY
+    execute) is authoritative when present — un-evadable by aliasing/obfuscation, unlike the static scan
+    below. Falls back to the static scan when no fresh probe exists."""
     if not stub_path.is_file():
         return False
+    try:
+        from models.common.native_probe import is_native_from_probe, read_fresh_probe
+
+        _verdict = is_native_from_probe(read_fresh_probe(stub_path))
+        if _verdict is not None:
+            return _verdict
+    except Exception:  # noqa: BLE001
+        pass
     try:
         text = stub_path.read_text(errors="ignore")
     except Exception:
