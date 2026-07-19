@@ -868,6 +868,23 @@ wait). Producers back-pressure whenever the 550 lanes collectively outrun the on
 | **1350** | **0/550** | **0** |
 | 2000 | 0/550 | 0 |
 
+**Per-word cost decomposition (clean single-path builds — a runtime `if` in the hot loop regresses the
+untaken path ~2×, so each mode was measured as its own unconditional build).** Why the drainer sits at
+615 MB/s vs the ~2.24 GB/s rdrbench read-only ceiling (2 harts) / ~1.15 GB/s per hart (3.5 cyc/word):
+
+| stage | cyc/word | GB/s | delta |
+|---|---|---|---|
+| rdrbench pure NoC read (no relay) | 3.5 | 1.15 | baseline read |
+| stream READ-ONLY (`vle` + head-advance + fence + poll, discard store) | 4.5 | 0.89 | **+1.0** relay bookkeeping |
+| stream READ+WRITE (production drainer) | 6.5 | 0.615 | **+2.0** posted PCIe store |
+
+So the drainer is NOT leaving read bandwidth on the table — it pays the pure-read 3.5, **+1.0** for the
+per-visit relay bookkeeping (the head-advance is itself a NoC write back to worker L1, plus a `fence` and the
+tail-poll loop), and **+2.0** for the PCIe posted write of the data. The write is ~31 % (not half — a posted
+write is cheaper per word than a NoC read round-trip); bookkeeping ~15 %; read ~54 %. 2 harts don't double
+because only the read half is parallel — the +2.0 write half funnels through the one shared PCIe endpoint.
+Levers: fewer bytes/marker cuts all three; a coarser relay (fewer per-visit fences/head-writes) trims the +1.0.
+
 **2-hart scaling levers (all measured, all closed):** `--ndrain 2` (independent slice/ring/HSENT-HACKED/heads
 per hart, zero shared LIM) is 550/550 lossless but SUBLINEAR — per-hart 6.5→~9 cyc/word, eff BW ~411→~539
 MB/s (+31%), knee ~1300→~900. Sublinear because both harts contend on the shared L2CPU load/store path + the
