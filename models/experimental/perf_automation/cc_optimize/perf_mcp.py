@@ -855,10 +855,32 @@ def _infer_block_count(counts: dict) -> int:
     return _C(vals).most_common(1)[0][0]
 
 
+def _signpost_blocks(seq: list) -> int:
+    m = -1
+    for s in seq or []:
+        if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX):
+            try:
+                m = max(m, int(s.split(":", 1)[1]))
+            except (ValueError, IndexError):
+                pass
+    return m + 1
+
+
+def _signposts_agree(seq: list) -> bool:
+    sp = _signpost_blocks(seq)
+    op = _infer_block_count(
+        _C_counts([s for s in seq or [] if not (isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX))])
+    )
+    if sp <= 1 or op <= 1:
+        return False
+    lo, hi = sorted((sp, op))
+    return lo / hi >= float(os.environ.get("PERF_MCP_SIGNPOST_AGREE_RATIO", "0.8"))
+
+
 def _block_starts(sequence: list, n_blocks: int | None = None) -> tuple:
     seq = sequence or []
     sp = [i for i, s in enumerate(seq) if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX)]
-    if sp:
+    if sp and _signposts_agree(seq):
         return sp, "signposts"
     if n_blocks is None:
         n_blocks = _infer_block_count(_C_counts(seq))

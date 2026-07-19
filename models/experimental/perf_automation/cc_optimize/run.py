@@ -575,7 +575,58 @@ def _work_signal(seq) -> int:
     return sum(1 for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:"))
 
 
-def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int, full_hint: int = 0) -> dict:
+def _op_block_count(seq) -> int:
+    from collections import Counter
+
+    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
+    vals = [c for c in Counter(ops).values() if c > 1]
+    if not vals:
+        return 0
+    return Counter(vals).most_common(1)[0][0]
+
+
+def _signposts_agree(seq) -> bool:
+    sp = _blocks_ran(seq)
+    op = _op_block_count(seq)
+    if sp <= 1 or op <= 1:
+        return False
+    lo, hi = sorted((sp, op))
+    return lo / hi >= float(os.environ.get("PERF_MCP_SIGNPOST_AGREE_RATIO", "0.8"))
+
+
+def _block_start_positions(seq):
+    if _signposts_agree(seq):
+        pos = [i for i, t in enumerate(seq or []) if isinstance(t, str) and t.startswith("PERF_BLOCK_SIGNPOST:")]
+        return pos, "signposts"
+    n = _op_block_count(seq)
+    if n <= 1:
+        return [], "none"
+    from collections import Counter
+
+    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
+    counts = Counter(ops)
+    anchor = next((t for t in ops if counts.get(t) == n), None)
+    if anchor is None:
+        return [], "none"
+    return [i for i, t in enumerate(seq or []) if t == anchor], "inferred"
+
+
+def _first_block_map(seq):
+    starts, source = _block_start_positions(seq)
+    import bisect
+
+    fb: dict = {}
+    for i, tok in enumerate(seq or []):
+        if not isinstance(tok, str) or tok.startswith("PERF_BLOCK_SIGNPOST:"):
+            continue
+        b = bisect.bisect_right(starts, i) - 1 if starts else 0
+        fb.setdefault(tok, max(b, 0))
+    return fb, source
+
+
+def _bridge_depth_env(
+    repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int, full_hint: int = 0, full_blocks: int = 0
+) -> dict:
     if not node or os.environ.get("PERF_MCP_DEPTH_BRIDGE", "1") != "1":
         return {}
     cached = _depth_cache_get(repo_root, node)
@@ -586,28 +637,35 @@ def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, 
     model_root = _model_root_from_node(repo_root, node)
     if model_root is None:
         return {}
-    full = int(full_hint)
-    if full <= 0:
+    full_op = int(full_hint)
+    full_sp = int(full_blocks)
+    if full_op <= 0:
         _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
-        full = _work_signal(seq)
-    if full <= 0:
+        full_op = _work_signal(seq)
+        full_sp = _blocks_ran(seq)
+    if full_op <= 0:
         print("  [optimize/cc] depth-knob bridge: full-model work-signal is 0 (probe empty); skipping")
         _depth_cache_put(repo_root, node, {})
         return {}
     env = _llm_depth_env(model_root, cov)
     if not env:
-        print(f"  [optimize/cc] depth-knob bridge: no depth knob found (work-signal {full})")
+        print(f"  [optimize/cc] depth-knob bridge: no depth knob found (work-signal {full_op})")
         _depth_cache_put(repo_root, node, {})
         return {}
     probe_env = dict(mcp_env)
     probe_env.update(env)
     _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
-    capped = _work_signal(seq2)
+    cap_op = _work_signal(seq2)
+    cap_sp = _blocks_ran(seq2)
+    if full_sp > 1 and cap_sp >= 1 and cap_sp <= full_sp * 0.7:
+        full, capped, metric = full_sp, cap_sp, "block-signpost"
+    else:
+        full, capped, metric = full_op, cap_op, "op-count"
     if capped <= 0 or capped >= full * 0.7:
-        print(f"  [optimize/cc] depth-knob bridge: {env} did not reduce work (signal {full}->{capped}); ignoring")
+        print(f"  [optimize/cc] depth-knob bridge: {env} did not reduce work ({metric} {full}->{capped}); ignoring")
         _depth_cache_put(repo_root, node, {})
         return {}
-    print(f"  [optimize/cc] depth-knob bridge: enforcing {env} (work-signal {full}->{capped})")
+    print(f"  [optimize/cc] depth-knob bridge: enforcing {env} ({metric} {full}->{capped})")
     _depth_cache_put(repo_root, node, env)
     return env
 
@@ -641,16 +699,8 @@ def _coverage_layers(
         facts = _parse_facts(raw, sigs)
         facts["all_ops"] = sorted(sigs)
         facts["full_signal"] = _work_signal(seq)
-        first_block: dict = {}
-        cur = 0
-        for tok in seq or []:
-            if isinstance(tok, str) and tok.startswith("PERF_BLOCK_SIGNPOST:"):
-                try:
-                    cur = int(tok.split(":", 1)[1])
-                except (ValueError, IndexError):
-                    pass
-            else:
-                first_block.setdefault(tok, cur)
+        facts["full_blocks"] = _blocks_ran(seq)
+        first_block, blk_source = _first_block_map(seq)
         if first_block:
             deepest = max(first_block.values())
             deep = sorted(op for op, b in first_block.items() if b >= 16)
@@ -662,8 +712,8 @@ def _coverage_layers(
         facts["deep_ops"] = deep
         tail = f"; {len(deep)} op(s) appear only past layer 16 (present, un-timed)" if deep else ""
         print(
-            f"  [optimize/cc] coverage (all-layers probe): {len(sigs)} distinct op(s); deepest new op at "
-            f"block {deepest} -> TT_PERF_LAYERS={_cov}{tail}"
+            f"  [optimize/cc] coverage (all-layers probe, blocks={blk_source}): {len(sigs)} distinct op(s); "
+            f"deepest new op at block {deepest} -> TT_PERF_LAYERS={_cov}{tail}"
         )
         _coverage_cache_put(repo_root, node, case, _cov)
         return _cov, facts

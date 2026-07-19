@@ -53,6 +53,16 @@ def test_signposts_give_exact_block_attribution():
     assert r["fully_applied"] is False and r["missed_blocks"] == [1]
 
 
+def test_decoupled_signposts_are_distrusted_and_fall_back_to_inferred():
+    seq = ["embed(...)"]
+    for dt in ["BFLOAT8_B", "BFLOAT16", "BFLOAT8_B"]:
+        seq += ["norm(...)", "matmul(((1,4096),),'%s')" % dt, "attn(...)"]
+    seq += ["PERF_BLOCK_SIGNPOST:%d" % i for i in range(20)]
+    r = P.compute_lever_coverage(Counter(seq), seq, "matmul(", "BFLOAT16", "BFLOAT8_B")
+    assert r["block_source"] == "inferred"
+    assert r["fully_applied"] is False and r["missed_blocks"] == [1]
+
+
 def test_op_not_found():
     seq = _seq(["BFLOAT8_B"] * 4)
     r = P.compute_lever_coverage(Counter(seq), seq, "conv2d(", "BFLOAT16", "BFLOAT8_B")
