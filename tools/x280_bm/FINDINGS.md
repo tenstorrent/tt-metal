@@ -878,11 +878,17 @@ throttles: (1) the HOST SINK — real, ~31 % of reader time, back-pressures via 
 zeroes spsc-wait. (2) WASTED POLLING — ~50 % of reader
 time even with the sink gone, INDEPENDENT of it. INSTRUMENTED (reader RES +0x28 visits, +0x30 polls):
 avg-run = **500 words** (buffers ARE full, ≈ RING_CAP 512 — drains are efficient at ~4.2 cyc/word), but
-**83–90 % of the tail-polls hit EMPTY lanes**. The reader cycles its 275 lanes ~44 passes faster than the
-producers refill (each lane drained ~8×, polled ~44×), so ~10k of ~12k tail-reads are pure wasted NoC
-round-trips eating ~⅓ of reader time. NOT per-productive-visit cost and NOT small runs — it's OVER-POLLING.
-FIX (cheap): each core's 5 RISC tails are 20 contiguous bytes (`cbase+20..40`) but are read as 5 separate
-`r32` NoC round-trips; bulk-read all 5 in one NoC transaction → ~5× less poll traffic. To get copy-dominant at peak needs BOTH a
+**83–90 % of the tail-polls hit EMPTY lanes**. The reader cycles its 275 lanes faster than the
+producers refill, so 83-90 % of tail-reads find `tail==head`. **BUT the poll is NOT the bottleneck**
+(corrected): a per-core ILP tail-gather (1 vle of the 5 contiguous tails/core, 4 cores' NoC reads in flight)
+was implemented and REVERTED — it left BW unchanged with the sink and marginally worse without it, and the
+`polls` counter TRIPLED (12k→40k) at the SAME wall. So the empty polls overlap with the copy/visit latency
+(the X280 LSU already pipelines the 5 scalar `r32` reads); making them cheaper just lets the reader spin
+more, not finish sooner. The real non-copy ~50 % is PER-VISIT serialization — the `fence` (drains ~500
+posted LIM writes before PROD publishes) + head-advance NoC write + PROD/sticky, ~2000 cyc × ~2k visits.
+AND at the real operating point (with the host sink) the SINK dominates anyway (spsc-wait), so reader
+overhead is second-order until fan-out. Lever, if pursued: batch the PROD publish/fence across several
+lanes (X280-internal LIM→relay, no host-heartbeat coupling — unlike the host-publish batching that failed). To get copy-dominant at peak needs BOTH a
 faster sink (fan-out to more rings/threads than readers) AND the reader-overhead fix (bulk-poll the
 tails + batch the PROD publish/fence). Bigger SPSC does NOT help — tried 4096→16384, it made things
 2.5× WORSE (burstier back-pressure, less 3-stage overlap; the small buffer is near-optimal).
