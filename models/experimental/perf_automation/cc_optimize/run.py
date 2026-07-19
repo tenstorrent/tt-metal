@@ -571,6 +571,25 @@ def _llm_depth_env(model_root: Path, cov: int) -> dict:
     return {str(k): str(v) for k, v in d.items() if str(k)}
 
 
+_ANCHOR_KEYS = ("flash", "sdpa", "attention", "attn", "mla")
+
+
+def _layer_signal(seq) -> int:
+    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
+    if not ops:
+        return 0
+    from collections import Counter
+
+    names = Counter(o.split("(", 1)[0].strip().lower() for o in ops)
+    anchor = sum(n for name, n in names.items() if any(k in name for k in _ANCHOR_KEYS))
+    if anchor > 0:
+        return anchor
+    blk = _blocks_ran(seq)
+    if blk > 0:
+        return blk
+    return len(ops)
+
+
 def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int) -> dict:
     if not node or os.environ.get("PERF_MCP_DEPTH_BRIDGE", "1") != "1":
         return {}
@@ -583,24 +602,24 @@ def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, 
     if model_root is None:
         return {}
     _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
-    ran = _blocks_ran(seq)
-    if ran <= 0 or ran <= cov + 1:
+    full = _layer_signal(seq)
+    if full <= 0:
         _depth_cache_put(repo_root, node, {})
         return {}
     env = _llm_depth_env(model_root, cov)
     if not env:
-        print(f"  [optimize/cc] depth-knob bridge: model ran {ran} layers ignoring TT_PERF_LAYERS={cov}; no knob found")
+        print(f"  [optimize/cc] depth-knob bridge: no depth knob found (layer-signal {full})")
         _depth_cache_put(repo_root, node, {})
         return {}
     probe_env = dict(mcp_env)
     probe_env.update(env)
     _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
-    capped = _blocks_ran(seq2)
-    if capped <= 0 or capped > ran - 1:
-        print(f"  [optimize/cc] depth-knob bridge: {env} did not cap layers ({ran}->{capped}); ignoring")
+    capped = _layer_signal(seq2)
+    if capped <= 0 or capped >= full * 0.7:
+        print(f"  [optimize/cc] depth-knob bridge: {env} did not reduce layers (signal {full}->{capped}); ignoring")
         _depth_cache_put(repo_root, node, {})
         return {}
-    print(f"  [optimize/cc] depth-knob bridge: model ignores TT_PERF_LAYERS; enforcing {env} ({ran}->{capped} layers)")
+    print(f"  [optimize/cc] depth-knob bridge: enforcing {env} (layer-signal {full}->{capped})")
     _depth_cache_put(repo_root, node, env)
     return env
 
@@ -928,6 +947,36 @@ def _pg_cpu_jiffies(pgid: int) -> int:
     return total
 
 
+def _llm_child_alive(pgid: int) -> bool:
+    target = str(pgid)
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return False
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        if len(fields) <= 2 or fields[2] != target:
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as fh:
+                cmd = fh.read().replace(b"\x00", b" ").decode("utf-8", "ignore").lower()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        if "claude" in cmd:
+            return True
+    return False
+
+
 def _run_device_proc(
     cmd,
     cwd,
@@ -989,7 +1038,7 @@ def _run_device_proc(
                 time.sleep(5)
                 now = time.monotonic()
                 cpu = _pg_cpu_jiffies(pgid)
-                moved = cpu > last_cpu + 10 or _act[0] > last_progress
+                moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid)
                 last_cpu = cpu
                 if moved:
                     max_gap = max(max_gap, now - last_progress)
