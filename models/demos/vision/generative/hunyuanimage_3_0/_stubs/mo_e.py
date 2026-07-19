@@ -48,28 +48,19 @@ from models.demos.vision.generative.hunyuanimage_3_0._stubs import top_k_gate as
 
 HF_MODEL_ID = "tencent/HunyuanImage-3.0"
 
-# Expert (SwiGLU) weight dtype. bf16 puts 32 layers at ~23 GB/chip — the eager
-# forward fits (~73 MB free) but the trace/2CQ perf path (a 2nd resident
-# pipeline) OOMs. bf8_b halves the dominant expert weights (~19 -> ~9.6 GB/chip)
-# for headroom, and is PCC-neutral (bf8 4L PCC 0.9967 == bf16 0.9961; the depth
-# behavior is identical since it's intrinsic bf16 activation sensitivity, not
-# expert-weight precision). Flip to ttnn.bfloat16 to A/B.
-_EXPERT_DTYPE = ttnn.bfloat8_b
 
-# Expert-matmul compute config: default HiFi4 (4-pass) is the slowest; LoFi is a
-# large step-time win for the (bf8) expert SwiGLU matmuls that dominate decode.
-# Shared with prefill; PCC/token-gated.
-_EXPERT_MM_CFG = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
-    math_approx_mode=True,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=True,
-)
+# Host dtype matching the target ttnn dtype: convert the weight to bf16 ON THE
+# HOST before from_torch so the fp32->bf16 cast happens once at build time (host
+# side) rather than as a per-forward on-device TypecastDeviceOperation on the
+# lazily-materialized fp32 upload. bfloat8_b has no host torch equivalent, so it
+# stays fp32 (its pack happens on device at build regardless).
+def _host_of(dtype):
+    return torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
 
 
 def _to_ttnn(t, device, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     return ttnn.from_torch(
-        t.to(torch.float32),
+        t.to(_host_of(dtype)),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -105,6 +96,12 @@ class _TtMoE:
         # Gate 2 real-invocation counter.
         self.num_calls = 0
 
+        # Full compute grid for the DRAM-bw-bound down matmul: aggregate DRAM
+        # read bandwidth scales with the number of cores issuing NoC reads, so a
+        # partial grid caps the weight-read throughput. Force the whole grid.
+        _g = device.compute_with_storage_grid_size()
+        self.mm_core_grid = ttnn.CoreGrid(y=_g.y, x=_g.x)
+
         if self.is_mesh:
             self.mesh_shape = tuple(int(x) for x in device.shape)
             self.tp_axis = self._pick_tp_axis()
@@ -126,7 +123,7 @@ class _TtMoE:
 
     def _repl(self, t, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
         return ttnn.from_torch(
-            t.to(torch.float32),
+            t.to(_host_of(dtype)),
             dtype=dtype,
             layout=layout,
             device=self.device,
@@ -138,7 +135,7 @@ class _TtMoE:
         dims = [None, None]
         dims[self.tp_axis] = dim
         return ttnn.from_torch(
-            t.to(torch.float32),
+            t.to(_host_of(dtype)),
             dtype=dtype,
             layout=layout,
             device=self.device,
@@ -182,49 +179,76 @@ class _TtMoE:
         # instead of an inline duplicate router).
         self.gate = _top_k_gate.build(self.device, torch_module.gate)
 
-        # routed experts: stack over experts, shard the expert axis (dim=0)
-        # across the TP mesh axis so each TP device owns epd experts.
-        gu_stack = torch.stack([e.gate_and_up_proj.weight.t().contiguous() for e in torch_module.experts], dim=0)
-        down_stack = torch.stack([e.down_proj.weight.t().contiguous() for e in torch_module.experts], dim=0)
-        self.expert_inter = int(torch_module.experts[0].gate_and_up_proj.weight.shape[0] // 2)
-        self.exp_gu = self._shard(gu_stack, dim=0, dtype=_EXPERT_DTYPE)  # [epd, hidden, 2*inter] per TP device
-        self.exp_down = self._shard(down_stack, dim=0, dtype=_EXPERT_DTYPE)  # [epd, inter, hidden] per TP device
+        # routed experts as TWO merged 2D matmuls (block-matmul identity).
+        # Every routed expert consumes the SAME token input x, and the routed
+        # output is sum_e w_e * (silu(x@Wg_e)*(x@Wu_e)) @ Wd_e. Because the down
+        # matmul's expert sum is a contraction, the whole epd-expert compute folds
+        # into two single 2D matmuls per device — no x-broadcast, no batched
+        # matmul, no per-expert reshape/permute, no expert-axis reduce:
+        #   gate_up:  gu = x @ Wgu_cat,  Wgu_cat = [Wg_0..Wg_{epd-1} | Wu_0..Wu_{epd-1}]  [H, 2*epd*I]
+        #   down:     y  = act @ Wd_stack, Wd_stack = vstack(Wd_0..Wd_{epd-1})            [epd*I, H]
+        # so act[:, :, e*I:(e+1)*I] @ Wd_stack[e*I:(e+1)*I, :] summed over e == the
+        # per-expert down+sum. Single big-N/big-K matmuls tile the full grid (near
+        # roofline) vs epd small batched matmuls. Weights bf8_b (DRAM-bw bound);
+        # activations bf16 (mixed-dtype matmul).
+        I = int(torch_module.experts[0].gate_and_up_proj.weight.shape[0] // 2)
+        self.expert_inter = I
+        gu_t = [e.gate_and_up_proj.weight.t().contiguous() for e in torch_module.experts]  # [H, 2I] each
+        dn_t = [e.down_proj.weight.t().contiguous() for e in torch_module.experts]  # [I, H] each
+        gu_cat = torch.stack(
+            [
+                torch.cat(
+                    [gu_t[d * epd + e][:, :I] for e in range(epd)]  # all gates
+                    + [gu_t[d * epd + e][:, I:] for e in range(epd)],  # all ups
+                    dim=-1,
+                )
+                for d in range(tp)
+            ],
+            dim=0,
+        )  # [tp, H, 2*epd*I]
+        dn_stack = torch.stack(
+            [torch.cat([dn_t[d * epd + e] for e in range(epd)], dim=0) for d in range(tp)], dim=0
+        )  # [tp, epd*I, H]
+        self.exp_gu_cat = self._shard(gu_cat, dim=0, dtype=ttnn.bfloat4_b)  # per TP device [1, H, 2*epd*I]
+        self.exp_down_stack = self._shard(dn_stack, dim=0, dtype=ttnn.bfloat4_b)  # per TP device [1, epd*I, H]
 
-        # per-TP-device one-hot selection matrix (sel[d] picks expert columns
-        # [d*epd : (d+1)*epd] out of the replicated router).
-        sel = torch.zeros(tp, self.num_experts, epd)
+        # per-TP-device selection+expand matrix: picks this device's expert
+        # columns out of the replicated router AND repeats each expert's weight
+        # across its I-wide down-matmul block, so `router @ sel` directly yields
+        # the [1, S, epd*I] per-column router weights the merged down matmul needs
+        # (no reshape/broadcast to expand epd -> epd*I).
+        sel = torch.zeros(tp, self.num_experts, epd * I)
         for d in range(tp):
             for e in range(epd):
-                sel[d, d * epd + e, e] = 1.0
+                sel[d, d * epd + e, e * I : (e + 1) * I] = 1.0
         self.sel = self._shard(sel, dim=0)
 
         # shared expert REPLICATED (added once, after the routed all-reduce)
         if self.use_shared:
-            self.shared_gu = self._repl(
-                torch_module.shared_mlp.gate_and_up_proj.weight.t().contiguous(), dtype=_EXPERT_DTYPE
-            )
-            self.shared_down = self._repl(
-                torch_module.shared_mlp.down_proj.weight.t().contiguous(), dtype=_EXPERT_DTYPE
-            )
+            self.shared_gu = self._repl(torch_module.shared_mlp.gate_and_up_proj.weight.t().contiguous())
+            self.shared_down = self._repl(torch_module.shared_mlp.down_proj.weight.t().contiguous())
             self.shared_inter = int(torch_module.shared_mlp.gate_and_up_proj.weight.shape[0] // 2)
 
     # ------------------------------------------------------------------
     def _mesh_reduce(self, x):
-        """All-reduce (sum) a per-device partial across the TP mesh axis."""
-        g = ttnn.all_gather(x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear)
-        r = ttnn.sum(g, dim=0, keepdim=True)
-        ttnn.deallocate(g)
-        return r
+        """All-reduce (sum) a per-device partial across the TP mesh axis.
+
+        Fused ring `ttnn.all_reduce` (cluster_axis=TP axis) instead of the naive
+        `all_gather(dim=0)+sum`: the old path materialised [tp, S, hidden] (tp× the
+        bytes) on every chip before a local reduce; the ring all_reduce moves ~2×
+        the shard bytes/chip and drops the separate sum — the exact prefill-MoE
+        reduce gpt_oss/gemma4/deepseek use. Same math, same shape."""
+        return ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear)
 
     def _swiglu(self, x, gu_w, down_w, inter):
-        gu = ttnn.linear(x, gu_w, compute_kernel_config=_EXPERT_MM_CFG)
+        gu = ttnn.linear(x, gu_w)
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], inter])
         x2 = ttnn.slice(gu, [0, 0, inter], [gu.shape[0], gu.shape[1], 2 * inter])
         ttnn.deallocate(gu)
         act = ttnn.multiply(x1, ttnn.silu(x2))
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        out = ttnn.linear(act, down_w, compute_kernel_config=_EXPERT_MM_CFG)
+        out = ttnn.linear(act, down_w)
         ttnn.deallocate(act)
         return out
 
@@ -238,25 +262,33 @@ class _TtMoE:
         # selects ITS expert columns out of that replicated router.
         l_aux, router = self.gate(x, return_router=True)
 
-        router_local = ttnn.matmul(router, self.sel)  # [1, S, epd]
+        router_local = ttnn.matmul(router, self.sel)  # [1, S, epd*I] (per-column weights, expanded)
         ttnn.deallocate(router)
 
-        combined = None
-        for e in range(self.experts_per_dev):
-            gu_e = ttnn.slice(self.exp_gu, [e, 0, 0], [e + 1, self.exp_gu.shape[1], self.exp_gu.shape[2]])
-            down_e = ttnn.slice(self.exp_down, [e, 0, 0], [e + 1, self.exp_down.shape[1], self.exp_down.shape[2]])
-            y = self._swiglu(x, gu_e, down_e, self.expert_inter)
-            ttnn.deallocate(gu_e)
-            ttnn.deallocate(down_e)
-            w = ttnn.slice(router_local, [0, 0, e], [router_local.shape[0], router_local.shape[1], e + 1])
-            y = ttnn.multiply(y, w)
-            ttnn.deallocate(w)
-            if combined is None:
-                combined = y
-            else:
-                combined = ttnn.add(combined, y)
-                ttnn.deallocate(y)
+        # --- routed experts: TWO merged 2D matmuls (block-matmul identity) ---
+        # gu = x @ Wgu_cat gives all experts' gate|up in one big-N matmul; SwiGLU
+        # in the flat [1,S,epd*I] layout (gates in the first half, ups in the
+        # second) needs only two slices at the midpoint — no reshape/permute.
+        # Router weights (already expanded to epd*I by `sel`) scale act per column,
+        # then act @ Wd_stack contracts over epd*I == the per-expert down + sum in
+        # ONE matmul. Numerically identical to the batched grouped-matmul, but the
+        # two matmuls tile the full grid (near roofline) and the concat/reshape/
+        # permute/expert-sum overhead is gone.
+        I = self.expert_inter
+        eI = self.experts_per_dev * I
+        gu = ttnn.matmul(x, self.exp_gu_cat)  # [1, S, 2*epd*I] = [all gates | all ups]
+        x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], eI])  # gates [1,S,epd*I]
+        x2 = ttnn.slice(gu, [0, 0, eI], [gu.shape[0], gu.shape[1], 2 * eI])  # ups   [1,S,epd*I]
+        ttnn.deallocate(gu)
+        act = ttnn.multiply(x1, ttnn.silu(x2))  # [1, S, epd*I]
+        ttnn.deallocate(x1)
+        ttnn.deallocate(x2)
+        act = ttnn.multiply(act, router_local)  # per-expert-column router weight
         ttnn.deallocate(router_local)
+        combined = ttnn.matmul(
+            act, self.exp_down_stack, core_grid=self.mm_core_grid
+        )  # [1, S, H] (down + expert-sum fused)
+        ttnn.deallocate(act)
 
         routed = self._mesh_reduce(combined)  # all-reduce over TP -> full expert sum
         ttnn.deallocate(combined)
