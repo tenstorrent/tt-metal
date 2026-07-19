@@ -168,6 +168,39 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     assert check_result["relative_rmse"] < 0.02
 
 
+# Regression guard for issue #50154 finding #19: the granular output-writer path
+# (write_block_sync_granular) must flush each row's write-source reads out of the cb_out slot before
+# cb_pop_front releases it back to the compute producer, otherwise the producer can repack the freed
+# slot while the writes are still reading it (WAR on the output CB) -> corrupt output. The race is
+# latent (timing-masked); this shape drives the output-writer core through the granular-write path
+# (verified: it corrupts under a forced source-slot clobber pre-fix) and turns a future ordering
+# regression into a PCC failure.
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 512, 2048)],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_granular_write_ordering(
+    device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize(
     "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [(512, 512, 512, 1, 1, 1, 1, 1)],
