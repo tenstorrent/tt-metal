@@ -520,7 +520,51 @@ def _model_root_from_node(repo_root: Path, node):
     return root if root.is_dir() else None
 
 
+_KNOB_CACHE_FILE = Path(tempfile.gettempdir()) / "perf_mcp_knob_cache.json"
+
+
+def _knob_fingerprint(model_root) -> str:
+    try:
+        tt = Path(model_root) / "tt"
+        mt = max((f.stat().st_mtime for f in tt.rglob("*.py")), default=0.0)
+        return str(int(mt))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _knob_cache_get(model_root):
+    try:
+        entry = json.loads(_KNOB_CACHE_FILE.read_text()).get(str(model_root))
+        if entry and entry.get("fp") == _knob_fingerprint(model_root):
+            return dict(entry["env"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _knob_cache_put(model_root, env) -> None:
+    try:
+        data = json.loads(_KNOB_CACHE_FILE.read_text()) if _KNOB_CACHE_FILE.is_file() else {}
+        data[str(model_root)] = {"env": dict(env), "fp": _knob_fingerprint(model_root)}
+        _KNOB_CACHE_FILE.write_text(json.dumps(data))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _knob_at(env, cov):
+    env = dict(env)
+    numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
+    if numkey:
+        env[numkey] = str(cov)
+    return env
+
+
 def _llm_depth_env(model_root: Path, cov: int) -> dict:
+    if model_root is None:
+        return {}
+    cached = _knob_cache_get(model_root)
+    if cached:
+        return _knob_at(cached, cov)
     tt_dir = model_root / "tt"
     srcs, total = [], 0
     for py in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
@@ -542,17 +586,22 @@ def _llm_depth_env(model_root: Path, cov: int) -> dict:
         f"env-var name to the string value that makes it run exactly {cov} layers; respond with {{}} if the "
         f"model exposes no such control.\n\n" + "\n\n".join(srcs)
     )
-    out = _claude_text(prompt) or ""
-    m = re.search(r"\{[^{}]*\}", out, re.DOTALL)
-    if not m:
-        return {}
-    try:
-        d = json.loads(m.group(0))
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(d, dict):
-        return {}
-    return {str(k): str(v) for k, v in d.items() if str(k)}
+    attempts = max(1, int(os.environ.get("PERF_MCP_KNOB_RETRIES", "8")))
+    for i in range(attempts):
+        out = _claude_text(prompt) or ""
+        m = re.search(r"\{[^{}]*\}", out, re.DOTALL)
+        if m:
+            try:
+                d = json.loads(m.group(0))
+            except (ValueError, TypeError):
+                d = None
+            if isinstance(d, dict) and d:
+                env = {str(k): str(v) for k, v in d.items() if str(k)}
+                _knob_cache_put(model_root, env)
+                return _knob_at(env, cov)
+        print(f"  [optimize/cc] depth-knob discovery: empty answer, retrying ({i + 1}/{attempts})")
+    print(f"  [optimize/cc] depth-knob discovery: no knob after {attempts} attempts (model may not support slicing)")
+    return {}
 
 
 def _work_signal(seq) -> int:
