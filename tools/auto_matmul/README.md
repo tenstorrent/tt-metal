@@ -50,12 +50,16 @@ that tensor is replicated.
 
 ## Usage
 
+`--manifest` and `--save-report` are resolved relative to (and confined within)
+the current working directory, so run this from the directory that holds your
+manifest and where the report should be written.
+
 ```bash
-python3 tools/auto_matmul/tune_matmul_cache.py --manifest /path/to/cases.json --device-id 0
+python3 tools/auto_matmul/tune_matmul_cache.py --manifest cases.json --device-id 0
 ```
 
 ```bash
-python3 tools/auto_matmul/tune_matmul_cache.py --manifest /path/to/cases.json --mesh-shape 1x8
+python3 tools/auto_matmul/tune_matmul_cache.py --manifest cases.json --mesh-shape 1x8
 ```
 
 Useful environment controls:
@@ -73,9 +77,9 @@ recommendations:
 ```bash
 TTNN_AUTO_MATMUL_FORCE_RETUNE=1 \
 python3 tools/auto_matmul/tune_matmul_cache.py \
-  --manifest /path/to/cases.json \
+  --manifest cases.json \
   --mesh-shape 1x8 \
-  --save-report /tmp/auto-matmul-report.json
+  --save-report auto-matmul-report.json
 ```
 
 This is the repo-native way to produce isolated op-level evidence that the

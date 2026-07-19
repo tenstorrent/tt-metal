@@ -40,6 +40,22 @@ def _normalize_mesh_shape(value) -> tuple[int, int] | None:
     return tuple(parts)
 
 
+def _resolve_within_base(raw_path: str, *, base_dir: Path, purpose: str) -> Path:
+    """Canonicalize a user-supplied CLI path and confine it to ``base_dir``.
+
+    Guards against path traversal: ``--manifest`` / ``--save-report`` values are
+    resolved relative to (and must stay within) the working directory, so a crafted
+    value cannot read or write files outside the intended scope. Absolute paths that
+    already live inside the working directory are still allowed.
+    """
+    base = base_dir.resolve()
+    candidate = Path(raw_path)
+    resolved = (candidate if candidate.is_absolute() else base / candidate).resolve()
+    if resolved != base and base not in resolved.parents:
+        raise ValueError(f"Refusing {purpose} path outside {base}: {raw_path!r}")
+    return resolved
+
+
 def _load_manifest(path: Path) -> list[dict]:
     payload = json.loads(path.read_text())
     if isinstance(payload, dict):
@@ -91,7 +107,11 @@ def _open_target_device(*, device_id: int, mesh_shape: tuple[int, int] | None):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pre-populate the measured auto-matmul cache from a manifest.")
-    parser.add_argument("--manifest", required=True, help="Path to a JSON manifest containing matmul cases.")
+    parser.add_argument(
+        "--manifest",
+        required=True,
+        help="Path to a JSON manifest containing matmul cases (resolved within the current working directory).",
+    )
     parser.add_argument("--device-id", type=int, default=0, help="Device ID to open for tuning.")
     parser.add_argument(
         "--mesh-shape",
@@ -104,11 +124,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--save-report",
-        help="Optional path to write the full per-case selection report as JSON, including candidate timings.",
+        help="Optional path to write the full per-case selection report as JSON, including candidate timings "
+        "(resolved within the current working directory).",
     )
     args = parser.parse_args()
 
-    manifest_path = Path(args.manifest)
+    base_dir = Path.cwd()
+    manifest_path = _resolve_within_base(args.manifest, base_dir=base_dir, purpose="--manifest")
     cases = _load_manifest(manifest_path)
     mesh_shape = _normalize_mesh_shape(args.mesh_shape)
     report_cases = []
@@ -201,7 +223,7 @@ def main() -> None:
         close_device(device)
 
     if args.save_report:
-        report_path = Path(args.save_report)
+        report_path = _resolve_within_base(args.save_report, base_dir=base_dir, purpose="--save-report")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps({"cases": report_cases}, indent=2, sort_keys=True))
 
