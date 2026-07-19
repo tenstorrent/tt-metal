@@ -280,7 +280,7 @@ jobs:
           # kernel-specific linux-tools package (e.g. linux-tools-5.15.0-185-generic) with the
           # generic package as a fallback. The package list is hardcoded to avoid exposing a
           # user-controlled input that could be used for command injection.
-          kernel_pkg="linux-tools-$(uname -r)-generic"
+          kernel_pkg="linux-tools-$(uname -r)"
           pkgs=(linux-tools-common "$kernel_pkg" linux-tools-generic)
           echo "Installing perf packages: ${pkgs[*]}"
           apt-get update || true
