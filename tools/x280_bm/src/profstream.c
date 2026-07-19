@@ -40,8 +40,13 @@
 #define MBOX_COORDS 0x08011200UL
 #define HEADS_BASE 0x08013000UL
 #define SRCLUT_BASE 0x08014000UL
-#define HSENT_ADDR 0x08017000UL  /* u32, relay writes, host reads */
-#define HACKED_ADDR 0x08017040UL /* u32, host writes, relay reads (own cache line) */
+#define HSENT_BASE 0x08017000UL  /* per-hart u32; X280 writes, host reads (stride 0x40) */
+#define HACKED_BASE 0x08017200UL /* per-hart u32; host writes, X280 reads (stride 0x40, own line) */
+#define HSENT(h) (HSENT_BASE + (uint64_t)(h) * 0x40)
+#define HACKED(h) (HACKED_BASE + (uint64_t)(h) * 0x40)
+/* split (reader/relay) uses the single hart-0 pair */
+#define HSENT_ADDR HSENT(0)
+#define HACKED_ADDR HACKED(0)
 #define STAGECTL 0x08018000UL
 #define STAGE_BASE 0x08020000UL
 #define STAGE_STRIDE 0x10000UL /* 64 KiB per reader */
@@ -343,23 +348,35 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
     fence_();
 }
 
-/* ============================== SINGLE-HART DIRECT DRAIN ============================== */
-/* One hart reads worker L1 (NoC, uncached -> coherent) and writes the single host ring DIRECTLY, injecting
- * a STICKY-SRC before each source's data. No LIM SPSC, no cross-hart handoff -> sidesteps the cross-hart LIM
- * coherence that corrupts the split pipeline's SPSC under saturation. Flow-controlled by the host's HACKED. */
+/* ============================== DIRECT DRAIN (1..N harts) ============================== */
+/* Each drain hart reads its OWN slice of worker cores (NoC, uncached -> coherent) and writes its OWN host
+ * ring DIRECTLY, injecting a STICKY-SRC before each source's data. No LIM SPSC, no cross-hart handoff ->
+ * sidesteps the cross-hart LIM coherence that corrupts the split pipeline's SPSC under saturation. Each hart
+ * is a fully independent coherent single-lane pair (own HSENT/HACKED, own ring, own heads region in the
+ * direct-mode-unused STAGE space), so N harts add zero shared LIM state. Flow-controlled by host HACKED(h). */
 static void drain_direct(
     uint64_t hartid,
+    uint64_t ndrain,
     uint64_t num_cores,
     uint64_t prof_l1,
     uint64_t host_base,
     uint64_t hring_words,
     uint64_t pcie_enc,
     uint64_t read_noc) {
+    uint64_t q = (num_cores + ndrain - 1) / ndrain; /* contiguous core slice for this hart */
+    uint64_t lo = hartid * q, hi = lo + q;
+    if (hi > num_cores) {
+        hi = num_cores;
+    }
+    if (lo > num_cores) {
+        lo = num_cores;
+    }
+    uint64_t my_host_base = host_base + (uint64_t)hartid * hring_words * 4; /* this hart's ring in sysmem */
     uint64_t ctrl_off = prof_l1 & (NOC_2M_WINDOW_STRIDE - 1ULL);
-    uint64_t off_w = host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
+    uint64_t off_w = my_host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
     volatile uint32_t* coords = (volatile uint32_t*)MBOX_COORDS;
-    /* one read window per core (index = core) */
-    for (uint64_t c = 0; c < num_cores; c++) {
+    /* one read window per core in this slice (index = global core index -> disjoint across harts) */
+    for (uint64_t c = lo; c < hi; c++) {
         noc_tlb_2m_t rt;
         rt.data[0] = 0;
         rt.data[1] = 0;
@@ -373,14 +390,14 @@ static void drain_direct(
         rt.noc_selector = (uint32_t)read_noc;
         (void)noc_configure_tlb_2m_ext((uint32_t)c, &rt, 0);
     }
-    /* one posted write window to the host ring */
-    uint32_t win_p = WRITE_WIN_BASE;
+    /* one posted write window to THIS hart's host ring (index = WRITE_WIN_BASE+hartid -> disjoint) */
+    uint32_t win_p = WRITE_WIN_BASE + (uint32_t)hartid;
     noc_tlb_2m_t wt;
     wt.data[0] = 0;
     wt.data[1] = 0;
     wt.data[2] = 0;
     wt.data[3] = 0;
-    wt.addr = host_base >> 21;
+    wt.addr = my_host_base >> 21;
     wt.x_end = (uint32_t)(pcie_enc & 0x3f);
     wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
     wt.x_start = (uint32_t)(pcie_enc & 0x3f);
@@ -391,21 +408,23 @@ static void drain_direct(
     fence_();
     uint64_t hbase = NOC_2M_WINDOW_BASE + (uint64_t)win_p * NOC_2M_WINDOW_STRIDE + off_w;
 
-    volatile uint32_t* heads = (volatile uint32_t*)HEADS_BASE;
-    for (uint64_t c = 0; c < num_cores; c++) {
+    /* per-hart heads region in the direct-mode-unused STAGE space (64 KiB/hart -> disjoint cache lines,
+     * no cross-hart LIM false sharing at slice boundaries) */
+    volatile uint32_t* heads = (volatile uint32_t*)(STAGE_BASE + hartid * STAGE_STRIDE);
+    for (uint64_t c = lo; c < hi; c++) {
         for (uint32_t r = 0; r < NRISC; r++) {
             heads[c * NRISC + r] = 0;
         }
     }
     uint32_t hsent = 0;
-    w32(HSENT_ADDR, 0);
+    w32(HSENT(hartid), 0);
     fence_();
     uint64_t total = 0, t_copy = 0, t_wait = 0;
     uint64_t t0 = rdcycle();
 
     for (;;) {
         uint64_t pending = 0;
-        for (uint64_t c = 0; c < num_cores; c++) {
+        for (uint64_t c = lo; c < hi; c++) {
             uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
             uint64_t rbufs = cbase + 128;
             for (uint32_t r = 0; r < NRISC; r++) {
@@ -419,7 +438,7 @@ static void drain_direct(
                 uint32_t run = tail - head;
                 uint32_t need = 2u + run;
                 uint64_t tw = rdcycle();
-                while ((uint32_t)((uint32_t)hring_words - (hsent - r32(HACKED_ADDR))) < need) {
+                while ((uint32_t)((uint32_t)hring_words - (hsent - r32(HACKED(hartid)))) < need) {
                     cpu_pause();
                 }
                 t_wait += rdcycle() - tw;
@@ -451,7 +470,7 @@ static void drain_direct(
                 heads[L] = tail;
                 w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks */
                 fence_();                 /* ring payload issued before the sent notify */
-                w32(HSENT_ADDR, hsent);   /* publish to the host */
+                w32(HSENT(hartid), hsent); /* publish to the host */
                 t_copy += rdcycle() - tc;
             }
         }
@@ -481,12 +500,22 @@ int main(uint64_t hartid) {
     uint64_t hring_words = r64(P_HRING_WORDS);
     uint64_t pcie_enc = r64(P_PCIE_ENC);
     uint64_t read_noc = r64(P_NONCE) & 1ull;
-    uint64_t direct = (r64(P_NONCE) >> 8) & 1ull; /* NONCE bit 8: single-hart DIRECT drain (no split) */
-    uint64_t nread = r64(P_NREAD);
-    if (nread == 0 || nread > 3) {
-        nread = 2;
+    uint64_t direct = (r64(P_NONCE) >> 8) & 1ull; /* NONCE bit 8: DIRECT drain (no reader/relay split) */
+    /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
+    uint64_t nread_or_drain = r64(P_NREAD);
+    uint64_t ndrain = 1, nread = 2;
+    if (direct) {
+        ndrain = nread_or_drain;
+        if (ndrain == 0 || ndrain > 4) {
+            ndrain = 1;
+        }
+    } else {
+        nread = nread_or_drain;
+        if (nread == 0 || nread > 3) {
+            nread = 2;
+        }
     }
-    uint64_t nharts = direct ? 1 : (nread + 1); /* direct: hart 0 only; split: readers + 1 relay */
+    uint64_t nharts = direct ? ndrain : (nread + 1); /* direct: ndrain drainers; split: readers + 1 relay */
 
     volatile uint64_t* rl = (volatile uint64_t*)RES_SLOT(hartid);
     for (int i = 0; i < 8; i++) {
@@ -504,7 +533,7 @@ int main(uint64_t hartid) {
     fence_();
 
     if (direct) {
-        drain_direct(hartid, num_cores, prof_l1, host_base, hring_words, pcie_enc, read_noc);
+        drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, read_noc);
     } else if (hartid < nread) {
         reader_run(hartid, num_cores, prof_l1, nread, read_noc);
     } else {

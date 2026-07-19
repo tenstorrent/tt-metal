@@ -50,8 +50,10 @@ using tt::tt_metal::profiler::X280Driver;
 static constexpr uint64_t MBOX_PARAMS = 0x08011000ULL;
 static constexpr uint64_t MBOX_COORDS = 0x08011200ULL;
 static constexpr uint64_t SRCLUT_BASE = 0x08014000ULL;
-static constexpr uint64_t HSENT_ADDR = 0x08017000ULL;   // relay writes, host reads
-static constexpr uint64_t HACKED_ADDR = 0x08017040ULL;  // host writes, relay reads
+static constexpr uint64_t HSENT_BASE = 0x08017000ULL;   // per-hart, X280 writes, host reads (stride 0x40)
+static constexpr uint64_t HACKED_BASE = 0x08017200ULL;  // per-hart, host writes, X280 reads (stride 0x40)
+static uint64_t HSENT_ADDR_H(uint64_t h) { return HSENT_BASE + h * 0x40; }
+static uint64_t HACKED_ADDR_H(uint64_t h) { return HACKED_BASE + h * 0x40; }
 static constexpr uint64_t P_STOP = MBOX_PARAMS + 0x28;
 static uint64_t harthb(int h) { return 0x08011040ULL + 0x100 + (uint64_t)h * 8; }
 
@@ -78,9 +80,9 @@ int main(int argc, char** argv) {
     using namespace tt::tt_metal;
     setvbuf(stdout, nullptr, _IOLBF, 0);
     int device_id = 0, l2cpu = 0, pll = 1000;
-    uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull;
+    uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
     uint32_t prog_id = 0xA5A5A5A5u, hring_words = 8192, prod_delay = 0;
-    bool do_reset = false, direct = false;  // --direct: single-hart direct drain (no reader/relay split)
+    bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -112,6 +114,9 @@ int main(int argc, char** argv) {
         } else if (a == "--reset") {
             do_reset = true;
         } else if (a == "--direct") {
+            direct = true;
+        } else if (a == "--ndrain") {
+            ndrain = std::stoull(next());
             direct = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
@@ -191,12 +196,13 @@ int main(int argc, char** argv) {
     uint64_t data_off = (chan_sz / 2) & ~(WIN_STRIDE - 1);
     uint64_t host_base = pcie_base + data_off;
     uint64_t hring_bytes = (uint64_t)hring_words * 4;
-    if (hring_bytes > WIN_STRIDE) {
-        fprintf(stderr, "[d2h] host ring exceeds 2 MB window\n");
+    uint64_t ndh = direct ? ndrain : 1;  // # host rings = # drain harts (each hart owns ring h @ +h*hring_bytes)
+    if (hring_bytes * ndh > WIN_STRIDE) {
+        fprintf(stderr, "[d2h] %llu host rings exceed 2 MB window\n", (unsigned long long)ndh);
         std::_Exit(2);
     }
-    {  // zero the host ring
-        std::vector<uint8_t> z(hring_bytes, 0);
+    {  // zero all host rings
+        std::vector<uint8_t> z(hring_bytes * ndh, 0);
         cluster.write_sysmem(z.data(), (uint32_t)z.size(), data_off, device_id, 0);
     }
 
@@ -207,10 +213,12 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[boot] idle FW not up (half_broken=%d) -- needs `tt-smi -r %d`\n", half_broken, device_id);
         std::_Exit(1);
     }
-    {  // zero HACKED + HSENT + STAGECTL (PROD/CONS) BEFORE boot -- no reader/relay init race
+    {  // zero HACKED + HSENT (per drain hart) + STAGECTL (PROD/CONS) BEFORE boot -- no init race
         std::vector<uint8_t> z(512, 0);
-        drv.write_block(z.data(), 8, HACKED_ADDR);
-        drv.write_block(z.data(), 8, HSENT_ADDR);
+        for (uint64_t h = 0; h < ndh; h++) {
+            drv.write_block(z.data(), 8, HACKED_ADDR_H(h));
+            drv.write_block(z.data(), 8, HSENT_ADDR_H(h));
+        }
         drv.write_block(z.data(), 512, 0x08018000ULL);  // STAGECTL
     }
     drv.write_block(coords.data(), (uint32_t)coords.size(), MBOX_COORDS);
@@ -230,9 +238,9 @@ int main(int argc, char** argv) {
     pack<uint64_t>(params, 0x20, (uint64_t)hring_words);
     pack<uint64_t>(params, 0x28, 0);  // P_STOP
     pack<uint64_t>(params, 0x30, read_noc | (direct ? 0x100ull : 0ull));  // NONCE bit 8 = direct drain
-    pack<uint64_t>(params, 0x38, nread);
+    pack<uint64_t>(params, 0x38, direct ? ndrain : nread);                // P_NREAD = drain-hart count in direct mode
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
-    uint64_t nharts = direct ? 1 : nread + 1;
+    uint64_t nharts = direct ? ndrain : nread + 1;
     for (uint64_t h = 0; h < nharts; h++) {
         drv.lim_wr_u64(harthb((int)h), 0);
     }
@@ -263,7 +271,11 @@ int main(int argc, char** argv) {
             std::_Exit(1);
         }
     }
-    printf("[boot] idle up, profstream RUNNING, %llu readers + 1 relay\n", (unsigned long long)nread);
+    if (direct) {
+        printf("[boot] idle up, profstream RUNNING, %llu direct drain hart(s)\n", (unsigned long long)ndrain);
+    } else {
+        printf("[boot] idle up, profstream RUNNING, %llu readers + 1 relay\n", (unsigned long long)nread);
+    }
 
     // ---- host consumer: drain the ONE host ring into a RAW capture buffer as fast as possible; the
     // sticky-demux + verify happen OFFLINE after the run, so the hot loop is just a bulk memcpy (keeps the
@@ -271,8 +283,10 @@ int main(int argc, char** argv) {
     // would work: capture raw, post-process. ----
     std::atomic<bool> producers_done{false};
     std::vector<std::vector<uint32_t>> accum(NL);  // demuxed per-lane stream (filled offline)
-    std::vector<uint32_t> capture;                 // the raw linearized stream, appended in order
-    capture.reserve((size_t)NL * (nmarkers + 8) * 2 + 64);
+    std::vector<std::vector<uint32_t>> caps(ndh);  // one RAW capture per drain hart / host ring
+    for (auto& cap : caps) {
+        cap.reserve((size_t)NL * (nmarkers + 8) * 2 / ndh + 64);
+    }
     uint64_t total_words = 0;
     std::atomic<uint64_t> overflow{0};
     uint64_t h_polls = 0, h_us_hsent = 0, h_us_ring = 0, h_us_hacked = 0;  // consumer op timing (us)
@@ -280,81 +294,75 @@ int main(int argc, char** argv) {
         auto us = [](auto a, auto b) {
             return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
         };
-        uint32_t acked = 0;  // words the host has consumed
-        int empty = 0;
+        std::vector<uint32_t> acked(ndh, 0);  // words consumed per ring
+        int empty = 0;                        // consecutive sweeps where NO ring had data
         auto start = std::chrono::steady_clock::now();
         auto next_log = start + std::chrono::seconds(1);
         for (;;) {
             auto now = std::chrono::steady_clock::now();
             if (now > next_log) {
-                uint32_t hs = 0, ha = 0;
-                drv.read_block(reinterpret_cast<uint8_t*>(&hs), 4, HSENT_ADDR);
-                drv.read_block(reinterpret_cast<uint8_t*>(&ha), 4, HACKED_ADDR);
                 printf(
-                    "  [consumer] total=%llu hsent=%u acked=%u done=%d\n",
-                    (unsigned long long)total_words,
-                    hs,
-                    ha,
-                    (int)producers_done.load());
+                    "  [consumer] total=%llu done=%d\n", (unsigned long long)total_words, (int)producers_done.load());
                 next_log = now + std::chrono::seconds(1);
             }
             if (now - start > std::chrono::seconds(30)) {
                 printf("  [consumer] WALL TIMEOUT at %llu words\n", (unsigned long long)total_words);
                 break;
             }
-            uint32_t hsent;
-            auto ta = std::chrono::steady_clock::now();
-            drv.read_block(reinterpret_cast<uint8_t*>(&hsent), 4, HSENT_ADDR);
-            h_us_hsent += us(ta, std::chrono::steady_clock::now());
-            if (hsent == acked) {
-                // exit only after producers are done AND the stream has been quiet for ~500 ms (the relay
-                // can lull mid-drain; exiting early truncates lane tails).
+            bool any = false;  // did any ring have data this sweep?
+            for (uint64_t h = 0; h < ndh; h++) {
+                uint64_t hoff = data_off + h * hring_bytes;  // this ring's sysmem offset
+                uint32_t hsent;
+                auto ta = std::chrono::steady_clock::now();
+                drv.read_block(reinterpret_cast<uint8_t*>(&hsent), 4, HSENT_ADDR_H(h));
+                h_us_hsent += us(ta, std::chrono::steady_clock::now());
+                if (hsent == acked[h]) {
+                    continue;
+                }
+                any = true;
+                uint32_t avail = hsent - acked[h];
+                if (avail > hring_words) {
+                    overflow.fetch_add(1);
+                    acked[h] = hsent;
+                    drv.write_block(reinterpret_cast<uint8_t*>(&acked[h]), 4, HACKED_ADDR_H(h));
+                    continue;
+                }
+                uint32_t drain = avail & ~1u;  // 2-word aligned
+                // read ONLY the new [acked, acked+drain) region straight into this ring's capture buffer
+                // (1-2 contiguous reads across the wrap) -- no whole-ring read, no per-marker decode.
+                auto& cap = caps[h];
+                size_t base = cap.size();
+                cap.resize(base + drain);
+                uint32_t st = acked[h] % hring_words;
+                auto tr = std::chrono::steady_clock::now();
+                if (st + drain <= hring_words) {
+                    cluster.read_sysmem(
+                        reinterpret_cast<uint8_t*>(&cap[base]), drain * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                } else {
+                    uint32_t first = hring_words - st;
+                    cluster.read_sysmem(
+                        reinterpret_cast<uint8_t*>(&cap[base]), first * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                    cluster.read_sysmem(
+                        reinterpret_cast<uint8_t*>(&cap[base + first]), (drain - first) * 4, hoff, device_id, 0);
+                }
+                h_us_ring += us(tr, std::chrono::steady_clock::now());
+                h_polls++;
+                acked[h] += drain;
+                total_words += drain;
+                auto th = std::chrono::steady_clock::now();
+                drv.write_block(reinterpret_cast<uint8_t*>(&acked[h]), 4, HACKED_ADDR_H(h));
+                h_us_hacked += us(th, std::chrono::steady_clock::now());
+            }
+            if (!any) {
+                // exit only after producers are done AND all rings quiet for ~500 ms (a drainer can lull
+                // mid-run; exiting early truncates lane tails).
                 if (producers_done.load() && ++empty >= 2500) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
-                continue;
-            }
-            empty = 0;
-            uint32_t avail = hsent - acked;
-            if (avail > hring_words) {
-                overflow.fetch_add(1);
-                acked = hsent;
-                drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR);
-                continue;
-            }
-            uint32_t drain = avail & ~1u;  // 2-word aligned
-            // read ONLY the new [acked, acked+drain) region straight into the capture buffer (1-2 contiguous
-            // reads across the ring wrap) -- no whole-ring read, no per-marker decode.
-            size_t base = capture.size();
-            capture.resize(base + drain);
-            uint32_t start = acked % hring_words;
-            auto tr = std::chrono::steady_clock::now();
-            if (start + drain <= hring_words) {
-                cluster.read_sysmem(
-                    reinterpret_cast<uint8_t*>(&capture[base]),
-                    drain * 4,
-                    data_off + (uint64_t)start * 4,
-                    device_id,
-                    0);
             } else {
-                uint32_t first = hring_words - start;
-                cluster.read_sysmem(
-                    reinterpret_cast<uint8_t*>(&capture[base]),
-                    first * 4,
-                    data_off + (uint64_t)start * 4,
-                    device_id,
-                    0);
-                cluster.read_sysmem(
-                    reinterpret_cast<uint8_t*>(&capture[base + first]), (drain - first) * 4, data_off, device_id, 0);
+                empty = 0;
             }
-            h_us_ring += us(tr, std::chrono::steady_clock::now());
-            h_polls++;
-            acked += drain;
-            total_words += drain;
-            auto th = std::chrono::steady_clock::now();
-            drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR);
-            h_us_hacked += us(th, std::chrono::steady_clock::now());
         }
     });
 
@@ -423,7 +431,7 @@ int main(int argc, char** argv) {
 
     // ---- pipeline profile: where does each X280 hart spend its cycles? ----
     printf("\n--- pipeline profile (X280 cycles; copy%% = fraction of wall spent moving data) ---\n");
-    uint64_t hmax = direct ? 0 : nread;  // direct: only hart 0 drains
+    uint64_t hmax = direct ? (ndrain - 1) : nread;  // direct: each drain hart; split: readers + relay
     for (uint64_t h = 0; h <= hmax; h++) {
         std::vector<uint8_t> rs(0x40);
         drv.read_block(rs.data(), 0x40, 0x08011040ULL + h * 0x40);
@@ -433,7 +441,8 @@ int main(int argc, char** argv) {
         double busy = t_total ? 100.0 * (double)t_copy / (double)t_total : 0.0;
         if (direct) {
             printf(
-                "  drain : %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  host-wait=%lluM cyc\n",
+                "  drain%llu: %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  host-wait=%lluM cyc\n",
+                (unsigned long long)h,
                 (unsigned long long)(bytes / 1024),
                 (unsigned long long)(t_total / 1000000),
                 busy,
@@ -469,11 +478,14 @@ int main(int argc, char** argv) {
         (unsigned long long)(h_us_hsent / 1000),
         (unsigned long long)(h_us_hacked / 1000));
 
-    // ---- offline demux: walk the raw captured stream, bind each marker/meta to the current STICKY-SRC ----
-    {
+    // ---- offline demux: each drain hart's stream is independent (its own sticky-src sequence over a
+    // disjoint lane slice), so walk each capture separately and bind markers to the current STICKY-SRC ----
+    size_t cap_words = 0;
+    for (auto& cap : caps) {
+        cap_words += cap.size();
         uint32_t cur_lane = 0xFFFFFFFF;
-        for (size_t p = 0; p + 1 < capture.size(); p += 2) {
-            uint32_t w0 = capture[p], w1 = capture[p + 1];
+        for (size_t p = 0; p + 1 < cap.size(); p += 2) {
+            uint32_t w0 = cap[p], w1 = cap[p + 1];
             if (pp_is_src(w0)) {
                 cur_lane = pp_src_lane(w0);
             } else if (cur_lane < NL) {
@@ -482,7 +494,7 @@ int main(int argc, char** argv) {
             }
         }
     }
-    printf("  [capture] %zu raw words drained\n", capture.size());
+    printf("  [capture] %zu raw words drained across %llu ring(s)\n", cap_words, (unsigned long long)ndh);
 
     // ---- verify each DEMUXED lane is complete + gap-free ----
     uint32_t active_lanes = num_cores * active_riscs;
@@ -551,7 +563,14 @@ int main(int argc, char** argv) {
     for (auto& s : bad) {
         printf("%s\n", s.c_str());
     }
-    printf("\n=== X280 linearized profiler (2 readers + 1 relay + single host ring, sticky-src) ===\n");
+    if (direct) {
+        printf(
+            "\n=== X280 linearized profiler (%llu direct drain hart(s), %llu host ring(s), sticky-src) ===\n",
+            (unsigned long long)ndrain,
+            (unsigned long long)ndh);
+    } else {
+        printf("\n=== X280 linearized profiler (2 readers + 1 relay + single host ring, sticky-src) ===\n");
+    }
     printf(
         "  lanes            : %llu ok / %u total%s\n",
         (unsigned long long)ok_lanes,
