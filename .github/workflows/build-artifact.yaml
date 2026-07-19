@@ -679,9 +679,12 @@ jobs:
           CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
           URL="${AWS_ENDPOINT_URL_S3}/${CCACHE_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
           echo "Saving CPM cache to: ${URL} ($(du -h .cpmcache.tar.zst | cut -f1))"
+          # Use --upload-file instead of --data-binary so curl streams the tarball
+          # from disk. A 1.2 GB CPM archive caused OOM with --data-binary @file.
           if curl -fsS --retry 3 --retry-delay 2 --max-time 300 \
-               -X PUT --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
-               "${URL}" --data-binary @.cpmcache.tar.zst -o /dev/null; then
+               --upload-file .cpmcache.tar.zst \
+               --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
+               "${URL}" -o /dev/null; then
             echo "CPM cache saved."
           else
             echo "::warning::CPM cache upload to Garage failed; build succeeds, next run rebuilds cache."
