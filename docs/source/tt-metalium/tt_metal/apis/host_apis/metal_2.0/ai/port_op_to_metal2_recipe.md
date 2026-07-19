@@ -429,7 +429,7 @@ Most ports don't reach for the raw pointer at all — `TensorAccessor`'s normal 
 
 > *Compute kernels — Case 2 is blocked, not an escape valve.* The `get_bank_base_address` bridge lives on `TensorAccessor`, and **a compute kernel cannot bind a `TensorAccessor` today** — the accessor's codegen pulls in the NOC dataflow API, absent from a compute (TRISC) build. So a compute kernel that genuinely needs a raw L1 base address has no bridge, and **the port is blocked**: stop and report it, routing the binding to the compute-kernel `TensorBinding` fix. Do **not** smuggle the address through a CRTA/RTA — even from an **op-owned** tensor, where the address is stable and it would be *strictly* correct, this is a path we deliberately do not take (it normalizes the very pattern Metal 2.0 exists to remove). The one legitimate alternative: if the kernel's access fits a **borrowed-memory DFB** — it reads the data through a `dfb::name` (`get_read_ptr()`), not raw arithmetic — use that. A borrowed DFB is a real framework-managed binding (its backing address refreshes on every cache hit), not a smuggle, and it sidesteps the block. If neither an accessor nor a borrowed DFB fits, the port stops here.
 
-> *Sanctioned exception — host-computed offset.* When the legacy host pre-composed a base pointer with a host-side-computed offset (`tensor.buffer()->address() + compute_offset(attrs)`) and passed the result through an RTA, the standard `TensorBinding` fix isn't enough on its own — the offset arithmetic has to cross the host/kernel boundary. Apply [Pattern: Host-computed base-pointer offset](metal2_port_patterns.md#pattern-host-computed-base-pointer-offset--cta-offset--kernel-side-addition): pass the tensor as a binding, pass the offset as a *named CTA*, and add the single `+ offset` line on the kernel side after the accessor's base-address retrieval. This is the only documented kernel-side modification beyond the whitelist above.
+> *Host-computed base-pointer offset — abort the port.* When the legacy host pre-composed a base pointer with a host-side-computed offset (`tensor.buffer()->address() + compute_offset(attrs)`) and passed the result through an RTA, there is **no** Metal 2.0 path: a `TensorBinding` auto-captures the base address but provides no offset hook, and adding the `+ offset` arithmetic kernel-side is off-whitelist (it relocates host computation into the kernel — exactly what the whitelist forbids). **Prominently document the site in the port report and abort the port** — capitulate per [§When the discipline doesn't fit](#when-the-discipline-doesnt-fit). This is an op-owner pre-port fix; the audit is being extended to gate these, so a cleared audit should mean none remain.
 
 **6. Conditionally bound resources (DFB, tensor, semaphore).** A binding declared conditionally on the host (omitted from the kernel's bindings when a path isn't taken) requires kernel-side coordination:
 
@@ -769,8 +769,8 @@ Written during the inventory and planning steps; committed alongside the port fo
 (or "none")
 
 ### Tensor accessors
-| host site (file:line) | originating Tensor | RTA slot (host) | CTA offset (kernel) |
-|---|---|---|---|
+| host site (file:line) | originating Tensor | RTA slot (host) |
+|---|---|---|
 | ... |
 
 ### Work split
