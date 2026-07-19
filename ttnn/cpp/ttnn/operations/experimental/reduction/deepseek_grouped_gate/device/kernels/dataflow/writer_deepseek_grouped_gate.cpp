@@ -9,6 +9,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ckernel.h"
 
 // Tile geometry constants for bf16 32x32 tiles with 16x16 faces
 namespace tile_constants {
@@ -45,6 +46,13 @@ FORCE_INLINE void generate_index_tile(
             index_cb_ptr[i] = (current_index + 1) << 16 | current_index;
             current_index += 2;
         }
+        // Force the first-line RISC stores above to be processed into L1 before the loop-back
+        // noc_async_read below reads that line (base_index_noc_addr) to replicate it to the other rows.
+        // A baby-RISCV store can retire before its write-request lands, and the RISCV core and the NoC are
+        // different L1 clients with no program-order guarantee (WormholeB0/.../MemoryOrdering.md); read the
+        // last written word (blocking load + memory clobber) so the fill is visible before the NoC read is
+        // issued. See issue #50154 (finding #23).
+        (void)ckernel::load_blocking(index_cb_ptr + ((columns_per_face / 2) - 1));
         // then use noc to write the rest of the face
         uint32_t dm_engine_index_write_offset = index_write_face_offset + face_line_bytes;
         for (uint32_t i = 1; i < rows_per_face; i++) {
