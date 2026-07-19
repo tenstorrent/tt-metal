@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
@@ -62,6 +63,7 @@ inline void calculate_sigmoid() {
 
 template <bool APPROXIMATION_MODE>
 inline void sigmoid_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         recip_init<false, false>();
     } else {
