@@ -76,5 +76,5 @@ def test_emitted_pcc_test_still_compiles(tmp_path):
     )
     assert generated and Path(test_path).is_file()
     src = Path(test_path).read_text()
-    assert "TT_PERF_MODULE_LEVEL" in src and "golden_cache" in src and "golden_cache_hit" in src
+    assert "TT_PLANNER_GOLDEN_CACHE" in src and "golden_cache" in src and "golden_cache_hit" in src
     py_compile.compile(str(test_path), doraise=True)  # emitted test is valid Python

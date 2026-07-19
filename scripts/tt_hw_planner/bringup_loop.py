@@ -716,7 +716,7 @@ def test_{component_safe}(device_params, device):
         _seed = 0
     torch.manual_seed(_seed)
 
-    _module_level = os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False")
+    _module_level = os.environ.get("TT_PLANNER_GOLDEN_CACHE", "1") not in ("", "0", "false", "False")
     _golden_cache_file = None
     _golden_hit = None
     if _module_level:
