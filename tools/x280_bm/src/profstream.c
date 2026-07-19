@@ -103,6 +103,16 @@ static inline void copy_words(uint64_t dst, uint64_t src, uint32_t n) {
     }
 }
 
+/* Read one core's 5 RISC tails (20 contiguous bytes, ctrl words 5..9) in ONE NoC transaction via a vector
+ * load, vs 5 separate `r32` NoC reads. Doesn't speed the reader's wall (the poll overlaps the copy/visit
+ * latency + the LSU already pipelines the scalar reads) but cuts poll NoC traffic 5x -- cheaper on the NoC,
+ * which matters as more harts/traffic contend. vl=5 (NRISC); X280 VLEN=512 so m2 VLMAX=32 >= 5 -> exact. */
+static inline void read_tails(uint64_t src, uint32_t* dst) {
+    __asm__ volatile("vsetvli x0, %0, e32, m2, ta, ma" ::"r"((uint64_t)NRISC));
+    __asm__ volatile("vle32.v v0, (%0)" ::"r"(src) : "memory", "v0");
+    __asm__ volatile("vse32.v v0, (%0)" ::"r"(dst) : "memory");
+}
+
 /* ---- boot-handoff helpers (idle FW baked in; we just re-enter it) ---- */
 static inline __attribute__((noreturn)) void x280_jump(uint64_t entry) {
     __asm__ volatile("fence ow, ow\n fence.i\n jr %0\n" : : "r"(entry) : "memory");
@@ -167,9 +177,11 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
         for (uint64_t c = lo; c < hi; c++) {
             uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
             uint64_t rbufs = cbase + 128;
+            uint32_t tails[NRISC];
+            read_tails(cbase + 5u * 4, tails); /* all 5 RISC tails in one NoC read */
             for (uint32_t r = 0; r < NRISC; r++) {
                 uint64_t L = c * NRISC + r;
-                uint32_t tail = r32(cbase + (5u + r) * 4);
+                uint32_t tail = tails[r];
                 uint32_t head = heads[L];
                 polls++;
                 if (tail == head) {
