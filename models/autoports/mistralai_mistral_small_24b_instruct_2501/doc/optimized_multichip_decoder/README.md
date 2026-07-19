@@ -1,6 +1,6 @@
 # Mistral-Small-24B optimized multichip decoder
 
-Status: implementation, hardware gates, profiling, watcher stress, and the final independent `$stage-review` pass; the scoped local commit is pending. This stage optimizes the completed `MultichipDecoder` in place on a logical `1x4` Blackhole p300c mesh. It does not start full-model, generator, vLLM, or serving work.
+Status: complete. Implementation, hardware gates, profiling, watcher stress, and the final independent `$stage-review` pass are committed locally in `29dd518771f`. This stage optimizes the completed `MultichipDecoder` in place on a logical `1x4` Blackhole p300c mesh. It does not start full-model, generator, vLLM, or serving work.
 
 ## Final result
 

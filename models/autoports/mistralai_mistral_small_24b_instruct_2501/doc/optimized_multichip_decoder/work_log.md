@@ -181,7 +181,7 @@ The actual two-layer real-weight stack, shared persistent buffers, and trace rep
 - First independent `$stage-review`: `more-work-needed`. Findings were incomplete command transcripts, invalid one-layer/synthetic prefill profiler provenance, missing coherent final-stack family comparisons, incorrect profiler normalization, and insufficient shared-workspace watcher coverage.
 - Remediation: retained full transcripts; added actual two-layer stacked prefill capture; reran all dominant families on the final two-layer path; corrected per-session/per-layer accounting plus PM ideal; ran actual two-layer shared-workspace watcher and post-health audit.
 - Final independent `$stage-review`: `clean-pass`; no required work and no hard-check gaps. The fresh read-only reviewer audited the source, current-source gates, TP1 PCC, primary profiler/accounting, candidate adaptations, watcher/health evidence, artifact references, and dirty-scope isolation.
-- Stage-owned local commit(s): pending.
+- Stage-owned implementation/evidence commit: `29dd518771f` (`Optimize Mistral Small 24B multichip decoder`). This SHA contains only the model source, tests, context contract, and optimized-stage artifacts; the unrelated pre-existing skill edit is excluded. A documentation-only follow-up records this SHA.
 - Push: prohibited and not performed.
 
 ## Final-review remediation: exact fused boundaries and primary batch 1
@@ -311,3 +311,7 @@ $MODEL_DIR/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_pre
 ```
 
 `prefill_trace_batch1_100.*` passes at eager/traced PCC 1.0 and 1.401168 ms/two layers (0.700584 ms/layer), 26.10% faster than the adjacent 1.896023 ms warmed eager default. This closes the actionable report advice and proves trace safety. The required final prefill number remains warmed eager; trace capture/replay is an optional caller-owned boundary and no full-model work was started.
+
+## Commit packaging
+
+The repository hooks passed for `29dd518771f`. The commit force-includes the otherwise globally ignored stage `.log` and `.csv` provenance, so the README's final-primary artifact references survive a fresh checkout. Three superseded raw artifacts exceed the repository's 500 KiB hook limit and remain local only: the 2.9 MiB shard-advisor console dump and two 3.0/5.7 MiB early profiler source CSVs. Their compact advisor JSON/text/MLIR, processed profiler reports, and every final-primary raw/processed CSV, table, log, and JUnit artifact are committed. No final claim depends on an excluded raw file.
