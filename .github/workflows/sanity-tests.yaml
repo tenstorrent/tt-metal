@@ -190,7 +190,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   resolve-artifacts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [build-artifact]
     if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
     outputs:
@@ -246,7 +246,7 @@ jobs:
   tests-to-run:
     needs: [resolve-artifacts]
     if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       ttnn-sanity-tests: ${{ steps.set-ttnn-sanity-tests.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}

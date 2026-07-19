@@ -34,7 +34,7 @@ on:
 
 jobs:
   verify-create-new-tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       version: ${{ steps.calculate-version.outputs.final_version }}
     env:

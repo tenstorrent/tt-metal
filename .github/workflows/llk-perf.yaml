@@ -27,7 +27,7 @@ jobs:
     if: always()
     needs:
       - llk-perf-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Check perf test results
         uses: re-actors/alls-green@release/v1
@@ -36,7 +36,7 @@ jobs:
 
   report-status:
     name: "Report status"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: always()
     needs: llk-perf-summary
     steps:

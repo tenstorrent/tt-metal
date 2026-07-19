@@ -669,7 +669,7 @@ jobs:
   # from literal strings/booleans or job outputs.
   resolve-inputs:
     name: Resolve workflow inputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       sweep-name: ${{ steps.resolve.outputs.sweep-name }}
       suite-name: ${{ steps.resolve.outputs.suite-name }}

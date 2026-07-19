@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   extract-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       version: ${{ steps.get-version.outputs.version }}
     steps:
