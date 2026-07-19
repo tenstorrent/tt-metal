@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
                                // full RING_CAP buffer per (core,risc). Deterministic max-drain load; LOSSY.
     bool bulkcore = false;     // --bulkcore: one bulk NoC read of the whole core (all 5 rings, 2560 words) --
                                // amortizes NoC latency (rdrbench >2GB/s regime), drops per-risc round-robin. LOSSY.
+    bool dualrelay = false;    // --dualrelay: one relay hart PER reader (decouple the two chip halves)
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -142,6 +143,8 @@ int main(int argc, char** argv) {
         } else if (a == "--bulkcore") {
             bulkcore = true;
             fullread = true;  // bulkcore is inherently a full-buffer read
+        } else if (a == "--dualrelay") {
+            dualrelay = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -266,11 +269,13 @@ int main(int argc, char** argv) {
         params,
         0x30,
         read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) | (wnoc1 ? 0x800ull : 0ull) |
-            (nodrain ? 0x1000ull : 0ull) | (fullread ? 0x2000ull : 0ull) |
-            (bulkcore ? 0x4000ull : 0ull));  // bit8=direct 9=splitnoc 11=wnoc1 12=nohostfc 13=fullread 14=bulkcore
+            (nodrain ? 0x1000ull : 0ull) | (fullread ? 0x2000ull : 0ull) | (bulkcore ? 0x4000ull : 0ull) |
+            (dualrelay ? 0x8000ull
+                       : 0ull));  // 8=direct 9=splitnoc 11=wnoc1 12=nohostfc 13=fullread 14=bulkcore 15=dualrelay
     pack<uint64_t>(params, 0x38, direct ? ndrain : nread);                // P_NREAD = drain-hart count in direct mode
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
-    uint64_t nharts = direct ? ndrain : nread + 1;
+    uint64_t nrelay = dualrelay ? nread : 1;
+    uint64_t nharts = direct ? ndrain : nread + nrelay;
     for (uint64_t h = 0; h < nharts; h++) {
         drv.lim_wr_u64(harthb((int)h), 0);
     }
@@ -550,7 +555,7 @@ int main(int argc, char** argv) {
 
     // ---- pipeline profile: where does each X280 hart spend its cycles? ----
     printf("\n--- pipeline profile (X280 cycles; copy%% = fraction of wall spent moving data) ---\n");
-    uint64_t hmax = direct ? (ndrain - 1) : nread;  // direct: each drain hart; split: readers + relay
+    uint64_t hmax = direct ? (ndrain - 1) : (nread + nrelay - 1);  // direct: drain harts; split: readers + relay(s)
     for (uint64_t h = 0; h <= hmax; h++) {
         std::vector<uint8_t> rs(0x40);
         drv.read_block(rs.data(), 0x40, 0x08011040ULL + h * 0x40);
@@ -567,10 +572,11 @@ int main(int argc, char** argv) {
                 busy,
                 (double)t_copy / (double)words,
                 (unsigned long long)(aux1 / 1000000));
-        } else if (h == nread) {
+        } else if (h >= nread) {
             printf(
-                "  relay : %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  hostfull=%llu idle=%llu "
+                "  relay%llu: %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  hostfull=%llu idle=%llu "
                 "OVERWRITE=%llu\n",
+                (unsigned long long)(h - nread),
                 (unsigned long long)(bytes / 1024),
                 (unsigned long long)(t_total / 1000000),
                 busy,

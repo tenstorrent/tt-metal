@@ -50,7 +50,8 @@
 #define STAGECTL 0x08018000UL
 #define STAGE_BASE 0x08020000UL
 #define STAGE_STRIDE 0x10000UL /* 64 KiB per reader */
-#define STAGE_WORDS 4096u      /* 16 KiB LIM SPSC per reader (>= 8 worker rings) */
+#define STAGE_WORDS_NORMAL 4096u /* 16 KiB LIM SPSC (per-risc mode; >= 8 worker rings) */
+#define STAGE_WORDS_BULK 16384u  /* 64 KiB LIM SPSC (bulkcore: holds several 2560-word cores; fills stride) */
 
 #define P_PCIE_ENC (MBOX_PARAMS + 0x00)
 #define P_HOST_BASE (MBOX_PARAMS + 0x08)
@@ -171,6 +172,8 @@ static void reader_run(
         }
     }
     uint64_t sbase = STAGE_BASE + hartid * STAGE_STRIDE; /* this reader's LIM SPSC ring */
+    uint32_t stage_words = bulkcore ? STAGE_WORDS_BULK : STAGE_WORDS_NORMAL; /* bigger SPSC for bulk cores */
+    uint32_t swm = stage_words - 1u;                                         /* power-of-2 mask */
     uint32_t prod = 0; /* LOCAL word count; only WRITTEN to LIM for the relay, never re-read */
     uint64_t total = 0;
     w32(PROD(hartid), 0);
@@ -195,22 +198,22 @@ static void reader_run(
                 uint32_t run = NRISC * RING_CAP; /* 2560 words = whole core */
                 uint32_t need = 2u + run;
                 uint64_t tw = rdcycle();
-                while ((uint32_t)(STAGE_WORDS - (prod - r32(CONS(hartid)))) < need) {
+                while ((uint32_t)(stage_words - (prod - r32(CONS(hartid)))) < need) {
                     cpu_pause();
                 }
                 t_wait += rdcycle() - tw;
                 uint64_t tc = rdcycle();
                 uint64_t lut = SRCLUT_BASE + (c * NRISC) * 8;
-                w32(sbase + (uint64_t)(prod % STAGE_WORDS) * 4, r32(lut));
-                w32(sbase + (uint64_t)((prod + 1) % STAGE_WORDS) * 4, r32(lut + 4));
+                w32(sbase + (uint64_t)(prod & swm) * 4, r32(lut));
+                w32(sbase + (uint64_t)((prod + 1) & swm) * 4, r32(lut + 4));
                 prod += 2;
                 uint64_t src = rbufs; /* ring 0 NoC addr; the 5 rings follow contiguously */
                 uint32_t di = prod, leftw = run;
                 while (leftw) {
-                    uint32_t sslot = di % STAGE_WORDS;
+                    uint32_t sslot = di & swm;
                     uint32_t chunk = leftw;
-                    if (chunk > STAGE_WORDS - sslot) {
-                        chunk = STAGE_WORDS - sslot;
+                    if (chunk > stage_words - sslot) {
+                        chunk = stage_words - sslot;
                     }
                     copy_words(sbase + (uint64_t)sslot * 4, src, chunk); /* one streaming bulk read */
                     src += (uint64_t)chunk * 4;
@@ -255,15 +258,15 @@ static void reader_run(
                 /* wait for room in our LIM SPSC. We read the RELAY's cons fresh from LIM each spin; our own
                  * prod stays local (only written to LIM for the relay) -- the proven profcons_split pattern. */
                 uint64_t tw = rdcycle();
-                while ((uint32_t)(STAGE_WORDS - (prod - r32(CONS(hartid)))) < need) {
+                while ((uint32_t)(stage_words - (prod - r32(CONS(hartid)))) < need) {
                     cpu_pause();
                 }
                 t_wait += rdcycle() - tw;
                 uint64_t tc = rdcycle();
                 /* inject the precomputed STICKY-SRC (2 words) for this lane */
                 uint64_t lut = SRCLUT_BASE + L * 8;
-                w32(sbase + (uint64_t)(prod % STAGE_WORDS) * 4, r32(lut));
-                w32(sbase + (uint64_t)((prod + 1) % STAGE_WORDS) * 4, r32(lut + 4));
+                w32(sbase + (uint64_t)(prod & swm) * 4, r32(lut));
+                w32(sbase + (uint64_t)((prod + 1) & swm) * 4, r32(lut + 4));
                 prod += 2;
                 /* copy the worker ring words [head,tail) into the SPSC in contiguous chunks (split at BOTH
                  * the worker-ring and SPSC wraps), each chunk copied with ILP flits. */
@@ -271,13 +274,13 @@ static void reader_run(
                 uint32_t si = head, di = prod, left = run;
                 while (left) {
                     uint32_t wslot = si % RING_CAP;
-                    uint32_t sslot = di % STAGE_WORDS;
+                    uint32_t sslot = di & swm;
                     uint32_t chunk = left;
                     if (chunk > RING_CAP - wslot) {
                         chunk = RING_CAP - wslot;
                     }
-                    if (chunk > STAGE_WORDS - sslot) {
-                        chunk = STAGE_WORDS - sslot;
+                    if (chunk > stage_words - sslot) {
+                        chunk = stage_words - sslot;
                     }
                     copy_words(sbase + (uint64_t)sslot * 4, wl1 + (uint64_t)wslot * 4, chunk);
                     si += chunk;
@@ -312,14 +315,23 @@ static void reader_run(
 /* Round-robin the reader SPSCs; copy their words verbatim to the single host ring, flow-controlled by the
  * host's ack (HACKED). Blocks on a full host ring. Runs until P_STOP and all reader SPSCs are drained. */
 static void relay_run(
-    uint64_t hartid, uint64_t host_base, uint64_t nread, uint64_t hring_words, uint64_t pcie_enc, uint64_t nohostfc) {
-    /* One host ring PER READER: reader h -> ring h @ host_base + h*hring_bytes, its own HSENT/HACKED pair and
-     * posted window WRITE_WIN_BASE+h. N per-ring host consumer threads drain them in PARALLEL, so the host
-     * side scales with nread instead of one thread bottlenecking a single ring. Each ring carries exactly one
-     * reader's self-framed (sticky+data) stream -> no cross-reader interleave, and the whole-snapshot drain
-     * below keeps each frame contiguous. */
+    uint64_t hartid,
+    uint64_t host_base,
+    uint64_t rlo,
+    uint64_t rhi,
+    uint64_t hring_words,
+    uint64_t pcie_enc,
+    uint64_t nohostfc,
+    uint64_t bulkcore) {
+    uint32_t stage_words = bulkcore ? STAGE_WORDS_BULK : STAGE_WORDS_NORMAL; /* MUST match the reader's SPSC size */
+    uint32_t swm = stage_words - 1u;
+    /* Drain readers [rlo,rhi) -> their OWN host rings (reader h -> ring h @ host_base + h*hring_bytes, own
+     * HSENT/HACKED pair + posted window WRITE_WIN_BASE+h). With ONE relay, [rlo,rhi)=[0,nread) (round-robins
+     * all readers). With a relay PER READER ([k,k+1)), the two chip halves are fully decoupled -> the single
+     * relay stops being the bottleneck. Each ring carries one reader's self-framed stream (no cross-reader
+     * interleave); a per-ring host consumer thread drains it. */
     uint64_t hbase[4];
-    for (uint64_t h = 0; h < nread; h++) {
+    for (uint64_t h = rlo; h < rhi; h++) {
         uint64_t mhb = host_base + h * hring_words * 4;
         uint32_t win_p = WRITE_WIN_BASE + (uint32_t)h;
         noc_tlb_2m_t wt;
@@ -341,7 +353,7 @@ static void relay_run(
 
     uint32_t hsent[4] = {0, 0, 0, 0}; /* per-ring published word count */
     uint32_t cons[4] = {0, 0, 0, 0};  /* LOCAL per-reader cons; only WRITTEN to LIM for the reader */
-    for (uint64_t h = 0; h < nread; h++) {
+    for (uint64_t h = rlo; h < rhi; h++) {
         w32(HSENT(h), 0);
         w32(CONS(h), 0);
     }
@@ -354,7 +366,7 @@ static void relay_run(
 
     for (;;) {
         uint64_t pending = 0;
-        for (uint64_t h = 0; h < nread; h++) {
+        for (uint64_t h = rlo; h < rhi; h++) {
             uint32_t prod = r32(PROD(h)); /* the reader's prod, fresh from LIM */
             uint32_t cn = cons[h];        /* our own cons stays local */
             if ((int32_t)(prod - cn) <= 0) {
@@ -379,11 +391,11 @@ static void relay_run(
             /* copy reader h's SPSC words -> its OWN ring h, chunked (split at SPSC wrap and ring wrap) */
             uint32_t si = cn, di = hsent[h], leftw = run;
             while (leftw) {
-                uint32_t sslot = si % STAGE_WORDS;
+                uint32_t sslot = si & swm;
                 uint32_t hslot = di % (uint32_t)hring_words;
                 uint32_t chunk = leftw;
-                if (chunk > STAGE_WORDS - sslot) {
-                    chunk = STAGE_WORDS - sslot;
+                if (chunk > stage_words - sslot) {
+                    chunk = stage_words - sslot;
                 }
                 if (chunk > (uint32_t)hring_words - hslot) {
                     chunk = (uint32_t)hring_words - hslot;
@@ -410,7 +422,7 @@ static void relay_run(
             /* Only stop once every READER is DONE (RES_DONE) *and* its SPSC is empty -- a reader can leave
              * its SPSC momentarily empty while blocked mid-drain; breaking then would strand its tail. */
             uint64_t all_done = 1;
-            for (uint64_t h = 0; h < nread; h++) {
+            for (uint64_t h = rlo; h < rhi; h++) {
                 if (r64(RES_SLOT(h) + RES_DONE) != DONE_MAGIC || r32(PROD(h)) != cons[h]) {
                     all_done = 0;
                 }
@@ -589,6 +601,7 @@ int main(uint64_t hartid) {
     uint64_t wnoc = (r64(P_NONCE) >> 11) & 1ull;    /* NONCE bit 11: route the posted PCIe write over NoC1 */
     uint64_t fullread = (r64(P_NONCE) >> 13) & 1ull; /* NONCE bit 13: reader always drains a FULL buffer (bench) */
     uint64_t bulkcore = (r64(P_NONCE) >> 14) & 1ull; /* NONCE bit 14: one bulk NoC read per core (all 5 rings) */
+    uint64_t dualrelay = (r64(P_NONCE) >> 15) & 1ull; /* NONCE bit 15: one relay hart PER READER (decouple halves) */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -603,7 +616,8 @@ int main(uint64_t hartid) {
             nread = 2;
         }
     }
-    uint64_t nharts = direct ? ndrain : (nread + 1); /* direct: ndrain drainers; split: readers + 1 relay */
+    uint64_t nrelay = dualrelay ? nread : 1;              /* 1 relay for all, or 1 per reader */
+    uint64_t nharts = direct ? ndrain : (nread + nrelay); /* direct: ndrain drainers; split: readers + relays */
 
     volatile uint64_t* rl = (volatile uint64_t*)RES_SLOT(hartid);
     for (int i = 0; i < 8; i++) {
@@ -626,7 +640,10 @@ int main(uint64_t hartid) {
     } else if (hartid < nread) {
         reader_run(hartid, num_cores, prof_l1, nread, read_noc, fullread, bulkcore);
     } else {
-        relay_run(hartid, host_base, nread, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull);
+        uint64_t hri = hartid - nread; /* relay index 0..nrelay-1 */
+        uint64_t rlo = (nrelay == 1) ? 0 : hri;
+        uint64_t rhi = (nrelay == 1) ? nread : (hri + 1); /* one relay per reader when dualrelay */
+        relay_run(hartid, host_base, rlo, rhi, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull, bulkcore);
     }
 
     if (hartid == 0) {
