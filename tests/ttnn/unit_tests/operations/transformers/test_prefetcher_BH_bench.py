@@ -676,7 +676,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # Centralized recv-contig param + cross-check: returns the validated block_count
     # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, block_count)] * num_prefetch_layers,

@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "experimental/kernel_args.h"
@@ -31,16 +30,13 @@ void kernel_main() {
     auto write_tiles_in_current_block = [&]() {
         cb_out.wait_front(num_tiles_per_output_block);
 
-        uint32_t l1_read_addr = cb_out.get_read_ptr();
         for (uint32_t l = 0; l < tile_height; ++l) {
-            CoreLocalMem<uint32_t> src(l1_read_addr);
             noc.async_write(
-                src,
+                cb_out,
                 s,
                 output_single_block_width_size,
-                {.offset_bytes = 0},
+                {.offset_bytes = l * output_single_block_width_size},
                 {.page_id = row_stick_ids[l], .offset_bytes = stick_offset});
-            l1_read_addr += output_single_block_width_size;
         }
         stick_offset += output_single_block_width_size;
 

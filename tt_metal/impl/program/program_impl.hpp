@@ -221,6 +221,7 @@ public:
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
@@ -423,6 +424,13 @@ public:
     // Metal 2.0: Get all registered kernel names (for completeness validation)
     std::vector<std::string> get_registered_kernel_names() const;
 
+    // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
+    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    void reserve_runtime_arg_buffers();
+
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -434,6 +442,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
