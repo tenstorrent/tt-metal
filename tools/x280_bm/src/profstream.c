@@ -233,7 +233,8 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
 /* ============================== RELAY ============================== */
 /* Round-robin the reader SPSCs; copy their words verbatim to the single host ring, flow-controlled by the
  * host's ack (HACKED). Blocks on a full host ring. Runs until P_STOP and all reader SPSCs are drained. */
-static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint64_t hring_words, uint64_t pcie_enc) {
+static void relay_run(
+    uint64_t hartid, uint64_t host_base, uint64_t nread, uint64_t hring_words, uint64_t pcie_enc, uint64_t nohostfc) {
     /* One host ring PER READER: reader h -> ring h @ host_base + h*hring_bytes, its own HSENT/HACKED pair and
      * posted window WRITE_WIN_BASE+h. N per-ring host consumer threads drain them in PARALLEL, so the host
      * side scales with nread instead of one thread bottlenecking a single ring. Each ring carries exactly one
@@ -284,7 +285,10 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
             pending = 1;
             uint64_t sbase = STAGE_BASE + h * STAGE_STRIDE;
             uint32_t avail = prod - cn;
-            uint32_t hspace = (uint32_t)hring_words - (hsent[h] - r32(HACKED(h)));
+            /* nohostfc (diagnostic): pretend the host ring is always fully drained -> the relay NEVER blocks
+             * on the host (writes/overwrites at full rate). Isolates whether the reader is throttled by the
+             * host consumer sink. LOSSY on purpose (host reads garbage / isn't run). */
+            uint32_t hspace = nohostfc ? (uint32_t)hring_words : (uint32_t)hring_words - (hsent[h] - r32(HACKED(h)));
             if (hspace == 0) {
                 hostfull++;
                 continue; /* ring h full -> skip to the OTHER reader (its own ring may have space), come back.
@@ -542,7 +546,7 @@ int main(uint64_t hartid) {
     } else if (hartid < nread) {
         reader_run(hartid, num_cores, prof_l1, nread, read_noc);
     } else {
-        relay_run(hartid, host_base, nread, hring_words, pcie_enc);
+        relay_run(hartid, host_base, nread, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull);
     }
 
     if (hartid == 0) {

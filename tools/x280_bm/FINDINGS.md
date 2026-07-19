@@ -870,6 +870,19 @@ lossless at full burst + 2.2M markers. Now READER-bound, not host-bound (readers
 ~1.86 GB/s aggregate); producer stall ~1.5× below direct (640M vs 951M spins). The whole-snapshot
 blocking drain (needed for a shared ring) was a throughput regression here and was reverted.**
 
+**TWO-THROTTLE DECOMPOSITION (`--nodrain` diagnostic, 2026-07-19).** "Why doesn't copy dominate at
+peak?" Isolated by removing the host sink entirely (relay ignores HACKED + no host consumer thread;
+NONCE bit 12; LOSSY on purpose). Reader at full burst, with vs without the sink: `spsc-wait` 4M →
+**0**, copy% 34 → **51 %**, wall 13M → 9M, producer spins 640M → 407M. So there are TWO independent
+throttles: (1) the HOST SINK — real, ~31 % of reader time, back-pressures via SPSC-full; removing it
+zeroes spsc-wait. (2) PER-VISIT OVERHEAD — poll (tail NoC reads) + head-advance (NoC write) + fence,
+~50 % of reader time even with the sink gone, INDEPENDENT of it (in cycles: copy ≈ 4.5M ≈ overhead
+4.5M). Feedback loop: a faster reader visits each lane sooner → smaller runs → the fixed per-visit
+cost is a bigger share, so copy caps ~51 % not ~85 %. To get copy-dominant at peak needs BOTH a
+faster sink (fan-out to more rings/threads than readers) AND the reader-overhead fix (bulk-poll the
+tails + batch the PROD publish/fence). Bigger SPSC does NOT help — tried 4096→16384, it made things
+2.5× WORSE (burstier back-pressure, less 3-stage overlap; the small buffer is near-optimal).
+
 **Direct drain (`--direct`, NONCE bit 8).** ONE hart reads worker-L1 over NoC (coherent) and
 writes the single host ring DIRECTLY, injecting sticky-src inline — no LIM SPSC, no cross-hart
 handoff, no relay. UNCONDITIONALLY LOSSLESS: 550/550 lanes, 0 seq gaps at every rate (proddelay

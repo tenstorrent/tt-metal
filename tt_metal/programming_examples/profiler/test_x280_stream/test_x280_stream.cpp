@@ -86,6 +86,8 @@ int main(int argc, char** argv) {
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
     bool wnoc1 = false;        // --wnoc1: route the posted PCIe write over NoC1 (reads stay NoC0)
+    bool nodrain = false;      // --nodrain: diagnostic -- relay ignores host flow control + no host consumer
+                               // (isolates whether the reader is throttled by the host sink; LOSSY on purpose)
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -129,6 +131,8 @@ int main(int argc, char** argv) {
         } else if (a == "--wnoc1") {
             wnoc1 = true;
             direct = true;
+        } else if (a == "--nodrain") {
+            nodrain = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -252,8 +256,8 @@ int main(int argc, char** argv) {
     pack<uint64_t>(
         params,
         0x30,
-        read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) |
-            (wnoc1 ? 0x800ull : 0ull));                                   // bit8=direct bit9=splitnoc bit11=wnoc1
+        read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) | (wnoc1 ? 0x800ull : 0ull) |
+            (nodrain ? 0x1000ull : 0ull));  // bit8=direct bit9=splitnoc bit11=wnoc1 bit12=nohostfc
     pack<uint64_t>(params, 0x38, direct ? ndrain : nread);                // P_NREAD = drain-hart count in direct mode
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
     uint64_t nharts = direct ? ndrain : nread + 1;
@@ -381,7 +385,9 @@ int main(int argc, char** argv) {
     // One host thread PER ring (default) -> ring 1 is never ack-starved by ring 0's servicing. --rrconsumer
     // falls back to a single thread round-robining all rings (the original behavior) for A/B comparison.
     std::vector<std::thread> consumers;
-    if (rr_consumer) {
+    if (nodrain) {
+        printf("[nodrain] host consumer DISABLED, relay ignores flow control -- diagnostic (lossy)\n");
+    } else if (rr_consumer) {
         // one thread interleaves all rings in a single sweep loop (original behavior)
         consumers.emplace_back([&]() {
             std::vector<uint32_t> acked(ndh, 0);
