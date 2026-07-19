@@ -331,8 +331,9 @@ jobs:
           # thread pool causes libgomp to burn CPU in busy-wait barriers. This env var only affects
           # the wrapped test command (not the rest of the matrix) and helps isolate the real host
           # work from OpenMP spin overhead.
-          OMP_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '1' || '' }}
-          MKL_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '1' || '' }}
+          OMP_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '2' || '' }}
+          MKL_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '2' || '' }}
+          OMP_WAIT_POLICY: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && 'passive' || '' }}
         run: |
           # Build the inner command passed to the power sidecar's `bash -c`. Use a shell variable
           # for the pytest command (from $TEST_GROUP_CMD) to avoid YAML/shell quoting hell.
