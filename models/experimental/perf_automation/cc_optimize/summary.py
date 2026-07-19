@@ -61,7 +61,10 @@ def module_optimize_block(
     pinned under whichever module was optimized first."""
     idx = f" — {index}" if index else ""
     head = f"## Module: `{module}`{idx}\n\n- pcc gate: `{pcc_gate}`\n- outcome: **{outcome}**\n\n"
-    return head + optimize_block(model_root, attempts_len, text, when_note)
+    body = optimize_block(model_root, attempts_len, text, when_note)
+    if body.startswith("# Optimize (perf)"):
+        body = body.split("\n\n", 1)[1]
+    return head + body
 
 
 def _level_of(kind: str) -> str:

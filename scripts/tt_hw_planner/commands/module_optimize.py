@@ -114,6 +114,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         os.environ["PERF_MCP_REPORT_MODULE"] = m
         os.environ["PERF_MCP_REPORT_PCC"] = node
         os.environ["PERF_MCP_REPORT_INDEX"] = "%d/%d" % (i, len(mods))
+        os.environ["PERF_MCP_TASK"] = m
         try:
             result = run_cc(
                 demo_dir,
@@ -126,7 +127,13 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
                 hitl=getattr(args, "hitl", False),
             )
         finally:
-            for _k in ("PERF_MCP_REPORT_KEY", "PERF_MCP_REPORT_MODULE", "PERF_MCP_REPORT_PCC", "PERF_MCP_REPORT_INDEX"):
+            for _k in (
+                "PERF_MCP_REPORT_KEY",
+                "PERF_MCP_REPORT_MODULE",
+                "PERF_MCP_REPORT_PCC",
+                "PERF_MCP_REPORT_INDEX",
+                "PERF_MCP_TASK",
+            ):
                 os.environ.pop(_k, None)
         status = _module_status(result)
         rows.append((m, status, result))
