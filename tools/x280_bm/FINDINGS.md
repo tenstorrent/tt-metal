@@ -868,6 +868,17 @@ wait). Producers back-pressure whenever the 550 lanes collectively outrun the on
 | **1350** | **0/550** | **0** |
 | 2000 | 0/550 | 0 |
 
+**2-hart scaling levers (all measured, all closed):** `--ndrain 2` (independent slice/ring/HSENT-HACKED/heads
+per hart, zero shared LIM) is 550/550 lossless but SUBLINEAR — per-hart 6.5→~9 cyc/word, eff BW ~411→~539
+MB/s (+31%), knee ~1300→~900. Sublinear because both harts contend on the shared L2CPU load/store path + the
+single PCIe write endpoint. `--rrconsumer` off (one host thread per ring) drives host-wait→0 (best ~680 MB/s)
+but is a minor factor — the ceiling is on-device. `--splitnoc` (hart h reads over NoC h&1) is a **NO-OP**
+(~identical wall), confirming it's not NoC bandwidth. **Double-buffered copy (software-pipeline the NoC read
+of chunk N+1 ahead of the PCIe store of chunk N, ping-pong vreg groups v0/v8) = NO-OP:** clean single-path
+build is 6.5 cyc/word, bit-identical to the plain copy. The X280 vector LSU already overlaps the store with
+following loads (posted PCIe writes retire immediately — nothing to hide); reverted. So the read-side `vle32.v
+m8` streaming is the whole ILP story; the only remaining lever is fewer bytes/marker (matches rdrbench).
+
 **Knee ≈ 1300 iters/marker.** Below it → workers stall; at/above → zero stall. Critically,
 **stalling ≠ loss**: every run incl. full burst was 0 seq gaps — back-pressure only perturbs
 workload *timing*, never drops markers. At ~615 MB/s / 8 B this is ~77 M markers/s aggregate
