@@ -1193,6 +1193,13 @@ def _emit_e2e_phase_a(args) -> int:
         print(f"  ✗ EMIT-E2E ABORTED (topology guard) — {_mismatch}")
         print(sep)
         return 2
+    if _manifest and int(_manifest.get("tp", 1)) > 1:
+        if _pc is not None:
+            print(
+                f"  ✓ topology guard: --mesh reverified against graduated split "
+                f"TP={_manifest.get('tp')} x DP={_manifest.get('dp')} on {_manifest.get('chips')} chips"
+            )
+        # (a tp<=1 manifest, or no manifest, is not enforced — see _topology_mismatch)
     _parallel_note = _parallelism_prompt_block(_pc)
     if _pc is not None and _pc.chips > 1:
         print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
