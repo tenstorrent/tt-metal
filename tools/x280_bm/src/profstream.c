@@ -343,6 +343,131 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
     fence_();
 }
 
+/* ============================== SINGLE-HART DIRECT DRAIN ============================== */
+/* One hart reads worker L1 (NoC, uncached -> coherent) and writes the single host ring DIRECTLY, injecting
+ * a STICKY-SRC before each source's data. No LIM SPSC, no cross-hart handoff -> sidesteps the cross-hart LIM
+ * coherence that corrupts the split pipeline's SPSC under saturation. Flow-controlled by the host's HACKED. */
+static void drain_direct(
+    uint64_t hartid,
+    uint64_t num_cores,
+    uint64_t prof_l1,
+    uint64_t host_base,
+    uint64_t hring_words,
+    uint64_t pcie_enc,
+    uint64_t read_noc) {
+    uint64_t ctrl_off = prof_l1 & (NOC_2M_WINDOW_STRIDE - 1ULL);
+    uint64_t off_w = host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
+    volatile uint32_t* coords = (volatile uint32_t*)MBOX_COORDS;
+    /* one read window per core (index = core) */
+    for (uint64_t c = 0; c < num_cores; c++) {
+        noc_tlb_2m_t rt;
+        rt.data[0] = 0;
+        rt.data[1] = 0;
+        rt.data[2] = 0;
+        rt.data[3] = 0;
+        rt.addr = prof_l1 >> 21;
+        rt.x_end = coords[c * 2 + 0];
+        rt.y_end = coords[c * 2 + 1];
+        rt.x_start = coords[c * 2 + 0];
+        rt.y_start = coords[c * 2 + 1];
+        rt.noc_selector = (uint32_t)read_noc;
+        (void)noc_configure_tlb_2m_ext((uint32_t)c, &rt, 0);
+    }
+    /* one posted write window to the host ring */
+    uint32_t win_p = WRITE_WIN_BASE;
+    noc_tlb_2m_t wt;
+    wt.data[0] = 0;
+    wt.data[1] = 0;
+    wt.data[2] = 0;
+    wt.data[3] = 0;
+    wt.addr = host_base >> 21;
+    wt.x_end = (uint32_t)(pcie_enc & 0x3f);
+    wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
+    wt.x_start = (uint32_t)(pcie_enc & 0x3f);
+    wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
+    wt.noc_selector = 0;
+    wt.posted = 1;
+    (void)noc_configure_tlb_2m_ext(win_p, &wt, 0);
+    fence_();
+    uint64_t hbase = NOC_2M_WINDOW_BASE + (uint64_t)win_p * NOC_2M_WINDOW_STRIDE + off_w;
+
+    volatile uint32_t* heads = (volatile uint32_t*)HEADS_BASE;
+    for (uint64_t c = 0; c < num_cores; c++) {
+        for (uint32_t r = 0; r < NRISC; r++) {
+            heads[c * NRISC + r] = 0;
+        }
+    }
+    uint32_t hsent = 0;
+    w32(HSENT_ADDR, 0);
+    fence_();
+    uint64_t total = 0, t_copy = 0, t_wait = 0;
+    uint64_t t0 = rdcycle();
+
+    for (;;) {
+        uint64_t pending = 0;
+        for (uint64_t c = 0; c < num_cores; c++) {
+            uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
+            uint64_t rbufs = cbase + 128;
+            for (uint32_t r = 0; r < NRISC; r++) {
+                uint64_t L = c * NRISC + r;
+                uint32_t tail = r32(cbase + (5u + r) * 4);
+                uint32_t head = heads[L];
+                if (tail == head) {
+                    continue;
+                }
+                pending = 1;
+                uint32_t run = tail - head;
+                uint32_t need = 2u + run;
+                uint64_t tw = rdcycle();
+                while ((uint32_t)((uint32_t)hring_words - (hsent - r32(HACKED_ADDR))) < need) {
+                    cpu_pause();
+                }
+                t_wait += rdcycle() - tw;
+                uint64_t tc = rdcycle();
+                /* inject the STICKY-SRC (2 words) into the host ring, then the worker data */
+                uint64_t lut = SRCLUT_BASE + L * 8;
+                w32(hbase + (uint64_t)(hsent % (uint32_t)hring_words) * 4, r32(lut));
+                w32(hbase + (uint64_t)((hsent + 1) % (uint32_t)hring_words) * 4, r32(lut + 4));
+                hsent += 2;
+                uint64_t wl1 = rbufs + (uint64_t)r * 2048;
+                uint32_t si = head, di = hsent, leftw = run;
+                while (leftw) {
+                    uint32_t wslot = si % RING_CAP;
+                    uint32_t hslot = di % (uint32_t)hring_words;
+                    uint32_t chunk = leftw;
+                    if (chunk > RING_CAP - wslot) {
+                        chunk = RING_CAP - wslot;
+                    }
+                    if (chunk > (uint32_t)hring_words - hslot) {
+                        chunk = (uint32_t)hring_words - hslot;
+                    }
+                    copy_words(hbase + (uint64_t)hslot * 4, wl1 + (uint64_t)wslot * 4, chunk);
+                    si += chunk;
+                    di += chunk;
+                    leftw -= chunk;
+                }
+                hsent += run;
+                total += run;
+                heads[L] = tail;
+                w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks */
+                fence_();                 /* ring payload issued before the sent notify */
+                w32(HSENT_ADDR, hsent);   /* publish to the host */
+                t_copy += rdcycle() - tc;
+            }
+        }
+        if (r64(P_STOP) && !pending) {
+            break;
+        }
+    }
+    uint64_t t_total = rdcycle() - t0;
+    w64(RES_SLOT(hartid) + RES_TOTAL, total * 4ULL);
+    w64(RES_SLOT(hartid) + 0x08, t_copy);
+    w64(RES_SLOT(hartid) + 0x10, t_total);
+    w64(RES_SLOT(hartid) + 0x20, t_wait);
+    w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
+    fence_();
+}
+
 int main(uint64_t hartid) {
     if (hartid == 0) {
         *(volatile uint64_t*)X280_BOOT_PHASE_ADDR = X280_BOOT_PHASE_RUNNING_ACTIVE_FW;
@@ -356,11 +481,12 @@ int main(uint64_t hartid) {
     uint64_t hring_words = r64(P_HRING_WORDS);
     uint64_t pcie_enc = r64(P_PCIE_ENC);
     uint64_t read_noc = r64(P_NONCE) & 1ull;
+    uint64_t direct = (r64(P_NONCE) >> 8) & 1ull; /* NONCE bit 8: single-hart DIRECT drain (no split) */
     uint64_t nread = r64(P_NREAD);
     if (nread == 0 || nread > 3) {
         nread = 2;
     }
-    uint64_t nharts = nread + 1; /* readers + 1 relay */
+    uint64_t nharts = direct ? 1 : (nread + 1); /* direct: hart 0 only; split: readers + 1 relay */
 
     volatile uint64_t* rl = (volatile uint64_t*)RES_SLOT(hartid);
     for (int i = 0; i < 8; i++) {
@@ -377,7 +503,9 @@ int main(uint64_t hartid) {
     w64(HARTHB(hartid), 3);
     fence_();
 
-    if (hartid < nread) {
+    if (direct) {
+        drain_direct(hartid, num_cores, prof_l1, host_base, hring_words, pcie_enc, read_noc);
+    } else if (hartid < nread) {
         reader_run(hartid, num_cores, prof_l1, nread, read_noc);
     } else {
         relay_run(hartid, host_base, nread, hring_words, pcie_enc);

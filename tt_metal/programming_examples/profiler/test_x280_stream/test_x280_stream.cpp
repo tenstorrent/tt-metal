@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     int device_id = 0, l2cpu = 0, pll = 1000;
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull;
     uint32_t prog_id = 0xA5A5A5A5u, hring_words = 8192, prod_delay = 0;
-    bool do_reset = false;
+    bool do_reset = false, direct = false;  // --direct: single-hart direct drain (no reader/relay split)
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -111,6 +111,8 @@ int main(int argc, char** argv) {
             read_noc = std::stoull(next());
         } else if (a == "--reset") {
             do_reset = true;
+        } else if (a == "--direct") {
+            direct = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -227,10 +229,10 @@ int main(int argc, char** argv) {
     pack<uint64_t>(params, 0x18, (uint64_t)num_cores);
     pack<uint64_t>(params, 0x20, (uint64_t)hring_words);
     pack<uint64_t>(params, 0x28, 0);  // P_STOP
-    pack<uint64_t>(params, 0x30, read_noc);
+    pack<uint64_t>(params, 0x30, read_noc | (direct ? 0x100ull : 0ull));  // NONCE bit 8 = direct drain
     pack<uint64_t>(params, 0x38, nread);
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
-    uint64_t nharts = nread + 1;
+    uint64_t nharts = direct ? 1 : nread + 1;
     for (uint64_t h = 0; h < nharts; h++) {
         drv.lim_wr_u64(harthb((int)h), 0);
     }
@@ -421,14 +423,23 @@ int main(int argc, char** argv) {
 
     // ---- pipeline profile: where does each X280 hart spend its cycles? ----
     printf("\n--- pipeline profile (X280 cycles; copy%% = fraction of wall spent moving data) ---\n");
-    for (uint64_t h = 0; h <= nread; h++) {
+    uint64_t hmax = direct ? 0 : nread;  // direct: only hart 0 drains
+    for (uint64_t h = 0; h <= hmax; h++) {
         std::vector<uint8_t> rs(0x40);
         drv.read_block(rs.data(), 0x40, 0x08011040ULL + h * 0x40);
         const uint64_t* v = reinterpret_cast<const uint64_t*>(rs.data());
         uint64_t bytes = v[0], t_copy = v[1], t_total = v[2], aux1 = v[4], aux2 = v[5], breach = v[6];
         uint64_t words = bytes / 4 + 1;
         double busy = t_total ? 100.0 * (double)t_copy / (double)t_total : 0.0;
-        if (h == nread) {
+        if (direct) {
+            printf(
+                "  drain : %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  host-wait=%lluM cyc\n",
+                (unsigned long long)(bytes / 1024),
+                (unsigned long long)(t_total / 1000000),
+                busy,
+                (double)t_copy / (double)words,
+                (unsigned long long)(aux1 / 1000000));
+        } else if (h == nread) {
             printf(
                 "  relay : %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  hostfull=%llu idle=%llu "
                 "OVERWRITE=%llu\n",
