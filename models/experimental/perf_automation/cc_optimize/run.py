@@ -266,8 +266,9 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         repo_root / PERF_DIR,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_TIMEOUT", "1200") or "1200"),
+        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
         "termination_check",
+        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
     if rc is None:
         return {"can_stop": False, "halt": False, "reason": ""}
@@ -303,34 +304,16 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
     )
     ms = None
-    timeout_s = int(os.environ.get("PERF_MCP_MEASURE_TIMEOUT", "1200") or "1200")
-    proc = subprocess.Popen(
+    rc, out = _run_device_proc(
         [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
-        cwd=str(repo_root / PERF_DIR),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
+        repo_root / PERF_DIR,
+        env,
+        devices,
+        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        f"full-pipeline ({label})",
+        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
-    try:
-        out, _ = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except Exception:  # noqa: BLE001
-            proc.kill()
-        try:
-            proc.communicate(timeout=30)
-        except Exception:  # noqa: BLE001
-            pass
-        print(
-            f"  [optimize/cc] FULL-model end-to-end ({label}) TIMED OUT after {timeout_s}s (likely a "
-            f"device wedge / leaked mesh) — killed the whole process group + {_reclaim_device(devices)}"
-        )
-        return None
-    except Exception as exc:  # noqa: BLE001
-        print(f"  [optimize/cc] FULL-model end-to-end ({label}) skipped ({exc})")
+    if rc is None:
         return None
     for line in (out or "").splitlines():
         if line.startswith("FULLPIPE_MS="):
@@ -384,8 +367,9 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
         repo_root,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_TIMEOUT", "1200") or "1200"),
+        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
         "coverage probe",
+        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
     if rc is None:
         return None, ""
@@ -1058,10 +1042,10 @@ def _run_device_proc(
     -r); AND reap the group on every exit so no stale holder survives to wedge the next op. Returns (rc,
     combined stdout+stderr); rc is None when it timed out / was killed.
 
-    Recovery-timeout tiers (all env-overridable, one knob each):
-      BUILD   discover (stall-detector on no CPU progress)      -> PERF_MCP_DISCOVER_STALL_SEC (1200s), backstop PERF_MCP_DISCOVER_TIMEOUT (10800s)
-      MEASURE gate / coverage / full-pipeline device runs       -> PERF_MCP_MEASURE_TIMEOUT  (1200s)
-      ROUND   agent round (stall-detector on no-progress)       -> PERF_MCP_ROUND_STALL_SEC  (600s)"""
+    Recovery-timeout tiers (all env-overridable, stall-detector on no-progress + absolute backstop):
+      BUILD   discover                                          -> PERF_MCP_DISCOVER_STALL_SEC (1200s), backstop PERF_MCP_DISCOVER_TIMEOUT (10800s)
+      MEASURE gate / coverage / op-sig / full-pipeline runs     -> PERF_MCP_MEASURE_STALL_SEC  (600s),  backstop PERF_MCP_MEASURE_BACKSTOP (3600s)
+      ROUND   agent round                                       -> PERF_MCP_ROUND_STALL_SEC   (600s)"""
     _piped = bool(capture or stall_s)
     proc = subprocess.Popen(
         list(cmd),
@@ -1074,26 +1058,26 @@ def _run_device_proc(
     )
     rc, out = None, ""
     try:
-        if capture:
-            out, _ = proc.communicate(timeout=timeout_s)
-            out = out or ""
-            rc = proc.returncode
-        elif stall_s:
+        if stall_s:
             import sys as _sys
             import threading as _th
 
+            _buf: list = []
             _act = [time.monotonic()]
 
             def _pump():
                 try:
                     for _ln in proc.stdout:
-                        _sys.stdout.write(_ln)
-                        _sys.stdout.flush()
+                        _buf.append(_ln)
+                        if not capture:
+                            _sys.stdout.write(_ln)
+                            _sys.stdout.flush()
                         _act[0] = time.monotonic()
                 except Exception:  # noqa: BLE001
                     pass
 
-            _th.Thread(target=_pump, daemon=True).start()
+            _pt = _th.Thread(target=_pump, daemon=True)
+            _pt.start()
             pgid = proc.pid
             start = time.monotonic()
             last_progress = start
@@ -1119,6 +1103,12 @@ def _run_device_proc(
                     raise subprocess.TimeoutExpired(cmd, limit)
                 if now - start >= timeout_s:
                     raise subprocess.TimeoutExpired(cmd, timeout_s)
+            rc = proc.returncode
+            _pt.join(timeout=30)
+            out = "".join(_buf)
+        elif capture:
+            out, _ = proc.communicate(timeout=timeout_s)
+            out = out or ""
             rc = proc.returncode
         else:
             proc.wait(timeout=timeout_s)
