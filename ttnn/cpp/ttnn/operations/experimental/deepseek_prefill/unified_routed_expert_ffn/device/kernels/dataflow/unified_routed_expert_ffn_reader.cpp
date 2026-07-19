@@ -30,6 +30,9 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#ifdef RE_MSKIP
+#include "../re_mskip_common.hpp"
+#endif
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
@@ -288,32 +291,28 @@ void kernel_main() {
 #ifdef RE_MSKIP
     // Count-sparsity: GRID_Y and the spread base. per_core_M/chunk_M_tiles are
     // compile-time; GRID_Y = chunk_M_tiles / per_core_M.
-    constexpr uint32_t re_grid_y = chunk_M_tiles / per_core_M;
+    constexpr uint32_t re_grid_y = re_mskip::grid_y(chunk_M_tiles, per_core_M);
 #endif
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
 #ifdef RE_MSKIP
         // SPREAD row map: this core (gy=my_mt) owns rows { chunk*chunk_M + gy +
         // m*GRID_Y : m<per_core_M }; valid rows are the prefix m<re_m_valid.
-        const uint32_t re_spread_base = chunk * chunk_M_tiles + my_mt;
-        uint32_t re_m_valid;
-        {
-            if (re_spread_base < count_tiles) {
-                const uint32_t re_budget = count_tiles - re_spread_base;
-                const uint32_t re_mv = (re_budget + re_grid_y - 1) / re_grid_y;
-                re_m_valid = re_mv < per_core_M ? re_mv : per_core_M;
-            } else {
-                re_m_valid = 0;
-            }
-        }
+        const uint32_t re_spread_base = re_mskip::spread_base(chunk, chunk_M_tiles, my_mt);
+        const uint32_t re_m_valid = re_mskip::m_valid(re_spread_base, count_tiles, re_grid_y, per_core_M);
 #endif
 
         // Pre-zero both DB slots of cb_in0_x for this chunk IFF this core
         // (as in0 sender) has any M-rows past M_bound. The K-loop below
-        // overwrites valid rows but skips writes for invalid rows — those
+        // overwrites valid rows but skips writes for invalid rows -- those
         // rows must already be zero in L1 to avoid feeding garbage (or
         // leftover chunk-N-1 real data) into the matmul. Fires only on
         // tail chunks of non-aligned M.
+        //
+        // Under RE_MSKIP this is dead work: the gate/up matmul bounds its
+        // M-loop by re_m_valid and the x-read/mcast only touch re_m_valid
+        // rows, so the invalid slots are never read. Skip the memset.
+#ifndef RE_MSKIP
         if (is_in0_sender) {
             const uint32_t this_core_last_row = this_core_first_row + per_core_M;
             if (this_core_last_row > M_bound) {
@@ -327,6 +326,7 @@ void kernel_main() {
                 }
             }
         }
+#endif
 
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
         //
@@ -388,7 +388,7 @@ void kernel_main() {
                 // remaining slots are stale but compute never reads them (its
                 // M-subblock loop is bounded by the same re_m_valid).
                 for (uint32_t m = 0; m < re_m_valid; ++m) {
-                    const uint32_t row = re_spread_base + m * re_grid_y;
+                    const uint32_t row = re_mskip::spread_row(re_spread_base, m, re_grid_y);
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                         const uint32_t col = kb * in0_block_w_gu + k;
                         const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;

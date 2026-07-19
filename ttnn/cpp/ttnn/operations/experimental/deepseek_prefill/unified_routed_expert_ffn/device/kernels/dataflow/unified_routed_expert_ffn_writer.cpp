@@ -42,6 +42,9 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#ifdef RE_MSKIP
+#include "../re_mskip_common.hpp"
+#endif
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
@@ -148,7 +151,7 @@ void kernel_main() {
     // Count-sparsity: drain only the re_m_valid output rows compute produced, at
     // their SPREAD token positions. GRID_Y = chunk_M_tiles / per_core_M. Assumes
     // d_out_subblock_h == 1 (rows == M-subblocks), which the program factory sets.
-    constexpr uint32_t re_grid_y = chunk_M_tiles / per_core_M;
+    constexpr uint32_t re_grid_y = re_mskip::grid_y(chunk_M_tiles, per_core_M);
 #endif
 
     // Destination tile-row offset for direct-write mode. In direct-write
@@ -238,7 +241,7 @@ void kernel_main() {
         const uint32_t sb_m_bound = d_in1_num_subblocks_M;
 #ifdef RE_MSKIP
         // SPREAD base for the output row map (row = re_spread_base + sb_m*GRID_Y).
-        const uint32_t re_spread_base = chunk * chunk_M_tiles + my_mt;
+        const uint32_t re_spread_base = re_mskip::spread_base(chunk, chunk_M_tiles, my_mt);
 #endif
         for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
@@ -249,7 +252,7 @@ void kernel_main() {
 #ifdef RE_MSKIP
                         // SPREAD: the sb_m-th valid row maps to token-row
                         // base + sb_m*GRID_Y (d_out_subblock_h==1 so i==0).
-                        const uint32_t row = re_spread_base + sb_m * re_grid_y + i;
+                        const uint32_t row = re_mskip::spread_row(re_spread_base, sb_m, re_grid_y) + i;
 #else
                         const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
 #endif

@@ -35,6 +35,10 @@ constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
 //   RE_SKIP_OUTPUT_WRITE -> writer skips the output DRAM write (keeps cb_out
 //                          drain), isolating the down-matmul write-bandwidth cost.
 // Both produce incorrect output and must never be set in production runs.
+//
+// Deliberately not tt::parse_env<bool>: that uses std::stoi and throws on any
+// non-numeric value, whereas these dev toggles accept any truthy string
+// (RE_MSKIP=1 / on / yes) and treat unset or "0" as off.
 bool env_flag_set(const char* name) {
     const char* v = std::getenv(name);
     return v != nullptr && v[0] != '\0' && v[0] != '0';

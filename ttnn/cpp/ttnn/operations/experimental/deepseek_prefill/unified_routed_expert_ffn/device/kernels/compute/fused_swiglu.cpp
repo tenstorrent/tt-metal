@@ -61,6 +61,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
+#ifdef RE_MSKIP
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/re_mskip_common.hpp"
+#endif
 
 #ifdef SWIGLU_OAI
 // SwiGLU-OAI (gpt-oss / MiniMax-M3) activation: reuse the proven binary SFPU op.
@@ -151,19 +154,20 @@ FORCE_INLINE void matmul_phase(
                 uint32_t dst_index = 0;
                 uint32_t in0_index = in0_index_subblock_offset;
                 uint32_t in1_index = in1_index_subblock_offset;
-                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-#ifndef RE_SKIP_MATMUL
-                    // RE_SKIP_MATMUL (perf-investigation only): drop the MAC so the
-                    // kernel still cycles all CB handshakes / packs but does no matmul
-                    // compute, isolating the DRAM-I/O floor. Output is garbage.
+                // RE_SKIP_MATMUL (perf-investigation only): drop the MAC so the kernel
+                // still cycles all CB handshakes / packs but does no matmul compute,
+                // isolating the DRAM-I/O floor. Output is garbage.
 #ifdef RE_MSKIP
-                    // RE_MSKIP: rows [m_subblocks, per_core_M) of cb_in0_down_full are
-                    // NOT written by the reader's (bounded) activated mcast, so skip the
-                    // MAC for them rather than feed the down matmul stale/uninitialized
-                    // L1. The partials/drain stay FULL (below) for L1_ACC alignment; the
-                    // skipped rows' output is discarded by the writer's row<count guard.
-                    if (sb_m < m_subblocks)
+                // RE_MSKIP: rows [m_subblocks, per_core_M) of cb_in0_down_full are NOT
+                // written by the reader's (bounded) activated mcast, so skip the whole
+                // subblock MAC for them (checked once here, not per K-inner iteration)
+                // rather than feed the down matmul stale/uninitialized L1. The partials
+                // reserve/pack/drain below stay FULL for L1_ACC ring alignment; the
+                // skipped rows' output is discarded by the writer's row<count guard.
+                if (sb_m < m_subblocks)
 #endif
+                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+#ifndef RE_SKIP_MATMUL
                         matmul_block(
                             in0_cb_id,
                             in1_cb_id,
@@ -175,9 +179,9 @@ FORCE_INLINE void matmul_phase(
                             out_subblock_h,
                             in0_block_w);
 #endif
-                    in0_index += 1;
-                    in1_index += in1_per_core_w;
-                }
+                        in0_index += 1;
+                        in1_index += in1_per_core_w;
+                    }
 
                 tile_regs_commit();
                 partials_cb.reserve_back(out_subblock_num_tiles);
@@ -712,7 +716,7 @@ void kernel_main() {
     // (gu_out_subblock_h == 1); GRID_Y == chunk_M_tiles / per_core_M.
     const uint32_t re_my_mt = get_arg_val<uint32_t>(0);
     constexpr uint32_t re_per_core_M = g_in0_num_subblocks;
-    const uint32_t re_grid_y = chunk_M_tiles / re_per_core_M;
+    constexpr uint32_t re_grid_y = re_mskip::grid_y(chunk_M_tiles, re_per_core_M);
 #endif
 
     // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
@@ -735,17 +739,8 @@ void kernel_main() {
         // Count-sparsity: valid rows this core owns in this chunk (SPREAD map).
         // OFF => compile-time full per_core_M (phases ignore the runtime arg).
 #ifdef RE_MSKIP
-        uint32_t re_m_valid;
-        {
-            const uint32_t re_base = chunk * chunk_M_tiles + re_my_mt;
-            if (re_base < count_tiles) {
-                const uint32_t re_budget = count_tiles - re_base;
-                const uint32_t re_mv = (re_budget + re_grid_y - 1) / re_grid_y;
-                re_m_valid = re_mv < re_per_core_M ? re_mv : re_per_core_M;
-            } else {
-                re_m_valid = 0;
-            }
-        }
+        const uint32_t re_base = re_mskip::spread_base(chunk, chunk_M_tiles, re_my_mt);
+        const uint32_t re_m_valid = re_mskip::m_valid(re_base, count_tiles, re_grid_y, re_per_core_M);
         const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
 #else
         constexpr uint32_t re_m_valid = g_in0_num_subblocks;

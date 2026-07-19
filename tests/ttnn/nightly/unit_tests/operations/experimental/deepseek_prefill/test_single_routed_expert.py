@@ -64,6 +64,16 @@ _TOKEN_SWEEP = [
 ]
 
 
+def _perf_toggle_makes_output_garbage():
+    """True when an RE_SKIP_* perf-investigation toggle is set. Those toggles strip
+    compute/output/read work to isolate DRAM I/O, so the numerical result is garbage
+    and PCC/NaN checks must be skipped on that run."""
+    return any(
+        os.environ.get(var) not in (None, "", "0")
+        for var in ("RE_SKIP_MATMUL", "RE_SKIP_OUTPUT_WRITE", "RE_SKIP_WEIGHT_READ")
+    )
+
+
 def run_single_routed_expert(
     mesh_device,
     device_params,
@@ -157,15 +167,7 @@ def run_single_routed_expert(
     ttnn.synchronize_device(mesh_device)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
 
-    # RE_SKIP_MATMUL / RE_SKIP_OUTPUT_WRITE strip compute/output work to isolate
-    # DRAM I/O for perf investigation; the numerical result is intentionally
-    # garbage, so skip the correctness checks below.
-    skip_correctness = (
-        os.environ.get("RE_SKIP_MATMUL") not in (None, "", "0")
-        or os.environ.get("RE_SKIP_OUTPUT_WRITE") not in (None, "", "0")
-        or os.environ.get("RE_SKIP_WEIGHT_READ") not in (None, "", "0")
-    )
-    if skip_correctness:
+    if _perf_toggle_makes_output_garbage():
         logger.warning("RE_SKIP_* set: skipping PCC/NaN checks (perf-only run)")
         return
 
@@ -263,6 +265,7 @@ def test_single_routed_expert_models(mesh_device, device_params, num_tokens: int
 # max, sparsely filled). Tags are fixed-width (aNNNNN) so pytest -k selects each
 # uniquely (no substring collisions). 25k is intentionally omitted.
 _FAKED_SWEEP = [
+    (5120, 0, "a00000"),
     (5120, 1, "a00001"),
     (5120, 2, "a00002"),
     (5120, 4, "a00004"),
@@ -355,15 +358,15 @@ def run_single_routed_expert_faked_token_count(
         tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
     ttnn.synchronize_device(mesh_device)
 
-    # RE_SKIP_* strip compute/output/read work for perf investigation; the result is
-    # intentionally garbage, so skip correctness checks on those runs.
-    skip_correctness = (
-        os.environ.get("RE_SKIP_MATMUL") not in (None, "", "0")
-        or os.environ.get("RE_SKIP_OUTPUT_WRITE") not in (None, "", "0")
-        or os.environ.get("RE_SKIP_WEIGHT_READ") not in (None, "", "0")
-    )
-    if skip_correctness:
+    if _perf_toggle_makes_output_garbage():
         logger.warning("RE_SKIP_* set: skipping PCC/NaN checks (perf-only run)")
+        return
+
+    # Empty-expert case: an expert can be routed zero tokens (count_tiles==0), which
+    # drives the device-side early-out (effective_chunks==0, no chunk loop). There is
+    # no active slice to PCC; reaching here without a hang IS the assertion.
+    if active_tokens == 0:
+        logger.debug("active_tokens==0: empty-expert early-out completed without hang")
         return
 
     tt_output_torch = ttnn.to_torch(
