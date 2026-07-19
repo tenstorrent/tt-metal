@@ -173,13 +173,21 @@ void kernel_main() {
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
+    // packet_header_cb holds 3 distinct pages. The bidirectional completion send below uses
+    // packet_headers[1] and packet_headers[2] as two SEPARATE arc headers (positive/negative), filled and
+    // sent back-to-back with a non-blocking (non-source-draining) fabric send, so they must be distinct L1
+    // buffers or the negative-arc fill clobbers the still-in-flight positive-arc header. get_read_ptr stays
+    // pinned here (cb_push_back only advances the write ptr and nothing pops this scratch CB), so take the
+    // base once and offset each header by sizeof(PACKET_HEADER_TYPE), mirroring writer_all_to_all_dispatch.
+    // (issue #50154 finding #10)
     volatile PACKET_HEADER_TYPE* packet_headers[3];
+    cb_reserve_back(packet_header_cb_id, 3);
+    const uint32_t packet_header_base = get_read_ptr(packet_header_cb_id);
     for (uint8_t i = 0; i < 3; ++i) {
-        cb_reserve_back(packet_header_cb_id,1);
-        const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
-        packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
-        cb_push_back(packet_header_cb_id,1);
+        packet_headers[i] =
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_base + i * sizeof(PACKET_HEADER_TYPE));
     }
+    cb_push_back(packet_header_cb_id, 3);
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
 
     open_direction_connections_barrier(directions, fabric_connections);
@@ -192,7 +200,7 @@ void kernel_main() {
         replicate_axis,
         num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
-    cb_wait_front(local_experts_cb_id,1);
+    cb_wait_front(local_experts_cb_id, 1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
     bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
@@ -200,15 +208,17 @@ void kernel_main() {
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
         cb_wait_front(metadata_cb_id, 1);
-        const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
+        // Consumer role: read the front page via get_read_ptr, not get_write_ptr (which only coincides while
+        // metadata_cb depth==1). Drops the hidden depth==1 dependence. (issue #50154 finding #11)
+        const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
-            const auto & expert_idx = local_experts_ptr[e];
+            const auto& expert_idx = local_experts_ptr[e];
             const auto [found, k] = find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
 
             if (found) {
-                cb_wait_front(data_cb_id,1);
+                cb_wait_front(data_cb_id, 1);
                 const uint32_t src_data_l1_ptr = get_read_ptr(data_cb_id);
 
                 // figure out output page index, noc address.
@@ -225,7 +235,7 @@ void kernel_main() {
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
                 if (dest_device_idx == linearized_mesh_coord) {
-                    noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
+                    noc_async_write(src_data_l1_ptr, output_noc_addr, data_size_bytes);
                     needs_barrier = true;
                     noc_async_writes_flushed();
                 } else {
@@ -262,7 +272,7 @@ void kernel_main() {
                             alignment);
                     }
                 }
-                cb_pop_front(data_cb_id,1);
+                cb_pop_front(data_cb_id, 1);
 
                 if constexpr (locally_reduced) {
                     break;
