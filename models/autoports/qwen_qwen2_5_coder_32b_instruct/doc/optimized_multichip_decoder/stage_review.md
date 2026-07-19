@@ -8,73 +8,91 @@ Verdict: clean-pass
 
 ## Other Concerns
 
-- None. The rejected topology, dtype, geometry, and buffer families are supported by measured artifacts rather than prose-only deferrals.
+- None. The current default, the completion-audit candidates, and the candidate ledger now agree with their retained artifacts. The expected stage-owned checkpoint after this review is workflow bookkeeping, not missing stage evidence.
 
 ## Hard-Check Gaps
 
-- None unresolved. The stage-owned local commit and SHA logging remain the prescribed post-review follow-up; the unrelated dirty `.agents/skills/forge-functional-decoder-from-ir/SKILL.md` is outside this stage and must remain excluded.
+- Full active-Ethernet Watcher instrumentation remains unavailable: its 27,920-byte instrumented Ring program exceeds the 25,600-byte runtime kernel-config buffer before model execution. The current-source worker/dispatch Watcher retry passed on all four devices with no fault-pattern matches; separate CCL trace, topology, two-layer, and 7x100 replay evidence controls the excluded Ethernet instrumentation scope.
+- No full 64-layer model was run because this stage is decoder-layer scoped. The local Hugging Face config has 64 homogeneous dense Qwen2 layers with identical shapes; real layer 32 covers the only layer kind, and a direct two-layer test covers the inter-layer contract. Full-model assembly remains a later stage.
 
 ## Anomaly Ledger
 
-- Observed anomaly: the first fused-AG, BFP8-CCL, global-BFP8-output, and persistent-off results used the earlier attention-HiFi2/SDPA-8x8 family.
-  Evidence: the original JSON `mesh_plan` fields under `results/autofix_*.json`, `results/sweep_activation_bfp8.json`, and `results/sweep_persistent_off.json`.
-  Affected path: material multi-device coherent-family rejection evidence.
-  Control or comparison: final default `attention_bfp8_lofi_mlp_bfp4_lofi`, SDPA 8x4, BF16 outputs/CCL, persistent buffers.
+- Observed anomaly: the first completion-audit prefill-L1 screen contained a compile-like timing outlier.
+  Evidence: `results/sweep_prefill_l1_inputs.json`.
+  Affected path: generic profiler advice to place prefill matmul input 0 in L1.
+  Control or comparison: a seven-prefill-trial final-policy rerun in `results/sweep_prefill_l1_inputs_full.json`.
+  Likely subsystem: lazy compilation or cache warmup in the first short screen.
+  Investigation performed: verified PCC, exact mesh plan, individual timing samples, medians, and the default-off source switch.
+  Resolution: controlled and rejected. The full candidate passed PCC but measured 3.579746 ms versus the current DRAM-interleaved default at 3.566172 ms.
+
+- Observed anomaly: the ledger originally called `sweep_geometry_gate64.json` a 64-core gate/up measurement, but its mesh plan records the unchanged 8x4/32-core gate program.
+  Evidence: the artifact's `decode_grids.gate_up`, its physical/program shapes, and `_core_grid_for_tiles`; logical K/N are 160/448 tiles with greatest common divisor 32.
+  Affected path: profiler-driven gate/up geometry coverage and evidence integrity.
+  Control or comparison: the selected 32-core program and a material padded-K retry.
+  Likely subsystem: target-core request resolution in the candidate harness.
+  Investigation performed: independently compared every geometry label to its JSON mesh plan, required the old row to be relabeled as a diagnostic/no-op, and inspected the adapted source and full artifact.
+  Resolution: fixed. `sweep_geometry_gate64_padded_k_full.json` uses physical K=6144, an actual 8x8/64-core gate/up projection, and a legal 8x7/56-core gated-elementwise layout. It passes PCC and bitwise 7x100 replay but loses at 0.792797 ms versus 0.758047 ms.
+
+- Observed anomaly: adding the default-off true-64 candidate after an earlier final run made that final JSON no longer literally producible by the current source because the mesh plan gained `gated_elementwise`.
+  Evidence: chronology and the missing field in the superseded live artifact.
+  Affected path: the claimed current-source final default and Watcher provenance.
+  Control or comparison: exact-default reruns after both completion-audit switches were present.
+  Likely subsystem: artifact/source chronology, not selected runtime behavior.
+  Investigation performed: required a fresh 7-prefill/7-decode/100-replay default run and a fresh scoped Watcher run, then recomputed hashes and medians.
+  Resolution: fixed. Authoritative `final_default.json` SHA256 is `7f862083c1b3b38c0d232a54712183f9c1a2c4e1e1dc0ac15c832d97a0bb40e6`; it records both selected grids at 8x4/32 cores, DRAM prefill input, PCC 0.992527216/0.993698060, 3.566172 ms prefill, 0.758047 ms traced decode, and bitwise stability.
+
+- Observed anomaly: the refreshed raw Watcher log contained trailing spaces, initially failing `git diff --check`.
+  Evidence: raw worker-core state lines in `results/watcher_clean.log`.
+  Affected path: artifact hygiene and its recorded digest.
+  Control or comparison: whitespace-normalized log plus recomputed JSON metadata.
+  Likely subsystem: Watcher text formatting.
+  Investigation performed: reran whitespace checking and independently matched the normalized file digest to `watcher_clean.json`.
+  Resolution: fixed. Normalized log SHA256 is `4f3e73777839c48f2c8a675a35eeada7d27bdc809eeb893bf43e35b4fd3c0f16`; `matches` is empty and repository-wide `git diff --check` passes.
+
+- Observed anomaly: early fused-AG, BFP8-CCL, global-BFP8-output, and persistent-off results used an older precision/SDPA family.
+  Evidence: original candidate JSON mesh-plan fields and the completion validation reports.
+  Affected path: coherent-family rejection evidence.
+  Control or comparison: final-policy, SDPA-8x4, BF16-output/CCL reruns.
   Likely subsystem: candidate harness configuration/provenance.
-  Investigation performed: required final-policy crosses and checked their JSON mesh plans, PCC, replay counts, and samples.
-  Resolution: fixed. Final-policy 7x100 results are fused AG 0.930669 ms, BFP8 CCL 0.787956 ms, persistent-off 0.771160 ms, and MLP-only BFP8 output 0.759567 ms; attention-only BFP8 output is 0.771944 ms. All lose to the current-source default at 0.758020 ms.
+  Investigation performed: checked final-policy 7x100 crosses for fused AG, BFP8 CCL, persistent-off, and MLP-only BFP8 output, plus the attention-only BFP8 probe.
+  Resolution: fixed. The corrected candidates are valid but slower than the current 0.758047 ms default.
 
-- Observed anomaly: optimized reruns initially overwrote six tracked artifacts belonging to the completed `multichip_decoder` stage, and two validation reports retained stale relative result paths.
-  Evidence: live worktree comparison against `HEAD` and the paths in `validation/{fused_ag_autofix,bfp8_ccl_autofix}.md`.
-  Affected path: stage isolation and stale-artifact provenance.
-  Control or comparison: completed multichip commit `ba8a83b14fd` and the new `doc/optimized_multichip_decoder/results/` copies.
-  Likely subsystem: result-retention path in the shared test harness.
-  Investigation performed: compared prior-stage JSON metrics to `HEAD`, checked all candidate-ledger paths, and checked validation links on the current filesystem.
-  Resolution: fixed. The prior-stage result directory is byte-clean against `HEAD`; `_write_result` and Watcher retention now target `doc/optimized_multichip_decoder/results`; validation paths exist.
+- Observed anomaly: the shard-advisor runtime initially disagreed with the live vendored TTNN interface, and its per-op recommendations were not a coherent end-to-end win.
+  Evidence: `shard_advise/report.json`, `shard_advise/result/final_ir.mlir`, the advisor comparison artifacts, and the repair notes in `work_log.md`.
+  Affected path: compiler-guided sharding coverage.
+  Control or comparison: current selected DRAM-sharded QKV/O/gate/down family.
+  Likely subsystem: advisor/runtime version boundary and local-versus-coherent optimization.
+  Investigation performed: verified the retained no-spill report, matched the vendored interface, and compared all four projection timings together.
+  Resolution: controlled. The current coherent family is about 291.6 us versus about 381.2 us for the advisor combination; selected sharding remains measured rather than deferred.
 
-- Observed anomaly: capacity artifacts labeled attention as HiFi2 after the final policy moved to LoFi.
-  Evidence: `results/capacity_seq12224.json`, `results/capacity_seq12225.json`, and the capacity payload in `tests/test_multichip_decoder.py`.
-  Affected path: context-contract evidence metadata only; fidelity does not alter allocation size.
-  Control or comparison: final source policy and `doc/context_contract.json`.
-  Likely subsystem: stale artifact metadata.
-  Investigation performed: compared capacity payload text, final mesh-plan precision, and allocation fields.
-  Resolution: fixed. Source and both artifacts now say attention BFP8/LoFi; the measured 12224 pass and adjacent 12225 allocation failure remain unchanged.
+- Observed anomaly: the Hugging Face model advertises 32,768 tokens, but the complete TP4 resident-state contract cannot fit that context on the target devices.
+  Evidence: `doc/context_contract.json`, `results/capacity_seq12224.json`, and `results/capacity_seq12225.json`.
+  Affected path: supported context length.
+  Control or comparison: exact byte accounting at the largest feasible length and the adjacent padded allocation.
+  Likely subsystem: device DRAM capacity, principally KV-cache residency.
+  Investigation performed: checked physical/logical sequence padding, model-resident allocations, per-device/per-bank bytes, the 12,224 pass, and the 12,225 expected OOM.
+  Resolution: controlled capability limit. The stage explicitly supports 12,224 tokens and does not claim the infeasible Hugging Face maximum.
 
-- Observed anomaly: fused two-link QKV stalled, packed fused gate/up exceeded CB capacity, and dynamic fused outputs were not trace-stable.
-  Evidence: `validation/fused_ag_autofix.md`, retained triage files, focused probe, and `results/autofix_fused_ag_full_probe.json`.
-  Affected path: fused all-gather plus matmul.
-  Control or comparison: standalone two-link AG plus packed projection.
-  Likely subsystem: fused CCL/matmul link, CB, and output-lifetime contracts.
-  Investigation performed: AutoFix adapted link count, rank/layout, padding/grid, projection decomposition, and four-shard persistent buffers; focused trace and full real-weight tests passed.
-  Resolution: controlled. The trace-safe one-link fused gate plus direct-up family is correct but 0.930669 ms at final policy, so the faster separate async-AG family remains selected.
-
-- Observed anomaly: full Ethernet Watcher instrumentation cannot compile the active-Ethernet Ring program because 27,920 bytes exceeds the 25,600-byte kernel-config buffer.
-  Evidence: `results/watcher_clean.json`, `results/watcher_clean.log`, and the exact commands in `work_log.md`.
-  Affected path: Watcher instrumentation, before model execution.
-  Control or comparison: separate final real-layer Watcher run with worker/dispatch monitoring and Ethernet instrumentation disabled only.
-  Likely subsystem: Watcher active-Ethernet instrumentation capacity.
-  Investigation performed: full instrumentation was attempted first; the scoped retry passed all four devices with no fault-pattern matches. Separate 7x100 trace stress, focused exact AG/RS traces, and direct two-layer shared-buffer tests cover the CCL behavior.
-  Resolution: controlled tooling limitation; no model/runtime failure is visible.
-
-- Observed anomaly: Tracy's merged four-device report attributes a large cross-device/signpost gap to a reshape row.
-  Evidence: `tracy/layer32/decode_perf_report.txt` reports 595 us device work but an 8,169 us merged op-to-op total.
-  Affected path: profiler presentation, not the traced latency harness.
-  Control or comparison: current-source final 7x100 benchmark at 0.758020 ms.
-  Likely subsystem: multi-device profiler row merge.
-  Investigation performed: reconciled device work, per-op rows, roofline estimate, and warmed end-to-end trace separately.
-  Resolution: controlled. Device rows are used for topology/dtype advice; the warmed trace benchmark is the end-to-end authority.
+- Observed anomaly: Tracy's merged four-device presentation assigns a large cross-device/signpost interval to a reshape row.
+  Evidence: `tracy/layer32/decode_perf_report.txt` versus its device-operation total and the end-to-end trace artifact.
+  Affected path: profiler presentation.
+  Control or comparison: per-device rows, compact report hashes, and the warmed 7x100 trace harness.
+  Likely subsystem: multi-device profiler row merging.
+  Investigation performed: reconciled operation dtypes/fidelities, device timings, provenance hashes, advice, and end-to-end latency separately.
+  Resolution: controlled. Profiler rows drive topology/dtype diagnosis; `final_default.json` is the latency authority.
 
 ## Scope Inspected
 
-- Goal/skill paths: original optimized-multichip-decoder contract; `.agents/skills/stage-review/SKILL.md`; `.agents/skills/optimize/SKILL.md`; `.agents/skills/tt-device-usage/SKILL.md`.
-- Artifact paths: `doc/optimized_multichip_decoder/{README.md,work_log.md,results,validation,shard_advise,tracy}`; `doc/context_contract.json`; prior `doc/multichip_decoder` evidence; independent baseline `/tmp/qwen2_5_coder_32b_optimized_baseline.pt`.
-- Code paths: `tt/multichip_decoder.py`; `tests/test_multichip_decoder.py`; focused advisor, fused-AG, and BFP8-CCL probes; live git diff excluding the unrelated skill file.
-- Commands run: read-only `git status/diff/show`, JSON/CSV parsing and cross-check scripts, SHA256 verification, artifact-path checks, profiler-row inspection, `git diff --check`, and Python compilation. In accordance with `$stage-review`, the reviewer did not open devices or rerun hardware.
-
-The review independently verified 37 candidate-ledger rows against their JSON artifacts, parsed all 45 result JSON files, matched the compact Tracy hashes to `provenance.json`, matched the independent baseline SHA, and confirmed that current profiler rows show BFP8/LoFi attention, BFP4/LoFi MLP, BF16 outputs/CCL, and BFP8 KV cache. The final current-source default is TP4 on `MeshShape(1,4)`, PCC 0.992527 prefill / 0.993698 decode, 3.541916 ms warmed prefill, and 0.758020 ms warmed traced decode with seven trials, 100 replays per trial, and bitwise stability.
+- Goal and skill contracts: the original optimized-multichip-decoder task; `$stage-review`; `$optimize`; `$tt-device-usage`; and the referenced graph-rewrite, shard-advisor, and AutoFix evidence requirements.
+- Source and tests: `tt/multichip_decoder.py`, `tests/test_multichip_decoder.py`, the current live diff, source defaults, runtime fallback audit, candidate-only padding/L1 switches, syntax compilation, Black check, and test collection.
+- Correctness: real layer-32 PCC, independent baseline digest, synthetic non-aligned sequence, paged versus contiguous cache, page-table/position trace refresh, two-layer handoff, K/V-cache PCC, and bitwise replay evidence.
+- Performance and topology: all 41 candidate-ledger rows reconciled exactly to JSON at six decimals; 52 stage JSON files parsed; final-policy precision/activation/CCL/KV families; selected versus compiler-provenance topology; fused AG/RS; geometry and K-block families; persistent buffers; prefill configs; and profiler advice closure.
+- Profiler/advisor provenance: compact Tracy CSV/text hashes, raw provenance metadata, selected BFP8/LoFi attention, BFP4/LoFi MLP, BF16 activation/CCL, BFP8 KV policy, shard-advisor report/final IR, and coherent timing comparison.
+- Capacity, health, and repository hygiene: exact 12,224/12,225 capacity boundary, current-source Watcher hash and empty fault matches, controlled Ethernet instrumentation exception, artifact-path existence, SHA256 checks, JSON/CSV reconciliation, `git diff --check`, and stage-local git scope. The unrelated dirty `.agents/skills/forge-functional-decoder-from-ir/SKILL.md` was excluded.
+- Reviewer commands were read-only except for this authorized report replacement. The reviewer did not open or use TT devices. Independently run checks included 11-test collection, the host-free/fallback contract test (1 passed), Python compilation, Black check, and repository-wide whitespace validation.
 
 ## Residual Risk
 
-- The implementation intentionally targets four Blackhole p300c devices, TP4, and the compiler-derived batch-32 decoder contract; full-model, LM-head, generation, and vLLM behavior were not started or reviewed.
-- Active-Ethernet Watcher firmware is not instrumented because of the documented compile-time size limit; worker/dispatch Watcher coverage plus separate CCL, stack, paged, non-aligned, and repeated-trace evidence is the available control.
-- Raw Tracy databases were omitted after reduction, as required for safe artifact retention; their hashes and all compact CSV/text report hashes remain in `tracy/layer32/provenance.json`.
+- The authoritative final prefill sample set contains one high first sample (6.803737 ms); the required seven-trial median is 3.566172 ms and the other six samples are tightly grouped enough that the median is not determined by the outlier. Prefill improvement over the starting default is therefore modest (0.33%), while traced decode improvement is 4.28%.
+- Active-Ethernet firmware itself is not Watcher-instrumented because of the documented compile-time capacity limit. CCL correctness is instead covered by focused exact AG/RS traces, topology comparison, direct two-layer reuse, current-source 7x100 replay, and worker/dispatch Watcher coverage.
+- This verdict covers the live TP4 Blackhole decoder-stage tree and retained evidence. Full-model embeddings, 64-layer execution, LM head, generation, serving, and vLLM integration remain intentionally outside this stage.

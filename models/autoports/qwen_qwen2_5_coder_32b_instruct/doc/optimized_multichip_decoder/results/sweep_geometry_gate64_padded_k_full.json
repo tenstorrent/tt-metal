@@ -2,15 +2,15 @@
   "batch": 32,
   "decode_position": 17,
   "decode_replays_per_trial": 100,
-  "decode_trace_median_ms": 0.7580470619723201,
+  "decode_trace_median_ms": 0.7927973195910454,
   "decode_trace_samples_ms": [
-    0.7581693027168512,
-    0.757827153429389,
-    0.7580645987764001,
-    0.7579312426969409,
-    0.7580470619723201,
-    0.757889267988503,
-    0.7580844406038523
+    0.792752243578434,
+    0.7927248859778047,
+    0.7928112475201488,
+    0.7927973195910454,
+    0.7929297816008329,
+    0.7928596483543515,
+    0.7927372073754668
   ],
   "mesh_plan": {
     "baseline": "OptimizedDecoder/advisor_packed_bfp8_hifi2_1d",
@@ -45,14 +45,14 @@
         "y": 2
       },
       "gate_up": {
-        "cores": 32,
+        "cores": 64,
         "x": 8,
-        "y": 4
+        "y": 8
       },
       "gated_elementwise": {
-        "cores": 32,
+        "cores": 56,
         "x": 8,
-        "y": 4
+        "y": 7
       },
       "local_residual": {
         "cores": 20,
@@ -186,12 +186,12 @@
         "activation_memory": "L1 WIDTH_SHARDED",
         "activation_shard_shape": [
           32,
-          160
+          96
         ],
         "grid": {
-          "cores": 32,
+          "cores": 64,
           "x": 8,
-          "y": 4
+          "y": 8
         },
         "input_logical_shape": [
           1,
@@ -209,23 +209,23 @@
         "output_memory": "L1 WIDTH_SHARDED",
         "output_shard_shape": [
           32,
-          448
+          224
         ],
         "padding": {
-          "k_channels": 0,
+          "k_channels": 1024,
           "m_rows": 0,
           "n_channels": 512
         },
         "physical_matmul_shape": {
-          "k": 5120,
+          "k": 6144,
           "m": 32,
           "n": 14336
         },
         "program_config": {
-          "in0_block_w": 5,
+          "in0_block_w": 3,
           "output_subblock": "not exposed by DRAM-sharded program config",
           "per_core_M": 1,
-          "per_core_N": 14,
+          "per_core_N": 7,
           "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
         },
         "weight_logical_shape": [
@@ -234,7 +234,7 @@
         ],
         "weight_memory": "DRAM WIDTH_SHARDED",
         "weight_shard_shape": [
-          5120,
+          6144,
           1792
         ]
       },
@@ -458,19 +458,19 @@
     "tp_degree": 4
   },
   "pcc": {
-    "decode": 0.9936980604886086,
+    "decode": 0.9937596429665452,
     "prefill": 0.9925272157628601
   },
   "pcc_threshold_for_this_candidate_run": 0.99,
-  "prefill_median_ms": 3.5661719739437103,
+  "prefill_median_ms": 3.525262698531151,
   "prefill_samples_ms": [
-    6.80373702198267,
-    3.5743173211812973,
-    3.472672775387764,
-    3.520675003528595,
-    3.5661719739437103,
-    3.5621938295662403,
-    3.7117190659046173
+    4.378690849989653,
+    3.602399956434965,
+    3.4433379769325256,
+    3.6101648584008217,
+    3.525262698531151,
+    3.398782107979059,
+    3.4307134337723255
   ],
   "sequence_length": 17,
   "trace_bitwise_deterministic": true

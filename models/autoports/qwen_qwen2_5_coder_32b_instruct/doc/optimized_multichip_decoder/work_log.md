@@ -106,8 +106,8 @@ Short candidate probes used the real layer-32 activation/reference, one prefill 
 - Gate BFP4/down BFP8: 0.799069 ms; rejected.
 - Gate BFP8/down BFP4 first hit CB pressure; adapted to 64 cores and prefill block limit 5, then passed at PCC 0.996685/0.997276 and 0.812011 ms; rejected.
 - BF16 KV control: 0.785161 ms; BFP8 retained.
-- BFP8 matmul outputs were isolated under the final policy/topology after the old global probe: attention-only was 0.771944 ms; MLP-only was 0.759567 ms at 7x100 and PCC 0.992527/0.993653. BF16 at 0.758020 ms was retained.
-- Persistent decode collectives disabled under the final policy/8x4 topology: 0.771160 ms at 7x100 versus 0.758020 ms enabled; persistent shared buffers retained.
+- BFP8 matmul outputs were isolated under the final policy/topology after the old global probe: attention-only was 0.771944 ms; MLP-only was 0.759567 ms at 7x100 and PCC 0.992527/0.993653. BF16 at 0.758047 ms was retained.
+- Persistent decode collectives disabled under the final policy/8x4 topology: 0.771160 ms at 7x100 versus 0.758047 ms enabled; persistent shared buffers retained.
 
 The final-policy matrix used the same real-weight performance command as the
 final default, changing only one environment variable and result name:
@@ -138,7 +138,8 @@ within noise of the default.
 - SDPA 8x4: 0.758606 ms, retained. Group width 8: 0.772048 ms, rejected.
 - QKV 32 cores: 0.767764 ms; rejected.
 - O 20/40 cores: 0.761706/0.775129 ms; rejected.
-- Gate/up 64 cores: 0.759756 ms; rejected against selected 32 cores.
+- The first gate/up target-64 request measured 0.759756 ms but silently resolved to the unchanged 32-core program: logical K/N are 160/448 tiles and their greatest common divisor is 32. `sweep_geometry_gate64.json` is therefore a diagnostic/no-op screen, not 64-core rejection evidence.
+- The material retry padded packed gate/up K from 5120 to 6144 with zeros. This produced a real `32x6144x14336` 8x8/64-core matmul (`in0_block_w=3`, `per_core_N=7`) and a separate largest-legal 8x7/56-core grid for the 7168-wide SiLU-times-up result. Its first attempt reached the 64-core matmul but failed because a 64-core 7168-wide elementwise shard is 112 channels, not tile aligned; the 56-core adaptation passed. Full 7x100 evidence is PCC 0.992527216/0.993759643, prefill 3.525263 ms, decode 0.792797 ms, and bitwise trace stability. It is 4.58% slower than the selected 32-core family and was rejected. Artifact SHA256: `7fd7a765a4e22ea023fa4aa9748762136bb961fff155bb2f6778aa0cf1fc54b0`.
 - Down 32 cores: 0.763292 ms; rejected.
 - QKV block 5/2: 0.763179/0.792033 ms; rejected.
 - O block 1: 0.771079 ms; rejected.
@@ -150,7 +151,7 @@ within noise of the default.
 - Final 10x10 grid, block-limit 10 control: 3.571924 ms median over three trials.
 - 8x10/block-10: 3.680131 ms; rejected.
 - 10x10/block-20 exceeded CB capacity. Adapted retries at 8x10/block-20 and 8x10/block-16 also exceeded exact CB capacity. The smaller block-10 default was retained.
-- Final 7-trial default: 3.541916 ms.
+- Final current-source 7-trial default: 3.566172 ms.
 
 Prefill remains valid for non-aligned logical inputs. Sequence 31 passes, and all internal tile/head/cache padding, masking, and output slicing are decoder-owned.
 
@@ -189,7 +190,7 @@ timeout 1800 python_env/bin/python -m pytest \
   models/autoports/qwen_qwen2_5_coder_32b_instruct/tests/test_multichip_decoder.py::test_real_multichip_warmed_prefill_and_traced_decode_perf -q -s
 ```
 
-Final result: PCC 0.992527216/0.993698060, prefill 3.541916 ms, traced decode 0.758020 ms, bitwise stable. `results/final_default.json` SHA256 is `339f66ab6ab07a111d3d70a5c55a7723ec462e63292a95516287ad976c6e4af0`.
+Final result: PCC 0.992527216/0.993698060, prefill 3.566172 ms, traced decode 0.758047 ms, bitwise stable. `results/final_default.json` SHA256 is `7f862083c1b3b38c0d232a54712183f9c1a2c4e1e1dc0ac15c832d97a0bb40e6`.
 
 Other final gates:
 
@@ -217,6 +218,16 @@ Synthetic/non-aligned/paged/stacked/trace gate passed. Runtime fallback audit pa
 Full Watcher instrumentation was attempted before the scoped retry. It fails at mesh open because the instrumented active-Ethernet Ring program is 27,920 bytes while the runtime kernel-config buffer is 25,600 bytes. ETH-only monitoring was disabled for the final gate; model worker/dispatch kernels remained monitored.
 
 Capacity evidence was preserved at the unchanged maximum 12224, with adjacent 12225 physical allocation failure. `doc/context_contract.json` records final residual/precision/grids and points to `results/capacity_seq12224.json` and `capacity_seq12225.json`.
+
+## Completion-audit follow-up
+
+The current-tree completion audit mechanically parsed all result JSON, matched every candidate-ledger number to its artifact, verified compact profiler and Watcher hashes, reran the source fallback contract, collected all multichip tests, and checked that both local commits touch only this autoport. A bounded `tt-smi -ls --local` saw all four p300c devices and a serialized `MeshShape(1,4)` open/close printed `MESH_SMOKE_OK`.
+
+The audit found one weak item: the final prefill report's generic advice to place matmul input 0 in L1 had not been directly measured. A candidate-only `QWEN2_5_CODER_32B_MULTICHIP_PREFILL_L1_INPUTS=1` switch now converts each QKV/O/gate-up/down working input to L1 interleaved while keeping the same final policy, 10x10 2D configs, TP4 residual/CCL topology, and DRAM outputs. The first three-trial screen passed but contained a compile outlier, so it was not used as rejection evidence. The cached seven-prefill-trial rerun passed PCC 0.992527216/0.993698060 and measured 3.579746 ms prefill plus 0.758915 ms traced decode; it loses to the current default and remains disabled. Artifact: `results/sweep_prefill_l1_inputs_full.json`, SHA256 `03e8b25393ef64a7fe31287fa9e3a6b6619a4a9192383eea645cbd8f669168a0`.
+
+Independent review then caught that the earlier target-64 gate entry had silently resolved to 32 cores. The completion audit added candidate-only logical-K zero padding and a distinct legal elementwise grid, retried after the first post-matmul tile-alignment error, and produced the true 64-core full result described in the geometry section. Both candidate switches default off; neither changes the public input shape or the selected runtime path.
+
+After both completion-audit candidate switches and the true-64 layout adaptation were present, the exact final default was rerun twice from the current source with the seven-prefill/seven-decode/100-replay command above. The last run is the authoritative artifact: PCC 0.992527216/0.993698060, 3.566172 ms prefill, 0.758047 ms traced decode, and bitwise stability. Both switches default off; the final mesh plan records `prefill_program.input_memory = DRAM INTERLEAVED`, gate/up 8x4/32 cores, and gated elementwise 8x4/32 cores. The scoped Watcher gate was then rerun from this same source and passed all four devices with no fault-pattern matches; its whitespace-normalized log SHA256 is `4f3e73777839c48f2c8a675a35eeada7d27bdc809eeb893bf43e35b4fd3c0f16`.
 
 ## Independent review and commits
 

@@ -24,7 +24,7 @@ geometry,SDPA_group_width_8,0.992527216,0.993698060,4.539093,0.772048,reject,swe
 geometry,QKV_32c,0.992527216,0.993620847,4.484299,0.767764,reject,sweep_geometry_qkv32.json
 geometry,O_20c,0.992527216,0.993699524,4.256854,0.761706,reject,sweep_geometry_o20.json
 geometry,O_40c,0.992527216,0.993719229,4.286951,0.775129,reject,sweep_geometry_o40.json
-geometry,gate_up_64c,0.992527216,0.993698060,4.329782,0.759756,reject,sweep_geometry_gate64.json
+geometry,gate_up_target64_resolved32_noop,0.992527216,0.993698060,4.329782,0.759756,diagnostic_not_64c,sweep_geometry_gate64.json
 geometry,down_32c,0.992527216,0.993692323,4.468868,0.763292,reject,sweep_geometry_down32.json
 block,QKV_in0_block5,0.992527216,0.993620847,4.189324,0.763179,reject,sweep_block_qkv5.json
 block,QKV_in0_block2,0.992527216,0.993659458,4.418851,0.792033,reject,sweep_block_qkv2.json
@@ -34,5 +34,9 @@ block,down_in0_block7,0.992527216,0.993692323,4.101405,0.762449,reject,sweep_blo
 block,down_in0_block2,0.992527216,0.993685492,4.521698,0.787857,reject,sweep_block_down2.json
 prefill,grid10x10_block10,0.992527216,0.993698060,3.571924,0.759632,retain,sweep_prefill_control10x10.json
 prefill,grid8x10_block10,0.992527216,0.993698060,3.680131,0.760140,reject,sweep_prefill_grid8x10.json
+prefill,L1_interleaved_matmul_inputs_first_screen,0.992527216,0.993698060,3.611386,0.758609,retry_noise,sweep_prefill_l1_inputs.json
+prefill,L1_interleaved_matmul_inputs_7prefill,0.992527216,0.993698060,3.579746,0.758915,reject,sweep_prefill_l1_inputs_full.json
+geometry,gate_up_true64_padded_k_screen,0.992527216,0.993759643,4.344126,0.793048,promote_full,sweep_geometry_gate64_padded_k_screen.json
+geometry,gate_up_true64_padded_k_7x100,0.992527216,0.993759643,3.525263,0.792797,reject,sweep_geometry_gate64_padded_k_full.json
 buffer,persistent_CCL_off_final_policy_7x100,0.992527216,0.993698060,3.496240,0.771160,reject,sweep_persistent_off_final_full.json
-final,final_default_7x100,0.992527216,0.993698060,3.541916,0.758020,selected,final_default.json
+final,final_default_7x100,0.992527216,0.993698060,3.566172,0.758047,selected,final_default.json

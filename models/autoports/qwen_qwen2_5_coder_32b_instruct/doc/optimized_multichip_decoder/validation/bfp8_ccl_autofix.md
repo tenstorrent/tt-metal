@@ -69,5 +69,5 @@ crossed with the final attention/MLP LoFi policy, 8x4 SDPA, and the complete
 seven-trial/100-replay harness. `../results/sweep_ccl_bfp8_final_full.json`
 (SHA-256 `c723c0d80ebaa37c7fd1130f697a64a1c3c9779d65febe3fc6dac0eb09540b0f`)
 records PCC 0.992493754/0.993622454, prefill 3.708916 ms, and traced decode
-0.787956 ms. The final compatible BF16-CCL control is 0.758020 ms, so BFP8 is
-3.94% slower. It is a functional material rejection; BF16 remains selected.
+0.787956 ms. The current final compatible BF16-CCL control is 0.758047 ms, so
+BFP8 is 3.92% slower. It is a functional material rejection; BF16 remains selected.

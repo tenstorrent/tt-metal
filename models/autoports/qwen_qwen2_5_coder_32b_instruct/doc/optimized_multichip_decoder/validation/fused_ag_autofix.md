@@ -91,8 +91,8 @@ family was rerun under the final attention/MLP LoFi policy, 8x4 SDPA, and the
 full seven-trial/100-replay harness. `../results/sweep_fused_ag_final_full.json`
 (SHA-256 `105c2a95bf47a62348236ba1bff5a8a9b217c8c43a470b21505eaf993f8f0502`)
 records PCC 0.992527216/0.993663699, warmed prefill 3.657417 ms, and traced
-decode 0.930669 ms. The final compatible control is 0.758020 ms, so this
-repaired fused family is 22.8% slower. It is therefore a functional,
+decode 0.930669 ms. The current final compatible control is 0.758047 ms, so this
+repaired fused family is 22.7% slower. It is therefore a functional,
 trace-safe material rejection rather than the selected default.
 
 The two persistent BF16 AG buffers cost exactly 655,360 bytes (0.625 MiB) per

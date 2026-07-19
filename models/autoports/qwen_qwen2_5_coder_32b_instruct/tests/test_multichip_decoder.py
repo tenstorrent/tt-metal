@@ -457,6 +457,7 @@ def test_real_multichip_warmed_prefill_and_traced_decode_perf(mesh_device):
             if "QWEN2_5_CODER_32B_MULTICHIP_GATE_CORES" in os.environ
             else 32
         ),
+        decode_gate_k_padding=int(os.getenv("QWEN2_5_CODER_32B_MULTICHIP_GATE_K_PADDING", "0")),
         decode_qkv_in0_block_w_limit=_optional_env_int("QWEN2_5_CODER_32B_MULTICHIP_QKV_BLOCK_W"),
         decode_o_in0_block_w_limit=_optional_env_int("QWEN2_5_CODER_32B_MULTICHIP_O_BLOCK_W"),
         decode_gate_in0_block_w_limit=_optional_env_int("QWEN2_5_CODER_32B_MULTICHIP_GATE_BLOCK_W"),
@@ -467,6 +468,7 @@ def test_real_multichip_warmed_prefill_and_traced_decode_perf(mesh_device):
         prefill_grid_x=int(os.getenv("QWEN2_5_CODER_32B_MULTICHIP_PREFILL_GRID_X", "10")),
         prefill_grid_y=int(os.getenv("QWEN2_5_CODER_32B_MULTICHIP_PREFILL_GRID_Y", "10")),
         prefill_in0_block_w=int(os.getenv("QWEN2_5_CODER_32B_MULTICHIP_PREFILL_IN0_BLOCK_W", "10")),
+        use_prefill_l1_inputs=os.getenv("QWEN2_5_CODER_32B_MULTICHIP_PREFILL_L1_INPUTS", "0") == "1",
         ccl_payload_dtype=ccl_dtype,
         decode_matmul_output_dtype=decode_matmul_output_dtype,
         decode_attention_output_dtype=decode_attention_output_dtype,

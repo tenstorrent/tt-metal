@@ -473,6 +473,7 @@ class MultichipDecoder(OptimizedDecoder):
         decode_qkv_target_cores: int | None = None,
         decode_o_target_cores: int | None = 8,
         decode_gate_target_cores: int | None = 32,
+        decode_gate_k_padding: int = 0,
         decode_qkv_in0_block_w_limit: int | None = None,
         decode_o_in0_block_w_limit: int | None = None,
         decode_gate_in0_block_w_limit: int | None = None,
@@ -483,6 +484,7 @@ class MultichipDecoder(OptimizedDecoder):
         prefill_grid_x: int = 10,
         prefill_grid_y: int = 10,
         prefill_in0_block_w: int = 10,
+        use_prefill_l1_inputs: bool = False,
         page_block_size: int = PAGE_BLOCK_SIZE,
         ccl_payload_dtype=ttnn.bfloat16,
         decode_matmul_output_dtype=ttnn.bfloat16,
@@ -530,6 +532,12 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError("fused decode all-gather matmul requires distributed decode norm")
         if use_fused_decode_all_gather_matmul and not use_packed_decode_gate_up:
             raise ValueError("fused decode all-gather matmul requires packed decode gate/up")
+        if decode_gate_k_padding < 0 or decode_gate_k_padding % 32:
+            raise ValueError("decode_gate_k_padding must be a non-negative multiple of 32")
+        if decode_gate_k_padding and not use_packed_decode_gate_up:
+            raise ValueError("decode gate K padding requires packed decode gate/up")
+        if decode_gate_k_padding and use_fused_decode_all_gather_matmul:
+            raise ValueError("decode gate K padding is not supported by fused decode all-gather matmul")
         device_grid = mesh_device.compute_with_storage_grid_size()
         if prefill_grid_x < 1 or prefill_grid_x > int(device_grid.x):
             raise ValueError(f"prefill_grid_x must be in [1, {int(device_grid.x)}], got {prefill_grid_x}")
@@ -646,6 +654,8 @@ class MultichipDecoder(OptimizedDecoder):
         self.decode_gate_target_cores = (
             decode_target_cores if decode_gate_target_cores is None else decode_gate_target_cores
         )
+        self.decode_gate_k_padding = decode_gate_k_padding
+        self.decode_gate_input_size = hidden_size + decode_gate_k_padding
         self.decode_qkv_in0_block_w_limit = decode_qkv_in0_block_w_limit
         self.decode_o_in0_block_w_limit = decode_o_in0_block_w_limit
         self.decode_gate_in0_block_w_limit = decode_gate_in0_block_w_limit
@@ -656,6 +666,7 @@ class MultichipDecoder(OptimizedDecoder):
         self.prefill_grid_x = prefill_grid_x
         self.prefill_grid_y = prefill_grid_y
         self.prefill_in0_block_w = prefill_in0_block_w
+        self.use_prefill_l1_inputs = use_prefill_l1_inputs
         self.topology = ttnn.Topology.Ring
         self.num_links = get_num_links(mesh_device)
         self.tt_ccl = get_tt_ccl(mesh_device)
@@ -825,6 +836,7 @@ class MultichipDecoder(OptimizedDecoder):
         qkv_host = _rank_packed_qkv(q, k, v, padded_local_width=self.padded_local_qkv_size)
         qkv_bias_host = _rank_packed_qkv_bias(q_bias, k_bias, v_bias, padded_local_width=self.padded_local_qkv_size)
         gate_up_host = _rank_packed_gate_up(gate, up, padded_local_width=self.padded_local_intermediate_size)
+        decode_gate_up_host = _zero_pad_first(gate_up_host, self.decode_gate_input_size)
         gate_host = torch.cat(
             [_zero_pad_last(chunk, self.padded_local_intermediate_size) for chunk in gate.T.chunk(TP_DEGREE, dim=-1)],
             dim=-1,
@@ -886,12 +898,12 @@ class MultichipDecoder(OptimizedDecoder):
                 )
             else:
                 self.gate_up_weight = _tp_tensor(
-                    gate_up_host,
+                    decode_gate_up_host,
                     shard_dim=-1,
                     mesh_device=mesh_device,
                     dtype=self.precision_policy["mlp_gate_up"],
                     memory_config=_dram_sharded_memory_config(
-                        mesh_device, hidden_size, 2 * self.padded_local_intermediate_size
+                        mesh_device, self.decode_gate_input_size, 2 * self.padded_local_intermediate_size
                     ),
                 )
         else:
@@ -976,6 +988,7 @@ class MultichipDecoder(OptimizedDecoder):
     def _build_multichip_configs(self) -> None:
         padded_rows = 32 * math.ceil(self.batch / 32)
         hidden_tiles = self.hidden_size // 32
+        gate_input_tiles = self.decode_gate_input_size // 32
         local_hidden_tiles = self.local_hidden_size // 32
         local_attention_tiles = self.local_attention_width // 32
         local_qkv_tiles = self.padded_local_qkv_size // 32
@@ -1007,8 +1020,14 @@ class MultichipDecoder(OptimizedDecoder):
         )
         gate_output_tiles = local_mlp_tiles * (2 if self.use_packed_decode_gate_up else 1)
         self.mlp_gate_grid = _core_grid_for_tiles(
-            hidden_tiles,
+            gate_input_tiles,
             gate_output_tiles,
+            target_cores=self.decode_gate_target_cores,
+            device=self.mesh_device,
+        )
+        self.mlp_gated_grid = _core_grid_for_tiles(
+            local_mlp_tiles,
+            local_mlp_tiles,
             target_cores=self.decode_gate_target_cores,
             device=self.mesh_device,
         )
@@ -1034,10 +1053,13 @@ class MultichipDecoder(OptimizedDecoder):
             padded_rows, self.hidden_size, self.o_grid, self.mesh_device
         )
         self.mlp_gate_input_memory_config = _width_sharded_memory_config(
-            padded_rows, self.hidden_size, self.mlp_gate_grid
+            padded_rows, self.decode_gate_input_size, self.mlp_gate_grid
         )
         self.mlp_gate_memory_config = _matmul_output_memory_config(
             padded_rows, self.padded_local_intermediate_size, self.mlp_gate_grid, self.mesh_device
+        )
+        self.mlp_gated_memory_config = _matmul_output_memory_config(
+            padded_rows, self.padded_local_intermediate_size, self.mlp_gated_grid, self.mesh_device
         )
         self.mlp_packed_gate_up_memory_config = _matmul_output_memory_config(
             padded_rows, 2 * self.padded_local_intermediate_size, self.mlp_gate_grid, self.mesh_device
@@ -1073,7 +1095,7 @@ class MultichipDecoder(OptimizedDecoder):
         )
         self.gate_decode_program_config = _dram_matmul_program_config(
             padded_rows,
-            self.hidden_size,
+            self.decode_gate_input_size,
             self.padded_local_intermediate_size * (2 if self.use_packed_decode_gate_up else 1),
             self.mlp_gate_grid,
             in0_block_w_limit=self.decode_gate_in0_block_w_limit,
@@ -1321,6 +1343,7 @@ class MultichipDecoder(OptimizedDecoder):
             "prefill_program": {
                 "grid": [self.prefill_grid_x, self.prefill_grid_y],
                 "in0_block_w_limit": self.prefill_in0_block_w,
+                "input_memory": "L1 INTERLEAVED candidate" if self.use_prefill_l1_inputs else "DRAM INTERLEAVED",
                 "roles": {
                     "qkv": prefill_role(160, 64),
                     "o": prefill_role(40, 160),
@@ -1340,15 +1363,16 @@ class MultichipDecoder(OptimizedDecoder):
             "decode_grids": {
                 "local_residual": grid(self.local_residual_grid),
                 "full_residual_norm": grid(self.full_residual_grid),
-                "qkv": grid(self.fused_ag_compute_grid)
-                if self.use_fused_decode_all_gather_matmul
-                else grid(self.qkv_grid),
+                "qkv": (
+                    grid(self.fused_ag_compute_grid) if self.use_fused_decode_all_gather_matmul else grid(self.qkv_grid)
+                ),
                 "o": grid(self.o_grid),
                 "gate_up": (
                     grid(self.fused_ag_compute_grid)
                     if self.use_fused_decode_all_gather_matmul
                     else grid(self.mlp_gate_grid)
                 ),
+                "gated_elementwise": grid(self.mlp_gated_grid),
                 "down": grid(self.mlp_down_grid),
                 **(
                     {"fused_ag_collective": grid(self.fused_ag_collective_grid)}
@@ -1403,11 +1427,12 @@ class MultichipDecoder(OptimizedDecoder):
                     fused_gate_up_roles()
                     if self.use_fused_decode_all_gather_matmul
                     else matmul_role(
-                        k=self.hidden_size,
+                        k=self.decode_gate_input_size,
                         n=self.padded_local_intermediate_size * (2 if self.use_packed_decode_gate_up else 1),
                         role_grid=self.mlp_gate_grid,
                         in0_limit=self.decode_gate_in0_block_w_limit,
                         fidelity=self.precision_policy["mlp_fidelity"],
+                        logical_k=self.hidden_size,
                         logical_n=self.local_intermediate_size * (2 if self.use_packed_decode_gate_up else 1),
                     )
                 ),
@@ -1914,12 +1939,18 @@ class MultichipDecoder(OptimizedDecoder):
             self.prepare_decode_position_buffers(self._eager_position_buffers, current_pos)
         return self._eager_position_buffers
 
+    def _prefill_working_input(self, tensor):
+        if not self.use_prefill_l1_inputs or tensor.memory_config().buffer_type == ttnn.BufferType.L1:
+            return tensor, False
+        return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG), True
+
     def _prefill_linear(self, tensor, weight, *, k: int, n: int, compute_kernel_config):
         rows = int(tensor.shape[-2])
         max_chunk_rows = 640
         if rows <= max_chunk_rows:
-            return ttnn.matmul(
-                tensor,
+            working, owns_working = self._prefill_working_input(tensor)
+            output = ttnn.matmul(
+                working,
                 weight,
                 dtype=ttnn.bfloat16,
                 program_config=_prefill_matmul_program_config(
@@ -1934,12 +1965,16 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if owns_working:
+                ttnn.deallocate(working, True)
+            return output
         chunks = []
         for start in range(0, rows, max_chunk_rows):
             end = min(start + max_chunk_rows, rows)
             chunk = ttnn.slice(tensor, [0, 0, start, 0], [1, 1, end, k])
+            working, owns_working = self._prefill_working_input(chunk)
             projected = ttnn.matmul(
-                chunk,
+                working,
                 weight,
                 dtype=ttnn.bfloat16,
                 program_config=_prefill_matmul_program_config(
@@ -1954,6 +1989,8 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if owns_working:
+                ttnn.deallocate(working, True)
             ttnn.deallocate(chunk, True)
             chunks.append(projected)
         output = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1977,8 +2014,9 @@ class MultichipDecoder(OptimizedDecoder):
                     [1, 1, end, k],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+            working, owns_working = self._prefill_working_input(chunk)
             partial = ttnn.matmul(
-                chunk,
+                working,
                 weight,
                 dtype=ttnn.bfloat16,
                 program_config=_prefill_matmul_program_config(
@@ -1993,6 +2031,8 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if owns_working:
+                ttnn.deallocate(working, True)
             if chunk is not tensor:
                 ttnn.deallocate(chunk, True)
             reduced = self._reduce_scatter_hidden(partial, memory_config=ttnn.DRAM_MEMORY_CONFIG, decode=False)
@@ -2263,6 +2303,13 @@ class MultichipDecoder(OptimizedDecoder):
                 gate = ttnn.sharded_to_interleaved(gate, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
                 up = ttnn.sharded_to_interleaved(up, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
             else:
+                if self.decode_gate_k_padding:
+                    normed = ttnn.pad(
+                        normed,
+                        padding=((0, 0), (0, 0), (0, 0), (0, self.decode_gate_k_padding)),
+                        value=0.0,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
                 normed = ttnn.to_memory_config(normed, self.mlp_gate_input_memory_config)
                 gate_up = ttnn.matmul(
                     normed,
@@ -2297,7 +2344,9 @@ class MultichipDecoder(OptimizedDecoder):
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
-            memory_config=self.mlp_gate_memory_config,
+            memory_config=(
+                self.mlp_gated_memory_config if self.use_packed_decode_gate_up else self.mlp_gate_memory_config
+            ),
         )
         if self.use_fused_decode_reduce_scatter:
             down = self._fused_decode_row_parallel(

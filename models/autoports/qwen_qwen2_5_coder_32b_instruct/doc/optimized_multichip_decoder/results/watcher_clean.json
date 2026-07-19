@@ -20,7 +20,7 @@
     "runtime_limit_bytes": 25600
   },
   "log_path": "models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/optimized_multichip_decoder/results/watcher_clean.log",
-  "log_sha256": "22a439cea159f8ec877a760aa40d6c2d792a368a306a7fa6a24e295877e3fe39",
+  "log_sha256": "4f3e73777839c48f2c8a675a35eeada7d27bdc809eeb893bf43e35b4fd3c0f16",
   "matches": [],
   "test": "real layer-32 prefill/decode versus optimized TTNN baseline"
 }

@@ -1,16 +1,12 @@
 {
   "batch": 32,
   "decode_position": 17,
-  "decode_replays_per_trial": 100,
-  "decode_trace_median_ms": 0.7580470619723201,
+  "decode_replays_per_trial": 20,
+  "decode_trace_median_ms": 0.7589145563542843,
   "decode_trace_samples_ms": [
-    0.7581693027168512,
-    0.757827153429389,
-    0.7580645987764001,
-    0.7579312426969409,
-    0.7580470619723201,
-    0.757889267988503,
-    0.7580844406038523
+    0.7591194473206997,
+    0.7589145563542843,
+    0.7586866151541471
   ],
   "mesh_plan": {
     "baseline": "OptimizedDecoder/advisor_packed_bfp8_hifi2_1d",
@@ -45,11 +41,6 @@
         "y": 2
       },
       "gate_up": {
-        "cores": 32,
-        "x": 8,
-        "y": 4
-      },
-      "gated_elementwise": {
         "cores": 32,
         "x": 8,
         "y": 4
@@ -408,7 +399,7 @@
         10
       ],
       "in0_block_w_limit": 10,
-      "input_memory": "DRAM INTERLEAVED",
+      "input_memory": "L1 INTERLEAVED candidate",
       "roles": {
         "down": {
           "in0_block_w": 8,
@@ -462,15 +453,15 @@
     "prefill": 0.9925272157628601
   },
   "pcc_threshold_for_this_candidate_run": 0.99,
-  "prefill_median_ms": 3.5661719739437103,
+  "prefill_median_ms": 3.579746000468731,
   "prefill_samples_ms": [
-    6.80373702198267,
-    3.5743173211812973,
-    3.472672775387764,
-    3.520675003528595,
-    3.5661719739437103,
-    3.5621938295662403,
-    3.7117190659046173
+    5.720566958189011,
+    3.5992423072457314,
+    3.5132691264152527,
+    3.535771742463112,
+    3.5359920002520084,
+    3.579746000468731,
+    3.5805469378829002
   ],
   "sequence_length": 17,
   "trace_bitwise_deterministic": true

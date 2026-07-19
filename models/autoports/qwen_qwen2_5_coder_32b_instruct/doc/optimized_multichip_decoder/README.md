@@ -10,11 +10,13 @@ The selected path is the real TP4 decoder on four Blackhole p300c devices in a `
 | --- | ---: | ---: | ---: |
 | Prefill PCC | 0.993392 | 0.992527 | accepted, above 0.99 |
 | Decode PCC | 0.994006 | 0.993698 | accepted, above 0.99 |
-| Warmed prefill median | 3.577945 ms | 3.541916 ms | 1.01% faster |
-| Warmed traced decode median | 0.791976 ms | 0.758020 ms | 4.29% faster |
+| Warmed prefill median | 3.577945 ms | 3.566172 ms | 0.33% faster |
+| Warmed traced decode median | 0.791976 ms | 0.758047 ms | 4.28% faster |
 | Trace measurement | 7 trials | 7 trials | 100 replays/trial; bitwise stable |
 
 The final numbers are from `results/final_default.json`, the final source defaults, and the final seven-trial/100-replay run. The independent TTNN reference artifact is `/tmp/qwen2_5_coder_32b_optimized_baseline.pt`; all real weights are revision `381fc969f78efac66bc87ff7ddeadb7e73c218a7` of `Qwen/Qwen2.5-Coder-32B-Instruct`.
+
+All 64 transformer layers use the same dense Qwen decoder architecture and parameter shapes; there are no layer exceptions or alternate layer kinds. Real layer 32 is therefore the single representative meaningful layer kind, while the direct two-layer gate covers the decoder-to-decoder boundary contract.
 
 The final default is:
 
@@ -48,14 +50,14 @@ This audit was performed before tuning. The retained Tracy reports and final sou
 | Repeated same-input matmuls | Gate and up separately read the same 5120-wide normalized activation | Packed into one physical `32x5120x14336` BFP4/LoFi matmul and split on device. Full retained-family result was 0.782612 ms. A 16-core first-CB failure was adapted to 32 cores. |
 | Input norm/QKV movement | Hidden AG, norm placement, and QKV reshard are material | Distributed-statistics norm was correct but 0.795022 ms and 4.651343 ms prefill. Fused AG+QKV was adapted across rank-4 weights, 2-link/1-link CCL, 8x4/8x1 grids, persistent gathered buffers, and packed/unpacked projections; its final-policy 7x100 coherent family was 0.930669 ms and rejected. |
 | Attention head padding | Local 10Q/2KV decode requires a legal physical SDPA layout | Model owns padding: two logical five-Q GQA groups are internally expanded to 16 each, concatenated to 32, then sliced back. SDPA 8x4 was retained; group width 8 was 0.772048 ms and rejected. Public lengths/heads stay logical. |
-| O/down row-parallel output | Matmul output conversion plus reduce-scatter is material | DRAM-sharded matmuls retained. Fused matmul+RS compiled and was correct but 0.885514 ms. O/down core and block families were measured; no variant beat the selected coherent default. |
+| O/down row-parallel output | Matmul output conversion plus reduce-scatter is material | DRAM-sharded matmuls retained. Fused matmul+RS compiled and was correct but 0.885514 ms. The alternate AG+column-sharded-O decomposition was also adapted through full-K input shards and all 24 shared K-rank weight permutations; the best PCC was 0.249461 because the Ring primitive exposes rank-relative K order that one shared mesh weight cannot express. Evidence remains in the completed input stage at `../multichip_decoder/results/fused_all_gather_o_probe.json`. O/down core and block families were measured; no valid variant beat the selected default. |
 | Collective placement | Two AG and two RS are required by the full-K/full-N projections | Persistent BF16 async collectives retained. Replicated boundary with two all-reduces was 0.842635 ms traced; selected fractured AG/RS family was 0.758101 ms at PCC 1.0. |
 | Collective dtype | BF16 payload might be reducible | BFP8 exact AG/RS focused traces passed after adapting persistent-buffer placement. Crossed with the final policy and 8x4 SDPA at 7x100, it gave PCC 0.992494/0.993622, prefill 3.708916 ms, decode 0.787956 ms. Rejected. |
-| Persistent buffers | Allocation/rebinding may dominate trace | Disabling persistent CCL buffers under the final policy/8x4 family was correct but 0.771160 ms versus 0.758020 ms final. Retained shared ping-pong buffers. |
+| Persistent buffers | Allocation/rebinding may dominate trace | Disabling persistent CCL buffers under the final policy/8x4 family was correct but 0.771160 ms versus 0.758047 ms final. Retained shared ping-pong buffers. |
 | Precision/fidelity | Attention and MLP precision dominate DRAM traffic | BFP8/LoFi attention plus BFP4/LoFi MLP was the fastest policy above the 0.99 PCC floor. All-BFP4 variants reached 0.758270-0.780703 ms but prefill PCC fell to 0.989796-0.989919, so they were rejected. |
-| Activation dtype | BFP8 matmul outputs could reduce local movement | The old global probe was followed by final-policy group isolation: attention-only was 0.771944 ms; MLP-only was 0.759567 ms at 7x100 and PCC 0.992527/0.993653. Both lost to 0.758020 ms BF16. |
+| Activation dtype | BFP8 matmul outputs could reduce local movement | The old global probe was followed by final-policy group isolation: attention-only was 0.771944 ms; MLP-only was 0.759567 ms at 7x100 and PCC 0.992527/0.993653. Both lost to 0.758047 ms BF16. |
 | KV dtype | Cache bandwidth may favor BFP8 | BF16 KV control was 0.785161 ms; BFP8 remains selected. Both contiguous and paged BFP8 caches pass. |
-| Prefill projections/CCL | Packed gate/up, four collectives, and cache fills dominate | 10x10/block-limit-10 retained at 3.571924 ms control; 8x10 was 3.680131 ms. Block 20 failed CB capacity, then adapted 8x10 block-20 and block-16 retries also failed exact CB capacity. Final seven-trial default is 3.541916 ms. |
+| Prefill projections/CCL | Packed gate/up, four collectives, and cache fills dominate | 10x10/block-limit-10 retained at 3.571924 ms control; 8x10 was 3.680131 ms and changed QKV's reported subblock from 1x1 to 1x4. Block 20 failed CB capacity, then adapted 8x10 block-20 and block-16 retries also failed exact CB capacity. Moving all four 2D-matmul inputs to L1 interleaved passed PCC but was 3.579746 ms over seven prefill trials versus the current 3.566172 ms DRAM-interleaved default. |
 
 The complete machine-readable ledger is `results/candidate_summary.csv`; every row links to its JSON artifact. Material first errors were adapted or sent through AutoFix rather than treated as final rejections.
 
@@ -70,7 +72,7 @@ Lower-movement changes were evaluated as families, without immediately restoring
 | Fused CCL+matmul | Adapted one-link persistent fused gate AG plus direct-up consumer, final-policy 7x100 0.930669 ms | reject |
 | Packed versus separate projections | Packed gate+up 0.782612 ms versus split starting path 0.791976 ms | retain packed |
 | Activation/CCL dtype | Final-policy attention-only BFP8 0.771944 ms, MLP-only BFP8 0.759567 ms, and BFP8 CCL 0.787956 ms | retain BF16 |
-| Persistent buffers | Final-policy disabled 0.771160 ms versus enabled 0.758020 ms | retain persistent |
+| Persistent buffers | Final-policy disabled 0.771160 ms versus enabled 0.758047 ms | retain persistent |
 | DRAM-sharded versus advisor L1 projections | Current family 291.6 us versus advisor family 381.2 us across QKV/O/gate/down | retain DRAM-sharded |
 
 The shard-advisor capture produced 16 ops, 15 choices, and zero L1 spills. Isolated projection measurements were QKV 46.588/43.342 us, O 32.812/35.087 us, gate 139.139/148.627 us, and down 73.047/154.139 us for current/advisor respectively. The advisor's QKV win did not offset losses in the coherent projection family.
@@ -91,7 +93,7 @@ Decode's merged four-device report contains 72 device ops and 595 us of device w
 | Packed gate+up | `32x5120x14336`, BF16 x BFP4, LoFi | 134 us | 32-core program; dominant device op |
 | Down | `32x7168x5120`, BF16 x BFP4, LoFi | 67 us | 16-core DRAM-sharded |
 
-The report's actionable matmul advice was exercised through gate 16/32/64-core, down 16/32-core, QKV/O core sweeps, six K-block variants, advisor layouts, packed/split projections, and fused AG/RS paths. Its fidelity advice was exercised by the precision sweep and accepted only above the PCC gate. Its head-padding/layout gaps were exercised with SDPA 8x4, 8x8, and group-width variants.
+The report's actionable matmul advice was exercised through gate 16/32-core, an adapted true 64-core gate retry, down 16/32-core, QKV/O core sweeps, six K-block variants, advisor layouts, packed/split projections, and fused AG/RS paths. The original target-64 gate request silently resolved to 32 cores because the logical K/N tile counts are 160/448 with greatest common divisor 32; that artifact is retained only as a diagnostic. The real retry zero-padded K from 5120 to 6144 so its packed projection ran on 8x8/64 cores, then used the largest legal 8x7/56-core grid for the 7168-wide gated elementwise output. It passed PCC at full 7x100 but decoded in 0.792797 ms, 4.58% slower than the 0.758047 ms default, and was rejected. Its prefill QKV subblock advice was exercised by the 8x10 candidate, which used a 1x4 subblock and lost at 3.680131 ms. Its prefill input-placement advice was exercised by a final-policy L1-interleaved candidate, which passed PCC but lost at 3.579746 ms over seven prefill trials versus 3.566172 ms for DRAM interleaved. Its fidelity advice was exercised by the precision sweep and accepted only above the PCC gate. Its head-padding/layout gaps were exercised with SDPA 8x4, 8x8, and group-width variants.
 
 Prefill's merged report contains 222 device ops and 1992 us of device work. Key device costs are packed gate+up 356 us, down 185 us, QKV 72 us, O 57 us, hidden AG 83/81 us, and RS 87/90 us. The measured prefill grid/block and fused-collective families cover those costs.
 
@@ -113,7 +115,7 @@ The per-rank decode projection/cache read floor is approximately 80.35 MB. At an
 ## Artifacts
 
 - `results/before_default.json`, `results/final_default.json`: reproducible before/final PCC and latency.
-- `results/candidate_summary.csv` and `results/sweep_*.json`: candidate evidence and rejection provenance.
+- `results/candidate_summary.csv` and `results/sweep_*.json`: candidate evidence and rejection provenance, including the final-policy prefill L1-input attempt.
 - `results/topology_family_benchmark.json`: fractured versus replicated topology.
 - `results/synthetic_correctness.json`, `results/paged_trace_refresh.json`: non-aligned, stacked, paged, and trace checks.
 - `results/capacity_seq12224.json`, `results/capacity_seq12225.json`: hard context boundary.
