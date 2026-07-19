@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
     uint32_t prog_id = 0xA5A5A5A5u, hring_words = 8192, prod_delay = 0;
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
+    bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -118,6 +119,8 @@ int main(int argc, char** argv) {
         } else if (a == "--ndrain") {
             ndrain = std::stoull(next());
             direct = true;
+        } else if (a == "--rrconsumer") {
+            rr_consumer = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -287,84 +290,161 @@ int main(int argc, char** argv) {
     for (auto& cap : caps) {
         cap.reserve((size_t)NL * (nmarkers + 8) * 2 / ndh + 64);
     }
-    uint64_t total_words = 0;
+    std::atomic<uint64_t> total_words{0};
     std::atomic<uint64_t> overflow{0};
-    uint64_t h_polls = 0, h_us_hsent = 0, h_us_ring = 0, h_us_hacked = 0;  // consumer op timing (us)
-    std::thread consumer([&]() {
-        auto us = [](auto a, auto b) {
-            return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
-        };
-        std::vector<uint32_t> acked(ndh, 0);  // words consumed per ring
-        int empty = 0;                        // consecutive sweeps where NO ring had data
+    // per-ring op timing (summed for the report); disjoint indices -> lock-free across threads
+    std::vector<uint64_t> h_polls_v(ndh, 0), h_us_hsent_v(ndh, 0), h_us_ring_v(ndh, 0), h_us_hacked_v(ndh, 0);
+    auto us = [](auto a, auto b) {
+        return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+    };
+    // Drain ONE ring h to quiescence. Ring h touches only disjoint sysmem (data_off+h*hring_bytes) and
+    // disjoint LIM (HSENT/HACKED_H(h)) + writes only caps[h]/counters[h] -> N of these run concurrently,
+    // one host thread each, with no shared mutable state (UMD sysmem reads are memcpy from the hugepage).
+    auto drain_ring = [&](uint64_t h) {
+        uint64_t hoff = data_off + h * hring_bytes;
+        uint32_t acked = 0;
+        int empty = 0;
         auto start = std::chrono::steady_clock::now();
         auto next_log = start + std::chrono::seconds(1);
         for (;;) {
             auto now = std::chrono::steady_clock::now();
-            if (now > next_log) {
+            if (h == 0 && now > next_log) {
                 printf(
-                    "  [consumer] total=%llu done=%d\n", (unsigned long long)total_words, (int)producers_done.load());
+                    "  [consumer] total=%llu done=%d\n",
+                    (unsigned long long)total_words.load(),
+                    (int)producers_done.load());
                 next_log = now + std::chrono::seconds(1);
             }
             if (now - start > std::chrono::seconds(30)) {
-                printf("  [consumer] WALL TIMEOUT at %llu words\n", (unsigned long long)total_words);
+                printf("  [consumer %llu] WALL TIMEOUT\n", (unsigned long long)h);
                 break;
             }
-            bool any = false;  // did any ring have data this sweep?
-            for (uint64_t h = 0; h < ndh; h++) {
-                uint64_t hoff = data_off + h * hring_bytes;  // this ring's sysmem offset
-                uint32_t hsent;
-                auto ta = std::chrono::steady_clock::now();
-                drv.read_block(reinterpret_cast<uint8_t*>(&hsent), 4, HSENT_ADDR_H(h));
-                h_us_hsent += us(ta, std::chrono::steady_clock::now());
-                if (hsent == acked[h]) {
-                    continue;
-                }
-                any = true;
-                uint32_t avail = hsent - acked[h];
-                if (avail > hring_words) {
-                    overflow.fetch_add(1);
-                    acked[h] = hsent;
-                    drv.write_block(reinterpret_cast<uint8_t*>(&acked[h]), 4, HACKED_ADDR_H(h));
-                    continue;
-                }
-                uint32_t drain = avail & ~1u;  // 2-word aligned
-                // read ONLY the new [acked, acked+drain) region straight into this ring's capture buffer
-                // (1-2 contiguous reads across the wrap) -- no whole-ring read, no per-marker decode.
-                auto& cap = caps[h];
-                size_t base = cap.size();
-                cap.resize(base + drain);
-                uint32_t st = acked[h] % hring_words;
-                auto tr = std::chrono::steady_clock::now();
-                if (st + drain <= hring_words) {
-                    cluster.read_sysmem(
-                        reinterpret_cast<uint8_t*>(&cap[base]), drain * 4, hoff + (uint64_t)st * 4, device_id, 0);
-                } else {
-                    uint32_t first = hring_words - st;
-                    cluster.read_sysmem(
-                        reinterpret_cast<uint8_t*>(&cap[base]), first * 4, hoff + (uint64_t)st * 4, device_id, 0);
-                    cluster.read_sysmem(
-                        reinterpret_cast<uint8_t*>(&cap[base + first]), (drain - first) * 4, hoff, device_id, 0);
-                }
-                h_us_ring += us(tr, std::chrono::steady_clock::now());
-                h_polls++;
-                acked[h] += drain;
-                total_words += drain;
-                auto th = std::chrono::steady_clock::now();
-                drv.write_block(reinterpret_cast<uint8_t*>(&acked[h]), 4, HACKED_ADDR_H(h));
-                h_us_hacked += us(th, std::chrono::steady_clock::now());
-            }
-            if (!any) {
-                // exit only after producers are done AND all rings quiet for ~500 ms (a drainer can lull
-                // mid-run; exiting early truncates lane tails).
+            uint32_t hsent;
+            auto ta = std::chrono::steady_clock::now();
+            drv.read_block(reinterpret_cast<uint8_t*>(&hsent), 4, HSENT_ADDR_H(h));
+            h_us_hsent_v[h] += us(ta, std::chrono::steady_clock::now());
+            if (hsent == acked) {
                 if (producers_done.load() && ++empty >= 2500) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
-            } else {
-                empty = 0;
+                continue;
             }
+            empty = 0;
+            uint32_t avail = hsent - acked;
+            if (avail > hring_words) {
+                overflow.fetch_add(1);
+                acked = hsent;
+                drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
+                continue;
+            }
+            uint32_t drain = avail & ~1u;  // 2-word aligned
+            // read ONLY the new [acked, acked+drain) region straight into this ring's capture buffer
+            // (1-2 contiguous reads across the wrap) -- no whole-ring read, no per-marker decode.
+            auto& cap = caps[h];
+            size_t base = cap.size();
+            cap.resize(base + drain);
+            uint32_t st = acked % hring_words;
+            auto tr = std::chrono::steady_clock::now();
+            if (st + drain <= hring_words) {
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(&cap[base]), drain * 4, hoff + (uint64_t)st * 4, device_id, 0);
+            } else {
+                uint32_t first = hring_words - st;
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(&cap[base]), first * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(&cap[base + first]), (drain - first) * 4, hoff, device_id, 0);
+            }
+            h_us_ring_v[h] += us(tr, std::chrono::steady_clock::now());
+            h_polls_v[h]++;
+            acked += drain;
+            total_words.fetch_add(drain);
+            auto th = std::chrono::steady_clock::now();
+            drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
+            h_us_hacked_v[h] += us(th, std::chrono::steady_clock::now());
         }
-    });
+    };
+    // One host thread PER ring (default) -> ring 1 is never ack-starved by ring 0's servicing. --rrconsumer
+    // falls back to a single thread round-robining all rings (the original behavior) for A/B comparison.
+    std::vector<std::thread> consumers;
+    if (rr_consumer) {
+        // one thread interleaves all rings in a single sweep loop (original behavior)
+        consumers.emplace_back([&]() {
+            std::vector<uint32_t> acked(ndh, 0);
+            int empty = 0;
+            auto start = std::chrono::steady_clock::now();
+            auto next_log = start + std::chrono::seconds(1);
+            for (;;) {
+                auto now = std::chrono::steady_clock::now();
+                if (now > next_log) {
+                    printf(
+                        "  [consumer] total=%llu done=%d\n",
+                        (unsigned long long)total_words.load(),
+                        (int)producers_done.load());
+                    next_log = now + std::chrono::seconds(1);
+                }
+                if (now - start > std::chrono::seconds(30)) {
+                    printf("  [consumer] WALL TIMEOUT\n");
+                    break;
+                }
+                bool any = false;
+                for (uint64_t h = 0; h < ndh; h++) {
+                    uint64_t hoff = data_off + h * hring_bytes;
+                    uint32_t hsent;
+                    auto ta = std::chrono::steady_clock::now();
+                    drv.read_block(reinterpret_cast<uint8_t*>(&hsent), 4, HSENT_ADDR_H(h));
+                    h_us_hsent_v[h] += us(ta, std::chrono::steady_clock::now());
+                    if (hsent == acked[h]) {
+                        continue;
+                    }
+                    any = true;
+                    uint32_t avail = hsent - acked[h];
+                    if (avail > hring_words) {
+                        overflow.fetch_add(1);
+                        acked[h] = hsent;
+                        drv.write_block(reinterpret_cast<uint8_t*>(&acked[h]), 4, HACKED_ADDR_H(h));
+                        continue;
+                    }
+                    uint32_t drain = avail & ~1u;
+                    auto& cap = caps[h];
+                    size_t base = cap.size();
+                    cap.resize(base + drain);
+                    uint32_t st = acked[h] % hring_words;
+                    auto tr = std::chrono::steady_clock::now();
+                    if (st + drain <= hring_words) {
+                        cluster.read_sysmem(
+                            reinterpret_cast<uint8_t*>(&cap[base]), drain * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                    } else {
+                        uint32_t first = hring_words - st;
+                        cluster.read_sysmem(
+                            reinterpret_cast<uint8_t*>(&cap[base]), first * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                        cluster.read_sysmem(
+                            reinterpret_cast<uint8_t*>(&cap[base + first]), (drain - first) * 4, hoff, device_id, 0);
+                    }
+                    h_us_ring_v[h] += us(tr, std::chrono::steady_clock::now());
+                    h_polls_v[h]++;
+                    acked[h] += drain;
+                    total_words.fetch_add(drain);
+                    auto th = std::chrono::steady_clock::now();
+                    drv.write_block(reinterpret_cast<uint8_t*>(&acked[h]), 4, HACKED_ADDR_H(h));
+                    h_us_hacked_v[h] += us(th, std::chrono::steady_clock::now());
+                }
+                if (!any) {
+                    if (producers_done.load() && ++empty >= 2500) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                } else {
+                    empty = 0;
+                }
+            }
+        });
+    } else {
+        for (uint64_t h = 0; h < ndh; h++) {
+            consumers.emplace_back(drain_ring, h);
+        }
+    }
 
     // ---- dispatch producers (unchanged from the lossless test) ----
     auto mk_defs = [&](int proc_idx, bool with_proc) {
@@ -411,7 +491,17 @@ int main(int argc, char** argv) {
 
     drv.lim_wr_u64(P_STOP, 1);
     producers_done.store(true);
-    consumer.join();
+    for (auto& c : consumers) {
+        c.join();
+    }
+    // sum the per-ring host op timers for the report
+    uint64_t h_polls = 0, h_us_hsent = 0, h_us_ring = 0, h_us_hacked = 0;
+    for (uint64_t h = 0; h < ndh; h++) {
+        h_polls += h_polls_v[h];
+        h_us_hsent += h_us_hsent_v[h];
+        h_us_ring += h_us_ring_v[h];
+        h_us_hacked += h_us_hacked_v[h];
+    }
     if (!drv.wait_active_fw_returned(std::chrono::seconds(5))) {
         fprintf(stderr, "[run] pipeline did not return to idle (unexpected)\n");
     }
