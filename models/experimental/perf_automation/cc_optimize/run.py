@@ -1225,12 +1225,12 @@ def _apply_adaptive_round_timers(baseline_wall_s) -> None:
     clock). Only applied under module-level optimize."""
     w = max(1.0, float(baseline_wall_s or 0.0))
     max_no_progress = int(min(2400, max(300, 8.0 * w)))
-    measure_timeout = int(min(1200, max(300, 6.0 * w)))
+    measure_backstop = int(min(1200, max(300, 6.0 * w)))
     os.environ["PERF_MCP_ROUND_MAX_SEC"] = str(max_no_progress)
-    os.environ["PERF_MCP_MEASURE_TIMEOUT"] = str(measure_timeout)
+    os.environ["PERF_MCP_MEASURE_BACKSTOP"] = str(measure_backstop)
     print(
         "  [optimize/cc] adaptive per-module timers (baseline wall %.0fs): round hard-cap %ds, "
-        "measure timeout %ds" % (w, max_no_progress, measure_timeout),
+        "measure backstop %ds (adaptive stall floor unchanged)" % (w, max_no_progress, measure_backstop),
         flush=True,
     )
 
