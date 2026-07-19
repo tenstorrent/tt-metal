@@ -700,14 +700,15 @@ def _coverage_layers(
         facts["all_ops"] = sorted(sigs)
         facts["full_signal"] = _work_signal(seq)
         facts["full_blocks"] = _blocks_ran(seq)
-        first_block, blk_source = _first_block_map(seq)
-        if first_block:
-            deepest = max(first_block.values())
+        if _signposts_agree(seq):
+            first_block, _ = _first_block_map(seq)
+            deepest = max(first_block.values()) if first_block else 0
             deep = sorted(op for op, b in first_block.items() if b >= 16)
+            blk_source = "signposts"
         else:
-            _kc, _ = _config_layer_kinds(config_ref or model_name)
-            deepest = (_kc - 1) if _kc else 1
+            deepest = 0
             deep = []
+            blk_source = "unverified"
         _cov = min(max(deepest + 1, 2), 16)
         facts["deep_ops"] = deep
         tail = f"; {len(deep)} op(s) appear only past layer 16 (present, un-timed)" if deep else ""
