@@ -77,61 +77,6 @@ def _verbose() -> bool:
     return os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
 
 
-def _render_grader_report(demo_dir: Path) -> bool:
-    """Render the structured grader_report.json as a clean, aligned terminal
-    block (no markdown). Returns True if rendered, False if unavailable —
-    callers fall back to a stripped version of the agent's prose."""
-    try:
-        rep = json.loads((demo_dir / "grader_report.json").read_text())
-    except Exception:
-        return False
-
-    rule = "  " + "─" * 74
-    lines = [rule, f"  GRADER REPORT — {demo_dir.name}", rule]
-
-    calls = rep.get("calls") or []
-    if calls:
-        lines.append(f"  {'Call':<6} {'Re-run':<7} {'Final PCC':<38} Audit")
-        for c in calls:
-            pccs = c.get("final_pcc") or []
-            try:
-                pcc_s = " / ".join(f"{float(x):.6f}" for x in pccs)
-            except Exception:
-                pcc_s = ", ".join(str(x) for x in pccs)
-            lines.append(
-                f"  {str(c.get('call', '?')):<6} {str(c.get('rerun', '?')):<7} "
-                f"{pcc_s:<38} {c.get('source_audit', '')}"
-            )
-        lines.append(rule)
-
-    def _ok(d):
-        return "pass" if d.get("ok") else "FAIL"
-
-    struct = rep.get("structure") or {}
-    nw = rep.get("no_waste") or {}
-    holes = rep.get("holes") or []
-    lines.append(f"  {'Structure':<11} {_ok(struct)}")
-    nw_extra = ""
-    if nw:
-        nw_extra = f" — {nw.get('names_present', '?')}/{nw.get('graduated_total', '?')} graduated invoked"
-        missing = nw.get("missing") or []
-        if missing:
-            nw_extra += f", missing: {', '.join(map(str, missing))}"
-    lines.append(f"  {'No-waste':<11} {_ok(nw)}{nw_extra}")
-    if holes:
-        lines.append(f"  {'Holes':<11} {len(holes)}")
-        for h in holes[:8]:
-            lines.append(
-                f"    - [{h.get('severity', '?')}] {h.get('id', '?')} " f"@ {h.get('file', '?')}:{h.get('lines', '?')}"
-            )
-    else:
-        lines.append(f"  {'Holes':<11} none")
-    lines.append(f"  {'Verdict':<11} {rep.get('verdict', '?')}")
-    lines.append(rule)
-    print("\n" + "\n".join(lines))
-    return True
-
-
 def _e2e_cell(rel: str, sub: str, f) -> str:
     return f"`{rel}/{sub}/{f.name}`" if f else "(none)"
 
@@ -1226,9 +1171,8 @@ def _emit_e2e_phase_a(args) -> int:
         label="builder",
         log_path=full_log,
     )
-    engine = getattr(args, "engine", "cc") or "cc"
     if rc_build != 0:
-        if engine == "cc" and (demo_dir / "tt").is_dir():
+        if (demo_dir / "tt").is_dir():
             print(
                 f"\n  ⚠ builder agent exited rc={rc_build}, but {demo_dir}/tt exists — "
                 f"entering CC fix-loop against the gate from current state"
@@ -1410,104 +1354,6 @@ def _fmt_tool(name: str, inp: dict) -> str:
         return f"{name} {json.dumps(inp)[:120]}"
     except Exception:
         return name
-
-
-def _build_grader_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
-    return f"""You are the independent GRADER for the end-to-end TTNN pipeline of
-`{model_id}` at {demo_dir}. You did NOT build this pipeline. Your job is NOT to
-fix or improve it — it is to ADVERSARIALLY VERIFY it and try to find a hole.
-Assume the builder may have gamed the gates; prove it didn't.
-
-Do all of this with your own tools (Read/Bash), then report a verdict.
-
-1. RE-RUN (independent execution). For each {demo_dir}/tests/e2e/test_*.py, run
-   it FRESH on the device yourself:
-     ./python_env/bin/python -m pytest <file> -s
-   Record pass/fail and every FINAL_PCC printed. A pass you reproduce counts;
-   a result you only read in a summary does NOT.
-
-2. AUDIT THE TEST SOURCE (is the test honest?). Read each test file and CONFIRM:
-   - the PCC is computed between the TT pipeline output and the HUGGINGFACE
-     reference output — NOT TT-vs-TT, not against a constant or a trivially
-     equal tensor;
-   - the input is built from the real HF processor/tokenizer/feature_extractor
-     (Source A), not random tensors;
-   - the INVOKED counters wrap stubs that are actually ON the compute path
-     (the wrapped object's output is really used downstream) — not a counter
-     that is bumped while the real compute bypasses it;
-   - there is NO `pytest.skip`, no `assert True`, no early return that dodges
-     the PCC assertion;
-   - every PCC assertion threshold is >= {pcc}.
-
-3. STRUCTURE (standard demo layout). Confirm the emitted package exists and is real:
-   {demo_dir}/demo/ (runnable per-Call entrypoints), {demo_dir}/tt/,
-   {demo_dir}/tests/e2e/, and a README.md. Flag missing/placeholder pieces.
-
-4. NO-WASTE. From {demo_dir}/bringup_status.json, take the GRADUATED set (NEW
-   components with a `_stubs/<name>.py.last_good_native` OR `.py.last_good_sharded`
-   snapshot — bring-up is single-phase, so a TP>1 mesh run graduates shardable
-   modules DIRECTLY sharded). Confirm the UNION of INVOKED stubs across all task
-   heads' runs == that graduated set. Name any graduated module never invoked.
-   IMPORTANT: coverage_step / coverage_sweep / invoke_all_stubs / any function
-   that calls each graduated stub once just to check the "invoked" counter DOES
-   NOT COUNT as invoked-in-forward-path. Every graduated stub must be truly IN
-   the real forward path (its output feeds downstream computation). Flag any
-   stub whose only invocation is via a coverage sweep as WASTE / SHORTCUT.
-
-5. TT-ONLY. Confirm the pipeline is pure TTNN in the forward path:
-   - NO `model.generate(...)` / `hf_model.generate(...)` — HF's host AR loop
-   - NO monkey-patching of HF submodule forwards (`self.model.<X>.forward = ...`)
-   - NO `hf_model.<X>(...)` computation calls (config reads and weight
-     extraction OK)
-   - NO `torch.matmul` / `torch.softmax` / `torch.layer_norm` / `torch.embedding` /
-     `torch.argmax` / `torch.topk` / `torch.multinomial` / `torch.nn.functional.*` /
-     `F.<X>` in the forward path
-   - The pipeline must be an EXPLICIT Python chain calling `stubs["<name>"](...)`
-     directly, readable top-down from `run_<task>()` — not HF orchestration.
-   HF/torch are ONLY allowed in `_hf_reference_<task>()` (golden reference) and
-   `<stage>_trace_setup(...)` (seeding fixed-input persistent buffers). Any
-   violation is a HOLE — flag it in the report.
-
-WRITE the structured machine-readable report to {demo_dir}/grader_report.json
-so the fix agent gets precise targets. Use EXACTLY this schema:
-  {{
-    "verdict": "PASS" | "FAIL",
-    "calls": [
-      {{"call": "<id>", "rerun": "pass|fail", "final_pcc": [<num>, ...],
-        "source_audit": "clean|ISSUE"}}
-    ],
-    "structure": {{"ok": true|false, "detail": "<...>"}},
-    "no_waste": {{"ok": true|false, "graduated_total": <N>, "on_path": <N>,
-                  "names_present": <N>, "missing": [<name>, ...]}},
-    "holes": [
-      {{"id": "<short-slug>",
-        "call": "<id>",
-        "modules": ["<graduated module name>", ...],
-        "file": "<path relative to {demo_dir}>",
-        "lines": "<start-end>",
-        "mechanism": "<exactly how the gate is gamed / what is wrong>",
-        "fix_hint": "<concrete action that would make it genuinely pass>",
-        "severity": "blocker" | "minor"}}
-    ]
-  }}
-A clean call contributes no holes. Every FAIL reason MUST appear as a hole with
-file+lines+mechanism+fix_hint filled in (no vague entries).
-
-Then ALSO print this verdict block to stdout (one row per Call):
-
-  GRADER_REPORT
-  | Call | re-run | final_pcc | source-audit | holes_found |
-  | ...  | pass/fail | <num> | clean/ISSUE | <what, or none> |
-  STRUCTURE: pass/fail (<detail>)
-  NO_WASTE: pass/fail (<N>/<total> graduated invoked; missing: <list>)
-  GRADER_VERDICT: PASS    <-- only if EVERY call re-ran-pass + source-audit clean
-                              + STRUCTURE pass + NO_WASTE pass. Otherwise:
-  GRADER_VERDICT: FAIL
-
-Do not write or edit any pipeline/stub/test files — you are read-only except for
-{demo_dir}/grader_report.json (the structured report above) and an optional
-{demo_dir}/grader_report.md prose summary. Be skeptical; if anything is
-ambiguous, it is a FAIL with a hole describing the ambiguity."""
 
 
 def _mesh_chip_count(mesh_arg) -> int:
