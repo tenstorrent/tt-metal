@@ -473,15 +473,26 @@ jobs:
           done || true
       - name: Upload perf profile (host profiling)
         if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+        run: |
+          # Gather the perf outputs (.data, .report.txt, .svg) into one directory so we can upload
+          # them as a single artifact tree. This avoids issues with multiple glob patterns in the
+          # upload-artifact action and gives a clean artifact layout.
+          mkdir -p /work/perf_outputs
+          shopt -s nullglob
+          for f in /work/perf_*.data /work/perf_*.report.txt /work/perf_*.svg; do
+            [ -f "$f" ] || continue
+            cp -v "$f" /work/perf_outputs/ || true
+          done
+          ls -la /work/perf_outputs/
+
+      - name: Upload perf profile artifact (host profiling)
+        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: perf-host-profile-${{ matrix.test-group.name }}
-          # /docker-job/ is the host-side mount of the container's /work/ directory. The profiled
-          # test step writes perf_<sanitized>.data (and an optional .report.txt / .svg) to /work.
-          path: |
-            ${{ github.workspace }}/docker-job/perf_*.data
-            ${{ github.workspace }}/docker-job/perf_*.report.txt
-            ${{ github.workspace }}/docker-job/perf_*.svg
+          # /docker-job/ is the host-side mount of the container's /work/ directory. The previous
+          # step copies perf_<sanitized>.data, .report.txt, and .svg into /work/perf_outputs/.
+          path: ${{ github.workspace }}/docker-job/perf_outputs/
           if-no-files-found: warn
           retention-days: 14
 
