@@ -19,7 +19,7 @@ namespace ttnn::operations::ccl {
 enum class ReceiverL1TestMode : uint8_t { Auto, ForceDirect, ForceReceiver };
 enum class ReceiverL1StageMode : uint8_t { Combined, L1Sink, L1Overwrite, DrainOnly };
 enum class ReceiverL1NotifyMode : uint8_t { Fused, Split };
-enum class ReceiverL1CreditMode : uint8_t { PerSlot, Window };
+enum class ReceiverL1CreditMode : uint8_t { PerSlot, Window, Pipelined };
 enum class BankOwnedRunPolicy : uint8_t { Divisor, MaxTail };
 
 // Test and attribution controls are read once when the operation arguments are
@@ -31,6 +31,8 @@ struct AllGatherReceiverPolicy {
     ReceiverL1StageMode stage_mode = ReceiverL1StageMode::Combined;
     ReceiverL1NotifyMode notify_mode = ReceiverL1NotifyMode::Fused;
     ReceiverL1CreditMode credit_mode = ReceiverL1CreditMode::Window;
+    // Zero selects a bounded automatic group size for pipelined credits.
+    uint32_t credit_group_batches = 0;
     bool attribution_enabled = false;
     bool address_attribution_enabled = false;
     bool bank_owned_links = false;

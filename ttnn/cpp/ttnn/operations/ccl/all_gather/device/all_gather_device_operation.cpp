@@ -65,11 +65,24 @@ AllGatherReceiverPolicy read_receiver_policy_from_environment() {
     }
     if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE")) {
         TT_FATAL(
-            std::string_view(value) == "window" || std::string_view(value) == "per_slot",
-            "TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE must be window or per_slot; got '{}'",
+            std::string_view(value) == "window" || std::string_view(value) == "per_slot" ||
+                std::string_view(value) == "pipelined",
+            "TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE must be window, per_slot, or pipelined; got '{}'",
             value);
-        policy.credit_mode =
-            std::string_view(value) == "per_slot" ? ReceiverL1CreditMode::PerSlot : ReceiverL1CreditMode::Window;
+        policy.credit_mode = std::string_view(value) == "per_slot"    ? ReceiverL1CreditMode::PerSlot
+                             : std::string_view(value) == "pipelined" ? ReceiverL1CreditMode::Pipelined
+                                                                      : ReceiverL1CreditMode::Window;
+    }
+    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_CREDIT_GROUP_BATCHES")) {
+        if (std::string_view(value) != "auto") {
+            char* end = nullptr;
+            const unsigned long parsed = std::strtoul(value, &end, 10);
+            TT_FATAL(
+                end != value && *end == '\0' && parsed > 0 && parsed <= 256,
+                "TTNN_ALL_GATHER_RECEIVER_CREDIT_GROUP_BATCHES must be auto or an integer in [1, 256]; got '{}'",
+                value);
+            policy.credit_group_batches = static_cast<uint32_t>(parsed);
+        }
     }
     if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION")) {
         TT_FATAL(
@@ -95,6 +108,8 @@ AllGatherReceiverPolicy read_receiver_policy_from_environment() {
     if (const char* value = std::getenv("TTNN_ALL_GATHER_BANK_OWNED_COALESCE")) {
         if (std::string_view(value) == "source") {
             policy.bank_owned_coalesce_mask = 1;
+        } else if (std::string_view(value) == "source_receiver") {
+            policy.bank_owned_coalesce_mask = 1 | 4;
         } else if (std::string_view(value) == "source_local") {
             policy.bank_owned_coalesce_mask = 1 | 2;
         } else if (std::string_view(value) == "all") {
@@ -102,7 +117,8 @@ AllGatherReceiverPolicy read_receiver_policy_from_environment() {
         } else {
             TT_FATAL(
                 std::string_view(value) == "none",
-                "TTNN_ALL_GATHER_BANK_OWNED_COALESCE must be none, source, source_local, or all; got '{}'",
+                "TTNN_ALL_GATHER_BANK_OWNED_COALESCE must be none, source, source_receiver, source_local, or all; got "
+                "'{}'",
                 value);
         }
     }

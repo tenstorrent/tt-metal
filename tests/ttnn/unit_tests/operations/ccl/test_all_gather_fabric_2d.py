@@ -190,6 +190,33 @@ def _reference_bank_owned_rows_per_run(max_rows, pages_per_bank, run_policy):
     return next(rows for rows in range(min(max_rows, pages_per_bank), 0, -1) if pages_per_bank % rows == 0)
 
 
+def _reference_grouped_credit_schedule(num_batches, slot_count, group_batches):
+    """Return receiver publications and the credit sequence required before each slot reuse."""
+    assert num_batches > 0 and slot_count > 0 and 0 < group_batches <= slot_count
+    published = [
+        (min(group_start + group_batches, num_batches), group_start // group_batches + 1)
+        for group_start in range(0, num_batches, group_batches)
+    ]
+    reclaim = [0 if batch < slot_count else (batch - slot_count) // group_batches + 1 for batch in range(num_batches)]
+    return published, reclaim
+
+
+@pytest.mark.parametrize(
+    "num_batches,slot_count,group_batches",
+    [(17, 6, 1), (17, 6, 2), (17, 6, 3), (24, 12, 4), (25, 12, 6)],
+)
+def test_all_gather_grouped_credit_schedule_reference(num_batches, slot_count, group_batches):
+    published, reclaim = _reference_grouped_credit_schedule(num_batches, slot_count, group_batches)
+    assert published[-1][0] == num_batches
+    assert published[-1][1] == (num_batches + group_batches - 1) // group_batches
+    for batch, required_sequence in enumerate(reclaim):
+        if required_sequence == 0:
+            continue
+        old_batch = batch - slot_count
+        assert (old_batch // group_batches) + 1 == required_sequence
+        assert published[required_sequence - 1][0] > old_batch
+
+
 @pytest.mark.parametrize(
     "max_rows,pages_per_bank,run_policy,expected_rows",
     [
@@ -359,8 +386,30 @@ def test_all_gather_fabric_2d_row_major_2k_pages(
     # FP8_E4M3 cannot be read back one device at a time. Convert after the
     # collective so we still validate every gathered replica numerically.
     check_output = ttnn.typecast(tt_output, ttnn.bfloat16) if dtype == ttnn.fp8_e4m3 else tt_output
-    for device_tensor in ttnn.get_device_tensors(check_output):
-        assert_with_pcc(ttnn.to_torch(device_tensor), torch_input, pcc=pcc)
+    if dtype == ttnn.fp8_e4m3:
+        # Compare against the values actually carried by the gather.  Comparing
+        # FP8 output directly with the pre-quantized random input confounds CCL
+        # correctness with FP8 conversion error.
+        check_input = ttnn.typecast(tt_input, ttnn.bfloat16)
+        input_shards = ttnn.get_device_tensors(check_input)
+        mesh_rows, mesh_cols = tuple(mesh_device.shape)
+        gather_group = (
+            [input_shards[row * mesh_cols] for row in range(mesh_rows)]
+            if cluster_axis == 0
+            else input_shards[:mesh_cols]
+        )
+        expected = torch.cat([ttnn.to_torch(device_tensor) for device_tensor in gather_group], dim=gather_dim)
+    else:
+        expected = torch_input
+    for device_index, device_tensor in enumerate(ttnn.get_device_tensors(check_output)):
+        actual = ttnn.to_torch(device_tensor)
+        mismatch = actual != expected
+        mismatch_rows = mismatch.nonzero()[:, 2].unique().tolist() if mismatch.any() else []
+        assert torch.equal(actual, expected), (
+            f"device {device_index} gather mismatch: "
+            f"max_abs={(actual.float() - expected.float()).abs().max().item()} "
+            f"mismatched_elements={mismatch.sum().item()} rows={mismatch_rows}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -497,15 +546,17 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": _parse_perf_fabric_config(os.environ.get("TTNN_AG_BANK_OWNED_FABRIC_CONFIG")),
             "fabric_router_config": _fabric_router_config(),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "l1_small_size": 512,
+            "l1_small_size": _parse_perf_l1_small_size(os.environ.get("TTNN_AG_BANK_OWNED_L1_SMALL_SIZE")),
         }
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device", [_parse_perf_mesh_shape(os.environ.get("TTNN_AG_BANK_OWNED_MESH_SHAPE"))], indirect=True
+)
 @pytest.mark.parametrize(
     "dtype,width,pcc",
     [
@@ -550,8 +601,25 @@ def test_all_gather_fabric_2d_bank_owned_schedule(mesh_device, dtype, width, pcc
         ttnn.synchronize_device(mesh_device)
 
     check_output = ttnn.typecast(tt_output, ttnn.bfloat16) if dtype == ttnn.fp8_e4m3 else tt_output
-    for device_tensor in ttnn.get_device_tensors(check_output):
-        assert_with_pcc(ttnn.to_torch(device_tensor), torch_input, pcc=pcc)
+    if dtype == ttnn.fp8_e4m3:
+        # Compare against the values actually carried by the gather. Comparing
+        # FP8 output directly with the pre-quantized random input confounds CCL
+        # correctness with FP8 conversion error.
+        check_input = ttnn.typecast(tt_input, ttnn.bfloat16)
+        expected = torch.cat(
+            [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(check_input)], dim=2
+        )
+    else:
+        expected = torch_input
+    for device_index, device_tensor in enumerate(ttnn.get_device_tensors(check_output)):
+        actual = ttnn.to_torch(device_tensor)
+        mismatch = actual != expected
+        mismatch_rows = mismatch.nonzero()[:, 2].unique().tolist() if mismatch.any() else []
+        assert torch.equal(actual, expected), (
+            f"device {device_index} gather mismatch: "
+            f"max_abs={(actual.float() - expected.float()).abs().max().item()} "
+            f"mismatched_elements={mismatch.sum().item()} rows={mismatch_rows}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -878,6 +946,7 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     receiver_batch_rows_env = os.environ.get("TTNN_ALL_GATHER_RECEIVER_BATCH_ROWS", "max")
     receiver_notify = os.environ.get("TTNN_ALL_GATHER_RECEIVER_NOTIFY_MODE", "fused")
     receiver_credit = os.environ.get("TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE", "window")
+    receiver_credit_group_batches = os.environ.get("TTNN_ALL_GATHER_RECEIVER_CREDIT_GROUP_BATCHES", "auto")
     receiver_attribution = os.environ.get("TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION", "0")
     address_attribution = os.environ.get("TTNN_ALL_GATHER_ADDRESS_ATTRIBUTION", "0")
     receiver_drain_riscs_env = os.environ.get("TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS", "auto")
@@ -892,12 +961,13 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     assert receiver_slots_env == "auto" or 1 <= int(receiver_slots_env) <= 256
     assert receiver_batch_rows_env in {"max", "1", "2", "4", "8"}
     assert receiver_notify in {"fused", "split"}
-    assert receiver_credit in {"per_slot", "window"}
+    assert receiver_credit in {"per_slot", "window", "pipelined"}
+    assert receiver_credit_group_batches == "auto" or 1 <= int(receiver_credit_group_batches) <= 256
     assert receiver_attribution in {"0", "1"}
     assert address_attribution in {"0", "1"}
     assert receiver_drain_riscs_env in {"auto", "1", "2"}
     assert bank_owned_links in {"0", "1"}
-    assert bank_owned_coalesce in {"none", "source", "source_local", "all"}
+    assert bank_owned_coalesce in {"none", "source", "source_receiver", "source_local", "all"}
     assert bank_owned_run_policy in {"divisor", "max_tail"}
     assert receiver_stage == "combined" or receiver_mode != "force_direct", "receiver stage mode requires receiver path"
     assert (
@@ -1003,6 +1073,7 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     print(
         f"ISOLATED_AG path={'receiver_l1' if expected_receiver_l1 else 'direct'} stage={receiver_stage} "
         f"slots={receiver_slots_env} batch_rows={bank_owned_batch_rows} notify={receiver_notify} credit={receiver_credit} "
+        f"credit_group_batches={receiver_credit_group_batches} "
         f"drain_riscs={receiver_drain_riscs} bank_owned_links={bank_owned_links} "
         f"bank_owned_coalesce={bank_owned_coalesce} bank_owned_run_policy={bank_owned_run_policy} "
         f"core_rect={perf_core_rect or 'auto'} fabric={perf_fabric_config} l1_small={perf_l1_small_size}B "

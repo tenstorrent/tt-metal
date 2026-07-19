@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr bool drain_to_output = get_compile_time_arg_val(5) != 0;
     constexpr uint32_t receiver_slot_count = get_compile_time_arg_val(6);
     constexpr bool run_receiver_batches = get_compile_time_arg_val(7) != 0;
-    constexpr bool receiver_window_credit = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t receiver_credit_group_batches = get_compile_time_arg_val(8);
     constexpr bool wait_for_payload = get_compile_time_arg_val(9) != 0;
     constexpr bool receiver_attribution = get_compile_time_arg_val(10) != 0;
     constexpr uint32_t receiver_drain_risc_count = get_compile_time_arg_val(11);
@@ -37,14 +37,17 @@ void kernel_main() {
     constexpr uint32_t bank_owned_num_banks = get_compile_time_arg_val(15);
     constexpr uint32_t bank_owned_num_links = get_compile_time_arg_val(16);
     constexpr uint32_t bank_owned_coalesce_mask = get_compile_time_arg_val(17);
+    constexpr uint32_t receiver_cores_per_link = get_compile_time_arg_val(18);
     constexpr bool bank_owned_coalesce_receiver = (bank_owned_coalesce_mask & 4) != 0;
-    constexpr auto output_tensor_args = TensorAccessorArgs<18>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<19>();
     static_assert(receiver_drain_risc_count == 1 || receiver_drain_risc_count == 2);
     static_assert(receiver_drain_risc_index < receiver_drain_risc_count);
-    static_assert(receiver_drain_risc_count == 1 || receiver_window_credit);
+    static_assert(receiver_credit_group_batches > 0);
+    static_assert(receiver_credit_group_batches <= receiver_slot_count);
     static_assert(!bank_owned_links || bank_owned_num_links > 0);
     static_assert(!bank_owned_links || bank_owned_num_banks % bank_owned_num_links == 0);
     static_assert(!bank_owned_links || bank_owned_num_banks == NUM_DRAM_BANKS);
+    static_assert(receiver_cores_per_link > 0);
 
     size_t arg_idx = 0;
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
@@ -57,10 +60,15 @@ void kernel_main() {
     const uint8_t sender_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<address_t>(arg_idx++);
     const uint32_t bank_owned_link_index = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receiver_bank_slot = get_arg_val<uint32_t>(arg_idx++);
 
-    address_t produced_sem[num_devices];
+    address_t produced_sem_forward[num_devices];
+    address_t produced_sem_backward[num_devices];
     for (uint32_t source = 0; source < num_devices; ++source) {
-        produced_sem[source] = get_arg_val<address_t>(arg_idx++);
+        produced_sem_forward[source] = get_arg_val<address_t>(arg_idx++);
+    }
+    for (uint32_t source = 0; source < num_devices; ++source) {
+        produced_sem_backward[source] = get_arg_val<address_t>(arg_idx++);
     }
     const address_t dual_risc_sync_sem = get_arg_val<address_t>(arg_idx++);
 
@@ -100,15 +108,25 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dual_risc_sync_sem);
     const uint32_t init_start = attribution_timestamp();
     if constexpr (receiver_drain_risc_index == 0) {
+        // The sender uses its otherwise-unused local-source produced semaphore
+        // as a start handshake.  Waiting here orders this receiver's ready
+        // signal after the sender resets the shared barrier/credit epoch.
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(produced_sem_backward[local_device_idx]), 1);
         for (uint32_t source = 0; source < num_devices; ++source) {
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(produced_sem[source]), 0);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(produced_sem_forward[source]), 0);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(produced_sem_backward[source]), 0);
         }
         if constexpr (receiver_drain_risc_count == 2) {
             // The previous invocation ends above 1.  Equality prevents the
             // second RISC from accepting stale produced counters before reset.
             __atomic_store_n(dual_risc_sync_sem_ptr, 1, __ATOMIC_RELEASE);
         }
-        noc_semaphore_inc(safe_get_noc_addr(sender_noc_x, sender_noc_y, barrier_sem), 1);
+        if constexpr (receiver_cores_per_link > 1) {
+            noc_semaphore_inc(safe_get_noc_addr(sender_noc_x, sender_noc_y, consumed_sem), 1);
+        } else {
+            noc_semaphore_inc(safe_get_noc_addr(sender_noc_x, sender_noc_y, barrier_sem), 1);
+        }
         noc.async_atomic_barrier();
     } else {
         while (__atomic_load_n(dual_risc_sync_sem_ptr, __ATOMIC_ACQUIRE) != 1) {
@@ -128,14 +146,15 @@ void kernel_main() {
     const uint32_t bank_owned_pages_per_bank = bank_owned_links ? output_source_page_stride / bank_owned_num_banks : 0;
     const uint32_t bank_owned_runs_per_bank =
         bank_owned_links ? (bank_owned_pages_per_bank + inputs_per_cb_page - 1) / inputs_per_cb_page : 1;
-    const uint32_t num_batches = bank_owned_links
-                                     ? bank_owned_runs_per_bank * (bank_owned_num_banks / bank_owned_num_links)
-                                     : (worker_pages + inputs_per_cb_page - 1) / inputs_per_cb_page;
+    const uint32_t num_batches =
+        bank_owned_links ? bank_owned_runs_per_bank *
+                               (receiver_cores_per_link == 1 ? bank_owned_num_banks / bank_owned_num_links : 1)
+                         : (worker_pages + inputs_per_cb_page - 1) / inputs_per_cb_page;
     auto bank_owned_pages_in_batch = [&](uint32_t batch) __attribute__((always_inline)) {
         const uint32_t run_in_bank = batch % bank_owned_runs_per_bank;
         return std::min(inputs_per_cb_page, bank_owned_pages_per_bank - run_in_bank * inputs_per_cb_page);
     };
-    constexpr uint32_t batches_per_window = receiver_window_credit ? receiver_slot_count : 1;
+    constexpr uint32_t batches_per_window = receiver_credit_group_batches;
     const uint32_t num_windows = (num_batches + batches_per_window - 1) / batches_per_window;
 
     for (uint32_t window = 0; window < num_windows; ++window) {
@@ -143,6 +162,8 @@ void kernel_main() {
         const uint32_t batch_end = std::min(batch_start + batches_per_window, num_batches);
         for (uint32_t batch = batch_start + receiver_drain_risc_index; batch < batch_end;
              batch += receiver_drain_risc_count) {
+            const uint32_t logical_bank_owned_batch =
+                receiver_cores_per_link == 1 ? batch : receiver_bank_slot * bank_owned_runs_per_bank + batch;
             const uint32_t page_in_worker = batch * inputs_per_cb_page;
             const uint32_t pages_in_batch = bank_owned_links
                                                 ? bank_owned_pages_in_batch(batch)
@@ -155,8 +176,21 @@ void kernel_main() {
 
                 if constexpr (wait_for_payload) {
                     const uint32_t wait_start = attribution_timestamp();
+                    address_t source_produced_sem = produced_sem_forward[source];
+                    uint32_t produced_sequence = batch + 1;
+                    if constexpr (bank_owned_links) {
+                        const uint32_t forward_distance = (local_device_idx + num_devices - source) % num_devices;
+                        const uint32_t half_ring = num_devices / 2;
+                        if (forward_distance > half_ring ||
+                            (forward_distance == half_ring && (logical_bank_owned_batch & 1) != 0)) {
+                            source_produced_sem = produced_sem_backward[source];
+                        }
+                        if (forward_distance == half_ring) {
+                            produced_sequence = batch / 2 + 1;
+                        }
+                    }
                     noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(produced_sem[source]), batch + 1);
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source_produced_sem), produced_sequence);
                     attribute_elapsed(produced_wait_cycles, wait_start);
                     if constexpr (receiver_attribution) {
                         ++produced_wait_count;
@@ -169,7 +203,8 @@ void kernel_main() {
                     uint32_t output_page_id =
                         source * output_source_page_stride + selected_input_page_start + page_in_worker;
                     if constexpr (bank_owned_links) {
-                        const uint32_t owned_bank_slot = batch / bank_owned_runs_per_bank;
+                        const uint32_t owned_bank_slot =
+                            receiver_cores_per_link == 1 ? batch / bank_owned_runs_per_bank : receiver_bank_slot;
                         const uint32_t run_in_bank = batch % bank_owned_runs_per_bank;
                         const uint32_t bank = bank_owned_link_index + owned_bank_slot * bank_owned_num_links;
                         output_page_id = source * output_source_page_stride + bank +

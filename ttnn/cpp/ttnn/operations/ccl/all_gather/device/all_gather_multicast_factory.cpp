@@ -150,7 +150,8 @@ ReceiverL1Plan make_receiver_l1_plan(
     if (plan.num_links == 0) {
         return reject("receiver requires at least one active Fabric link");
     }
-    plan.required_worker_cores = 2 * plan.num_links;
+    constexpr uint32_t receiver_cores_per_link = 1;
+    plan.required_worker_cores = (1 + receiver_cores_per_link) * plan.num_links;
     auto subdevice_id = attrs.subdevice_id.value_or(input.device()->get_sub_device_ids().at(0));
     auto available_cores = input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     if (attrs.sub_core_grid.has_value()) {
@@ -176,7 +177,8 @@ ReceiverL1Plan make_receiver_l1_plan(
         return reject("receiver L1-small semaphore alignment is zero");
     }
     plan.control_semaphore_count =
-        1 + attrs.num_devices + 2 +
+        1 + attrs.num_devices + (attrs.receiver_policy.bank_owned_links ? attrs.num_devices : 0) +
+        2 * receiver_cores_per_link +
         (receiver_l1_drain_risc_count(attrs.receiver_policy, input) == 2 ? 1 : 0);  // barrier + receiver controls
     plan.control_semaphore_bytes_per_core = static_cast<uint64_t>(plan.control_semaphore_count) * semaphore_alignment;
     if (plan.control_semaphore_bytes_per_core > l1_small_bank_size) {
@@ -314,12 +316,17 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     std::vector<tt::tt_metal::GlobalSemaphore> receiver_control_sems;
     if (receiver_l1_mode) {
-        // [0] remote-consumption credit fan-in on each sender core
-        // [1] local receiver-consumed sequence on each sender core
-        // [2 + source] payload-produced sequence on each receiver core
-        // [2 + num_devices] is present only for dual-RISC receiver drain.
+        // Remote-consumption credit, local receiver-consumed sequence,
+        // forward/reader payload-produced sequences, and backward/writer
+        // payload-produced sequences,
+        // present only for the bank-owned path. Generic routing uses the forward
+        // sequence for both workers and does not pay this L1-small cost.
+        // The final entry is present only for dual-RISC receiver drain.
+        constexpr uint32_t receiver_cores_per_link = 1;
         const uint32_t receiver_control_sem_count =
-            operation_attributes.num_devices + 2 +
+            operation_attributes.num_devices +
+            (operation_attributes.receiver_policy.bank_owned_links ? operation_attributes.num_devices : 0) +
+            2 * receiver_cores_per_link +
             (receiver_l1_drain_risc_count(operation_attributes.receiver_policy, tensor_args.input_tensor) == 2 ? 1 : 0);
         receiver_control_sems.reserve(receiver_control_sem_count);
         for (uint32_t i = 0; i < receiver_control_sem_count; ++i) {
@@ -415,19 +422,23 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         receiver_stage_mode == ReceiverL1StageMode::Combined || receiver_stage_mode == ReceiverL1StageMode::L1Sink;
     const bool receiver_attribution = operation_attributes.receiver_policy.attribution_enabled;
     const bool receiver_address_attribution = operation_attributes.receiver_policy.address_attribution_enabled;
+    constexpr uint32_t receiver_cores_per_link = 1;
     const uint32_t receiver_drain_risc_count =
         receiver_l1_mode ? receiver_l1_drain_risc_count(operation_attributes.receiver_policy, input_tensor) : 1;
     TT_FATAL(
         receiver_drain_risc_count == 1 ||
-            operation_attributes.receiver_policy.credit_mode == ReceiverL1CreditMode::Window,
-        "dual-RISC receiver drain requires window credits");
+            operation_attributes.receiver_policy.credit_mode != ReceiverL1CreditMode::PerSlot,
+        "dual-RISC receiver drain requires window or pipelined credits");
     TT_FATAL(
         receiver_drain_risc_count == 1 || receiver_stage_mode == ReceiverL1StageMode::Combined ||
             receiver_stage_mode == ReceiverL1StageMode::DrainOnly,
         "dual-RISC receiver drain is supported only for combined or drain_only stages");
     uint32_t receiver_slot_count = receiver_l1_mode ? operation_attributes.receiver_policy.slot_count : 1;
     TT_FATAL(
-        !receiver_l1_mode || receiver_control_sems.size() == num_devices + 2 + (receiver_drain_risc_count == 2 ? 1 : 0),
+        !receiver_l1_mode || receiver_control_sems.size() ==
+                                 num_devices +
+                                     (operation_attributes.receiver_policy.bank_owned_links ? num_devices : 0) +
+                                     2 * receiver_cores_per_link + (receiver_drain_risc_count == 2 ? 1 : 0),
         "receiver all-gather control semaphore count does not match the selected drain RISC count");
 
     // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
@@ -450,9 +461,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const uint32_t links1 = operation_attributes.axis_num_links[1];
     const uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
 
-    // Receiver mode adds one mirrored drain core per link.  The flat allocation is
-    // [sender, receiver] for each link; direct-scatter retains [sender].
-    const uint32_t num_cores_per_link = receiver_l1_mode ? 2 : 1;
+    // Receiver mode adds one drain core per link.
+    const uint32_t num_cores_per_link = receiver_l1_mode ? 1 + receiver_cores_per_link : 1;
     // On a four-device Blackhole gather axis, pairing FP8 sender/receiver cores
     // vertically avoids the NOC contention observed with the default horizontal
     // pairs.  The placement does not help the two-device Sparse MLA proxy, so
@@ -489,9 +499,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         worker_cores.push_back(worker);
         worker_core_set.emplace(worker, worker);
         if (receiver_l1_mode) {
-            const auto& receiver = all_cores[link * num_cores_per_link + 1];
-            receiver_cores.push_back(receiver);
-            receiver_core_set.emplace(receiver, receiver);
+            for (uint32_t receiver_idx = 0; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                const auto& receiver = all_cores[link * num_cores_per_link + 1 + receiver_idx];
+                receiver_cores.push_back(receiver);
+                receiver_core_set.emplace(receiver, receiver);
+            }
         }
     }
     const CoreRangeSet worker_core_range(worker_core_set);
@@ -585,7 +597,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         TT_FATAL(
             input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
             "bank-owned links are initially validated only on Blackhole");
-        TT_FATAL(num_devices == 4, "bank-owned links initially require four devices, got {}", num_devices);
+        TT_FATAL(
+            num_devices == 4 || num_devices == 8,
+            "bank-owned links require four or eight devices, got {}",
+            num_devices);
         TT_FATAL(min_num_links == 2, "bank-owned links initially require two links, got {}", min_num_links);
         TT_FATAL(num_dram_banks == 8, "bank-owned links initially require eight DRAM banks, got {}", num_dram_banks);
         TT_FATAL(batch_size == 1, "bank-owned links initially require batch size one, got {}", batch_size);
@@ -606,8 +621,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             total_input_pages,
             num_dram_banks);
         const uint32_t pages_per_bank = total_input_pages / num_dram_banks;
-        bank_owned_pages_per_run =
-            bank_owned_rows_per_run(operation_attributes.receiver_policy, max_pages_per_packet, pages_per_bank);
+        bank_owned_pages_per_run = bank_owned_rows_per_run(
+            operation_attributes.receiver_policy,
+            receiver_l1_batch_rows(operation_attributes.receiver_policy, max_pages_per_packet),
+            pages_per_bank);
         TT_FATAL(
             bank_owned_pages_per_run > 1,
             "bank-owned links need at least two contiguous pages per bank run; max rows {}, pages per bank {}",
@@ -650,6 +667,28 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         receiver_slot_count = available_receiver_l1 / (num_devices * cb_page_size);
         TT_FATAL(receiver_slot_count > 0, "receiver all-gather has no room for one complete source-slot set");
     }
+    const bool receiver_proactive_credit =
+        operation_attributes.receiver_policy.credit_mode == ReceiverL1CreditMode::Pipelined;
+    uint32_t receiver_credit_group_batches = receiver_slot_count;
+    if (operation_attributes.receiver_policy.credit_mode == ReceiverL1CreditMode::PerSlot) {
+        receiver_credit_group_batches = 1;
+    } else if (receiver_proactive_credit) {
+        receiver_credit_group_batches = operation_attributes.receiver_policy.credit_group_batches == 0
+                                            ? std::max(1u, receiver_slot_count / 3)
+                                            : operation_attributes.receiver_policy.credit_group_batches;
+    }
+    TT_FATAL(
+        !receiver_l1_mode ||
+            (receiver_credit_group_batches > 0 && receiver_credit_group_batches <= receiver_slot_count),
+        "receiver credit group of {} batches must fit in the {}-slot receiver ring",
+        receiver_credit_group_batches,
+        receiver_slot_count);
+    const uint32_t receiver_credit_sem_base = 0;
+    const uint32_t receiver_consumed_sem_base = receiver_cores_per_link;
+    const uint32_t receiver_produced_forward_sem_base = 2 * receiver_cores_per_link;
+    const uint32_t receiver_produced_backward_sem_base = receiver_produced_forward_sem_base + num_devices;
+    const uint32_t receiver_dual_sync_sem_index =
+        receiver_produced_backward_sem_base + (bank_owned_links ? num_devices : 0);
     const uint64_t receiver_buffer_end =
         receiver_buffer_base + static_cast<uint64_t>(num_devices) * receiver_slot_count * cb_page_size;
     TT_FATAL(
@@ -783,6 +822,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         receiver_credit_enabled,          // require consume/credit ordering
         operation_attributes.receiver_policy.credit_mode ==
             ReceiverL1CreditMode::Window,  // one acknowledgement per slot window
+        receiver_proactive_credit,         // proxy completed credit groups before slot reuse
+        receiver_credit_group_batches,     // batches represented by one consumed/credit sequence
         receiver_send_payload,             // suppress Fabric payloads for drain-only attribution
         receiver_attribution,              // emit accumulated per-stage profiler cycle records
         receiver_address_attribution,      // emit physical page-mapping counters
@@ -790,6 +831,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         num_dram_banks,                    // interleaved DRAM-bank count
         min_num_links,                     // number of bank ownership groups
         bank_owned_coalesce,               // bit 0: source, bit 1: local output, bit 2: receiver
+        receiver_cores_per_link,           // independent receiver/credit streams per link
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -813,12 +855,15 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         receiver_credit_enabled,          // require consume/credit ordering
         operation_attributes.receiver_policy.credit_mode ==
             ReceiverL1CreditMode::Window,  // one acknowledgement per slot window
+        receiver_proactive_credit,         // proxy completed credit groups before slot reuse
+        receiver_credit_group_batches,     // batches represented by one consumed/credit sequence
         receiver_send_payload,             // suppress Fabric payloads for drain-only attribution
         receiver_attribution,              // emit accumulated per-stage profiler cycle records
         bank_owned_links,                  // link owns complete DRAM-bank runs
         num_dram_banks,                    // interleaved DRAM-bank count
         min_num_links,                     // number of bank ownership groups
         bank_owned_coalesce,               // bit 0: source, bit 1: local output, bit 2: receiver
+        receiver_cores_per_link,           // independent receiver/credit streams per link
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -848,17 +893,17 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
                 receiver_stage_mode == ReceiverL1StageMode::DrainOnly,  // enable persistent-output drain
             receiver_slot_count,                                        // independent payload slots per source
             receiver_stage_mode != ReceiverL1StageMode::L1Overwrite,    // execute receiver batch schedule
-            operation_attributes.receiver_policy.credit_mode ==
-                ReceiverL1CreditMode::Window,  // acknowledge a complete slot window
-            receiver_send_payload,             // wait for produced and publish consumption when payloads are sent
-            receiver_attribution,              // emit accumulated per-stage profiler cycle records
-            receiver_drain_risc_count,         // one or both data-movement RISCs drain receiver slots
-            0,                                 // BRISC receiver-drain role
-            receiver_address_attribution,      // emit physical page-mapping counters
-            bank_owned_links,                  // link owns complete DRAM-bank runs
-            num_dram_banks,                    // interleaved DRAM-bank count
-            min_num_links,                     // number of bank ownership groups
-            bank_owned_coalesce,               // bit 0: source, bit 1: local output, bit 2: receiver
+            receiver_credit_group_batches,                              // batches represented by one consumed sequence
+            receiver_send_payload,         // wait for produced and publish consumption when payloads are sent
+            receiver_attribution,          // emit accumulated per-stage profiler cycle records
+            receiver_drain_risc_count,     // one or both data-movement RISCs drain receiver slots
+            0,                             // BRISC receiver-drain role
+            receiver_address_attribution,  // emit physical page-mapping counters
+            bank_owned_links,              // link owns complete DRAM-bank runs
+            num_dram_banks,                // interleaved DRAM-bank count
+            min_num_links,                 // number of bank ownership groups
+            bank_owned_coalesce,           // bit 0: source, bit 1: local output, bit 2: receiver
+            receiver_cores_per_link,       // receiver cores per active Fabric link
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(receiver_compile_args);
         receiver_kernel_id = tt::tt_metal::CreateKernel(
@@ -887,9 +932,14 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
         CoreCoord receiver_core{};
         CoreCoord virtual_receiver_core{};
+        std::vector<CoreCoord> virtual_receiver_cores;
         if (receiver_l1_mode) {
-            receiver_core = receiver_cores[link];
+            receiver_core = receiver_cores[link * receiver_cores_per_link];
             virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
+            for (uint32_t receiver_idx = 0; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                virtual_receiver_cores.push_back(mesh_device->worker_core_from_logical_core(
+                    receiver_cores[link * receiver_cores_per_link + receiver_idx]));
+            }
         }
 
         // Set runtime args
@@ -924,7 +974,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
         //   2D: every chip in the mesh outside me is covered by exactly one of the 4 mcast packets.
         // Both equal num_devices - 1.
-        uint32_t barrier_wait_value = num_devices - 1 + (receiver_l1_mode ? 2 : 0);
+        uint32_t barrier_wait_value = num_devices - 1 + (receiver_l1_mode && receiver_cores_per_link == 1 ? 2 : 0);
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         auto physical_direction = [&](const std::optional<MeshCoordinate>& coord) {
             if (!coord.has_value()) {
@@ -965,12 +1015,20 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             virtual_receiver_core.x,            // receiver L1 core x (0 outside receiver mode)
             virtual_receiver_core.y,            // receiver L1 core y
             receiver_buffer_base,               // source-indexed receiver slot base
-            receiver_l1_mode ? receiver_control_sems[2 + device_idx].address() : 0,
-            receiver_l1_mode ? receiver_control_sems[0].address() : 0,
-            receiver_l1_mode ? receiver_control_sems[1].address() : 0,
+            receiver_l1_mode ? receiver_control_sems[receiver_produced_forward_sem_base + device_idx].address() : 0,
+            receiver_l1_mode ? receiver_control_sems[receiver_credit_sem_base].address() : 0,
+            receiver_l1_mode ? receiver_control_sems[receiver_consumed_sem_base].address() : 0,
             receiver_l1_mode ? num_devices - 1 : 0,
             link,  // bank-ownership link index
         };
+        if (receiver_l1_mode) {
+            for (uint32_t receiver_idx = 1; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                reader_rt_args.push_back(receiver_control_sems[receiver_credit_sem_base + receiver_idx].address());
+                reader_rt_args.push_back(receiver_control_sems[receiver_consumed_sem_base + receiver_idx].address());
+                reader_rt_args.push_back(virtual_receiver_cores[receiver_idx].x);
+                reader_rt_args.push_back(virtual_receiver_cores[receiver_idx].y);
+            }
+        }
         // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
         if (e_hops > 0 && e_coord.has_value()) {
@@ -1017,13 +1075,26 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             virtual_receiver_core.x,            // receiver L1 core x (0 outside receiver mode)
             virtual_receiver_core.y,            // receiver L1 core y
             receiver_buffer_base,               // source-indexed receiver slot base
-            receiver_l1_mode ? receiver_control_sems[2 + device_idx].address() : 0,
-            receiver_l1_mode ? receiver_control_sems[0].address() : 0,
-            receiver_l1_mode ? receiver_control_sems[1].address() : 0,
+            receiver_l1_mode
+                ? receiver_control_sems
+                      [(bank_owned_links ? receiver_produced_backward_sem_base : receiver_produced_forward_sem_base) +
+                       device_idx]
+                          .address()
+                : 0,
+            receiver_l1_mode ? receiver_control_sems[receiver_credit_sem_base].address() : 0,
+            receiver_l1_mode ? receiver_control_sems[receiver_consumed_sem_base].address() : 0,
             receiver_l1_mode ? num_devices - 1 : 0,
             link,                         // bank-ownership link index
             input_pages_per_full_stripe,  // output page stride between source slabs
         };
+        if (receiver_l1_mode) {
+            for (uint32_t receiver_idx = 1; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                writer_rt_args.push_back(receiver_control_sems[receiver_credit_sem_base + receiver_idx].address());
+                writer_rt_args.push_back(receiver_control_sems[receiver_consumed_sem_base + receiver_idx].address());
+                writer_rt_args.push_back(virtual_receiver_cores[receiver_idx].x);
+                writer_rt_args.push_back(virtual_receiver_cores[receiver_idx].y);
+            }
+        }
 
         // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
@@ -1049,26 +1120,40 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
         if (receiver_l1_mode) {
-            std::vector<uint32_t> receiver_rt_args = {
-                output_tensor.buffer()->address(),                 // persistent output address
-                device_idx,                                        // local source is already written by sender core
-                bank_owned_links ? 0 : selected_input_page_start,  // logical slice start or owned-page count base
-                bank_owned_links ? input_pages_per_link : selected_input_page_end,
-                input_pages_per_full_stripe,         // full output-page stride between source slabs
-                receiver_control_sems[1].address(),  // locally consumed sequence on mirrored sender core
-                virtual_core.x,                      // mirrored sender core x
-                virtual_core.y,                      // mirrored sender core y
-                barrier_sem.address(),               // receiver-ready signal target
-                link,                                // bank-ownership link index
-            };
-            for (uint32_t source = 0; source < num_devices; ++source) {
-                receiver_rt_args.push_back(receiver_control_sems[2 + source].address());
-            }
-            receiver_rt_args.push_back(
-                receiver_drain_risc_count == 2 ? receiver_control_sems[2 + num_devices].address() : 0);
-            tt::tt_metal::SetRuntimeArgs(program, receiver_kernel_id, {receiver_core}, receiver_rt_args);
-            if (receiver_drain_risc_count == 2) {
-                tt::tt_metal::SetRuntimeArgs(program, receiver_reader_kernel_id, {receiver_core}, receiver_rt_args);
+            for (uint32_t receiver_idx = 0; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                const auto& indexed_receiver_core = receiver_cores[link * receiver_cores_per_link + receiver_idx];
+                std::vector<uint32_t> receiver_rt_args = {
+                    output_tensor.buffer()->address(),                 // persistent output address
+                    device_idx,                                        // local source is already written by sender core
+                    bank_owned_links ? 0 : selected_input_page_start,  // logical slice start or owned-page count base
+                    bank_owned_links ? input_pages_per_link : selected_input_page_end,
+                    input_pages_per_full_stripe,  // full output-page stride between source slabs
+                    receiver_control_sems[receiver_consumed_sem_base + receiver_idx]
+                        .address(),         // this receiver's consumed sequence on mirrored sender core
+                    virtual_core.x,         // mirrored sender core x
+                    virtual_core.y,         // mirrored sender core y
+                    barrier_sem.address(),  // receiver-ready signal target
+                    link,                   // bank-ownership link index
+                    receiver_idx,           // bank slot owned by this receiver core
+                };
+                for (uint32_t source = 0; source < num_devices; ++source) {
+                    receiver_rt_args.push_back(
+                        receiver_control_sems[receiver_produced_forward_sem_base + source].address());
+                }
+                for (uint32_t source = 0; source < num_devices; ++source) {
+                    receiver_rt_args.push_back(receiver_control_sems
+                                                   [(bank_owned_links ? receiver_produced_backward_sem_base
+                                                                      : receiver_produced_forward_sem_base) +
+                                                    source]
+                                                       .address());
+                }
+                receiver_rt_args.push_back(
+                    receiver_drain_risc_count == 2 ? receiver_control_sems[receiver_dual_sync_sem_index].address() : 0);
+                tt::tt_metal::SetRuntimeArgs(program, receiver_kernel_id, {indexed_receiver_core}, receiver_rt_args);
+                if (receiver_drain_risc_count == 2) {
+                    tt::tt_metal::SetRuntimeArgs(
+                        program, receiver_reader_kernel_id, {indexed_receiver_core}, receiver_rt_args);
+                }
             }
         }
     }
@@ -1081,6 +1166,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         .receiver_kernel_id = receiver_kernel_id,
         .receiver_reader_kernel_id = receiver_reader_kernel_id,
         .receiver_drain_risc_count = receiver_l1_mode ? receiver_drain_risc_count : 0,
+        .receiver_cores_per_link = receiver_cores_per_link,
         .bank_owned_links = bank_owned_links,
         .barrier_sem = barrier_sem,
         .receiver_control_sems = receiver_control_sems,
@@ -1200,23 +1286,26 @@ void AllGatherMulticastFactory::override_runtime_arguments(
             writer_args[4] = output_page_byte_offset_start;
             writer_args[5] = num_worker_output_chunks;
             if (receiver_args_by_core != nullptr) {
-                const auto& receiver_core = shared_vars.receiver_cores[link];
-                auto& receiver_args = (*receiver_args_by_core)[receiver_core.x][receiver_core.y];
-                receiver_args[0] = output_addr;
-                receiver_args[2] = shared_vars.bank_owned_links ? 0 : selected_input_page_start;
-                receiver_args[3] = shared_vars.bank_owned_links ? num_input_pages / shared_vars.worker_cores.size()
-                                                                : selected_input_page_end;
-                receiver_args[4] = input_pages_per_full_stripe;
-                receiver_args[8] = barrier_sem_addr;
-                if (receiver_reader_args_by_core != nullptr) {
-                    auto& receiver_reader_args = (*receiver_reader_args_by_core)[receiver_core.x][receiver_core.y];
-                    receiver_reader_args[0] = output_addr;
-                    receiver_reader_args[2] = shared_vars.bank_owned_links ? 0 : selected_input_page_start;
-                    receiver_reader_args[3] = shared_vars.bank_owned_links
-                                                  ? num_input_pages / shared_vars.worker_cores.size()
-                                                  : selected_input_page_end;
-                    receiver_reader_args[4] = input_pages_per_full_stripe;
-                    receiver_reader_args[8] = barrier_sem_addr;
+                for (uint32_t receiver_idx = 0; receiver_idx < shared_vars.receiver_cores_per_link; ++receiver_idx) {
+                    const auto& receiver_core =
+                        shared_vars.receiver_cores[link * shared_vars.receiver_cores_per_link + receiver_idx];
+                    auto& receiver_args = (*receiver_args_by_core)[receiver_core.x][receiver_core.y];
+                    receiver_args[0] = output_addr;
+                    receiver_args[2] = shared_vars.bank_owned_links ? 0 : selected_input_page_start;
+                    receiver_args[3] = shared_vars.bank_owned_links ? num_input_pages / shared_vars.worker_cores.size()
+                                                                    : selected_input_page_end;
+                    receiver_args[4] = input_pages_per_full_stripe;
+                    receiver_args[8] = barrier_sem_addr;
+                    if (receiver_reader_args_by_core != nullptr) {
+                        auto& receiver_reader_args = (*receiver_reader_args_by_core)[receiver_core.x][receiver_core.y];
+                        receiver_reader_args[0] = output_addr;
+                        receiver_reader_args[2] = shared_vars.bank_owned_links ? 0 : selected_input_page_start;
+                        receiver_reader_args[3] = shared_vars.bank_owned_links
+                                                      ? num_input_pages / shared_vars.worker_cores.size()
+                                                      : selected_input_page_end;
+                        receiver_reader_args[4] = input_pages_per_full_stripe;
+                        receiver_reader_args[8] = barrier_sem_addr;
+                    }
                 }
             }
         }

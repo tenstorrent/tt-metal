@@ -41,14 +41,17 @@ void kernel_main() {
     constexpr bool receiver_fused_notify = get_compile_time_arg_val(12) != 0;
     constexpr bool receiver_credit_enabled = get_compile_time_arg_val(13) != 0;
     constexpr bool receiver_window_credit = get_compile_time_arg_val(14) != 0;
-    constexpr bool receiver_send_payload = get_compile_time_arg_val(15) != 0;
-    constexpr bool receiver_attribution = get_compile_time_arg_val(16) != 0;
-    constexpr bool bank_owned_links = get_compile_time_arg_val(17) != 0;
-    constexpr uint32_t bank_owned_num_banks = get_compile_time_arg_val(18);
-    constexpr uint32_t bank_owned_num_links = get_compile_time_arg_val(19);
-    constexpr uint32_t bank_owned_coalesce_mask = get_compile_time_arg_val(20);
+    constexpr bool receiver_proactive_credit = get_compile_time_arg_val(15) != 0;
+    constexpr uint32_t receiver_credit_group_batches = get_compile_time_arg_val(16);
+    constexpr bool receiver_send_payload = get_compile_time_arg_val(17) != 0;
+    constexpr bool receiver_attribution = get_compile_time_arg_val(18) != 0;
+    constexpr bool bank_owned_links = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t bank_owned_num_banks = get_compile_time_arg_val(20);
+    constexpr uint32_t bank_owned_num_links = get_compile_time_arg_val(21);
+    constexpr uint32_t bank_owned_coalesce_mask = get_compile_time_arg_val(22);
+    constexpr uint32_t receiver_cores_per_link = get_compile_time_arg_val(23);
     constexpr bool bank_owned_coalesce_local = (bank_owned_coalesce_mask & 2) != 0;
-    constexpr auto output_tensor_args = TensorAccessorArgs<21>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<24>();
 
     constexpr bool enable_fabric = (num_connections > 0);
     constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
@@ -56,6 +59,9 @@ void kernel_main() {
     static_assert(!bank_owned_links || bank_owned_num_links > 0);
     static_assert(!bank_owned_links || bank_owned_num_banks % bank_owned_num_links == 0);
     static_assert(!bank_owned_links || bank_owned_num_banks == NUM_DRAM_BANKS);
+    static_assert(receiver_cores_per_link > 0);
+    static_assert(receiver_credit_group_batches > 0);
+    static_assert(receiver_credit_group_batches <= receiver_slot_count);
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -92,6 +98,20 @@ void kernel_main() {
     const uint32_t credit_wait_value = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t bank_owned_link_index = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_source_page_stride = get_arg_val<uint32_t>(arg_idx++);
+    address_t credit_sems[receiver_cores_per_link];
+    address_t consumed_sems[receiver_cores_per_link];
+    uint8_t receiver_noc_xs[receiver_cores_per_link];
+    uint8_t receiver_noc_ys[receiver_cores_per_link];
+    credit_sems[0] = credit_sem;
+    consumed_sems[0] = consumed_sem;
+    receiver_noc_xs[0] = receiver_noc_x;
+    receiver_noc_ys[0] = receiver_noc_y;
+    for (uint32_t receiver_idx = 1; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+        credit_sems[receiver_idx] = get_arg_val<address_t>(arg_idx++);
+        consumed_sems[receiver_idx] = get_arg_val<address_t>(arg_idx++);
+        receiver_noc_xs[receiver_idx] = get_arg_val<uint32_t>(arg_idx++);
+        receiver_noc_ys[receiver_idx] = get_arg_val<uint32_t>(arg_idx++);
+    }
     size_t arg_for_fab = arg_idx;
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
@@ -203,13 +223,42 @@ void kernel_main() {
     if constexpr (do_init_barrier) {
         const uint32_t interval_start = attribution_timestamp();
         if constexpr (receiver_l1_mode) {
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_sem), 0);
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sem), 0);
-            noc_semaphore_inc(safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem), 1);
+            // The local-source produced semaphore is never consumed by the
+            // receiver batch loop, because the sender writes its own output
+            // directly.  Reuse it as an explicit start handshake so the
+            // receiver cannot publish readiness before this RISC has reset the
+            // shared sender epoch.  Without the handshake, a fast receiver can
+            // increment barrier_sem before the local sender is ready.  Do not
+            // reset barrier_sem here: remote devices may already have sent
+            // their initialization increments, and the reader retires the
+            // complete epoch with an atomic decrement.
+            for (uint32_t receiver_idx = 0; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_sems[receiver_idx]), 0);
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sems[receiver_idx]), 0);
+            }
+            if constexpr (receiver_cores_per_link == 1) {
+                noc_semaphore_inc(safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem), 1);
+            }
+            for (uint32_t receiver_idx = 0; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                noc_semaphore_inc(
+                    safe_get_noc_addr(receiver_noc_xs[receiver_idx], receiver_noc_ys[receiver_idx], produced_sem), 1);
+            }
             noc.async_atomic_barrier();
-            // The second local signal comes from the receiver after it resets all
-            // produced counters.  Only then may this RISC advertise readiness remotely.
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2);
+            if constexpr (receiver_cores_per_link > 1) {
+                // Each receiver publishes readiness through its own consumed
+                // counter.  Clear those temporary tokens before payload credit
+                // epochs begin, then release the local reader through counter 0.
+                for (uint32_t receiver_idx = 0; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                    auto* ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sems[receiver_idx]);
+                    noc_semaphore_wait_min(ready_sem, 1);
+                    noc_semaphore_set(ready_sem, 0);
+                }
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sems[0]), 1);
+            } else {
+                // The second local signal comes from the receiver after it resets all
+                // produced counters.  Only then may this RISC advertise readiness remotely.
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2);
+            }
         }
         if constexpr (enable_fabric) {
             uint64_t barrier_sem_noc_addr_in_pkt =
@@ -277,22 +326,66 @@ void kernel_main() {
         return loc;
     };
 
-    uint32_t receiver_batches_sent = 0;
-    auto prepare_receiver_slot = [&]() __attribute__((always_inline)) -> uint32_t {
+    uint32_t receiver_batches_sent[receiver_cores_per_link] = {};
+    uint32_t credit_groups_proxied[receiver_cores_per_link] = {};
+    auto proxy_ready_credit_groups = [&](uint32_t receiver_idx) __attribute__((always_inline)) {
+        if constexpr (receiver_l1_mode && enable_fabric && receiver_credit_enabled && receiver_proactive_credit) {
+            const uint32_t interval_start = attribution_timestamp();
+            volatile tt_l1_ptr uint32_t* consumed_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sems[receiver_idx]);
+            const uint64_t remote_credit_sem_addr =
+                safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, credit_sems[receiver_idx], 0);
+            const uint32_t ready_groups = __atomic_load_n(consumed_sem_ptr, __ATOMIC_ACQUIRE);
+            while (credit_groups_proxied[receiver_idx] < ready_groups) {
+                fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    fabric_connection,
+                    sem_route_id,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_credit_sem_addr, 0});
+                ++credit_groups_proxied[receiver_idx];
+                if constexpr (receiver_attribution) {
+                    ++credit_command_count;
+                }
+            }
+            attribute_elapsed(credit_cycles, interval_start);
+        }
+    };
+    auto prepare_receiver_slot = [&](uint32_t receiver_idx) __attribute__((always_inline)) -> uint32_t {
         if constexpr (receiver_l1_mode && enable_fabric && receiver_credit_enabled) {
+            const uint32_t batches_sent = receiver_batches_sent[receiver_idx];
+            volatile tt_l1_ptr uint32_t* consumed_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sems[receiver_idx]);
+            const uint64_t remote_credit_sem_addr =
+                safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, credit_sems[receiver_idx], 0);
+            if constexpr (receiver_proactive_credit) {
+                proxy_ready_credit_groups(receiver_idx);
+                if (batches_sent >= receiver_slot_count) {
+                    const uint32_t reclaim_sequence =
+                        (batches_sent - receiver_slot_count) / receiver_credit_group_batches + 1;
+                    if (credit_groups_proxied[receiver_idx] < reclaim_sequence) {
+                        const uint32_t interval_start = attribution_timestamp();
+                        noc_semaphore_wait_min(consumed_sem_ptr, reclaim_sequence);
+                        attribute_elapsed(credit_cycles, interval_start);
+                        proxy_ready_credit_groups(receiver_idx);
+                    }
+                    const uint32_t interval_start = attribution_timestamp();
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_sems[receiver_idx]),
+                        reclaim_sequence * credit_wait_value);
+                    attribute_elapsed(credit_cycles, interval_start);
+                }
+                return batches_sent % receiver_slot_count;
+            }
             uint32_t reclaim_sequence = 0;
             if constexpr (receiver_window_credit) {
-                if (receiver_batches_sent > 0 && receiver_batches_sent % receiver_slot_count == 0) {
-                    reclaim_sequence = receiver_batches_sent / receiver_slot_count;
+                if (batches_sent > 0 && batches_sent % receiver_slot_count == 0) {
+                    reclaim_sequence = batches_sent / receiver_slot_count;
                 }
-            } else if (receiver_batches_sent >= receiver_slot_count) {
-                reclaim_sequence = receiver_batches_sent - receiver_slot_count + 1;
+            } else if (batches_sent >= receiver_slot_count) {
+                reclaim_sequence = batches_sent - receiver_slot_count + 1;
             }
             if (reclaim_sequence > 0) {
                 const uint32_t interval_start = attribution_timestamp();
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sem), reclaim_sequence);
-                const uint64_t remote_credit_sem_addr =
-                    safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, credit_sem, 0);
+                noc_semaphore_wait_min(consumed_sem_ptr, reclaim_sequence);
                 fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     fabric_connection,
                     sem_route_id,
@@ -301,21 +394,39 @@ void kernel_main() {
                     ++credit_command_count;
                 }
                 noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_sem), reclaim_sequence * credit_wait_value);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_sems[receiver_idx]),
+                    reclaim_sequence * credit_wait_value);
                 attribute_elapsed(credit_cycles, interval_start);
             }
-            return receiver_batches_sent % receiver_slot_count;
+            return batches_sent % receiver_slot_count;
         }
         return 0u;
     };
     auto finish_receiver_batches = [&]() __attribute__((always_inline)) {
         if constexpr (receiver_l1_mode && enable_fabric && receiver_credit_enabled) {
-            const uint32_t interval_start = attribution_timestamp();
-            const uint32_t consumed_sequence =
-                receiver_window_credit ? (receiver_batches_sent + receiver_slot_count - 1) / receiver_slot_count
-                                       : receiver_batches_sent;
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sem), consumed_sequence);
-            attribute_elapsed(credit_cycles, interval_start);
+            for (uint32_t receiver_idx = 0; receiver_idx < receiver_cores_per_link; ++receiver_idx) {
+                volatile tt_l1_ptr uint32_t* consumed_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sems[receiver_idx]);
+                if constexpr (receiver_proactive_credit) {
+                    const uint32_t final_sequence =
+                        (receiver_batches_sent[receiver_idx] + receiver_credit_group_batches - 1) /
+                        receiver_credit_group_batches;
+                    while (credit_groups_proxied[receiver_idx] < final_sequence) {
+                        const uint32_t interval_start = attribution_timestamp();
+                        noc_semaphore_wait_min(consumed_sem_ptr, credit_groups_proxied[receiver_idx] + 1);
+                        attribute_elapsed(credit_cycles, interval_start);
+                        proxy_ready_credit_groups(receiver_idx);
+                    }
+                    continue;
+                }
+                const uint32_t interval_start = attribution_timestamp();
+                const uint32_t consumed_sequence =
+                    receiver_window_credit
+                        ? (receiver_batches_sent[receiver_idx] + receiver_slot_count - 1) / receiver_slot_count
+                        : receiver_batches_sent[receiver_idx];
+                noc_semaphore_wait_min(consumed_sem_ptr, consumed_sequence);
+                attribute_elapsed(credit_cycles, interval_start);
+            }
         }
     };
     auto run_main = [&](auto& fabric) {
@@ -325,6 +436,7 @@ void kernel_main() {
             attribute_elapsed(cb_wait_cycles, cb_wait_start);
             auto l1_read_addr = cb.get_read_ptr();
             const auto batch_l1_read_addr = l1_read_addr;
+            const uint32_t output_batch = bank_owned_output_batch;
             const uint32_t batch = bank_owned_links
                                        ? bank_owned_pages_in_batch(bank_owned_output_batch)
                                        : std::min(outputs_per_cb_page, num_output_chunks - output_chunks_sent);
@@ -377,14 +489,16 @@ void kernel_main() {
             attribute_elapsed(local_issue_cycles, local_issue_start);
 
             if constexpr (enable_fabric && receiver_l1_mode && receiver_send_payload) {
-                const uint32_t receiver_slot = prepare_receiver_slot();
+                const uint32_t receiver_idx =
+                    receiver_cores_per_link == 1 ? 0 : output_batch / bank_owned_runs_per_bank;
+                const uint32_t receiver_slot = prepare_receiver_slot(receiver_idx);
                 const uint64_t remote_l1_addr = safe_get_noc_addr(
-                    receiver_noc_x,
-                    receiver_noc_y,
+                    receiver_noc_xs[receiver_idx],
+                    receiver_noc_ys[receiver_idx],
                     receiver_buffer_base + (device_idx * receiver_slot_count + receiver_slot) * cb_page_size,
                     0);
                 const uint64_t remote_produced_sem_addr =
-                    safe_get_noc_addr(receiver_noc_x, receiver_noc_y, produced_sem, 0);
+                    safe_get_noc_addr(receiver_noc_xs[receiver_idx], receiver_noc_ys[receiver_idx], produced_sem, 0);
                 const uint32_t fabric_issue_start = attribution_timestamp();
                 fabric.async_write(
                     batch_l1_read_addr, batch * output_chunk_size, remote_l1_addr, remote_produced_sem_addr);
@@ -392,11 +506,11 @@ void kernel_main() {
                     ++fabric_payload_command_count;
                 }
                 attribute_elapsed(fabric_issue_cycles, fabric_issue_start);
-                ++receiver_batches_sent;
+                ++receiver_batches_sent[receiver_idx];
             }
 
             const uint32_t local_flush_start = attribution_timestamp();
-            noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes
+            noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes to depart
             attribute_elapsed(local_flush_cycles, local_flush_start);
             if constexpr (enable_fabric) {
                 const uint32_t fabric_flush_start = attribution_timestamp();

@@ -28,12 +28,12 @@ struct AllGatherMulticastFactory {
         tt::tt_metal::KernelHandle receiver_kernel_id{};
         tt::tt_metal::KernelHandle receiver_reader_kernel_id{};
         uint32_t receiver_drain_risc_count = 0;
+        uint32_t receiver_cores_per_link = 1;
         bool bank_owned_links = false;
         tt::tt_metal::GlobalSemaphore barrier_sem;
-        // Receiver path only: [0] is the sender credit counter, [1] is the
-        // local consumed sequence, and [2 + source] is that source's produced
-        // sequence on every mirrored receiver core.  When dual-RISC drain is
-        // selected, [2 + num_devices] is its local window-completion counter.
+        // Receiver path: per-receiver credit counters, per-receiver consumed
+        // sequences, forward produced sequences, optional backward produced
+        // sequences, then the optional dual-RISC completion counter.
         std::vector<tt::tt_metal::GlobalSemaphore> receiver_control_sems;
     };
 
