@@ -276,7 +276,7 @@ jobs:
           echo "perf host profiling requested for target group: '$PERF_TARGET_GROUP'"
 
       - name: Install perf (host profiling)
-        if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == inputs.perf-target-group }}
+        if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
         env:
           # Optional override: a space/comma-separated list of package names. Validated below and
           # split into a safe array; never spliced verbatim into the apt-get command line.
@@ -315,7 +315,7 @@ jobs:
       # step, so the selected group still tests even when recording is denied.
       - name: Probe perf recording capability (host profiling)
         id: perf-probe
-        if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == inputs.perf-target-group }}
+        if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
         env:
           PERF_SAMPLE_FREQUENCY: ${{ inputs.perf-sample-frequency }}
         run: |
@@ -340,7 +340,7 @@ jobs:
         env:
           # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
           # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
-          PERF_PROFILE_THIS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == inputs.perf-target-group }}
+          PERF_PROFILE_THIS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
           # Whether the probe confirmed perf can actually record. Empty when the probe step was
           # skipped (experiment off / not the target group); treated as "not ready".
           PERF_READY: ${{ steps.perf-probe.outputs.perf_ready }}
@@ -433,7 +433,7 @@ jobs:
       # EXPERIMENT (perf host profiling): summarize + upload perf.data. Guarded so it only runs
       # for the chosen HW group when the experiment is enabled; otherwise skipped (no overhead).
       - name: Summarize perf profile (host profiling)
-        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == inputs.perf-target-group }}
+        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
         run: |
           # Best-effort human-readable summary next to the perf.data. Only attempt when a perf.data
           # exists, perf is available, and the file is a sane size (skip huge captures to keep this
@@ -456,7 +456,7 @@ jobs:
           done || true
 
       - name: Upload perf profile (host profiling)
-        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == inputs.perf-target-group }}
+        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: perf-host-profile-${{ matrix.test-group.name }}
