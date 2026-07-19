@@ -847,12 +847,34 @@ prior generation of a wrapped slot) — the same cross-hart LIM incoherence that
 PROD/CONS pointers and killed per-lane HACKED. `cbo` cache maintenance HANGS the X280 and LIM
 has no easy uncached alias, so the split can only be kept lossless by never wrapping the ring.
 
-**Direct drain (`--direct`, NONCE bit 8) — the fix.** ONE hart reads worker-L1 over NoC
-(coherent) and writes the single host ring DIRECTLY, injecting sticky-src inline — no LIM SPSC,
-no cross-hart handoff, no relay. **UNCONDITIONALLY LOSSLESS**: 550/550 lanes, 0 seq gaps at
-every rate (proddelay 0..6000), full burst, high volume (2000 markers/lane ≈ 13 host-ring
-wraps), on the normal wrapping ring. The exact configs the split corrupted are clean. Proves
-the cross-hart LIM SPSC was the sole root cause.
+**⚠️ CORRECTION (2026-07-19): the split "loss" above was MISDIAGNOSED — it was NOT cache
+coherence, it was a relay FRAMING bug, now FIXED (commit 881e41be20c). Tell: the corrupted runs
+had the EXACT marker count (1,100,000 == expected) with ~27 % seq gaps and half the lanes short
+— markers MISATTRIBUTED to the wrong lane, not lost/overwritten (coherence staleness would change
+counts). Cause: the relay capped each copy at host-ring free space (`run = min(avail, hspace)`),
+cutting a reader's data-run mid-frame, then round-robined to the OTHER reader; when the host
+freed space, round-robin inserted reader0's next frame BETWEEN reader1's split halves, orphaning
+the continuation from its STICKY-SRC → host bound it to the wrong lane. `profcons_split` (§15)
+never suffered because it copies only WHOLE rings to descriptor-addressed host slots. FIX: the
+relay drains a reader's WHOLE published snapshot (`avail = prod - cn`; PROD only published at
+frame boundaries) CONTIGUOUSLY before touching the other reader, publishing HSENT incrementally.
+RESULT: the exact 261/550 config → 550/550 lossless, 0 gaps; 4000 mk (2.2M markers) also clean.
+Readers 4.3 cyc/word (~1.86 GB/s). So the split is a valid, faster-on-the-read-side design; the
+"cross-hart LIM incoherence" story here (and the PROD/CONS local-pointer workarounds it justified)
+is suspect. PER-RING HOST DRAIN (done): relay writes reader h → its OWN host ring h (own HSENT/
+HACKED, own posted window), N per-ring host consumer threads drain in parallel; relay uses a
+NON-blocking round-robin (skip to the other reader when a ring is full — safe now, each reader
+owns a ring so partial copies stay contiguous). Result: relay `hostfull` 270k → ~13k (20× less
+spinning), wall 16M → 13M, ~666 MB/s end-to-end (beats direct 615 and the single-ring split 539),
+lossless at full burst + 2.2M markers. Now READER-bound, not host-bound (readers 4.2 cyc/word,
+~1.86 GB/s aggregate); producer stall ~1.5× below direct (640M vs 951M spins). The whole-snapshot
+blocking drain (needed for a shared ring) was a throughput regression here and was reverted.**
+
+**Direct drain (`--direct`, NONCE bit 8).** ONE hart reads worker-L1 over NoC (coherent) and
+writes the single host ring DIRECTLY, injecting sticky-src inline — no LIM SPSC, no cross-hart
+handoff, no relay. UNCONDITIONALLY LOSSLESS: 550/550 lanes, 0 seq gaps at every rate (proddelay
+0..6000), full burst, high volume. Correct + simplest, but NOT the only correct design (the split
+is lossless too, post-fix) and slower on the read side (single hart read+write = 615 MB/s).
 
 **BW + stall knee (bh-11, 550 lanes, `pll=1000` → 1 cyc = 1 ns).** The drainer is a steady
 **6.5 cyc/word ≈ 615 MB/s raw** (read worker-L1 + write host ring, per 4 B word); end-to-end at

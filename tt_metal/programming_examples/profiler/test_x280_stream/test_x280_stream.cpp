@@ -207,7 +207,8 @@ int main(int argc, char** argv) {
     uint64_t data_off = (chan_sz / 2) & ~(WIN_STRIDE - 1);
     uint64_t host_base = pcie_base + data_off;
     uint64_t hring_bytes = (uint64_t)hring_words * 4;
-    uint64_t ndh = direct ? ndrain : 1;  // # host rings = # drain harts (each hart owns ring h @ +h*hring_bytes)
+    uint64_t ndh = direct ? ndrain : nread;  // # host rings: direct = 1/drain hart; split = 1/reader (relay
+                                             // writes reader h -> ring h), each drained by its own host thread
     if (hring_bytes * ndh > WIN_STRIDE) {
         fprintf(stderr, "[d2h] %llu host rings exceed 2 MB window\n", (unsigned long long)ndh);
         std::_Exit(2);

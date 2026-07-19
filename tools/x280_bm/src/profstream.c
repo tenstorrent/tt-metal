@@ -234,28 +234,36 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
 /* Round-robin the reader SPSCs; copy their words verbatim to the single host ring, flow-controlled by the
  * host's ack (HACKED). Blocks on a full host ring. Runs until P_STOP and all reader SPSCs are drained. */
 static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint64_t hring_words, uint64_t pcie_enc) {
-    uint64_t off_w = host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
-    uint32_t win_p = WRITE_WIN_BASE; /* single posted window to the host ring */
-    noc_tlb_2m_t wt;
-    wt.data[0] = 0;
-    wt.data[1] = 0;
-    wt.data[2] = 0;
-    wt.data[3] = 0;
-    wt.addr = host_base >> 21;
-    wt.x_end = (uint32_t)(pcie_enc & 0x3f);
-    wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
-    wt.x_start = (uint32_t)(pcie_enc & 0x3f);
-    wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
-    wt.noc_selector = 0;
-    wt.posted = 1;
-    (void)noc_configure_tlb_2m_ext(win_p, &wt, 0);
-    fence_();
-    uint64_t hbase = NOC_2M_WINDOW_BASE + (uint64_t)win_p * NOC_2M_WINDOW_STRIDE + off_w;
-
-    uint32_t hsent = 0;
-    uint32_t cons[4] = {0, 0, 0, 0}; /* LOCAL per-reader cons; only WRITTEN to LIM for the reader */
-    w32(HSENT_ADDR, 0);
+    /* One host ring PER READER: reader h -> ring h @ host_base + h*hring_bytes, its own HSENT/HACKED pair and
+     * posted window WRITE_WIN_BASE+h. N per-ring host consumer threads drain them in PARALLEL, so the host
+     * side scales with nread instead of one thread bottlenecking a single ring. Each ring carries exactly one
+     * reader's self-framed (sticky+data) stream -> no cross-reader interleave, and the whole-snapshot drain
+     * below keeps each frame contiguous. */
+    uint64_t hbase[4];
     for (uint64_t h = 0; h < nread; h++) {
+        uint64_t mhb = host_base + h * hring_words * 4;
+        uint32_t win_p = WRITE_WIN_BASE + (uint32_t)h;
+        noc_tlb_2m_t wt;
+        wt.data[0] = 0;
+        wt.data[1] = 0;
+        wt.data[2] = 0;
+        wt.data[3] = 0;
+        wt.addr = mhb >> 21;
+        wt.x_end = (uint32_t)(pcie_enc & 0x3f);
+        wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
+        wt.x_start = (uint32_t)(pcie_enc & 0x3f);
+        wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
+        wt.noc_selector = 0;
+        wt.posted = 1;
+        (void)noc_configure_tlb_2m_ext(win_p, &wt, 0);
+        hbase[h] = NOC_2M_WINDOW_BASE + (uint64_t)win_p * NOC_2M_WINDOW_STRIDE + (mhb & (NOC_2M_WINDOW_STRIDE - 1ULL));
+    }
+    fence_();
+
+    uint32_t hsent[4] = {0, 0, 0, 0}; /* per-ring published word count */
+    uint32_t cons[4] = {0, 0, 0, 0};  /* LOCAL per-reader cons; only WRITTEN to LIM for the reader */
+    for (uint64_t h = 0; h < nread; h++) {
+        w32(HSENT(h), 0);
         w32(CONS(h), 0);
     }
     fence_();
@@ -275,47 +283,42 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
             }
             pending = 1;
             uint64_t sbase = STAGE_BASE + h * STAGE_STRIDE;
-            uint32_t avail = prod - cn; /* WHOLE frames: PROD is only published at (sticky+run) boundaries */
-            uint64_t tc = rdcycle();
-            /* Drain this reader's WHOLE snapshot before touching the other reader, so its frames stay
-             * CONTIGUOUS in the shared host ring. The old code capped the copy at hspace and moved on --
-             * that splits a reader's data-run and lets the OTHER reader's frame land between the halves; the
-             * continuation then has no STICKY-SRC prefix, so the host binds it to the wrong lane. That was
-             * the "loss" (exact marker count, but ~27% misattributed) -- a framing bug, not LIM coherence.
-             * We publish HSENT incrementally inside the loop so the host keeps draining and frees hspace. */
-            while (avail) {
-                uint32_t hspace = (uint32_t)hring_words - (hsent - r32(HACKED_ADDR));
-                if (hspace == 0) {
-                    hostfull++;
-                    continue; /* spin on the SAME reader until the host frees space -- never interleave */
-                }
-                uint32_t run = avail < hspace ? avail : hspace;
-                uint32_t si = cn, di = hsent, leftw = run;
-                while (leftw) {
-                    uint32_t sslot = si % STAGE_WORDS;
-                    uint32_t hslot = di % (uint32_t)hring_words;
-                    uint32_t chunk = leftw;
-                    if (chunk > STAGE_WORDS - sslot) {
-                        chunk = STAGE_WORDS - sslot;
-                    }
-                    if (chunk > (uint32_t)hring_words - hslot) {
-                        chunk = (uint32_t)hring_words - hslot;
-                    }
-                    copy_words(hbase + (uint64_t)hslot * 4, sbase + (uint64_t)sslot * 4, chunk);
-                    si += chunk;
-                    di += chunk;
-                    leftw -= chunk;
-                }
-                cn += run;
-                hsent += run;
-                total += run;
-                avail -= run;
-                fence_();               /* host writes issued before we publish the pointers */
-                w32(CONS(h), cn);       /* free the reader SPSC incrementally */
-                w32(HSENT_ADDR, hsent); /* publish so the host keeps draining -> frees hspace */
+            uint32_t avail = prod - cn;
+            uint32_t hspace = (uint32_t)hring_words - (hsent[h] - r32(HACKED(h)));
+            if (hspace == 0) {
+                hostfull++;
+                continue; /* ring h full -> skip to the OTHER reader (its own ring may have space), come back.
+                           * SAFE with per-reader rings: reader h's continuation returns to ring h, still
+                           * contiguous -- no other reader's frame can land on ring h. (The framing bug only
+                           * existed on a single SHARED ring; here each reader owns a ring.) */
             }
-            cons[h] = cn;
+            uint32_t run = avail < hspace ? avail : hspace;
+            uint64_t tc = rdcycle();
+            /* copy reader h's SPSC words -> its OWN ring h, chunked (split at SPSC wrap and ring wrap) */
+            uint32_t si = cn, di = hsent[h], leftw = run;
+            while (leftw) {
+                uint32_t sslot = si % STAGE_WORDS;
+                uint32_t hslot = di % (uint32_t)hring_words;
+                uint32_t chunk = leftw;
+                if (chunk > STAGE_WORDS - sslot) {
+                    chunk = STAGE_WORDS - sslot;
+                }
+                if (chunk > (uint32_t)hring_words - hslot) {
+                    chunk = (uint32_t)hring_words - hslot;
+                }
+                copy_words(hbase[h] + (uint64_t)hslot * 4, sbase + (uint64_t)sslot * 4, chunk);
+                si += chunk;
+                di += chunk;
+                leftw -= chunk;
+            }
             t_copy += rdcycle() - tc;
+            cn += run;
+            cons[h] = cn;
+            hsent[h] += run;
+            total += run;
+            fence_();                /* host writes issued before we publish the pointers */
+            w32(CONS(h), cn);        /* free the reader SPSC */
+            w32(HSENT(h), hsent[h]); /* publish to consumer thread h */
             (void)breach;
         }
         if (!pending) {
