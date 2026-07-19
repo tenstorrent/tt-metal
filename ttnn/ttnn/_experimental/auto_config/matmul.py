@@ -2041,14 +2041,14 @@ def _env_flag_enabled(name: str) -> bool:
 def _device_profiler_enabled() -> bool:
     """True when this process was launched under the Tracy device profiler.
 
-    The auto-config selection loop runs in-process while the device is held
-    open, so it cannot spawn a separate profiler subprocess to measure a
-    candidate.  Instead, when the whole workload is launched under the profiler
-    (``TT_METAL_DEVICE_PROFILER=1`` + mid-run-dump + cpp-post-process on a
-    Tracy-enabled build), we read the on-device ``DEVICE KERNEL DURATION``
-    column directly -- that measurement is the pure kernel execution time and
-    excludes host dispatch overhead.  When the profiler is not active the perf
-    APIs return an empty dict, so we fall back to wall-clock timing.
+        open, so it cannot spawn a separate profiler subprocess to measure a
+        candidate.  Instead, when the whole workload is launched under the profiler
+        (``TT_METAL_DEVICE_PROFILER=1`` + mid-run-dump + cpp-post-process on a
+        Tracy-enabled build), we read the on-device ``DEVICE KERNEL DURATION``
+        column directly -- that measurement is the pure kernel execution time and
+        excludes host dis    The auto-config selection loop runs in-process while the device is held
+    patch overhead.  When the profiler is not active the perf
+        APIs return an empty dict, so we fall back to wall-clock timing.
     """
     ttnn = _ttnn()
     profiler_mod = getattr(ttnn, "_ttnn", None)
@@ -2116,6 +2116,41 @@ def _benchmark_candidate_profiler(candidate: Candidate, device: Any) -> tuple[fl
     return average_us, samples_us, "profiler"
 
 
+def _log_info(message: str) -> None:
+    try:
+        from loguru import logger
+    except Exception:
+        return
+    logger.info(message)
+
+
+_benchmark_mode_notice_emitted = False
+
+
+def _notify_benchmark_mode(mode: str) -> None:
+    """Emit a one-time note (per process) about how candidates are being timed.
+
+    Makes the measurement path transparent: on a profiler-enabled run selection
+    is driven by device kernel duration; otherwise it falls back to wall-clock
+    timing (which includes host dispatch overhead) and we say how to enable the
+    profiler path.  ``DEVICE KERNEL DURATION`` is only produced by a Tracy-enabled
+    build, so on a release build the wall-clock fallback is the only option.
+    """
+    global _benchmark_mode_notice_emitted
+    if _benchmark_mode_notice_emitted:
+        return
+    _benchmark_mode_notice_emitted = True
+    if mode == "profiler":
+        _log_info("auto-config matmul: benchmarking candidates by device kernel duration (profiler active).")
+    else:
+        _log_info(
+            f"auto-config matmul: device profiler not active; benchmarking candidates by wall-clock '{mode}' "
+            "timing, which includes host dispatch overhead. For dispatch-overhead-free selection, run under a "
+            "Tracy-enabled build with TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1 and "
+            "TT_METAL_PROFILER_CPP_POST_PROCESS=1 set."
+        )
+
+
 def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0) -> tuple[float, list[float], str]:
     ttnn = _ttnn()
     # Preferred: measure the on-device kernel duration via the device profiler.
@@ -2124,7 +2159,9 @@ def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0
     # is only available when the workload is launched under the profiler.
     if _device_profiler_enabled():
         try:
-            return _benchmark_candidate_profiler(candidate, device)
+            result = _benchmark_candidate_profiler(candidate, device)
+            _notify_benchmark_mode(result[2])
+            return result
         except Exception:
             pass
     # Fallbacks (wall-clock, so they include some dispatch overhead) for runs
@@ -2134,10 +2171,14 @@ def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0
         hasattr(ttnn, attr) for attr in ("begin_trace_capture", "end_trace_capture", "execute_trace", "release_trace")
     ):
         try:
-            return _benchmark_candidate_trace(candidate, device, queue_id=queue_id)
+            result = _benchmark_candidate_trace(candidate, device, queue_id=queue_id)
+            _notify_benchmark_mode(result[2])
+            return result
         except Exception:
             pass
-    return _benchmark_candidate_eager(candidate, device)
+    result = _benchmark_candidate_eager(candidate, device)
+    _notify_benchmark_mode(result[2])
+    return result
 
 
 def _callable_accepts_keyword(function: Callable[..., Any], keyword: str) -> bool:

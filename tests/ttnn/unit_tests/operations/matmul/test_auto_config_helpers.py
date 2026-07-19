@@ -939,3 +939,27 @@ def test_benchmark_candidate_falls_back_to_wall_clock_without_profiler(monkeypat
     avg_us, _samples, mode = auto_matmul._benchmark_candidate(candidate, "dev")
     assert mode == "trace"
     assert avg_us == pytest.approx(5.0)
+
+
+def test_benchmark_mode_notice_emits_once_and_reflects_mode(monkeypatch):
+    monkeypatch.setattr(auto_matmul, "_benchmark_mode_notice_emitted", False)
+    msgs = []
+    monkeypatch.setattr(auto_matmul, "_log_info", lambda m: msgs.append(m))
+
+    auto_matmul._notify_benchmark_mode("trace")
+    auto_matmul._notify_benchmark_mode("profiler")  # second call is suppressed
+
+    assert len(msgs) == 1
+    assert "device profiler not active" in msgs[0]
+    assert "TT_METAL_DEVICE_PROFILER=1" in msgs[0]
+
+
+def test_benchmark_mode_notice_profiler_message(monkeypatch):
+    monkeypatch.setattr(auto_matmul, "_benchmark_mode_notice_emitted", False)
+    msgs = []
+    monkeypatch.setattr(auto_matmul, "_log_info", lambda m: msgs.append(m))
+
+    auto_matmul._notify_benchmark_mode("profiler")
+
+    assert len(msgs) == 1
+    assert "device kernel duration" in msgs[0]
