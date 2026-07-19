@@ -185,7 +185,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || '--device /dev/tenstorrent -e TT_GH_CI_INFRA' }}
+      options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || (inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku)) && '--cap-add CAP_PERFMON --device /dev/tenstorrent -e TT_GH_CI_INFRA' || '--device /dev/tenstorrent -e TT_GH_CI_INFRA' }}
     defaults:
       run:
         shell: bash
