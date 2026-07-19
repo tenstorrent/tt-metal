@@ -500,7 +500,8 @@ int main(uint64_t hartid) {
     uint64_t hring_words = r64(P_HRING_WORDS);
     uint64_t pcie_enc = r64(P_PCIE_ENC);
     uint64_t read_noc = r64(P_NONCE) & 1ull;
-    uint64_t direct = (r64(P_NONCE) >> 8) & 1ull; /* NONCE bit 8: DIRECT drain (no reader/relay split) */
+    uint64_t direct = (r64(P_NONCE) >> 8) & 1ull;   /* NONCE bit 8: DIRECT drain (no reader/relay split) */
+    uint64_t splitnoc = (r64(P_NONCE) >> 9) & 1ull; /* NONCE bit 9: each drain hart reads over NoC (hartid&1) */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -533,7 +534,8 @@ int main(uint64_t hartid) {
     fence_();
 
     if (direct) {
-        drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, read_noc);
+        uint64_t eff_noc = splitnoc ? (hartid & 1ull) : read_noc; /* split reads across NoC0/NoC1 per hart */
+        drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, eff_noc);
     } else if (hartid < nread) {
         reader_run(hartid, num_cores, prof_l1, nread, read_noc);
     } else {
