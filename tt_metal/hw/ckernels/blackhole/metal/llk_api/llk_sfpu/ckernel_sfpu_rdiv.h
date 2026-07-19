@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
-#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel {
@@ -44,7 +43,6 @@ inline void calculate_rdiv(const uint value) {
 
 template <bool APPROXIMATION_MODE>
 void rdiv_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 

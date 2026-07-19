@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "cmath_common.h"  // math::reset_counters, p_setrwc
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_recip.h"
 
@@ -31,7 +30,6 @@ inline void calculate_silu() {
 
 template <bool APPROXIMATION_MODE>
 inline void silu_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // calculate_silu always uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must
     // use non-approx sigmoid_init regardless of APPROXIMATION_MODE.
     sigmoid_init<false>();

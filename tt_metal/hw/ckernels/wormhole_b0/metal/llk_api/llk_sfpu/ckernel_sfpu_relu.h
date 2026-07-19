@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 
@@ -140,7 +139,6 @@ inline void relu_clamp_int(uint threshold) {
         }
     }
 }
-inline void relu_min_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold) {
@@ -153,8 +151,6 @@ inline void relu_min(uint uint_threshold) {
         dst_reg++;
     }
 }
-
-inline void relu_max_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold) {
@@ -169,8 +165,6 @@ inline void relu_max(uint uint_threshold) {
         dst_reg++;
     }
 }
-
-inline void lrelu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_lrelu(const uint slope) {

@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_topk.h"
-#include "llk_math_eltwise_unary_sfpu.h"
 
 using namespace sfpi;
 
@@ -33,8 +32,6 @@ inline void calculate_bitonic_topk_rebuild(uint idir, uint m_iter, uint k, uint 
 
 template <bool APPROXIMATION_MODE>
 inline void topk_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
     _init_topk();
 }
 

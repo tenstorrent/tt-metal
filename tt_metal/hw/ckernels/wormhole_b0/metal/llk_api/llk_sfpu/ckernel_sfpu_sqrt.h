@@ -7,7 +7,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
@@ -114,7 +113,6 @@ inline void calculate_sqrt() {
 
 template <bool APPROXIMATION_MODE, bool legacy_compat = false>
 void sqrt_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
         if constexpr (APPROXIMATION_MODE) {
             sfpi::vConstIntPrgm0 = 0x5f0b3892;

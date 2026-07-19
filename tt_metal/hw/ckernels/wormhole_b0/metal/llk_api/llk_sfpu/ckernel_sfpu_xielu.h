@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_exp.h"
 
@@ -155,7 +154,6 @@ inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
 
 template <bool APPROXIMATION_MODE>
 void xielu_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.4426950408889634f;   // 1/ln(2)
     sfpi::vConstFloatPrgm1 = -1e-6f;                // eps value
     sfpi::vConstFloatPrgm2 = -0.0000009999995427f;  // expm1(eps)

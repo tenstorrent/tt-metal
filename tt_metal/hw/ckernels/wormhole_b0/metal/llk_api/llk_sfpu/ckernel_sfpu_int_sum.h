@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 
 #include "sfpi.h"
 
@@ -84,9 +83,7 @@ inline void calculate_sum_int_row() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void sum_int_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void sum_int_init() {}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void add_int(const uint dst_offset) {

@@ -7,7 +7,6 @@
 #include <limits>
 
 #include "ckernel_sfpu_exp.h"
-#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 /*
@@ -191,7 +190,6 @@ inline void calculate_expm1() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void expm1_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = -0.693145752f;    // -ln(2)_hi

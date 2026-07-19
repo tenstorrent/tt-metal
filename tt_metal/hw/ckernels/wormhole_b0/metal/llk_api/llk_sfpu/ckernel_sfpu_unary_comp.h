@@ -6,14 +6,11 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
-
-inline void unary_ne_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_ne(uint value) {
@@ -33,8 +30,6 @@ inline void calculate_unary_ne(uint value) {
     }
 }
 
-inline void unary_eq_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_eq(uint value) {
     // SFPU microcode
@@ -52,8 +47,6 @@ inline void calculate_unary_eq(uint value) {
         sfpi::dst_reg++;
     }
 }
-
-inline void unary_gt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_gt(uint value) {
@@ -73,8 +66,6 @@ inline void calculate_unary_gt(uint value) {
     }
 }
 
-inline void unary_lt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_lt(uint value) {
     // SFPU microcode
@@ -93,8 +84,6 @@ inline void calculate_unary_lt(uint value) {
     }
 }
 
-inline void unary_ge_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_ge(uint value) {
     // SFPU microcode
@@ -112,8 +101,6 @@ inline void calculate_unary_ge(uint value) {
         sfpi::dst_reg++;
     }
 }
-
-inline void unary_le_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_le(uint value) {

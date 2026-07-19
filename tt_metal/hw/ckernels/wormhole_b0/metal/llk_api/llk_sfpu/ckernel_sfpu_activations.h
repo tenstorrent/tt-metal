@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 
@@ -43,7 +42,6 @@ inline void calculate_activation() {
 
 template <bool APPROXIMATION_MODE>
 void hardsigmoid_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // For hardsigmoid slope is 1/6, FP32 IEEE 754 representation.
     sfpi::vConstFloatPrgm0 = 0.1666666716337204f;
     sfpi::vConstFloatPrgm1 = 0.5f;

@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 
@@ -59,7 +58,6 @@ inline void calculate_erfinv() {
 
 template <bool APPROXIMATION_MODE>
 void erfinv_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     log_init<false, false, false>();
 }
 

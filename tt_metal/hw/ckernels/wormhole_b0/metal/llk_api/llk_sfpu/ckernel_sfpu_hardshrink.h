@@ -4,13 +4,10 @@
 
 #pragma once
 
-#include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu {
-
-inline void hardshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_hardshrink(uint32_t param0) {

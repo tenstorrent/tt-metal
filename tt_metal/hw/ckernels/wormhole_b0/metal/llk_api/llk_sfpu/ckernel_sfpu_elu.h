@@ -5,13 +5,10 @@
 #pragma once
 
 #include "ckernel.h"
-#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
 
 namespace ckernel::sfpu {
-
-inline void elu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {

@@ -35,7 +35,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
-#include "cmath_common.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -154,7 +153,6 @@ inline void calculate_log1p() {
  */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log1p_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
     const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
     // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into

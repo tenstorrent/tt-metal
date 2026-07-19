@@ -7,7 +7,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -164,8 +163,6 @@ inline void calculate_unary_max_min_int32(uint value) {
 
 template <bool IS_MAX_OP = true>
 inline void unary_max_min_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSWAP(
@@ -197,8 +194,6 @@ inline void unary_max_min_init() {
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
 inline void unary_max_min_int32_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSWAP(
