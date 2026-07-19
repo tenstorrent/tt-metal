@@ -355,14 +355,29 @@ def run_bringup_cc(
         if _tp > 1:
             _shard_flag, _shard_tp = "1", str(_tp)
             print(f"  [shard] mesh implies TP={_tp} → Phase 2 (shard-aware bring-up) enabled at TP={_tp}")
+    _grad_dp = 1
     if _shard_flag:
         mcp_env["TT_HW_PLANNER_SHARD"] = _shard_flag
         if _shard_tp:
             mcp_env["TT_HW_PLANNER_SHARD_TP"] = _shard_tp
-            _dp = max(_mesh_chips(mesh) // int(_shard_tp), 1)
-            if _dp > 1:
-                mcp_env["TT_HW_PLANNER_SHARD_DP"] = str(_dp)
-            print(f"  [shard] TP={_shard_tp} x DP={_dp} → opens {int(_shard_tp) * _dp} chips (fabric auto-discovered)")
+            _grad_dp = max(_mesh_chips(mesh) // int(_shard_tp), 1)
+            if _grad_dp > 1:
+                mcp_env["TT_HW_PLANNER_SHARD_DP"] = str(_grad_dp)
+            print(
+                f"  [shard] TP={_shard_tp} x DP={_grad_dp} → opens {int(_shard_tp) * _grad_dp} chips (fabric auto-discovered)"
+            )
+    _grad_chips = _mesh_chips(mesh)
+    _grad_tp = int(_shard_tp) if _shard_tp else 1
+    try:
+        from ..parallelism import write_parallelism_manifest
+
+        _mpath = write_parallelism_manifest(demo_dir, chips=_grad_chips, tp=_grad_tp, dp=_grad_dp)
+        if _mpath is not None:
+            print(
+                f"  [topology] graduated split recorded → {_mpath.name} (chips={_grad_chips} TP={_grad_tp} DP={_grad_dp})"
+            )
+    except Exception:  # noqa: BLE001
+        pass
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "bringup-mcp")
     import re as _re
 

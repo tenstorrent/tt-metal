@@ -1184,6 +1184,15 @@ def _emit_e2e_phase_a(args) -> int:
     print(sep)
 
     _pc = _planned_parallelism(model_id, args)
+    from ..parallelism import read_parallelism_manifest
+
+    _manifest = read_parallelism_manifest(demo_dir)
+    _mismatch = _topology_mismatch(_manifest, _pc, _mesh_chip_count(getattr(args, "mesh", None)))
+    if _mismatch:
+        print(sep)
+        print(f"  ✗ EMIT-E2E ABORTED (topology guard) — {_mismatch}")
+        print(sep)
+        return 2
     _parallel_note = _parallelism_prompt_block(_pc)
     if _pc is not None and _pc.chips > 1:
         print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
@@ -1201,6 +1210,20 @@ def _emit_e2e_phase_a(args) -> int:
                     f"NO shard implementation may be replicated. The final pipeline MUST contain "
                     f"ShardTensorToMesh + a collective (all_reduce/all_gather); a pure-replication pipeline is "
                     f"NOT an acceptable TP={_pc.tp} result."
+                )
+                _parallel_note += (
+                    "\n\nSCHEME EVALUATION (do this BEFORE composing — the tool has verified the chip "
+                    "count/TP/DP match bring-up, but the per-component SCHEME is YOUR check and it must "
+                    "generalize to THIS model): for EACH sharded stub above, read its forward + docstring "
+                    "to identify its parallel scheme (TP column/row, expert-parallel EP, sequence/SP, "
+                    "replicate) and the mesh AXIS + COLLECTIVE it uses, then validate that scheme against "
+                    f"THIS model's config at TP={_pc.tp} x DP={_pc.dp} — e.g. expert-parallel requires "
+                    "n_routed_experts % (expert-axis degree) == 0; attention TP requires degree <= "
+                    "num_key_value_heads; sequence-parallel requires seq % degree == 0; every sharded "
+                    "component must agree on which physical mesh axis is the sharded (cols/TP) axis. If any "
+                    "component's scheme is INCOMPATIBLE with this mesh/config, STOP and report it as a hole — "
+                    "do NOT silently replicate it. Gathered output MUST still equal the single-device HF "
+                    "golden; the on-device PCC gate is the final arbiter."
                 )
             else:
                 print(
@@ -1609,8 +1632,9 @@ def _mesh_chip_count(mesh_arg) -> int:
         return 1
     try:
         prod = 1
-        for tok in str(mesh_arg).lower().split("x"):
-            prod *= int(tok)
+        for tok in str(mesh_arg).lower().replace(",", "x").split("x"):
+            if tok.strip():
+                prod *= int(tok.strip())
         return max(prod, 1)
     except Exception:
         return 1
@@ -1620,6 +1644,34 @@ def _planned_parallelism(model_id: str, args):
     from ..parallelism import plan_parallelism
 
     return plan_parallelism(model_id, _mesh_chip_count(getattr(args, "mesh", None)))
+
+
+def _topology_mismatch(manifest, pc, given_chips: int):
+    """Deterministic fail-safe: return an error string if the --mesh-derived split disagrees with the
+    topology bring-up actually graduated at (recorded in parallelism_manifest.json), else None.
+
+    Only enforced when bring-up graduated a real sharded split (tp>1) — a single-device / replicate-only
+    graduation has nothing to reproduce. This is the decidable floor (pure chip/tp/dp equality); the
+    per-component SCHEME compatibility is evaluated by the builder LLM, not here."""
+    if not manifest:
+        return None  # no recorded topology (older bring-up) — don't block, fall through to current behavior
+    g_chips = int(manifest.get("chips", 1))
+    g_tp = int(manifest.get("tp", 1))
+    g_dp = int(manifest.get("dp", 1))
+    if g_tp <= 1:
+        return None  # bring-up graduated single-device / replicate-only — nothing to enforce
+    hint = f"Pass --mesh {g_dp}x{g_tp} (or --mesh {g_chips}) to match, or re-run bring-up at the new mesh."
+    if pc is None:
+        return (
+            f"bring-up graduated TP={g_tp} x DP={g_dp} on {g_chips} chips, but --mesh implies "
+            f"{given_chips} chip(s) (single-device). {hint}"
+        )
+    if pc.chips != g_chips or pc.tp != g_tp or pc.dp != g_dp:
+        return (
+            f"topology mismatch — bring-up graduated TP={g_tp} x DP={g_dp} on {g_chips} chips, but "
+            f"--mesh implies TP={pc.tp} x DP={pc.dp} on {pc.chips} chips. {hint}"
+        )
+    return None
 
 
 def _parallelism_prompt_block(pc) -> str:
