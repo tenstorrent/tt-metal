@@ -875,10 +875,14 @@ peak?" Isolated by removing the host sink entirely (relay ignores HACKED + no ho
 NONCE bit 12; LOSSY on purpose). Reader at full burst, with vs without the sink: `spsc-wait` 4M →
 **0**, copy% 34 → **51 %**, wall 13M → 9M, producer spins 640M → 407M. So there are TWO independent
 throttles: (1) the HOST SINK — real, ~31 % of reader time, back-pressures via SPSC-full; removing it
-zeroes spsc-wait. (2) PER-VISIT OVERHEAD — poll (tail NoC reads) + head-advance (NoC write) + fence,
-~50 % of reader time even with the sink gone, INDEPENDENT of it (in cycles: copy ≈ 4.5M ≈ overhead
-4.5M). Feedback loop: a faster reader visits each lane sooner → smaller runs → the fixed per-visit
-cost is a bigger share, so copy caps ~51 % not ~85 %. To get copy-dominant at peak needs BOTH a
+zeroes spsc-wait. (2) WASTED POLLING — ~50 % of reader
+time even with the sink gone, INDEPENDENT of it. INSTRUMENTED (reader RES +0x28 visits, +0x30 polls):
+avg-run = **500 words** (buffers ARE full, ≈ RING_CAP 512 — drains are efficient at ~4.2 cyc/word), but
+**83–90 % of the tail-polls hit EMPTY lanes**. The reader cycles its 275 lanes ~44 passes faster than the
+producers refill (each lane drained ~8×, polled ~44×), so ~10k of ~12k tail-reads are pure wasted NoC
+round-trips eating ~⅓ of reader time. NOT per-productive-visit cost and NOT small runs — it's OVER-POLLING.
+FIX (cheap): each core's 5 RISC tails are 20 contiguous bytes (`cbase+20..40`) but are read as 5 separate
+`r32` NoC round-trips; bulk-read all 5 in one NoC transaction → ~5× less poll traffic. To get copy-dominant at peak needs BOTH a
 faster sink (fan-out to more rings/threads than readers) AND the reader-overhead fix (bulk-poll the
 tails + batch the PROD publish/fence). Bigger SPSC does NOT help — tried 4096→16384, it made things
 2.5× WORSE (burstier back-pressure, less 3-stage overlap; the small buffer is near-optimal).

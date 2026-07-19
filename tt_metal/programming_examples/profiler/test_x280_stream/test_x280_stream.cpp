@@ -569,14 +569,20 @@ int main(int argc, char** argv) {
                 (unsigned long long)aux2,
                 (unsigned long long)breach);
         } else {
+            uint64_t visits = aux2, polls = breach;  // reader: v[5]=visits (drains), v[6]=polls (tail reads)
             printf(
-                "  reader%llu: %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  spsc-wait=%lluM cyc\n",
+                "  reader%llu: %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  spsc-wait=%lluM  "
+                "visits=%lluk avg-run=%llu words  polls=%lluk (%.0f%% empty)\n",
                 (unsigned long long)h,
                 (unsigned long long)(bytes / 1024),
                 (unsigned long long)(t_total / 1000000),
                 busy,
                 (double)t_copy / (double)words,
-                (unsigned long long)(aux1 / 1000000));
+                (unsigned long long)(aux1 / 1000000),
+                (unsigned long long)(visits / 1000),
+                (unsigned long long)(visits ? words / visits : 0),
+                (unsigned long long)(polls / 1000),
+                polls ? 100.0 * (double)(polls - visits) / (double)polls : 0.0);
         }
     }
     printf(

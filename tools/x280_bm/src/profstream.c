@@ -160,6 +160,7 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
     fence_();
 
     uint64_t t_copy = 0, t_wait = 0; /* PROFILE: cycles in the copy (NoC read+LIM write) vs SPSC-full wait */
+    uint64_t visits = 0, polls = 0;  /* PROFILE: drains (tail!=head) vs total tail reads -> avg run = words/visits */
     uint64_t t0 = rdcycle();
     for (;;) {
         uint64_t pending = 0;
@@ -170,10 +171,12 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
                 uint64_t L = c * NRISC + r;
                 uint32_t tail = r32(cbase + (5u + r) * 4);
                 uint32_t head = heads[L];
+                polls++;
                 if (tail == head) {
                     continue;
                 }
                 pending = 1;
+                visits++;
                 uint32_t run = tail - head; /* <= RING_CAP (worker flow control) */
                 uint32_t need = 2u + run;   /* sticky + data */
                 /* wait for room in our LIM SPSC. We read the RELAY's cons fresh from LIM each spin; our own
@@ -226,6 +229,8 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
     w64(RES_SLOT(hartid) + 0x08, t_copy);  /* RES_TCOPY */
     w64(RES_SLOT(hartid) + 0x10, t_total); /* RES_TTOTAL */
     w64(RES_SLOT(hartid) + 0x20, t_wait);  /* RES_TWAIT */
+    w64(RES_SLOT(hartid) + 0x28, visits);  /* # drains */
+    w64(RES_SLOT(hartid) + 0x30, polls);   /* # tail reads */
     w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
     fence_();
 }
