@@ -12,7 +12,11 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-constexpr bool flush = false;
+// FLIP-FIX (2026-07-19): flush=true so the fused write+atomic-inc (below) waits for the payload to
+// LAND at the receiver before incrementing the semaphore (same signal-before-landing race + fix as
+// llama_reduce_scatter_create_heads; matches the reduce_to_root flush=true precedent). This is the
+// per-layer MLP FF (w1/w3) reduce-scatter in decode.
+constexpr bool flush = true;
 
 template <bool ring_topology>
 FORCE_INLINE uint32_t distance(uint32_t chip_id, uint32_t target_device_id, uint32_t num_devices) {

@@ -16,7 +16,13 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
-constexpr bool flush = false;
+// FLIP-FIX (2026-07-19): flush=true so the fused write+atomic-inc (below) WAITS for the payload
+// write to LAND at the receiver core before incrementing receiver_semaphore. With flush=false the
+// small atomic-inc (different cmd buf) could commit before the data landed, so the worker's
+// semaphore reached its count while intermediate_packet_buffer was still stale -> the reduction
+// summed stale per-user data -> nondeterministic cross-row near-tie flip. flush=true matches the
+// reduce_to_root precedent (its identical fused write+inc uses flush=true).
+constexpr bool flush = true;
 void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
