@@ -247,6 +247,102 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
 }
 
+// clang-format off
+/**
+ * Performs element-wise multiplication C=A*B on `ntiles` consecutive tile pairs from two CBs, writing each result
+ * to a consecutive DST register slot. This is the uniform block entry point for the multiply op: its body is a
+ * simple loop over `mul_tiles`, so it inherits `mul_tiles`'s semantics and requires the same initialization
+ * (`mul_tiles_init`) to have been called first. The DST register buffer must be in acquired state via
+ * *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ *
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47482.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                              | Type     | Valid Range                                    | Required |
+ * |-----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0            | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | icb1            | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | start_itile0    | The index of the first tile A within the first CB        | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_itile1    | The index of the first tile B within the second CB       | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst      | The index of the first tile in DST REG for the result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles          | The number of consecutive tile pairs to multiply         | uint32_t | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+ALWI void mul_block(
+    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
+    for (uint32_t i = 0; i < ntiles; ++i) {
+        mul_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Performs element-wise addition C=A+B on `ntiles` consecutive tile pairs from two CBs, writing each result to a
+ * consecutive DST register slot. This is the uniform block entry point for the add op: its body is a simple loop
+ * over `add_tiles`, so it inherits `add_tiles`'s semantics and requires the same initialization (`add_tiles_init`)
+ * to have been called first. The DST register buffer must be in acquired state via *acquire_dst* call. This call
+ * is blocking and is only available on the compute engine.
+ *
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47482.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                              | Type     | Valid Range                                    | Required |
+ * |-----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0            | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | icb1            | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | start_itile0    | The index of the first tile A within the first CB        | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_itile1    | The index of the first tile B within the second CB       | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst      | The index of the first tile in DST REG for the result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles          | The number of consecutive tile pairs to add              | uint32_t | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+ALWI void add_block(
+    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
+    for (uint32_t i = 0; i < ntiles; ++i) {
+        add_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Performs element-wise subtraction C=A-B on `ntiles` consecutive tile pairs from two CBs, writing each result to
+ * a consecutive DST register slot. This is the uniform block entry point for the subtract op: its body is a simple
+ * loop over `sub_tiles`, so it inherits `sub_tiles`'s semantics and requires the same initialization
+ * (`sub_tiles_init`) to have been called first. The DST register buffer must be in acquired state via
+ * *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ *
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47482.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                              | Type     | Valid Range                                    | Required |
+ * |-----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0            | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | icb1            | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | start_itile0    | The index of the first tile A within the first CB        | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_itile1    | The index of the first tile B within the second CB       | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst      | The index of the first tile in DST REG for the result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles          | The number of consecutive tile pairs to subtract         | uint32_t | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+ALWI void sub_block(
+    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
+    for (uint32_t i = 0; i < ntiles; ++i) {
+        sub_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
+    }
+}
+
 /**
  * Please refer to documentation for any_init.
  */
