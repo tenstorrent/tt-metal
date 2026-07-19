@@ -42,6 +42,15 @@ _WEDGE_EAGER_GUIDANCE = (
     "print TRACE_NOT_TRACE_CAPABLE=1 so the eager FORWARD_WALL_MS is the result (VERDICT=PASS_EAGER)."
 )
 
+_EAGER_NOT_ALLOWED_GUIDANCE = (
+    "REJECTED — you skipped the trace and went eager, but you have only had %d/%d real trace attempts. "
+    "Eager is NOT allowed until the trace has actually been attempted %d times. Put the trace-replay "
+    "block BACK (remove TRACE_NOT_TRACE_CAPABLE / the eager skip) and restructure the captured region to "
+    "be host-free so the trace HOLDS: build the module and all inputs/constants resident ONCE before "
+    "begin_trace_capture; move any host op (e.g. _from_dev) OUT of the captured region or replace it with "
+    "a device-only equivalent. Then call run_perf_test again to ATTEMPT the trace."
+)
+
 
 def _judge_output(rc, out: str) -> str:
     from .perf_test_gen import _is_eager_terminal, _parse_trace_path
@@ -68,30 +77,35 @@ def _bound_output(out: str, limit: int = 16000) -> str:
     return out[-limit:]
 
 
-def _run_and_format(node_abs: str, wedges: list | None = None) -> str:
+def _run_and_format(node_abs: str, state: dict | None = None) -> str:
     from .perf_test_gen import _run_perf_node
 
-    if wedges is None:
-        wedges = [0]
+    if state is None:
+        state = {"wedges": 0, "passed": False}
     rc, out = _run_perf_node(
         node_abs, {"TT_PERF_TRACE": "1", "TT_PERF_NUM_CQ": "1"}, timeout_s=_COMPONENT_RUN_TIMEOUT_S
     )
     verdict = _judge_output(rc, out)
     if verdict == "WEDGE":
-        wedges[0] += 1
-        if wedges[0] >= _TRACE_WEDGE_LIMIT:
-            return f"VERDICT=WEDGE\nrc={rc}\n{_WEDGE_EAGER_GUIDANCE % wedges[0]}"
-        return f"VERDICT=WEDGE\nrc={rc}\n(trace hang {wedges[0]}/{_TRACE_WEDGE_LIMIT}) {_WEDGE_RETRY_GUIDANCE}"
+        state["wedges"] += 1
+        if state["wedges"] >= _TRACE_WEDGE_LIMIT:
+            return f"VERDICT=WEDGE\nrc={rc}\n{_WEDGE_EAGER_GUIDANCE % state['wedges']}"
+        return f"VERDICT=WEDGE\nrc={rc}\n(trace hang {state['wedges']}/{_TRACE_WEDGE_LIMIT}) {_WEDGE_RETRY_GUIDANCE}"
+    if verdict == "PASS_EAGER" and state["wedges"] < _TRACE_WEDGE_LIMIT:
+        return "VERDICT=EAGER_NOT_ALLOWED\nrc=%d\n%s" % (
+            rc,
+            _EAGER_NOT_ALLOWED_GUIDANCE % (state["wedges"], _TRACE_WEDGE_LIMIT, _TRACE_WEDGE_LIMIT),
+        )
+    if verdict in ("PASS_TRACE", "PASS_EAGER"):
+        state["passed"] = True
     return f"VERDICT={verdict}\nrc={rc}\n----- raw test output -----\n{_bound_output(out)}"
 
 
-def _make_perf_run_server(node_abs: str):
+def _make_perf_run_server(node_abs: str, state: dict):
     try:
         from claude_agent_sdk import create_sdk_mcp_server, tool
     except Exception:  # noqa: BLE001
         return None
-
-    wedges = [0]
 
     @tool(
         "run_perf_test",
@@ -105,7 +119,7 @@ def _make_perf_run_server(node_abs: str):
         {},
     )
     async def run_perf_test(args):  # noqa: ANN001
-        text = await asyncio.to_thread(_run_and_format, node_abs, wedges)
+        text = await asyncio.to_thread(_run_and_format, node_abs, state)
         return {"content": [{"type": "text", "text": text}]}
 
     return create_sdk_mcp_server(PERF_RUN_SERVER, tools=[run_perf_test])
@@ -119,7 +133,8 @@ _SYSTEM = (
     "because the captured region touched the host: RESTRUCTURE it to be host-free (build inputs/constants "
     "resident once before the capture) and retry the trace — keep trying to make the trace hold. Only "
     "fall back to eager (VERDICT=PASS_EAGER: drop the trace block, print TRACE_NOT_TRACE_CAPABLE=1) once "
-    "run_perf_test tells you the trace-attempt limit is reached. Edit ONLY the one perf test file named in the task. "
+    "run_perf_test tells you the trace-attempt limit is reached. If you go eager too early you will get "
+    "VERDICT=EAGER_NOT_ALLOWED — put the trace block back and keep attempting the trace. Edit ONLY the one perf test file named in the task. "
     "NEVER run pytest, tt-smi, kill, fuser, or open/close a device yourself — the run_perf_test tool "
     "and the harness own all device execution and recovery; doing it yourself breaks the run. Do not "
     "repeat an approach that already failed the same way — change the approach. Keep your final "
@@ -130,7 +145,8 @@ _SYSTEM = (
 def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_body: str, max_turns: int = 48) -> bool:
     root = Path(root)
     node_abs = f"{root / out_rel}::test_{task}_perf"
-    server = _make_perf_run_server(node_abs)
+    state = {"wedges": 0, "passed": False}
+    server = _make_perf_run_server(node_abs, state)
     if server is None:
         return False
     try:
@@ -186,5 +202,5 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     try:
         run_with_retry(_go, lambda: chunks.clear(), timeout=_agent_timeout)
     except Exception:  # noqa: BLE001
-        return False
-    return True
+        return bool(state.get("passed"))
+    return bool(state.get("passed"))
