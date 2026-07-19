@@ -254,32 +254,85 @@ jobs:
           mkdir -p /work/coverage
           echo "LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw" >> "$GITHUB_ENV"
 
-      # EXPERIMENT (perf host profiling): the following three steps are only active when
+      # EXPERIMENT (perf host profiling): the following steps are only active when
       # inputs.enable-perf-host-profiling is true. They validate the target group, install
-      # linux perf on the HW runner, and confirm perf is callable. All are no-ops (skipped)
-      # when the experiment is disabled, so there is zero overhead on the default path.
+      # linux perf on the HW runner, and probe whether perf can actually *record* (not just
+      # exist). All are no-ops (skipped) when the experiment is disabled, so there is zero
+      # overhead on the default path.
+      #
+      # SECURITY: user-controlled inputs (perf-target-group, perf-install-package) are never
+      # interpolated into a shell body via ${{ ... }}; they are passed through `env:` and only
+      # expanded as quoted "$VAR" at runtime so they cannot inject shell.
       - name: Validate perf profiling target (host profiling)
         if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') }}
+        env:
+          PERF_TARGET_GROUP: ${{ inputs.perf-target-group }}
         run: |
-          if [ -z "${{ inputs.perf-target-group }}" ]; then
+          if [ -z "$PERF_TARGET_GROUP" ]; then
             echo "::error::enable-perf-host-profiling is true but perf-target-group is empty."
             echo "::error::You must supply the exact matrix test-group name to profile (e.g. 'ttnn eltwise group 1')."
             exit 1
           fi
-          echo "perf host profiling requested for target group: '${{ inputs.perf-target-group }}'"
+          echo "perf host profiling requested for target group: '$PERF_TARGET_GROUP'"
 
       - name: Install perf (host profiling)
         if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == inputs.perf-target-group }}
+        env:
+          # Optional override: a space/comma-separated list of package names. Validated below and
+          # split into a safe array; never spliced verbatim into the apt-get command line.
+          PERF_INSTALL_PACKAGE: ${{ inputs.perf-install-package }}
         run: |
           # Non-failing on purpose: if the perf package can't be installed (kernel/version mismatch
           # on the runner), leave a clear signal in the logs but don't fail the job.
+          #
+          # SECURITY: build the package list into a bash array. Accept only well-formed package
+          # names ([A-Za-z0-9][A-Za-z0-9+._-]*), rejecting anything that could carry shell
+          # metacharacters or extra apt-get flags. Fall back to a fixed default set if the input
+          # is empty or contains no valid names.
+          default_pkgs=(linux-tools-common linux-tools-generic)
+          pkgs=()
+          # Split on whitespace and commas only.
+          IFS=', ' read -r -a raw_pkgs <<< "$PERF_INSTALL_PACKAGE"
+          for p in "${raw_pkgs[@]}"; do
+            if [[ "$p" =~ ^[A-Za-z0-9][A-Za-z0-9+._-]*$ ]]; then
+              pkgs+=("$p")
+            elif [ -n "$p" ]; then
+              echo "::warning::Ignoring invalid perf package name: '$p'"
+            fi
+          done
+          if [ "${#pkgs[@]}" -eq 0 ]; then
+            echo "No valid packages supplied; using default set: ${default_pkgs[*]}"
+            pkgs=("${default_pkgs[@]}")
+          fi
+          echo "Installing perf packages: ${pkgs[*]}"
           apt-get update || true
-          apt-get install -y ${{ inputs.perf-install-package }} || true
+          apt-get install -y -- "${pkgs[@]}" || true
 
-      - name: Check perf availability (host profiling)
+      # Probe whether perf can actually RECORD, not merely that the binary exists. `command -v`
+      # only proves the executable is present; on many CI runners perf_event_open is denied
+      # (kernel.perf_event_paranoid, seccomp, missing CAP_PERFMON, etc.). Run a real, throwaway
+      # `perf record ... -- true` and only mark perf_ready=true if it succeeds. Never fails the
+      # step, so the selected group still tests even when recording is denied.
+      - name: Probe perf recording capability (host profiling)
+        id: perf-probe
         if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == inputs.perf-target-group }}
+        env:
+          PERF_SAMPLE_FREQUENCY: ${{ inputs.perf-sample-frequency }}
         run: |
-          perf --version || echo "::warning::perf is not available; the profiled run will fall back to running the command without perf."
+          perf_ready=false
+          if command -v perf >/dev/null 2>&1; then
+            perf --version || true
+            if perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o /tmp/perf_probe.data -- true >/dev/null 2>&1; then
+              perf_ready=true
+              echo "perf recording probe succeeded; the target group will be profiled."
+            else
+              echo "::warning::perf is installed but cannot record (perf_event_open likely denied); the group will run without profiling."
+            fi
+            rm -f /tmp/perf_probe.data || true
+          else
+            echo "::warning::perf is not available; the group will run without profiling."
+          fi
+          echo "perf_ready=$perf_ready" >> "$GITHUB_OUTPUT"
 
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
@@ -288,7 +341,11 @@ jobs:
           # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
           # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
           PERF_PROFILE_THIS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == inputs.perf-target-group }}
+          # Whether the probe confirmed perf can actually record. Empty when the probe step was
+          # skipped (experiment off / not the target group); treated as "not ready".
+          PERF_READY: ${{ steps.perf-probe.outputs.perf_ready }}
           PERF_SAMPLE_FREQUENCY: ${{ inputs.perf-sample-frequency }}
+          PERF_TARGET_GROUP: ${{ inputs.perf-target-group }}
           TEST_GROUP_NAME: ${{ matrix.test-group.name }}
           TEST_GROUP_CMD: ${{ matrix.test-group.cmd }}
         run: |
@@ -299,26 +356,31 @@ jobs:
           # directly under the power sidecar.
           # Profiled path (experiment): wrap the group cmd in `perf record -g -F <freq> -o <out>`,
           # writing perf.data to /work so the host mount at ${{ github.workspace }}/docker-job can
-          # upload it. If perf isn't installed, fall back to running the cmd unwrapped.
-          if [ "$PERF_PROFILE_THIS" = "true" ]; then
+          # upload it. Only wrap when the recording-capability probe (perf-probe step) succeeded;
+          # otherwise fall back to running the cmd unwrapped so the group still tests.
+          #
+          # The whole group cmd is wrapped in `perf record ... -- bash -c '<cmd>'` so that a group
+          # command with chained commands (e.g. `pytest ... && pytest ...`) is captured in full,
+          # not just the first simple command. $TEST_GROUP_CMD is passed as a positional arg to the
+          # inner `bash -c` (see the sidecar invocation below), never spliced into a string, so its
+          # &&/quotes survive intact and it can't inject into the perf command line.
+          if [ "$PERF_PROFILE_THIS" = "true" ] && [ "$PERF_READY" = "true" ]; then
             # Sanitize the group name for use in a filename: spaces and any non [A-Za-z0-9._-] -> '_'.
             SANITIZED=$(printf '%s' "$TEST_GROUP_NAME" | sed -E 's/[^A-Za-z0-9._-]+/_/g')
             PERF_OUTPUT="/work/perf_${SANITIZED}.data"
             echo "perf host profiling ENABLED for '$TEST_GROUP_NAME' -> $PERF_OUTPUT (freq ${PERF_SAMPLE_FREQUENCY}Hz)"
-            if command -v perf >/dev/null 2>&1; then
-              INNER="perf record -g -F ${PERF_SAMPLE_FREQUENCY} -o ${PERF_OUTPUT} -- ${TEST_GROUP_CMD}"
-            else
-              echo "::warning::perf not found; running '$TEST_GROUP_NAME' without profiling."
-              INNER="${TEST_GROUP_CMD}"
-            fi
+            RUNNER=(perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o "${PERF_OUTPUT}" -- bash -c "$TEST_GROUP_CMD")
           else
-            INNER="${TEST_GROUP_CMD}"
+            if [ "$PERF_PROFILE_THIS" = "true" ]; then
+              echo "::warning::perf recording not available; running '$TEST_GROUP_NAME' without profiling."
+            fi
+            RUNNER=(bash -c "$TEST_GROUP_CMD")
           fi
 
           python3 tools/tt-power-sidecar/tt_power_sidecar.py \
             --backend sysfs \
             --out /work/power_report.json \
-            -- bash -c "$INNER"
+            -- "${RUNNER[@]}"
 
       # Simulator runs have no hardware power telemetry, so swap the HW power sidecar for the
       # host-load sidecar — it reports host CPU/memory/disk/network usage (a "mem report", not
