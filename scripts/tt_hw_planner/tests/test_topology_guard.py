@@ -97,3 +97,16 @@ def test_topology_guard_catches_different_split():
     m = {"chips": 32, "tp": 8, "dp": 4, "mesh": [4, 8]}
     err = tm(m, _PC(tp=4, dp=2), 8)  # wrong chip count + TP
     assert err and "mismatch" in err.lower() and "TP=8" in err
+
+
+def test_resolve_demo_dir_slug_matches_scaffold(tmp_path, monkeypatch):
+    """emit-e2e must resolve the SAME slug the scaffold created — dotted names (HunyuanImage-3.0)
+    map '.' and '-' both to '_' (hunyuanimage_3_0), not keep the dot (hunyuanimage_3.0)."""
+    import types
+
+    emit = _emit()
+    scaffold = importlib.import_module("scripts.tt_hw_planner.scaffold_demo_folder")
+    monkeypatch.chdir(tmp_path)  # no matching dir on disk → falls to the default slug path
+    args = types.SimpleNamespace(model_id="tencent/HunyuanImage-3.0", output=None)
+    resolved = emit._resolve_demo_dir(args)
+    assert resolved.name == scaffold._slug("HunyuanImage-3.0") == "hunyuanimage_3_0"

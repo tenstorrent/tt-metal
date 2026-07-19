@@ -1889,7 +1889,12 @@ def _resolve_demo_dir(args) -> Path:
     if raw:
         p = Path(raw)
         return p.parent if p.suffix == ".py" else p
-    slug = args.model_id.split("/")[-1].replace("-", "_").lower()
+    try:
+        from ..scaffold_demo_folder import _slug
+
+        slug = _slug(args.model_id.split("/")[-1])
+    except Exception:
+        slug = args.model_id.split("/")[-1].replace("-", "_").lower()
     demos_root = Path.cwd() / "models" / "demos"
     if demos_root.is_dir():
         for cand in demos_root.rglob(slug):
