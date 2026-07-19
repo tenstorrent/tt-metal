@@ -305,6 +305,9 @@ def run_single_routed_expert_faked_token_count(
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         activation=ttnn.RoutedExpertActivation.Silu,
+        # Size chunk_M_tiles/per_core_M to the ACTIVE count, not the allocation,
+        # so an over-allocated buffer does not pay phantom per_core_M work.
+        expected_tokens_per_expert=active_tokens,
     )
 
     tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
