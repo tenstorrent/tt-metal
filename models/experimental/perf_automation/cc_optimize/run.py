@@ -670,6 +670,31 @@ def _bridge_depth_env(
     return env
 
 
+def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root):
+    base = _llm_depth_env(model_root, 2) if model_root is not None else {}
+    if not base:
+        return None
+    numkey = next((k for k, v in base.items() if str(v).isdigit()), None)
+    want = set(full_types or [])
+    if not want:
+        return None
+    ladder = [int(x) for x in (os.environ.get("PERF_MCP_COV_LADDER", "2,4,8,16")).split(",") if x.strip().isdigit()]
+    got = set()
+    for d in ladder:
+        env = dict(base)
+        if numkey:
+            env[numkey] = str(d)
+        penv = dict(mcp_env)
+        penv.update(env)
+        sigs_d, _, _ = _run_op_sigs(repo_root, penv, devices, node, case, d)
+        if not sigs_d:
+            return None
+        got = set(sigs_d)
+        if want <= got:
+            return d, [], "measured"
+    return (ladder[-1] if ladder else 16), sorted(want - got), "measured"
+
+
 def _coverage_layers(
     repo_root: Path,
     mcp_env: dict,
@@ -700,22 +725,22 @@ def _coverage_layers(
         facts["all_ops"] = sorted(sigs)
         facts["full_signal"] = _work_signal(seq)
         facts["full_blocks"] = _blocks_ran(seq)
-        if _signposts_agree(seq):
+        measured = _measure_cov(repo_root, mcp_env, devices, node, case, sigs, _model_root_from_node(repo_root, node))
+        if measured is not None:
+            _cov, deep, blk_source = measured
+        elif _signposts_agree(seq):
             first_block, _ = _first_block_map(seq)
             deepest = max(first_block.values()) if first_block else 0
             deep = sorted(op for op, b in first_block.items() if b >= 16)
+            _cov = min(max(deepest + 1, 2), 16)
             blk_source = "signposts"
         else:
-            deepest = 0
             deep = []
-            blk_source = "unverified"
-        _cov = min(max(deepest + 1, 2), 16)
+            _cov = 2
+            blk_source = "unverified-floor"
         facts["deep_ops"] = deep
-        tail = f"; {len(deep)} op(s) appear only past layer 16 (present, un-timed)" if deep else ""
-        print(
-            f"  [optimize/cc] coverage (all-layers probe, blocks={blk_source}): {len(sigs)} distinct op(s); "
-            f"deepest new op at block {deepest} -> TT_PERF_LAYERS={_cov}{tail}"
-        )
+        tail = f"; {len(deep)} op-type(s) still absent at max depth (present in full model, un-timed)" if deep else ""
+        print(f"  [optimize/cc] coverage ({blk_source}): {len(sigs)} distinct op(s) -> TT_PERF_LAYERS={_cov}{tail}")
         _coverage_cache_put(repo_root, node, case, _cov)
         return _cov, facts
     k, n_kinds = _config_layer_kinds(config_ref or model_name)
