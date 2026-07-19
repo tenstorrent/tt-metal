@@ -820,3 +820,122 @@ def test_place_weight_reports_unverified_shard_when_ground_truth_fails(monkeypat
     assert placement.strategy == "shard_k"
     assert placement.verified is False
     assert any("did not match the ground-truth" in rec for rec in placement.recommendations)
+
+
+# ---------------------------------------------------------------------------
+# Device-profiler based benchmarking (device kernel duration, no dispatch overhead)
+# ---------------------------------------------------------------------------
+
+
+def _profiler_env(monkeypatch, enabled=True):
+    for flag in auto_matmul._PROFILER_ENV_FLAGS:
+        if enabled:
+            monkeypatch.setenv(flag, "1")
+        else:
+            monkeypatch.delenv(flag, raising=False)
+
+
+def _ttnn_with_profiler(**overrides):
+    profiler_ns = SimpleNamespace()
+    ns = SimpleNamespace(
+        _ttnn=SimpleNamespace(profiler=profiler_ns),
+        get_latest_programs_perf_data=lambda: {},
+        ReadDeviceProfiler=lambda device: None,
+    )
+    for key, value in overrides.items():
+        setattr(ns, key, value)
+    return ns
+
+
+def test_device_profiler_enabled_requires_bindings_and_env(monkeypatch):
+    _profiler_env(monkeypatch, enabled=True)
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: _ttnn_with_profiler())
+    assert auto_matmul._device_profiler_enabled() is True
+
+    # Missing env flags -> disabled.
+    _profiler_env(monkeypatch, enabled=False)
+    assert auto_matmul._device_profiler_enabled() is False
+
+    # Env set but no profiler bindings in the build -> disabled.
+    _profiler_env(monkeypatch, enabled=True)
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: SimpleNamespace(_ttnn=SimpleNamespace()))
+    assert auto_matmul._device_profiler_enabled() is False
+
+
+def _perf_program(duration_ns):
+    result = SimpleNamespace(duration=duration_ns)
+    return SimpleNamespace(program_analyses_results={auto_matmul._DEVICE_KERNEL_DURATION_KEY: result})
+
+
+def test_latest_device_kernel_duration_sums_programs_and_takes_slowest_chip(monkeypatch):
+    # Chip 0 runs two programs (500 + 700 ns); chip 1 runs one (900 ns).
+    # Per-chip totals: {0: 1200, 1: 900}; the critical path is the slowest chip.
+    perf_data = {
+        0: [_perf_program(500), _perf_program(700)],
+        1: [_perf_program(900)],
+    }
+    monkeypatch.setattr(
+        auto_matmul, "_ttnn", lambda: _ttnn_with_profiler(get_latest_programs_perf_data=lambda: perf_data)
+    )
+    assert auto_matmul._latest_device_kernel_duration_ns("dev") == 1200.0
+
+
+def test_latest_device_kernel_duration_returns_none_when_empty(monkeypatch):
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: _ttnn_with_profiler(get_latest_programs_perf_data=lambda: {}))
+    assert auto_matmul._latest_device_kernel_duration_ns("dev") is None
+
+
+def test_benchmark_candidate_profiler_reports_device_kernel_duration_in_us(monkeypatch):
+    # Warmup read + one read per iteration; return 2000 ns each iteration -> 2.0 us.
+    perf_data = {0: [_perf_program(2000)]}
+    monkeypatch.setattr(
+        auto_matmul, "_ttnn", lambda: _ttnn_with_profiler(get_latest_programs_perf_data=lambda: perf_data)
+    )
+    monkeypatch.setattr(auto_matmul, "_sync_device", lambda device: None)
+    monkeypatch.setattr(auto_matmul, "_deallocate_result", lambda result: None)
+
+    candidate = auto_matmul.Candidate(descriptor={"kind": "minimal_matmul"}, run=lambda: "out")
+    avg_us, samples_us, mode = auto_matmul._benchmark_candidate_profiler(candidate, "dev")
+
+    assert mode == "profiler"
+    assert avg_us == pytest.approx(2.0)
+    assert samples_us == pytest.approx([2.0] * auto_matmul._BENCHMARK_ITERS)
+
+
+def test_benchmark_candidate_prefers_profiler_when_enabled(monkeypatch):
+    _profiler_env(monkeypatch, enabled=True)
+    perf_data = {0: [_perf_program(3000)]}
+    monkeypatch.setattr(
+        auto_matmul, "_ttnn", lambda: _ttnn_with_profiler(get_latest_programs_perf_data=lambda: perf_data)
+    )
+    monkeypatch.setattr(auto_matmul, "_sync_device", lambda device: None)
+    monkeypatch.setattr(auto_matmul, "_deallocate_result", lambda result: None)
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("wall-clock fallback should not run when the profiler is active")
+
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate_trace", _fail)
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate_eager", _fail)
+
+    candidate = auto_matmul.Candidate(descriptor={"kind": "minimal_matmul"}, run=lambda: "out")
+    avg_us, _samples, mode = auto_matmul._benchmark_candidate(candidate, "dev")
+    assert mode == "profiler"
+    assert avg_us == pytest.approx(3.0)
+
+
+def test_benchmark_candidate_falls_back_to_wall_clock_without_profiler(monkeypatch):
+    _profiler_env(monkeypatch, enabled=False)
+    monkeypatch.setattr(
+        auto_matmul,
+        "_ttnn",
+        lambda: SimpleNamespace(begin_trace_capture=1, end_trace_capture=1, execute_trace=1, release_trace=1),
+    )
+    monkeypatch.setattr(
+        auto_matmul,
+        "_benchmark_candidate_trace",
+        lambda candidate, device, queue_id=0: (5.0, [5.0], "trace"),
+    )
+    candidate = auto_matmul.Candidate(descriptor={"kind": "minimal_matmul"}, run=lambda: "out")
+    avg_us, _samples, mode = auto_matmul._benchmark_candidate(candidate, "dev")
+    assert mode == "trace"
+    assert avg_us == pytest.approx(5.0)

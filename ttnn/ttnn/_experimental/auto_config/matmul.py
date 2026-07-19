@@ -24,6 +24,18 @@ _MN_BLOCK_MIN = 2
 _MN_BLOCK_MAX = 16
 _K_BLOCK_MIN = 2
 _BENCHMARK_ITERS = 3
+# Column reported by the Tracy device profiler that measures pure on-device
+# kernel execution time (host dispatch overhead excluded).  We read it via
+# ``ttnn.get_latest_programs_perf_data()`` when the profiler is active.
+_DEVICE_KERNEL_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
+# Environment flags that must all be set (on a Tracy-enabled build) for the
+# in-process device-profiler perf-data APIs to return data; otherwise they
+# return an empty dict and we fall back to wall-clock timing.
+_PROFILER_ENV_FLAGS = (
+    "TT_METAL_DEVICE_PROFILER",
+    "TT_METAL_PROFILER_MID_RUN_DUMP",
+    "TT_METAL_PROFILER_CPP_POST_PROCESS",
+)
 # Maximum number of minimal-matmul candidates to benchmark per signature.  The
 # full cartesian product of block-size candidates can exceed 100 entries for
 # large shapes (e.g. 784×192×576 → 174 entries), which would add tens of
@@ -2021,8 +2033,103 @@ def _benchmark_candidate_trace(
         _deallocate_result(trace_output)
 
 
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name)
+    return bool(value) and value not in ("0", "false", "False", "no", "off")
+
+
+def _device_profiler_enabled() -> bool:
+    """True when this process was launched under the Tracy device profiler.
+
+    The auto-config selection loop runs in-process while the device is held
+    open, so it cannot spawn a separate profiler subprocess to measure a
+    candidate.  Instead, when the whole workload is launched under the profiler
+    (``TT_METAL_DEVICE_PROFILER=1`` + mid-run-dump + cpp-post-process on a
+    Tracy-enabled build), we read the on-device ``DEVICE KERNEL DURATION``
+    column directly -- that measurement is the pure kernel execution time and
+    excludes host dispatch overhead.  When the profiler is not active the perf
+    APIs return an empty dict, so we fall back to wall-clock timing.
+    """
+    ttnn = _ttnn()
+    profiler_mod = getattr(ttnn, "_ttnn", None)
+    if profiler_mod is None or not hasattr(profiler_mod, "profiler"):
+        return False
+    if not hasattr(ttnn, "get_latest_programs_perf_data") or not hasattr(ttnn, "ReadDeviceProfiler"):
+        return False
+    return all(_env_flag_enabled(flag) for flag in _PROFILER_ENV_FLAGS)
+
+
+def _latest_device_kernel_duration_ns(device: Any) -> float | None:
+    """Critical-path device kernel duration from the most recent profiler read.
+
+    Reads the programs captured by the preceding ``ttnn.ReadDeviceProfiler``
+    call, sums the ``DEVICE KERNEL DURATION [ns]`` of every program on each chip
+    (a composite recipe launches several programs), and returns the maximum
+    across chips -- the slowest chip gates the recipe.  Returns ``None`` when the
+    profiler produced no usable data so the caller can fall back.
+    """
+    ttnn = _ttnn()
+    try:
+        perf_data = ttnn.get_latest_programs_perf_data()
+    except Exception:
+        return None
+    if not perf_data:
+        return None
+    per_chip_totals: list[float] = []
+    for programs in perf_data.values():
+        chip_total = 0.0
+        found = False
+        for program in programs:
+            results = getattr(program, "program_analyses_results", None) or {}
+            result = results.get(_DEVICE_KERNEL_DURATION_KEY)
+            duration = getattr(result, "duration", None) if result is not None else None
+            if duration is None:
+                continue
+            chip_total += float(duration)
+            found = True
+        if found:
+            per_chip_totals.append(chip_total)
+    if not per_chip_totals:
+        return None
+    return max(per_chip_totals)
+
+
+def _benchmark_candidate_profiler(candidate: Candidate, device: Any) -> tuple[float, list[float], str]:
+    ttnn = _ttnn()
+    _sync_device(device)
+    warmup_output = candidate.run()
+    _sync_device(device)
+    ttnn.ReadDeviceProfiler(device)  # flush the warmup out of the "latest" window
+    _deallocate_result(warmup_output)
+
+    samples_us: list[float] = []
+    for _ in range(_BENCHMARK_ITERS):
+        output = candidate.run()
+        _sync_device(device)
+        ttnn.ReadDeviceProfiler(device)
+        duration_ns = _latest_device_kernel_duration_ns(device)
+        _deallocate_result(output)
+        if duration_ns is None:
+            raise RuntimeError("Device profiler returned no kernel-duration data")
+        samples_us.append(duration_ns / 1_000.0)
+    average_us = sum(samples_us) / len(samples_us)
+    return average_us, samples_us, "profiler"
+
+
 def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0) -> tuple[float, list[float], str]:
     ttnn = _ttnn()
+    # Preferred: measure the on-device kernel duration via the device profiler.
+    # This is the pure kernel execution time and excludes host dispatch
+    # overhead, which is the metric that should drive candidate selection.  It
+    # is only available when the workload is launched under the profiler.
+    if _device_profiler_enabled():
+        try:
+            return _benchmark_candidate_profiler(candidate, device)
+        except Exception:
+            pass
+    # Fallbacks (wall-clock, so they include some dispatch overhead) for runs
+    # not launched under the profiler.  Trace amortises per-iteration dispatch
+    # far better than eager enqueue, so prefer it when trace APIs are available.
     if all(
         hasattr(ttnn, attr) for attr in ("begin_trace_capture", "end_trace_capture", "execute_trace", "release_trace")
     ):
