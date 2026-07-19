@@ -69,10 +69,15 @@ struct DeviceCausalGeometry {
     uint32_t straddle_jump_tiles;  // diagonal jump in tiles (0 unless this device straddles)
 };
 inline DeviceCausalGeometry device_causal_geometry(
-    const operation_attributes_t& args, uint32_t device_index, uint32_t Sq) {
+    const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
     const uint32_t TW = tt::constants::TILE_WIDTH;
     if (!args.block_cyclic.has_value()) {
-        return {(args.chunk_start_idx + device_index * Sq) / TW, 0u, 0u};  // contiguous K -> linear diagonal
+        // Contiguous K -> linear diagonal at chunk_start + (seq-shard rank)*Sq. The rank is device_index for an
+        // SP-only seq shard; but a 2D SP×TP sub-shard whose SP axis is size-1 (e.g. QuietBox sp=1) is stored
+        // as no-block-cyclic (identity permutation), and there the query is seq-sharded over the TP axis, so the
+        // rank is tp_index. The two are mutually exclusive nonzero here (tp_index!=0 requires block_cyclic_sp_axis
+        // set with sp==1, which forces device_index==0; no sub-shard -> tp_index==0), so their sum is the rank.
+        return {(args.chunk_start_idx + (device_index + tp_index) * Sq) / TW, 0u, 0u};
     }
     const uint32_t sp = args.block_cyclic->sp;
     const uint32_t chunk_local = args.block_cyclic->chunk_local;  // cache per-shard slab width (elements)
@@ -85,21 +90,23 @@ inline DeviceCausalGeometry device_causal_geometry(
             "block_cyclic_sp_axis)",
             device_index,
             sp);
-        // SP-only block-cyclic: device_index is the SP-ring index and owns ONE block (Sq == chunk_local).
-        // Mirror the update_padded_kv_cache writer's update_idxt (== rotated_chip_positions[device_index][0])
-        // so the diagonal starts at this chip's TRUE logical block -- handling the boundary_chip rotation that
-        // the linear chunk_start_idx + c*Sq misses. Only the boundary chip is mid-slab, so only it straddles.
+        // Block-cyclic, named SP axis. device_index is the SP-ring index; its slab starts at the writer's
+        // update_idxt (== rotated_chip_positions[device_index][0]), handling the boundary_chip rotation the
+        // linear form misses. tp_index (SP×TP 2D sub-shard) selects this device's Sq-row sub-range within that
+        // slab: it owns local rows [tp_index*Sq, (tp_index+1)*Sq). lr0 is its first slab-local row; the mapping
+        // and straddle below are EXACT for both the SP-only case (tp_index==0, Sq==chunk_local) and the 2D case.
         const uint32_t boundary_slab = args.chunk_start_idx / chunk_global;
         const uint32_t boundary_chip = (args.chunk_start_idx / chunk_local) % sp;
         const uint32_t offset = args.chunk_start_idx % chunk_local;
         const uint32_t update_idxt = device_index < boundary_chip    ? (boundary_slab + 1) * chunk_local
                                      : device_index == boundary_chip ? boundary_slab * chunk_local + offset
                                                                      : boundary_slab * chunk_local;
-        const uint32_t logical_start =
-            (update_idxt / chunk_local) * chunk_global + device_index * chunk_local + (update_idxt % chunk_local);
+        const uint32_t lr0 = update_idxt + tp_index * Sq;  // this device's first slab-local row (TP sub-offset)
+        const uint32_t loff = lr0 % chunk_local;           // its offset within the current slab
+        const uint32_t logical_start = (lr0 / chunk_local) * chunk_global + device_index * chunk_local + loff;
         uint32_t straddle_q_tile = 0, straddle_jump_tiles = 0;
-        if (device_index == boundary_chip && offset != 0 && offset + Sq > chunk_local) {
-            straddle_q_tile = (chunk_local - offset) / TW;
+        if (loff != 0 && loff + Sq > chunk_local) {  // this device's Sq rows cross a slab boundary
+            straddle_q_tile = (chunk_local - loff) / TW;
             straddle_jump_tiles = (chunk_global - chunk_local) / TW;
         }
         return {logical_start / TW, straddle_q_tile, straddle_jump_tiles};
@@ -168,9 +175,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t T = k.logical_shape()[2];
 
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
-    // arg, so the binary is identical across coords and steps.
+    // arg, so the binary is identical across coords and steps. tp_index = its rank along seq_subshard_axis
+    // (the 2D SP×TP query sub-shard); 0 when not sub-sharded or single-device.
     const uint32_t device_index = device_index_for(args, coord, q);
-    const auto geom = device_causal_geometry(args, device_index, Sq);
+    const uint32_t tp_index =
+        (args.seq_subshard_axis.has_value() && q.device_storage().get_coords().size() > 1)
+            ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.seq_subshard_axis)
+            : 0u;
+    const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
     const uint32_t chunk_t = geom.chunk_start_tiles;
 
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
@@ -571,7 +583,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             .compute_kernel = compute_id,
             .writer_kernel = writer_id,
             .worker_cores = cores,
-            .device_index = device_index}};
+            .device_index = device_index,
+            .tp_index = tp_index}};
 }
 
 IndexerScoreProgramFactory::cached_mesh_workload_t IndexerScoreProgramFactory::create_mesh_workload(
@@ -607,7 +620,7 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel);
         auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, shared.compute_kernel);
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, shared.writer_kernel);
-        const auto geom = device_causal_geometry(args, shared.device_index, Sq);
+        const auto geom = device_causal_geometry(args, shared.device_index, shared.tp_index, Sq);
         const uint32_t chunk_t = geom.chunk_start_tiles;
         for (const auto& core : shared.worker_cores) {
             auto& reader_rt = reader_args[core.x][core.y];

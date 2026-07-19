@@ -1,33 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Local vLLM wrapper for Qwen3.5-9B: a thin tt_transformers Generator subclass.
+"""vLLM wrapper for Qwen3.5/3.6 on Blackhole — a thin tt_transformers Generator subclass.
 
-Qwen3.5-9B is a hybrid model: 8 full-attention layers (paged KV, stateless across prefill) plus
-24 Gated DeltaNet (GDN) layers carrying a recurrent + conv state that accumulates across the whole
-sequence. Standard tt_transformers models are stateless beyond paged KV, so the standard contract
-assumes token-padding is numerically free and the decode trace is position-general. Neither holds
-for GDN — which is the root of every place this model must diverge.
-
-What conforms to the standard Generator (Llama/DeepSeek/Qwen-VL):
-  - Decode, end to end. The model implements the standard decode contract (prepare_inputs_decode /
-    ttnn_decode_forward / process_output_decode); current_pos and page_table are device input
-    tensors the standard replay updates per step. The inherited WarmupForwardMixin captures the
-    decode trace at position 0 during warmup; Generator.decode_forward replays it at serving.
-
-What must diverge, and why:
-  - Prefill bucketing. GDN forbids token-padding inside its recurrent scan, so prefill pads to a
-    fixed bucket and passes an EXACT valid_len (the standard contract only plumbs get_last_token,
-    floored to a 32-multiple — too lossy for the GDN mask). See model.prefill_masked_bucket.
-  - Chunk-outer trace. At 128K a whole-length prefill trace is infeasible; we capture ONE
-    2048-token chunk trace and replay it N times, carrying GDN/KV state in place. See
-    model.prefill_traced_chunked / capture_prefill_trace_chunked.
-  - State-reset guard. The stock trace capture runs the forward twice (compile + capture), which
-    advances GDN state non-idempotently. Harmless only because every new sequence re-zeros the
-    bound GDN buffers before consuming a token (model._reset_gdn_state_for_new_sequence).
-
-Generator drives decode; all prefill is model-owned (prefill_masked_bucket / prefill_traced_chunked)
-via prefill_dispatch. GDN recurrent state and the attention KV caches are model-bound, so the
-kv_cache contract param is accepted but unused.
+Hybrid model: 8 paged-KV attention + 24 GDN recurrent-state layers. GDN forbids token-padding and
+isn't position-general, so prefill is model-owned (masked-bucket for short prompts / chunk-outer
+trace for long, via prefill_dispatch) while Generator drives decode only. GDN + KV state is
+model-bound, so the kv_cache contract param is accepted but unused.
 """
 import math
 import os
@@ -68,7 +46,13 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
 class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
-    model_capabilities = {"supports_prefix_caching": False, "supports_async_decode": False}
+    # supports_async_decode=False: async decode assumes on-device token/position continuity, which
+    # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
+    model_capabilities = {
+        "supports_prefix_caching": False,
+        "supports_async_decode": False,
+        "supports_sample_on_device": True,
+    }
 
     @classmethod
     def get_max_tokens_all_users(
@@ -80,17 +64,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         max_num_seqs: int | None = None,
         **kwargs,
     ) -> int:
-        """All-user KV-cache token capacity = served context length (B=1).
-
-        Qwen3.5/3.6 serve one sequence at a time (max_concurrency=1), so the whole
-        paged KV cache belongs to a single user and its capacity is exactly the
-        served context length — max_model_len, i.e. the catalog's max_context.
-        Deriving from max_model_len, instead of the inherited 131072 fallback, lets
-        these models serve at the full requested ISL (e.g. 256K = 262144): the
-        chunk-outer prefill and the full-KV page-table sizing in
-        warmup_model_prefill already scale to whatever KV cache vLLM allocates.
-        The * max_num_seqs keeps the all-user semantics correct if B ever grows.
-        """
+        """All-user KV capacity = max_model_len × max_num_seqs (B=1 serving), not the inherited
+        131072 fallback — so these models serve the full requested ISL (e.g. 256K)."""
         if max_model_len is not None:
             return int(max_model_len) * int(max_num_seqs or 1)
         return super().get_max_tokens_all_users(
@@ -120,9 +95,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         optimizations=None,
         **kwargs,
     ):
-        # Resolution order: MODEL_WEIGHTS_DIR (tt-inference-server Docker convention) →
-        # HF_MODEL → vLLM's hf_config._name_or_path (the hub id). Resolve a hub id to a
-        # local snapshot dir (AutoConfig on a bare hub id is unreliable in this transformers).
+        # Weights dir: MODEL_WEIGHTS_DIR → HF_MODEL → hf_config._name_or_path; a hub id resolves to a local snapshot.
         name_or_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL") or hf_config._name_or_path
         if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
             from huggingface_hub import snapshot_download
@@ -242,51 +215,25 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return logits, torch.zeros(1, dtype=torch.long)
 
     def decode_forward(self, *args, **kwargs):
-        # Both single-device and TP serve TRACED decode. The decode trace is valid for TP
-        # because GDN state lives in fixed in-place buffers (reset_state_inplace preserves
-        # addresses), and it no longer collides with prefill: TP prefill runs the bounded,
-        # pre-warmed masked-bucket program set (warmed before the trace parks), so a request
-        # never compiles a new program that could clobber the parked decode trace.
-        # Standard path (default): the decode trace is captured at position 0 during warmup by the
-        # inherited WarmupForwardMixin, then replayed here by Generator.decode_forward — identical
-        # to Llama/DeepSeek/Qwen-VL. current_pos and page_table are device input tensors the
-        # standard replay updates per step, so a pos-0 capture is position-general.
+        # Traced decode (single-device and TP): trace captured at pos 0 in warmup, replayed here.
+        # Valid for TP — GDN state is in fixed in-place buffers, and prefill only replays pre-warmed programs.
         if not getattr(self, "_decode_logged", False):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
-        # Single-device AND TP share this path: capture_prefill_trace_chunked dispatches to its
-        # TP fork (_capture_prefill_trace_chunked_tp) when num_devices>1. The capture compiles the
-        # per-chunk programs AND warms the bounded masked-bucket program set (short prompts + the
-        # long-prompt tail) before the decode trace is parked, so a real request only ever replays
-        # already-compiled programs — the compile-clobbers-trace fix — and long prompts replay the
-        # chunk-outer trace (bounded host dispatch, the 128K path) instead of the eager fallback.
-        #
-        # The plugin's warmup_model() is two-phase: it calls this first with
-        # enable_trace=False (compile), then resets ``already_warmed_up_prefill``
-        # and calls again with enable_trace=True (capture). Only the traced phase
-        # captures the chunk-prefill trace; capture_prefill_trace_chunked compiles
-        # its own programs before capturing, so the non-traced phase is a no-op.
-        # The guard attribute MUST be named ``already_warmed_up_prefill`` so the
-        # plugin's between-phase reset (model_runner.warmup_model) clears it.
+        # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
+        # pre-compiled programs (compile-clobbers-trace fix). Guard name must match the plugin's reset.
         if not enable_trace:
             return
         if getattr(self, "already_warmed_up_prefill", False):
             return
         self.already_warmed_up_prefill = True
-        # Size the captured chunk-trace page table to the FULL allocated KV cache
-        # (max_model_len worth of blocks), so served ISL matches the tt-metal demo's
-        # 128K — not a hardcoded 4096. The chunk-outer trace still captures only one
-        # _PREFILL_WARMUP_CHUNK-token chunk, so this is just a larger page-table
-        # tensor, not more compute/trace memory. kv_cache[0][0] is the first attention
-        # layer's K cache, shape [max_num_blocks, n_kv_heads, block_size, head_dim].
+        # Size the chunk-trace page table to the full KV cache (not a hardcoded 4096) so served ISL
+        # isn't capped; still captures one chunk — just a bigger page-table tensor.
         if kv_cache:
-            # Round up to a multiple of 32: the paged/chunked SDPA requires the page-table
-            # width (stick size) to be % 32 == 0 (the allocated block count carries a slack
-            # block, e.g. 257, which is not 32-aligned). prefill_traced_chunked pads each
-            # request's page table up to this width before replay.
+            # Round to a multiple of 32: paged/chunked SDPA needs the page-table stick % 32 == 0.
             num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         else:
             num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
@@ -298,11 +245,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         self.model[0].capture_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
 
     def warmup_model_decode(self, *args, **kwargs):
-        # Standard path (default): defer to the inherited WarmupForwardMixin, which captures the
-        # paged-SDPA + GDN decode trace at position 0 during warmup. Qwen sets
-        # _supports_on_device_sampling=False, so the orchestrator passes can_sample_on_device=False
-        # and exactly one greedy trace is captured; serving replays it with per-step input updates.
-        #
+        # Defer to WarmupForwardMixin, which captures the paged-SDPA + GDN decode trace at pos 0.
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
         return super().warmup_model_decode(*args, **kwargs)
