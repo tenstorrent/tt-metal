@@ -222,4 +222,8 @@ Capacity evidence was preserved at the unchanged maximum 12224, with adjacent 12
 
 Fresh `$stage-review` returned `clean-pass`; the full independent anomaly ledger is in `stage_review.md`. Review findings caused final-policy 7x100 reruns for fused AG, BFP8 CCL, persistent-off, and MLP-only BFP8 activation; an attention-only BFP8 probe; stage-local result retention; restoration of completed prior-stage artifacts; corrected validation paths; corrected allocation-neutral fidelity metadata; and a final current-source default/Watcher rerun.
 
-Local stage-owned commit SHAs are appended here after commit. No push is performed.
+- Implementation, tests, review, and evidence: `f0ab6bfcf5c` (`Optimize Qwen2.5 Coder TP4 decoder`).
+- The repository commit hooks passed. Their only source changes were Black/isort formatting; the 1.07 MiB fused-AG hang trace is retained losslessly as `validation/fused_ag_hang_triage.txt.gz` to satisfy the 500 KiB artifact gate.
+- This SHA-log update is a documentation-only follow-up commit; its SHA is reported in the final handoff because a commit cannot record its own hash.
+
+No push was performed.
