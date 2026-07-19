@@ -1054,6 +1054,22 @@ def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
     return _stub_body_is_native(stub_path)
 
 
+def _stub_has_graduated_any(stub_path: Path) -> bool:
+    """Verified-graduated via EITHER the single-chip native path (`.py.last_good_native`) OR the
+    tensor-parallel sharded path (`.py.last_good_sharded`) — in both cases the current body must be
+    native. A sharded snapshot is written only when the gathered-PCC shard gate passes, so it is a
+    real graduation just like the native one."""
+    if not stub_path.is_file():
+        return False
+    has_snapshot = (
+        stub_path.with_suffix(".py.last_good_native").is_file()
+        or stub_path.with_suffix(".py.last_good_sharded").is_file()
+    )
+    if not has_snapshot:
+        return False
+    return _stub_body_is_native(stub_path)
+
+
 def _emit_pcc_template(
     *,
     demo_dir: Path,

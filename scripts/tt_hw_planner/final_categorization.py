@@ -133,7 +133,7 @@ def reuse_adapt_on_device(demo_dir: Path, components_list: List[dict]) -> Set[st
     graduated native stub exists (rare for REUSE) or the reuse target is wired
     (:func:`_reuse_target_wired`). Shared by both the terminal compute-split and
     the RUN_REPORT categorization so the two surfaces cannot disagree."""
-    from .bringup_loop import _safe_id, _stub_has_graduated_from_autofill
+    from .bringup_loop import _safe_id, _stub_has_graduated_any
 
     out: Set[str] = set()
     for c in components_list:
@@ -142,7 +142,7 @@ def reuse_adapt_on_device(demo_dir: Path, components_list: List[dict]) -> Set[st
             continue
         stub = demo_dir / "_stubs" / f"{_safe_id(name)}.py"
         try:
-            graduated = _stub_has_graduated_from_autofill(stub)
+            graduated = _stub_has_graduated_any(stub)
         except Exception:
             graduated = False
         if graduated or _reuse_target_wired(demo_dir, c.get("tt_reuse_target")):
@@ -364,13 +364,13 @@ def _load_decomposition_children(demo_dir: Path) -> Dict[str, List[str]]:
 
 
 def _infer_graduated_from_disk(demo_dir: Path, components: List[str]) -> List[str]:
-    from .bringup_loop import _safe_id, _stub_has_graduated_from_autofill
+    from .bringup_loop import _safe_id, _stub_has_graduated_any
 
     out: List[str] = []
     for comp in components:
         stub = demo_dir / "_stubs" / f"{_safe_id(comp)}.py"
         try:
-            if _stub_has_graduated_from_autofill(stub):
+            if _stub_has_graduated_any(stub):
                 out.append(comp)
         except Exception:
             continue
