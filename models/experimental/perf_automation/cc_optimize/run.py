@@ -587,7 +587,7 @@ def _layer_signal(seq) -> int:
     return len(ops)
 
 
-def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int) -> dict:
+def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int, full_hint: int = 0) -> dict:
     if not node or os.environ.get("PERF_MCP_DEPTH_BRIDGE", "1") != "1":
         return {}
     cached = _depth_cache_get(repo_root, node)
@@ -598,9 +598,12 @@ def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, 
     model_root = _model_root_from_node(repo_root, node)
     if model_root is None:
         return {}
-    _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
-    full = _layer_signal(seq)
+    full = int(full_hint)
     if full <= 0:
+        _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
+        full = _layer_signal(seq)
+    if full <= 0:
+        print("  [optimize/cc] depth-knob bridge: full-model layer-signal is 0 (probe empty); skipping")
         _depth_cache_put(repo_root, node, {})
         return {}
     env = _llm_depth_env(model_root, cov)
@@ -649,6 +652,7 @@ def _coverage_layers(
     if sigs:
         facts = _parse_facts(raw, sigs)
         facts["all_ops"] = sorted(sigs)
+        facts["full_signal"] = _layer_signal(seq)
         first_block: dict = {}
         cur = 0
         for tok in seq or []:

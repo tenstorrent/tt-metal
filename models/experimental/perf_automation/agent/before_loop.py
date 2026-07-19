@@ -484,7 +484,7 @@ def before_loop(
     try:
         from models.experimental.perf_automation.cc_optimize.run import _bridge_depth_env, _coverage_layers
 
-        _bl_cov, _ = _coverage_layers(
+        _bl_cov, _bl_facts = _coverage_layers(
             tt_root,
             sub_env,
             devices,
@@ -495,9 +495,14 @@ def before_loop(
         )
         if not _bl_cov:
             _bl_cov = int(os.environ.get("PERF_MCP_DEPTH_DEFAULT_LAYERS", "4"))
-        print(f"      depth-bridge: node={perf_rel} case={case} cov={_bl_cov}", file=sys.stderr, flush=True)
+        _bl_full = int((_bl_facts or {}).get("full_signal") or 0)
+        print(
+            f"      depth-bridge: node={perf_rel} case={case} cov={_bl_cov} full_signal={_bl_full}",
+            file=sys.stderr,
+            flush=True,
+        )
         os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
-        _bl_depth = _bridge_depth_env(tt_root, sub_env, devices, perf_rel, case, _bl_cov)
+        _bl_depth = _bridge_depth_env(tt_root, sub_env, devices, perf_rel, case, _bl_cov, full_hint=_bl_full)
         if _bl_depth:
             os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
     except Exception as _bl_e:  # noqa: BLE001
