@@ -1492,6 +1492,28 @@ def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
     return None
 
 
+def _decode_gate(prof: dict, attempts: list) -> dict | None:
+    if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
+        return None
+    if prof.get("decode_status") != "repeat_prefill":
+        return None
+    if any((a.get("kernel_kind") or "").lower() in ("structural-decode", "kv-cache") for a in attempts):
+        return None
+    return {
+        "op": "generation_loop",
+        "op_class": "decode",
+        "gap_ms": round(float(prof.get("per_token_ms") or _MATERIAL_GAP_MS), 4),
+        "bound_by": "host",
+        "grid": None,
+        "weight_dtype": None,
+        "next_rung": "structural-decode",
+        "reason": (
+            "repeat_prefill: decode re-runs the full prefill every token (no cached decode_step / "
+            "KV-cache); add a KV-cache + single-token decode_step (recall_knobs(op_class='decode'))"
+        ),
+    }
+
+
 @mcp.tool()
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
@@ -1542,6 +1564,9 @@ def termination_check() -> dict:
     host_block = _host_gate(prof, blocking, attempts)
     if host_block:
         blocking.append(host_block)
+    decode_block = _decode_gate(prof, attempts)
+    if decode_block:
+        blocking.append(decode_block)
     can_stop = not blocking
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
