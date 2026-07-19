@@ -351,5 +351,8 @@ contract was corrected to say that the scratch is DRAM and persistence is
 The final independent `$stage-review` verdict is **`clean-pass`**. It confirmed
 that the corrected prefill reduce-scatter contract matches the source, all
 review findings are closed, provenance is current, and no regressions or stage
-blockers remain. The implementation commit SHA is recorded below after the
-local commit is created. No push is performed.
+blockers remain.
+
+The stage-owned implementation and evidence commit is
+`ff27647f8f88c7009bb8810a4d0b099fb07bd491`. The follow-up documentation-only
+commit records that SHA. No push was performed.
