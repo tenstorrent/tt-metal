@@ -326,6 +326,13 @@ jobs:
           PERF_TARGET_GROUP: ${{ inputs.perf-target-group }}
           TEST_GROUP_NAME: ${{ matrix.test-group.name }}
           TEST_GROUP_CMD: ${{ matrix.test-group.cmd }}
+          # EXPERIMENT: cap PyTorch/ATen host-side OpenMP threads when profiling is active. The
+          # eltwise tests use torch for tiny reference-tensor operations on the host; an uncapped
+          # thread pool causes libgomp to burn CPU in busy-wait barriers. This env var only affects
+          # the wrapped test command (not the rest of the matrix) and helps isolate the real host
+          # work from OpenMP spin overhead.
+          OMP_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '1' || '' }}
+          MKL_NUM_THREADS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) && '1' || '' }}
         run: |
           # Build the inner command passed to the power sidecar's `bash -c`. Use a shell variable
           # for the pytest command (from $TEST_GROUP_CMD) to avoid YAML/shell quoting hell.
