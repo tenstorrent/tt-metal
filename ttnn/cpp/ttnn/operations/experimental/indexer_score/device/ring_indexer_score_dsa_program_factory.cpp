@@ -206,15 +206,44 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t rows_used = group_rows * num_blocks;    // grid rows used by compute
     const uint32_t num_groups = group_count / group_rows;  // phase-stack count (groups per row, round-robin)
 
-    // STRIPED band -> column assignment (fused overlap balance). The classic factory gives each column a
-    // CONTIGUOUS band run; but an SP shard occupies ~sll_t/KC contiguous bands, so a contiguous split puts each
-    // shard onto only a few adjacent columns. When that shard arrives late (ring tail), those few columns are the
-    // long pole -- they stall until arrival then compute the shard's whole band run -- while every other column,
-    // done with its already-arrived shard, sits idle. Striping (col c owns bands blk_off+c, blk_off+c+cols_used,
-    // ...) gives every column a mix of early- and late-arriving bands, so the last shard's bands spread across ALL
-    // columns and the tail exposed after the all-gather is ~(bands_of_last_shard / cols_used) instead of the whole
-    // shard. Each column's bands are ABSOLUTE indices (reader/compute/writer get band0=0 + the absolute list), so
-    // the per-column readiness sort below still walks local-first-then-arrival exactly as before.
+    // Ring-arrival readiness, hoisted above the band->column assignment (which now balances it) AND reused by the
+    // per-column visit sort below. shard_order[c] = the ring iteration that delivers SP shard c (local shard -> 0);
+    // replay the RingIdSequencer on the HOST with the same seed as the reader. A band's readiness = max arrival-
+    // iter over the shards its tiles land in.
+    const uint32_t ring_size = ring_size_for(args, q);  // shared with validate/signaler (same ring extent)
+    const auto rw = ring_writes_for(ring_size, device_index, fused.topology);
+    std::vector<uint32_t> shard_order(ring_size, 0);
+    {
+        RingIdSequencer seq(device_index, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
+        for (uint32_t i = 0; i < ring_size; ++i) {
+            const uint32_t rid = seq.get_next_ring_id([](uint32_t, uint32_t) {});
+            shard_order[rid] = i;
+        }
+    }
+    const uint32_t sll_t = Tt / ring_size;  // tiles per SP shard in the gathered buffer (cl_t hoisted above)
+    const auto band_readiness = [&](uint32_t band_abs) -> uint32_t {
+        const uint32_t start = band_abs * KC;
+        const uint32_t end = std::min(start + KC, Tt);
+        uint32_t readiness = 0;
+        for (uint32_t logical_tile = start; logical_tile < end; ++logical_tile) {
+            const uint32_t shard = args.has_block_cyclic() ? (logical_tile / cl_t) % ring_size : (logical_tile / sll_t);
+            readiness = std::max(readiness, shard_order[shard]);
+        }
+        return readiness;
+    };
+
+    // READINESS-BALANCED band -> column assignment (fused overlap balance). Distribute a block's bands across
+    // columns round-robin WITHIN each ring-arrival readiness level, using a shared column cursor. This balances
+    // BOTH the total band count AND the per-readiness count across columns, so every column front-loads an equal
+    // share of already-available (local, readiness 0) work before it needs any remote shard, and every column
+    // also carries an equal share of the last-arriving shard (its tail spreads across ALL columns).
+    //   A plain `i % cols_used` stripe instead CORRELATES shard with column: since a block-cyclic band maps to
+    // shard (band's first tile / cl_t) % ring_size and the stripe maps it to column band % cols_used, a column
+    // sees only cols_used / gcd(cols_used, ring_size) distinct shards (e.g. 10 cols x ring 4 -> 2 shards/col).
+    // Half the columns then hold NO local band and stall on a remote shard at their VERY FIRST band, exposing the
+    // entire first-slab arrival (~95us here) instead of overlapping it behind local work. Bands stay ABSOLUTE
+    // indices (reader/compute/writer get band0=0 + the absolute list); the per-column readiness sort below still
+    // walks local-first-then-arrival exactly as before.
     std::vector<std::vector<std::vector<uint32_t>>> band_list(
         num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
     uint32_t max_bands = 0;
@@ -223,8 +252,16 @@ ProgramDescriptor build_ring_program_descriptor(
         uint32_t blk_off = 0;
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             const uint32_t blk_bands = bands_per_block + (blk < blk_extra ? 1u : 0u);
-            for (uint32_t i = 0; i < blk_bands; ++i) {
-                band_list[blk][i % cols_used].push_back(blk_off + i);
+            uint32_t col_cursor = 0;
+            for (uint32_t rlevel = 0; rlevel < ring_size; ++rlevel) {
+                for (uint32_t i = 0; i < blk_bands; ++i) {
+                    const uint32_t band_abs = blk_off + i;
+                    if (band_readiness(band_abs) != rlevel) {
+                        continue;
+                    }
+                    band_list[blk][col_cursor % cols_used].push_back(band_abs);
+                    ++col_cursor;
+                }
             }
             blk_off += blk_bands;
             for (uint32_t col = 0; col < cols_used; ++col) {
@@ -302,10 +339,8 @@ ProgramDescriptor build_ring_program_descriptor(
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
-    // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI).
-    const uint32_t ring_size = ring_size_for(args, q);  // shared with validate (same ring extent)
-    const auto rw = ring_writes_for(ring_size, device_index, fused.topology);
-
+    // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI). ring_size / rw
+    // are computed above (hoisted for the readiness-balanced band assignment).
     ttnn::prim::RingSDPAFusedOpSignaler sdpa_sig;
     sdpa_sig.init_all_gather(ring_size, device_index, rw.forward_writes_expected, rw.backward_writes_expected);
     sdpa_sig.fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
@@ -431,31 +466,11 @@ ProgramDescriptor build_ring_program_descriptor(
     sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);  // {ring_size, ring_index, fwd, bwd, sem0, sem1}
 
     // ---- Step E: band-visit reorder (local-first, then remote by ring arrival) --------------------------
-    // Replay RingIdSequencer on the HOST (same seed as the reader) so shard_order[c] = the ring iteration that
-    // delivers SP shard c (local shard -> 0). A band's readiness = max arrival-iter over the shards its tiles
-    // land in; sorting a core's bands by readiness makes it score its local + already-arrived bands first and
-    // hide the farther slabs' transport behind that compute. The SAME permutation is fed to reader/compute/
-    // writer (band identity preserved) so the cb_k / cb_out FIFOs stay in lockstep.
-    std::vector<uint32_t> shard_order(ring_size, 0);
-    {
-        RingIdSequencer seq(device_index, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
-        for (uint32_t i = 0; i < ring_size; ++i) {
-            const uint32_t rid = seq.get_next_ring_id([](uint32_t, uint32_t) {});
-            shard_order[rid] = i;
-        }
-    }
-    const uint32_t sll_t = Tt / ring_size;  // tiles per SP shard in the gathered buffer (cl_t hoisted above)
-    const auto band_readiness = [&](uint32_t band_abs) -> uint32_t {
-        const uint32_t start = band_abs * KC;
-        const uint32_t end = std::min(start + KC, Tt);
-        uint32_t readiness = 0;
-        for (uint32_t logical_tile = start; logical_tile < end; ++logical_tile) {
-            const uint32_t shard = args.has_block_cyclic() ? (logical_tile / cl_t) % ring_size : (logical_tile / sll_t);
-            readiness = std::max(readiness, shard_order[shard]);
-        }
-        return readiness;
-    };
-
+    // shard_order / band_readiness are computed above (hoisted so the band->column assignment can balance
+    // readiness across columns). The per-column stable_sort by band_readiness below makes each core score its
+    // local + already-arrived bands first and hide the farther slabs' transport behind that compute. The SAME
+    // permutation is fed to reader/compute/writer (band identity preserved) so the cb_k / cb_out FIFOs stay in
+    // lockstep.
     for (uint32_t row = 0; row < rows_used; ++row) {
         // Q/W row mcast rect + diagonal sender (shared with the classic factory).
         const auto qb = q_mcast_bbox(phys, row, cols_used);
