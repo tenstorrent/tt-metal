@@ -61,7 +61,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
     steps:

@@ -66,7 +66,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ inputs.subcategories != '' && steps.filter-categories.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:

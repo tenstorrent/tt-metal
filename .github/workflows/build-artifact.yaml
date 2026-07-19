@@ -296,7 +296,7 @@ jobs:
 
   # Parse platform dropdown to extract distro/version/toolchain
   parse-platform:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}

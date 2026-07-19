@@ -31,7 +31,7 @@ on:
 
 jobs:
   define-models:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       models-to-run: ${{ steps.compute-models.outputs.models-to-run }}
     steps:
@@ -91,7 +91,7 @@ jobs:
 
   generate-matrix:
     needs: define-models
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.generate-matrix.outputs.matrix }}
     steps:

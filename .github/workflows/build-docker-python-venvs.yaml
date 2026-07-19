@@ -31,7 +31,7 @@ on:
 jobs:
   metadata:
     name: "Venv metadata"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       ci_build_venv_tag: ${{ steps.metadata.outputs.ci_build_venv_tag }}
       ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
