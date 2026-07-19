@@ -570,6 +570,12 @@ def before_loop(
         (run.dir / "perf_seq_len").write_text(_seq_env)
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
+    try:
+        import tempfile as _tf
+
+        (Path(_tf.gettempdir()) / "perf_mcp_baseline.json").write_text(json.dumps(profile))
+    except Exception:  # noqa: BLE001
+        pass
     _bk = {b.get("id"): int(b.get("count", 0)) for b in (profile.get("buckets") or [])}
     _struct_ops = sum(c for i, c in _bk.items() if i in STRUCTURAL_OP_CLASSES)
     if profile.get("device_ms", 0) <= 0 or _struct_ops == 0:
