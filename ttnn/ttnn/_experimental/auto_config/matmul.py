@@ -2531,10 +2531,15 @@ def place_weight(
     forms a shape-consistent matmul: a replicated activation pairs with a
     replicated weight; a K-sharded (row-parallel) activation pairs with a
     K-sharded weight (reduce-scatter recipe).  On a single device the weight is
-    replicated.  For the K-sharded case ``place_weight`` lets the selector pick
-    the best reduce-scatter recipe and verifies the result against a torch
-    ground-truth reference built from the host weight, reporting the outcome in
-    ``WeightPlacement.verified`` (and a recommendation when verification fails).
+    replicated.
+
+    Deciding and staging the placement runs nothing on-device.  Passing
+    ``measure=True`` additionally executes the K-sharded reduce-scatter recipe,
+    lets the selector pick the fastest variant, and verifies it against a torch
+    ground-truth reference built from the host weight (``WeightPlacement.verified``).
+    Measurement is opt-in because the "minimal" reduce-scatter collectives are
+    built for ring topologies and can hang on non-ring layouts; keep it off unless
+    the target mesh is CCL-capable.
 
     Args:
         weight: host ``torch.Tensor`` (or an already-placed ``ttnn.Tensor``).
@@ -2547,8 +2552,10 @@ def place_weight(
         is_linear: build linear (vs matmul) candidate recipes when measuring.
         dtype / memory_config / layout: staging controls (sensible defaults).
         strategy: ``"auto"`` (default), ``"replicate"``, or ``"shard_k"``.
-        measure: force measurement on/off.  Defaults to measuring on a
-            multi-device mesh when more than one placement is viable.
+        measure: opt in (``True``) to execute + verify a K-sharded reduce-scatter
+            placement on-device.  Defaults to ``False`` (decide + stage only) so
+            place_weight never launches a collective that could hang on non-ring
+            hardware.
 
     Returns:
         WeightPlacement: the placed tensor plus the recorded decision.
@@ -2652,12 +2659,20 @@ def place_weight(
     verified = False
     candidate_timings: list[dict[str, Any]] = []
 
-    # Only the K-sharded (reduce-scatter) placement needs measuring/verifying:
-    # replication is correct by construction, and the best local config is picked
-    # by the ordinary ttnn.matmul path on first use.  For the sharded placement we
-    # let the selector pick the best reduce-scatter recipe and then verify its
-    # output against the torch ground truth built from the host weight.
-    should_measure = measure if measure is not None else (output_is_sharded and isinstance(activation, ttnn.Tensor))
+    # Measurement is OPT-IN (measure=True), never the default.  Measuring a
+    # K-sharded placement executes the reduce-scatter collective on-device, and
+    # those "minimal" CCL recipes are built for ring topologies (e.g. T3K): on a
+    # non-ring layout the collective can *hang* rather than raise, and a device
+    # hang cannot be caught the way an exception can.  So by default place_weight
+    # only decides + stages the placement (no collective is run); callers on
+    # CCL-capable hardware pass measure=True to pick the best reduce-scatter
+    # recipe and verify it against the host-weight ground truth.
+    should_measure = bool(measure) and output_is_sharded and isinstance(activation, ttnn.Tensor)
+    if not should_measure and output_is_sharded:
+        recommendations.append(
+            "K-sharded (reduce-scatter) placement was staged but not executed/verified (measure=False). "
+            "Pass measure=True on CCL-capable hardware (e.g. a ring topology) to measure and verify it."
+        )
     if should_measure and output_is_sharded:
         base_operation = _get_cpp_base_operation(is_linear)
         reference_flat = _placement_reference_output(

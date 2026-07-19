@@ -763,13 +763,37 @@ def test_place_weight_shards_on_k_and_verifies_for_k_sharded_activation(monkeypa
     monkeypatch.setattr(auto_matmul, "_measure_weight_placement", fake_measure)
     weight = SimpleNamespace(shape=(64, 128))
 
-    placement = auto_matmul.place_weight(weight, activation=activation, mesh_device=_FakeMeshDevice(2, (2,)))
+    placement = auto_matmul.place_weight(
+        weight, activation=activation, mesh_device=_FakeMeshDevice(2, (2,)), measure=True
+    )
 
     assert placement.strategy == "shard_k"
     assert placement.tensor == "weight_shard_k"
     assert placement.output_is_sharded is True
     assert placement.verified is True
     assert placement.cluster_axis == 0
+
+
+def test_place_weight_does_not_execute_a_collective_by_default(monkeypatch):
+    # Measurement runs the reduce-scatter collective, which can hang on non-ring
+    # hardware; place_weight must NOT do that unless measure=True is passed.
+    fake_ttnn = _fake_ttnn_for_placement()
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: fake_ttnn)
+    activation = fake_ttnn.Tensor()
+    monkeypatch.setattr(auto_matmul, "_activation_k_shard", lambda a, transpose_a: (0, 2, 1))
+    monkeypatch.setattr(auto_matmul, "_stage_weight", lambda weight, device, **kwargs: kwargs["role"])
+
+    def explode(*args, **kwargs):
+        raise AssertionError("place_weight must not measure/execute a collective by default")
+
+    monkeypatch.setattr(auto_matmul, "_measure_weight_placement", explode)
+    weight = SimpleNamespace(shape=(64, 128))
+
+    placement = auto_matmul.place_weight(weight, activation=activation, mesh_device=_FakeMeshDevice(2, (2,)))
+
+    assert placement.strategy == "shard_k"
+    assert placement.verified is False
+    assert any("not executed/verified" in rec for rec in placement.recommendations)
 
 
 def test_place_weight_reports_unverified_shard_when_ground_truth_fails(monkeypatch):
@@ -787,7 +811,9 @@ def test_place_weight_reports_unverified_shard_when_ground_truth_fails(monkeypat
     monkeypatch.setattr(auto_matmul, "_measure_weight_placement", fake_measure)
     weight = SimpleNamespace(shape=(64, 128))
 
-    placement = auto_matmul.place_weight(weight, activation=activation, mesh_device=_FakeMeshDevice(2, (2,)))
+    placement = auto_matmul.place_weight(
+        weight, activation=activation, mesh_device=_FakeMeshDevice(2, (2,)), measure=True
+    )
 
     # The K-sharded weight is the only shape-consistent placement for a K-sharded
     # activation, so it is returned but flagged unverified with a recommendation.
