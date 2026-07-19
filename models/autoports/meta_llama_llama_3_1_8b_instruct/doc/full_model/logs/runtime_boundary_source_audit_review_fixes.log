@@ -1,0 +1,127 @@
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:26:    MultiChipDecoder,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:81:    kv_cache_dtype: object = ttnn.bfloat8_b
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:99:        if self.kv_cache_dtype not in (ttnn.bfloat8_b, ttnn.bfloat16):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:199:        shared_cos, shared_sin = MultiChipDecoder._make_rotary_tables(
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:202:        decode_cos, decode_sin = MultiChipDecoder._make_rotary_tables(
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:279:            layer = MultiChipDecoder.from_state_dict(
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:304:                num_gather_links=config.multichip.num_links,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:307:                num_argmax_gather_links=config.multichip.num_links,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:333:        dtype = self.config.kv_cache_dtype if dtype is None else dtype
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:361:    def reset_kv_cache(kv_cache) -> None:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:375:            num_links=self.config.multichip.num_links,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:597:    def sample_greedy_split(self, logits, *, k, p, temp, tt_out_tok=None):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:600:        return self.sampler.greedy_decode_forward(logits, tt_out_tok=tt_out_tok)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:602:    def sample_stochastic_split(self, logits, *, k, p, temp, tt_out_tok=None):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:610:            tt_out_tok=tt_out_tok,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:614:    def sample_force_argmax(self, logits, *, tt_out_tok=None):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/model.py:617:        return self.sampler.decode_forward(logits, tt_out_tok=tt_out_tok, enable_log_probs=False)[0]
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:98:            "token_host_copies": 0,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:99:            "position_host_copies": 0,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:100:            "page_table_host_copies": 0,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:280:    def _local_logits_to_torch(self, logits) -> torch.Tensor:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:324:        return self._sample_device_split(selected_logits, k=k, p=p, temp=temp, tt_out_tok=self._prefill_sampled)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:363:                self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:376:                self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:391:            self.model.reset_kv_cache(kv_cache)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:436:            self.model.reset_kv_cache(kv_cache)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:458:        sampling_mode: str = "host",
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:465:        if sampling_mode not in {"host", "device"}:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:466:            raise ValueError("sampling_mode must be 'host' or 'device'")
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:467:        if sampling_mode == "device" and return_all_logits:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:469:        if sampling_mode == "host" and (self._trace_model_id is not None or self._prefill_trace_ids):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:470:            self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:484:        if sampling_mode == "device":
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:525:                chunk_logits = self._local_logits_to_torch(output)[0, : self.batch, :chunk_len, :]
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:541:        host_logits = self._local_logits_to_torch(selected_logits)[0, 0, :active_batch, :]
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:626:        self._sample_device_split(warm_logits, k=k, p=p, temp=temp, tt_out_tok=token)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:667:    def _sample_device_split(self, logits, *, k, p, temp, tt_out_tok=None):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:669:            return self.model.sample_stochastic_split(logits, k=k, p=p, temp=temp, tt_out_tok=tt_out_tok)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:670:        return self.model.sample_greedy_split(logits, k=k, p=p, temp=temp, tt_out_tok=tt_out_tok)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:745:            self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:840:        self.trace_stats["token_host_copies"] += 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:841:        self.trace_stats["position_host_copies"] += 2
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:843:            self.trace_stats["page_table_host_copies"] += 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:864:            self._sample_device_split(warm_logits, k=k, p=p, temp=temp, tt_out_tok=token)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:895:            sampled = self._sample_device_split(logits, k=k, p=p, temp=temp, tt_out_tok=token)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:939:            self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:946:        self.trace_stats["token_host_copies"] += 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:947:        self.trace_stats["position_host_copies"] += 2
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:951:            self.trace_stats["page_table_host_copies"] += 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:959:            self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:967:            self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:980:        self.trace_stats["page_table_host_copies"] += 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:982:    def _replay_split_sampling(self):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1010:    def _release_all_traces(self) -> None:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1028:        self.trace_stats["token_host_copies"] += 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1042:        sampling_mode: str = "host",
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1056:        if sampling_mode not in {"host", "device"}:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1057:            raise ValueError("sampling_mode must be 'host' or 'device'")
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1058:        if sampling_mode == "host" and (self._trace_model_id is not None or self._prefill_trace_ids):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1059:            self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1073:        if sampling_mode == "device" and self._sampling_stochastic and not self._sampling_request_active:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1076:        if enable_trace and sampling_mode == "device":
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1088:            sampled = self._replay_split_sampling()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1106:        if sampling_mode == "device":
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1111:        return self._local_logits_to_torch(logits)[0, 0, : self.batch, :]
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1158:        self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1160:        processed_position_horizon = len(prompt_token_ids) + max_new_tokens - 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1162:        page_host = self._make_page_table([max(_round_up(processed_position_horizon, 64), padded_prefill)])
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1169:        predicted = int(logits[0, 0].argmax().item())
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1182:                sampling_mode="host",
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1185:            predicted = int(decoded[0].argmax().item())
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1195:        sampling_mode: str = "device",
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1210:        processed_position_horizon = len(prompt_token_ids) + max_new_tokens - 1
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1211:        if processed_position_horizon > self.model.config.max_context_len:
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1213:        if sampling_mode == "host":
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1219:        if sampling_mode != "device":
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1220:            raise ValueError("sampling_mode must be 'device' or 'host'")
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1231:        page_host = self._make_page_table([max(_round_up(processed_position_horizon, 64), padded_prefill)])
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1237:            sampling_mode="device",
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1258:                sampling_mode="device",
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1271:            self.model.reset_kv_cache(self._kv_cache)
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1278:        self._release_all_traces()
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/generator.py:1329:        kv_cache_dtype=_resolve_dtype(kwargs.pop("kv_cache_dtype", None), default=ttnn.bfloat8_b),
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:72:    num_links: int = 2
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:142:class MultiChipDecoder(OptimizedDecoder):
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:167:                f"MultiChipDecoder targets exactly {TARGET_MESH_SHAPE}, got "
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:171:            raise ValueError(f"MultiChipDecoder targets mesh {TARGET_MESH_SHAPE}, got {tuple(self.mesh_device.shape)}")
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:400:    ) -> "MultiChipDecoder":
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:403:                f"MultiChipDecoder requires mesh {TARGET_MESH_SHAPE}; got shape={tuple(mesh_device.shape)}, "
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:653:                num_links=self.multichip_config.num_links,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:665:                num_links=self.multichip_config.num_links,
+models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py:1161:    "MultiChipDecoder",
+models/common/modules/sampling/sampling_1d.py:235:        tt_out_tok: ttnn.Tensor | None = None,
+models/common/modules/sampling/sampling_1d.py:245:            tt_out_tok: Optional output tensor to write results to.
+models/common/modules/sampling/sampling_1d.py:266:                return self._sample_argmax(logits, tt_out_tok)
+models/common/modules/sampling/sampling_1d.py:272:        return self._sample_topk(logits, k, p, temp, seeds, tt_out_tok)
+models/common/modules/sampling/sampling_1d.py:278:    def greedy_decode_forward(self, logits: ttnn.Tensor, *, tt_out_tok: ttnn.Tensor | None = None):
+models/common/modules/sampling/sampling_1d.py:291:            return self._sample_argmax(logits, tt_out_tok)[0]
+models/common/modules/sampling/sampling_1d.py:296:        local_indices_rm = ttnn.argmax(logits_rm, dim=-1, keepdim=True)
+models/common/modules/sampling/sampling_1d.py:332:            num_links=cfg.num_gather_links,
+models/common/modules/sampling/sampling_1d.py:357:        winner_position_rm = ttnn.argmax(candidate_values_rm, dim=2, keepdim=True)
+models/common/modules/sampling/sampling_1d.py:397:        if tt_out_tok is not None:
+models/common/modules/sampling/sampling_1d.py:398:            ttnn.copy(greedy_tokens, tt_out_tok)
+models/common/modules/sampling/sampling_1d.py:400:            return tt_out_tok
+models/common/modules/sampling/sampling_1d.py:405:    def _sample_argmax(self, logits, tt_out_tok):
+models/common/modules/sampling/sampling_1d.py:408:        tt_out_tok = ttnn.argmax(
+models/common/modules/sampling/sampling_1d.py:411:            output_tensor=tt_out_tok,
+models/common/modules/sampling/sampling_1d.py:416:        return tt_out_tok, None
+models/common/modules/sampling/sampling_1d.py:421:        Port of main's ``_get_force_argmax_all_gather_config`` (#44246): bound num_links to the
+models/common/modules/sampling/sampling_1d.py:426:        num_links = cfg.num_argmax_gather_links
+models/common/modules/sampling/sampling_1d.py:427:        if hasattr(cfg.tt_ccl, "get_num_links"):
+models/common/modules/sampling/sampling_1d.py:428:            num_links = min(num_links, cfg.tt_ccl.get_num_links(cluster_axis))
+models/common/modules/sampling/sampling_1d.py:432:        return max(1, num_links), topology
+models/common/modules/sampling/sampling_1d.py:448:                num_links=1,
+models/common/modules/sampling/sampling_1d.py:456:        num_links, topology = self._get_argmax_all_gather_config(cluster_axis)
+models/common/modules/sampling/sampling_1d.py:462:            num_links=num_links,
+models/common/modules/sampling/sampling_1d.py:497:    def _sample_topk(self, logits, k, p, temp, seeds, tt_out_tok):
+models/common/modules/sampling/sampling_1d.py:535:        tt_out_tok = ttnn.sampling(
+models/common/modules/sampling/sampling_1d.py:542:            output_tensor=tt_out_tok,
+models/common/modules/sampling/sampling_1d.py:552:            log_probs = self._log_probs_calculator.calculate_log_probs(logits, tt_out_tok)
+models/common/modules/sampling/sampling_1d.py:555:        return tt_out_tok, log_probs
+models/common/modules/sampling/sampling_1d.py:628:            num_links=cfg.num_gather_links,
+models/common/modules/sampling/sampling_1d.py:639:            num_links=cfg.num_gather_links,
+models/common/modules/sampling/sampling_1d.py:654:    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+models/common/modules/sampling/sampling_1d.py:664:                "num_links": num_links,
+models/common/modules/sampling/sampling_1d.py:675:            num_links=num_links,
+models/common/modules/sampling/sampling_1d.py:711:            num_argmax_gather_links = ag_cfg.get("num_links", num_gather_links)

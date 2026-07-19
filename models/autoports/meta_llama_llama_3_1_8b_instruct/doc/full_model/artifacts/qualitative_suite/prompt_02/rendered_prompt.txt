@@ -1,0 +1,8 @@
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 26 Jul 2024
+
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered<|eot_id|><|start_header_id|>assistant<|end_header_id|>

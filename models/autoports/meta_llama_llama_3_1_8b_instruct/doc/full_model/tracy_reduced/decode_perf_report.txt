@@ -1,0 +1,21 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'start FULL_MODEL_REDUCED_DECODE'.
+Using operations until 'stop FULL_MODEL_REDUCED_DECODE'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/tracy_reduced/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 31.3% (160 GB/s)
+Warning: Unclassified operation 'PlusOneDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingHfDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllReduceAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SamplingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ManualSeedDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/tracy_reduced/decode_op_summary.csv.csv
+Plotting PNG stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/tracy_reduced/decode_op_summary.csv.png

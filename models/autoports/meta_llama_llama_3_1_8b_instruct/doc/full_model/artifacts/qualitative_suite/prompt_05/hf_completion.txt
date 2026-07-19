@@ -1,0 +1,20 @@
+**Fibonacci Sequence Function**
+================================
+
+The Fibonacci sequence is a series of numbers where a number is the sum of the two preceding ones, usually starting with 0 and 1.
+
+### Recursive Implementation
+
+```python
+def fibonacci_recursive(n):
+    """
+    Calculate the nth Fibonacci number using recursion.
+
+    Args:
+        n (int): The position of the Fibonacci number to calculate.
+
+    Returns:
+        int: The nth Fibonacci number.
+
+    Raises:
+        ValueError: If n is a negative

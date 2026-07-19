@@ -122,11 +122,12 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
     if chat_template:
         if not hasattr(tokenizer, "apply_chat_template"):
             raise RuntimeError(f"Tokenizer {type(tokenizer).__name__} does not support apply_chat_template")
-        prompt_tokens = tokenizer.apply_chat_template(
+        rendered_prompt = tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt_text}],
             add_generation_prompt=True,
-            tokenize=True,
+            tokenize=False,
         )
+        prompt_tokens = tokenizer.encode(rendered_prompt, add_special_tokens=False)
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 

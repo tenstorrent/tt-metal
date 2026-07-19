@@ -1,0 +1,16 @@
+The translation of "Hello, how are you today?" to French is:
+
+"Bonjour, comment allez-vous aujourd'hui?"
+
+Here's a breakdown:
+
+- "Bonjour" means "hello" or "good day"
+- "comment" means "how"
+- "allez-vous" is a polite way to ask "how are you"
+- "aujourd'hui" means "today"
+
+However, a more common way to greet someone in French is:
+
+"Bonjour, comment ça va?"
+
+This is

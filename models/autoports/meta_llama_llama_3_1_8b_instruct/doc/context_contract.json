@@ -6,7 +6,7 @@
   "capacity_evidence": {
     "target_mesh": "1x4 Blackhole P300c ring, TP=4",
     "device_allocator_dram_bytes": 34178731008,
-    "device_allocator_probe": "Full visible MeshShape(1,4); ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM): 8 banks * 4272341376 bytes per bank on each device",
+    "device_allocator_probe": "Full visible MeshShape(1,4): raw DRAM allocator capacity is 34178731008 bytes/device. With trace_region_size=100000000 bytes/bank, ttnn.get_memory_view reports 8 banks and 33378731008 usable bytes/device; the trace reservation is 800000000 bytes/device.",
     "page_block_size": 64,
     "page_pool_blocks": 2048,
     "aggregate_cache_tokens": 131072,
@@ -20,12 +20,27 @@
     "stack_shared_minimal_all_reduce_buffers_per_mesh": 1,
     "stack_shared_minimal_all_reduce_buffer_bytes_per_device": 1048576,
     "stack_shared_minimal_all_reduce_buffer_bytes_per_worker_core": 65536,
-    "conservative_non_decoder_weight_allowance_bytes": 4294967296,
-    "reserved_trace_activation_ccl_headroom_bytes": 4294967296,
-    "bf16_plan_total_bytes": 14847836160,
-    "formula": "KV/device: 32 layers * 2 local KV heads * 131072 aggregate positions * 128 head_dim * 2 (K,V) * dtype bytes. BFP8 uses 1088 bytes per 1024-element tile. Each phase-specific projection-weight layout/device: 32 * 54525952 local elements * 576 BFP4 bytes per 1024-element tile. The optimized path keeps one DRAM-sharded prefill layout and one interleaved 1-D decode layout. The final TP4 minimal-all-reduce workspace is mesh/stack-shared: 32 padded rows * 16384 BF16 elements = 1048576 bytes/device, width-sharded over 16 workers = 65536 bytes/core, independent of layer count and valid for every public batch in [1,32].",
+    "per_device_decoder_norm_weight_bytes": 16777216,
+    "per_device_embedding_weight_bytes": 262668288,
+    "per_device_final_norm_weight_bytes": 262144,
+    "per_device_bfp8_lm_head_weight_bytes": 142606336,
+    "per_device_shared_prefill_rope_table_bytes": 67108864,
+    "per_device_shared_decode_rope_table_bytes": 67108864,
+    "per_device_position_index_bytes_batch1": 524288,
+    "per_device_invalid_vocab_mask_bytes": 2097152,
+    "per_device_sampler_persistent_bytes": 2114048,
+    "per_device_full_model_persistent_non_cache_bytes": 2525250048,
+    "per_device_trace_region_reservation_bytes": 800000000,
+    "per_device_page_table_bytes_batch1": 8192,
+    "per_device_measured_persistent_after_weights_bytes": 2534929408,
+    "per_device_measured_persistent_after_bfp8_cache_bytes": 4816630784,
+    "per_device_bfp8_full_context_plan_bytes": 5616638976,
+    "per_device_bf16_full_context_plan_bytes": 7629904896,
+    "per_device_bfp8_full_context_headroom_bytes": 28562092032,
+    "per_device_bf16_full_context_headroom_bytes": 26548826112,
+    "formula": "KV/device: 32 layers * 2 local KV heads * 131072 aggregate positions * 128 head_dim * 2 (K,V) * dtype storage. BFP8 uses 1088 bytes per 1024-element tile. Projection weights/device retain both accepted phase layouts: 981467136 prefill + 981467136 decode bytes. The full-model persistent formula additionally includes tile-padded decoder norms, TP4 row-major embedding, final norm, BFP8 TP4 LM head padded to vocab 131072, one shared BF16 TILE RoPE pair for prefill, one shared BF16 row-major RoPE pair for decode, batch-1 position indices, invalid-vocab mask, Sampling1D exact-greedy/stochastic buffers, and the shared 1 MiB minimal-all-reduce pool. Fresh hardware measurement reports 2534929408 bytes allocated/device after full weights and 4816630784 after adding the exact full-context BFP8 cache, a delta of 2281701376 bytes matching the tile formula. Plan totals add the measured persistent weight allocation, selected cache, 800 MB/device trace reservation (100 MB per bank), and batch-1 page table. The BF16 split uses the same accepted shape with exact BF16 storage accounting and still leaves 26.5 GB/device raw-allocator headroom. No advertised-context reduction is needed.",
     "allocator_policy": "A 2048-block pool can be assigned entirely to one 131072-token request or shared across a batch. Inputs are chunked/logical tensors and are not required to materialize batch*max_context as one persistent allocation.",
-    "stage_scope": "The optimized full-mesh multichip decoder preserves the advertised logical context and its paged-cache layout. Hardware correctness covers non-aligned prefill/decode plus adversarial physical page placement across positions 63, 64, and 65; full-model long-context execution remains a downstream full-model responsibility."
+    "stage_scope": "The full autoregressive model preserves the advertised logical context and optimized TP4 paged-cache layout. Hardware gates cover full-stack 32-layer prefill/decode; a real one-layer 131071-token non-divisible public generation with all 2048 pages and inspected final-page K/V data; the exact 131072-token prompt/one-output boundary; mixed prompts, fixed slots, inactive rows, trace replay; and both accepted BFP8 and compatibility BF16 cache capacity plans."
   },
   "notes": "TP=4 quarters KV-head ownership and projection-weight storage per device relative to a dense single-device layer. Logical sequence lengths remain unaligned at the API boundary; tile and final-page padding are internal. The model has no MoE experts.",
   "paths": {
@@ -63,6 +78,7 @@
     "functional_baseline": "BF16 weights and activations; TILE layout; DRAM memory by default",
     "optimized_decoder": "BFP4 projection weights with LoFi projection math; BF16 activations and norms; BF16 and BFP8 caller-owned KV caches",
     "multichip_decoder": "Same optimized projection policy per rank; BF16 residual in 16-core width-sharded L1 across layer boundaries and BF16 minimal-all-reduce payload; KV cache is sharded by head with two local heads per device",
-    "deferred": "Full-model top-k datatype-frontier selection remains downstream work."
+    "full_model": "BFP4/LoFi optimized decoder projections; BF16 activations, residuals, norms, CCL payloads, final logits, and invalid-vocabulary mask; BFP8/HiFi2 TP4 LM-head weights; BFP8 paged KV cache by default with explicit BF16 compatibility selection; Sampling1D exact local-argmax plus packed FP32 rank-candidate gather on device.",
+    "rejection_ledger": "Preserved from optimized_multichip_decoder: BF16 projection weights, BFP8 CCL payloads, packed gate/up, alternate advisor geometries, link=1, and non-minimal all-reduce remain rejected. Full-model terminal rejection: full-vocabulary force-argmax all-gather is comparison-only because canonical exact greedy communicates only one value/token packet per rank; non-semantic ttnn.sampling(k=1) is also rejected."
   }
 }

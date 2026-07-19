@@ -1,0 +1,8 @@
+**Supervised Learning:**
+
+Imagine you have a teacher who shows you examples of different fruits (e.g., apples, bananas, oranges) and tells you which category each one belongs to. Then, you try to learn from these examples and predict the category of a new, unseen fruit.
+
+In supervised learning, the algorithm is given:
+
+1. **Input data** (e.g., features of a fruit, like color and shape)
+2. **Output data** (e.g., the category of

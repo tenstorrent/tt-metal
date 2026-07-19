@@ -1,0 +1,55 @@
+{
+  "mesh": "P300 1x4 FABRIC_1D_RING TP=4",
+  "num_layers": 32,
+  "workload": {
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "batch": 1
+  },
+  "sampling": {
+    "top_k": 1,
+    "top_p": 0.0,
+    "temperature": 1.0
+  },
+  "first_token": 82,
+  "output_token_count": 128,
+  "ttft_ms": 20.512086804956198,
+  "ttft_trace_counter_delta": {
+    "captures": 0,
+    "replays": 0,
+    "releases": 0,
+    "prefill_captures": 0,
+    "prefill_replays": 1,
+    "prefill_releases": 0,
+    "decode_warmups": 0,
+    "token_host_copies": 0,
+    "position_host_copies": 0,
+    "page_table_host_copies": 0,
+    "sampling_param_host_copies": 0,
+    "sampling_seed_host_copies": 0,
+    "caller_token_readbacks": 1,
+    "explicit_synchronizations": 0
+  },
+  "end_to_end_ms": 1170.361341908574,
+  "token_out_decode_ms": 1149.849255103618,
+  "token_out_decode_ms_per_token": 9.053931142548173,
+  "token_out_decode_t_s_u": 110.4492605759487,
+  "trace_counter_delta": {
+    "captures": 0,
+    "replays": 127,
+    "releases": 0,
+    "prefill_captures": 0,
+    "prefill_replays": 1,
+    "prefill_releases": 0,
+    "decode_warmups": 0,
+    "token_host_copies": 1,
+    "position_host_copies": 2,
+    "page_table_host_copies": 1,
+    "sampling_param_host_copies": 0,
+    "sampling_seed_host_copies": 0,
+    "caller_token_readbacks": 128,
+    "explicit_synchronizations": 0
+  },
+  "feedback_contract": "Sampler tt_out_tok writes the persistent decode-token tensor; caller token-ID readback is output-only and is never copied back as feedback.",
+  "public_api_contract": "TTFT calls public prefill_forward with device sampling; end-to-end calls public generate, which delegates to public prefill_forward/decode_forward and reuses compatible traces."
+}

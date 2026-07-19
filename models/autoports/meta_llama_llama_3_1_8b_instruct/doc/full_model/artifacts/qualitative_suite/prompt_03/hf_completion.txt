@@ -1,0 +1,5 @@
+The three laws of thermodynamics are fundamental principles that describe the relationships between heat, work, and energy. Here are the three laws:
+
+1. **Zeroth Law of Thermodynamics**: This law states that if two systems are in thermal equilibrium with a third system, then they are also in thermal equilibrium with each other. In simpler terms, it allows us to define a temperature scale, such as the Celsius or Kelvin scale, which measures the thermal energy of a system.
+
+2. **First Law of

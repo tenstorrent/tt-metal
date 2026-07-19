@@ -8,7 +8,7 @@ module keeps its optimized operation graph and precision policy while applying
 1-D tensor parallelism to the four-chip Blackhole P300c ring on this host:
 autoport:
 
-* packed QKV and gate/up weights are column parallel;
+* packed QKV plus separate gate and up weights are column parallel;
 * output and down weights are row parallel;
 * Q/K/V, attention, and SwiGLU execute on device-local heads/features;
 * the replicated residual stream is restored by two asynchronous all-reduces
@@ -391,6 +391,11 @@ class MultiChipDecoder(OptimizedDecoder):
         max_cache_len: int = EMITTED_CACHE_LENGTH,
         multichip_config: MultiChipConfig | None = None,
         tt_ccl: TT_CCL | None = None,
+        rotary_cos=None,
+        rotary_sin=None,
+        decode_rotary_cos=None,
+        decode_rotary_sin=None,
+        position_indices=None,
         **_kwargs,
     ) -> "MultiChipDecoder":
         if mesh_device.get_num_devices() != TARGET_TP_DEGREE or tuple(mesh_device.shape) != TARGET_MESH_SHAPE:
@@ -447,13 +452,6 @@ class MultiChipDecoder(OptimizedDecoder):
         packed_gate_up = _pack_tp_gate_up(gate_t, up_t, TARGET_TP_DEGREE) if policy.optimized.packed_gate_up else None
         local_gate_up_width = local_intermediate_size * (2 if policy.optimized.packed_gate_up else 1)
 
-        rotary = LlamaRotaryEmbedding(hf_config)
-        positions = torch.arange(max_cache_len, dtype=torch.long).unsqueeze(0)
-        rope_probe = torch.zeros((1, 1, max_cache_len, head_dim), dtype=torch.bfloat16)
-        cos, sin = rotary(rope_probe, positions)
-        cos = cos.to(torch.bfloat16).unsqueeze(1)
-        sin = sin.to(torch.bfloat16).unsqueeze(1)
-
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         shard_last = ttnn.ShardTensorToMesh(mesh_device, dim=1)
         shard_first = ttnn.ShardTensorToMesh(mesh_device, dim=0)
@@ -461,6 +459,12 @@ class MultiChipDecoder(OptimizedDecoder):
         gate_up_dtype = policy.optimized.gate_up_weight_dtype
         down_dtype = policy.optimized.down_weight_dtype
         prefill_weight_memory_config = lambda k, n: _dram_weight_memory_config(mesh_device, k=k, n=n)
+        if (rotary_cos is None) != (rotary_sin is None):
+            raise ValueError("rotary_cos and rotary_sin must be supplied together")
+        if rotary_cos is None:
+            rotary_cos, rotary_sin = cls._make_rotary_tables(hf_config, max_cache_len, head_dim, mesh_device)
+        if (decode_rotary_cos is None) != (decode_rotary_sin is None):
+            raise ValueError("decode_rotary_cos and decode_rotary_sin must be supplied together")
 
         decoder = cls(
             multichip_config=policy,
@@ -519,16 +523,22 @@ class MultiChipDecoder(OptimizedDecoder):
                 dtype=down_dtype,
                 memory_config=prefill_weight_memory_config(local_intermediate_size, hidden_size),
             ),
-            rotary_cos=_mesh_tensor(cos, mesh_device, mesh_mapper=replicate),
-            rotary_sin=_mesh_tensor(sin, mesh_device, mesh_mapper=replicate),
-            position_indices=_mesh_tensor(
-                torch.arange(max_cache_len, dtype=torch.int32).unsqueeze(1).expand(-1, batch),
-                mesh_device,
-                mesh_mapper=replicate,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.int32,
+            rotary_cos=rotary_cos,
+            rotary_sin=rotary_sin,
+            position_indices=(
+                position_indices
+                if position_indices is not None
+                else _mesh_tensor(
+                    torch.arange(max_cache_len, dtype=torch.int32).unsqueeze(1).expand(-1, batch),
+                    mesh_device,
+                    mesh_mapper=replicate,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.int32,
+                )
             ),
         )
+        decoder.decode_rotary_cos = decode_rotary_cos if decode_rotary_cos is not None else rotary_cos
+        decoder.decode_rotary_sin = decode_rotary_sin if decode_rotary_sin is not None else rotary_sin
         if policy.optimized.decode_matmul_strategy == "advisor_1d":
             # Prefill benefits from channel-aligned DRAM sharding, while the
             # advisor's 1-D decode programs require interleaved DRAM weights.
@@ -548,6 +558,32 @@ class MultiChipDecoder(OptimizedDecoder):
             if packed_gate_up is None:
                 decoder._decode_weight_specs.append(("decode_up_weight", up_t, shard_last, gate_up_dtype))
         return decoder
+
+    @staticmethod
+    def _make_rotary_tables(
+        hf_config,
+        max_cache_len: int,
+        head_dim: int,
+        mesh_device,
+        *,
+        layout=ttnn.TILE_LAYOUT,
+    ):
+        """Build the legacy rotate-half tables for standalone layer construction.
+
+        Full-model construction passes one shared pair to every layer.  Keeping
+        this helper preserves the existing decoder factory contract without
+        allocating one context-sized table pair per layer in the full stack.
+        """
+
+        rotary = LlamaRotaryEmbedding(hf_config)
+        positions = torch.arange(max_cache_len, dtype=torch.long).unsqueeze(0)
+        rope_probe = torch.zeros((1, 1, max_cache_len, head_dim), dtype=torch.bfloat16)
+        cos, sin = rotary(rope_probe, positions)
+        replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+        return (
+            _mesh_tensor(cos.to(torch.bfloat16).unsqueeze(1), mesh_device, mesh_mapper=replicate, layout=layout),
+            _mesh_tensor(sin.to(torch.bfloat16).unsqueeze(1), mesh_device, mesh_mapper=replicate, layout=layout),
+        )
 
     @staticmethod
     def mesh_mapper_for_input(mesh_device):
@@ -634,19 +670,37 @@ class MultiChipDecoder(OptimizedDecoder):
             reduced = ttnn.typecast(reduced, ttnn.bfloat16, memory_config=output_memory_config)
         return reduced
 
-    def _fill_cache(self, cache, values, *, page_table, seq_len: int) -> None:
+    def _fill_cache(
+        self,
+        cache,
+        values,
+        *,
+        page_table,
+        seq_len: int,
+        prompt_lens=None,
+        chunk_start_idx: int = 0,
+        chunk_page_table=None,
+    ) -> None:
         cache_values = values if values.dtype == cache.dtype else ttnn.typecast(values, cache.dtype)
         for user_id in range(self.batch):
+            valid_chunk_len = seq_len
+            if prompt_lens is not None:
+                valid_chunk_len = min(seq_len, max(0, int(prompt_lens[user_id]) - chunk_start_idx))
+                if valid_chunk_len == 0:
+                    continue
             user = ttnn.slice(
                 cache_values,
                 [user_id, 0, 0, 0],
-                [user_id + 1, self.num_kv_heads, seq_len, self.head_dim],
+                [user_id + 1, self.num_kv_heads, valid_chunk_len, self.head_dim],
                 [1, 1, 1, 1],
             )
             if page_table is None:
+                if chunk_start_idx:
+                    raise ValueError("chunked prefill requires a paged KV cache")
                 ttnn.fill_cache(cache, user, user_id)
             else:
-                ttnn.experimental.paged_fill_cache(cache, user, page_table, batch_idx=user_id)
+                fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+                ttnn.experimental.paged_fill_cache(cache, user, fill_page_table, batch_idx=user_id)
 
     def _mlp_prefill_tp(self, hidden_states, seq_len: int):
         return self._all_reduce_partial(
@@ -686,11 +740,28 @@ class MultiChipDecoder(OptimizedDecoder):
         )
         return ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
 
-    def prefill_forward(self, hidden_states, key_cache, value_cache, *, page_table=None):
+    def prefill_forward(
+        self,
+        hidden_states,
+        key_cache,
+        value_cache,
+        *,
+        page_table=None,
+        prompt_lens=None,
+        chunk_start_idx: int = 0,
+        chunk_page_table=None,
+    ):
         seq_len = self._validate_hidden_states(hidden_states)
         self._validate_caches(key_cache, value_cache, page_table)
-        if page_table is not None and math.ceil(seq_len / PAGED_BLOCK_SIZE) > page_table.shape[1]:
+        if prompt_lens is not None and len(prompt_lens) != self.batch:
+            raise ValueError(f"prompt_lens must contain {self.batch} entries")
+        if chunk_start_idx < 0 or chunk_start_idx + seq_len > self.max_cache_len:
+            raise ValueError("prefill chunk lies outside the supported context")
+        required_pages = math.ceil((chunk_start_idx + seq_len) / PAGED_BLOCK_SIZE)
+        if page_table is not None and required_pages > page_table.shape[1]:
             raise ValueError("page_table does not cover the logical prefill length")
+        if chunk_start_idx and (page_table is None or chunk_page_table is None):
+            raise ValueError("chunked prefill requires both full and chunk page tables")
 
         residual = hidden_states
         normed = self._prefill_norm(hidden_states, self.input_norm, seq_len)
@@ -716,8 +787,18 @@ class MultiChipDecoder(OptimizedDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        cos = ttnn.slice(self.rotary_cos, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim], [1, 1, 1, 1])
-        sin = ttnn.slice(self.rotary_sin, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim], [1, 1, 1, 1])
+        cos = ttnn.slice(
+            self.rotary_cos,
+            [0, 0, chunk_start_idx, 0],
+            [1, 1, chunk_start_idx + seq_len, self.head_dim],
+            [1, 1, 1, 1],
+        )
+        sin = ttnn.slice(
+            self.rotary_sin,
+            [0, 0, chunk_start_idx, 0],
+            [1, 1, chunk_start_idx + seq_len, self.head_dim],
+            [1, 1, 1, 1],
+        )
         query = ttnn.experimental.rotary_embedding(query, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         key = ttnn.experimental.rotary_embedding(key, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         query = ttnn.slice(
@@ -734,19 +815,37 @@ class MultiChipDecoder(OptimizedDecoder):
             [1, 1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self._fill_cache(key_cache, key, page_table=page_table, seq_len=seq_len)
-        self._fill_cache(value_cache, value, page_table=page_table, seq_len=seq_len)
-
-        attention = ttnn.transformer.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            is_causal=True,
-            scale=self.scale,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.prefill_sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel,
+        fill_kwargs = dict(
+            page_table=page_table,
+            seq_len=seq_len,
+            prompt_lens=prompt_lens,
+            chunk_start_idx=chunk_start_idx,
+            chunk_page_table=chunk_page_table,
         )
+        self._fill_cache(key_cache, key, **fill_kwargs)
+        self._fill_cache(value_cache, value, **fill_kwargs)
+
+        if chunk_start_idx:
+            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
+                input_tensor_q=query,
+                input_tensor_k=key_cache,
+                input_tensor_v=value_cache,
+                page_table_tensor=page_table,
+                chunk_start_idx=chunk_start_idx,
+                program_config=self.prefill_sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel,
+            )
+        else:
+            attention = ttnn.transformer.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                is_causal=True,
+                scale=self.scale,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.prefill_sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel,
+            )
         attention = ttnn.transformer.concatenate_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attention = ttnn.reshape(attention, [1, self.batch, seq_len, self.local_hidden_size])
         attention = self._prefill_linear(
@@ -776,14 +875,63 @@ class MultiChipDecoder(OptimizedDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def decode_forward(self, hidden_states, key_cache, value_cache, *, current_pos: int, page_table=None):
+    def _decode_rotary_tables(self, rotary_position):
+        """Gather batch-specific RoPE rows without a host-visible position."""
+
+        cos = ttnn.embedding(
+            rotary_position,
+            self.decode_rotary_cos,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin = ttnn.embedding(
+            rotary_position,
+            self.decode_rotary_sin,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos = ttnn.transpose(ttnn.unsqueeze_to_4D(cos), 1, 2)
+        sin = ttnn.transpose(ttnn.unsqueeze_to_4D(sin), 1, 2)
+        cos = ttnn.slice(
+            cos,
+            [0, 0, 0, 0],
+            [1, self.batch, 1, self.head_dim],
+            [1, 1, 1, 1],
+            memory_config=self.decode_heads_mem_config,
+        )
+        sin = ttnn.slice(
+            sin,
+            [0, 0, 0, 0],
+            [1, self.batch, 1, self.head_dim],
+            [1, 1, 1, 1],
+            memory_config=self.decode_heads_mem_config,
+        )
+        return cos, sin
+
+    def decode_forward(
+        self,
+        hidden_states,
+        key_cache,
+        value_cache,
+        *,
+        current_pos: int | ttnn.Tensor,
+        rotary_position=None,
+        page_table=None,
+    ):
         self.prepare_decode()
         self._validate_hidden_states(hidden_states, expected_seq_len=1)
         self._validate_caches(key_cache, value_cache, page_table)
-        if current_pos < 0 or current_pos >= self.max_cache_len:
-            raise ValueError(f"current_pos must be in [0, {self.max_cache_len}), got {current_pos}")
-        if page_table is not None and current_pos // PAGED_BLOCK_SIZE >= page_table.shape[1]:
-            raise ValueError("page_table does not cover current_pos")
+        dynamic_position = isinstance(current_pos, ttnn.Tensor)
+        if dynamic_position:
+            if tuple(current_pos.shape) != (self.batch,):
+                raise ValueError(f"current_pos tensor must have shape [{self.batch}], got {tuple(current_pos.shape)}")
+            if rotary_position is None:
+                raise ValueError("dynamic decode requires non-negative rotary_position indices")
+        else:
+            if current_pos < 0 or current_pos >= self.max_cache_len:
+                raise ValueError(f"current_pos must be in [0, {self.max_cache_len}), got {current_pos}")
+            if page_table is not None and current_pos // PAGED_BLOCK_SIZE >= page_table.shape[1]:
+                raise ValueError("page_table does not cover current_pos")
 
         hidden_states = ttnn.reshape(hidden_states, [1, 1, self.batch, self.hidden_size])
         decode_residual_mem_config = (
@@ -830,29 +978,42 @@ class MultiChipDecoder(OptimizedDecoder):
             memory_config=self.decode_heads_mem_config,
         )
 
-        cos = ttnn.slice(
-            self.rotary_cos,
-            [0, 0, current_pos, 0],
-            [1, 1, current_pos + 1, self.head_dim],
-            [1, 1, 1, 1],
-        )
-        sin = ttnn.slice(
-            self.rotary_sin,
-            [0, 0, current_pos, 0],
-            [1, 1, current_pos + 1, self.head_dim],
-            [1, 1, 1, 1],
-        )
-        query = ttnn.experimental.rotary_embedding(query, cos, sin, 0, memory_config=self.decode_heads_mem_config)
-        key = ttnn.experimental.rotary_embedding(key, cos, sin, 0, memory_config=self.decode_heads_mem_config)
+        if dynamic_position:
+            cos, sin = self._decode_rotary_tables(rotary_position)
+        else:
+            cos = ttnn.slice(
+                self.rotary_cos,
+                [0, 0, current_pos, 0],
+                [1, 1, current_pos + 1, self.head_dim],
+                [1, 1, 1, 1],
+            )
+            sin = ttnn.slice(
+                self.rotary_sin,
+                [0, 0, current_pos, 0],
+                [1, 1, current_pos + 1, self.head_dim],
+                [1, 1, 1, 1],
+            )
+        if dynamic_position:
+            # The legacy rotary op broadcasts one [1, 1, 1, D] cache row
+            # across the batch.  Serving slots can be at different positions,
+            # so use the HF decode op with one gathered row per slot.
+            query = ttnn.experimental.rotary_embedding_hf(query, cos, sin, is_decode_mode=True)
+            key = ttnn.experimental.rotary_embedding_hf(key, cos, sin, is_decode_mode=True)
+        else:
+            query = ttnn.experimental.rotary_embedding(query, cos, sin, 0, memory_config=self.decode_heads_mem_config)
+            key = ttnn.experimental.rotary_embedding(key, cos, sin, 0, memory_config=self.decode_heads_mem_config)
 
-        update_indices = ttnn.slice(
-            self.position_indices,
-            [current_pos, 0],
-            [current_pos + 1, self.batch],
-            [1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        update_indices = ttnn.reshape(update_indices, [self.batch])
+        if dynamic_position:
+            update_indices = current_pos
+        else:
+            update_indices = ttnn.slice(
+                self.position_indices,
+                [current_pos, 0],
+                [current_pos + 1, self.batch],
+                [1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            update_indices = ttnn.reshape(update_indices, [self.batch])
         ttnn.experimental.paged_update_cache(
             key_cache,
             key,
@@ -965,10 +1126,22 @@ class MultiChipDecoder(OptimizedDecoder):
         *,
         mode: str,
         current_pos: int | None = None,
+        rotary_position=None,
         page_table=None,
+        prompt_lens=None,
+        chunk_start_idx: int = 0,
+        chunk_page_table=None,
     ):
         if mode == "prefill":
-            return self.prefill_forward(hidden_states, key_cache, value_cache, page_table=page_table)
+            return self.prefill_forward(
+                hidden_states,
+                key_cache,
+                value_cache,
+                page_table=page_table,
+                prompt_lens=prompt_lens,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+            )
         if mode == "decode":
             if current_pos is None:
                 raise ValueError("decode mode requires current_pos")
@@ -977,6 +1150,7 @@ class MultiChipDecoder(OptimizedDecoder):
                 key_cache,
                 value_cache,
                 current_pos=current_pos,
+                rotary_position=rotary_position,
                 page_table=page_table,
             )
         raise ValueError(f"mode must be 'prefill' or 'decode', got {mode!r}")

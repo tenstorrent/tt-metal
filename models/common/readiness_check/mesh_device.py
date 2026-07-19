@@ -14,9 +14,14 @@ from typing import Any
 MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "P300": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
+
+# P300 full-model decode traces retain 32 optimized decoder layers plus the
+# terminal LM-head boundary.  Match the established model-test reservation.
+MESH_TRACE_REGION_SIZES: dict[str, int] = {"P300": 100_000_000}
 
 FABRIC_CONFIG_CHOICES = ("FABRIC_1D", "FABRIC_1D_RING", "FABRIC_2D")
 
@@ -60,7 +65,10 @@ def open_readiness_mesh_device(mesh_device_label: str, fabric_config: str | None
         }[fabric_config]
         ttnn.set_fabric_config(fabric)
 
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape))
+    open_kwargs = {}
+    if mesh_device_label in MESH_TRACE_REGION_SIZES:
+        open_kwargs["trace_region_size"] = MESH_TRACE_REGION_SIZES[mesh_device_label]
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape), **open_kwargs)
 
 
 def close_readiness_mesh_device(mesh_device: Any, fabric_config: str | None = None) -> None:

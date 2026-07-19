@@ -1,0 +1,29 @@
+{
+  "artifact": "aime24_chat_100.refpt",
+  "artifact_sha256": "3dc948d1055779df6df70623ce5025ab48318acef6af55e6fc8f72d6852f4a42",
+  "generated_utc": "2026-07-19",
+  "checkpoint": {
+    "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+    "snapshot_revision": "0e9e39f249a16976918f6564b8830bc894c89659",
+    "config_sha256": "29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e",
+    "tokenizer_sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+    "tokenizer_config_sha256": "177c7b61e616fecb84c17ce0591acb92c6c4d60e9ac5ababfb940ff23bbcd424"
+  },
+  "prompt": {
+    "source": "models/demos/deepseek_v3/demo/aime_under_8k_prompts.json",
+    "source_sha256": "ced18521fe26b8e304b3d9900e9c05e33387a3967dbb964c941eaca77321ef99",
+    "index": 0,
+    "task": "aime24",
+    "chat_template": true,
+    "add_generation_prompt": true,
+    "prompt_tokens": 184
+  },
+  "continuation_tokens": 100,
+  "captured_top_k": 100,
+  "tensor_shapes": {
+    "prompt_tokens": [1, 184],
+    "generated_tokens": [1, 100],
+    "topk_tokens": [100, 100]
+  },
+  "command": "HF_HOME=/home/mvasiljevic/hf-cache python -m models.common.readiness_check.generate --hf-model <snapshot> --prompt-source aime24 --chat-template --gen-len 100 --top-k 100 --output <artifact>"
+}

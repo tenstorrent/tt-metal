@@ -1,0 +1,5 @@
+**Supervised Learning**
+
+Imagine you have a friend who wants to learn how to recognize different types of fruits. You show them a picture of an apple and say, "This is an apple." Then, you show them a picture of a banana and say, "This is a banana." You keep doing this with different fruits, telling your friend what each one is.
+
+In supervised learning, the computer is trained on labeled data, meaning the correct answers are provided for the computer to learn from. The

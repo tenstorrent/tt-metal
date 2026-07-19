@@ -1,0 +1,8 @@
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 26 Jul 2024
+
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Write a Python function to calculate the Fibonacci sequence.<|eot_id|><|start_header_id|>assistant<|end_header_id|>

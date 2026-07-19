@@ -95,9 +95,11 @@ def _hf_generate_greedy(
         pad_id = eos[0] if isinstance(eos, (list, tuple)) else eos
 
     input_ids = torch.tensor([prompt_token_ids], dtype=torch.long, device=device)
+    attention_mask = torch.ones_like(input_ids)
     with torch.no_grad():
         out = model.generate(
             input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
             do_sample=False,
             num_beams=1,
@@ -122,6 +124,7 @@ def run_autoregressive(
     output_dir: Path,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     build_kwargs: Optional[Dict[str, Any]] = None,
+    chat_template: bool = False,
 ) -> Dict[str, Path]:
     """
     Programmatic entry point. Generates a completion from HF and from the TT
@@ -134,7 +137,15 @@ def run_autoregressive(
         raise ValueError(f"Prompt file {prompt_file} is empty")
 
     tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
-    prompt_token_ids: List[int] = tokenizer.encode(prompt_text, add_special_tokens=True)
+    if chat_template:
+        rendered_prompt = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt_text}],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        prompt_token_ids = tokenizer.encode(rendered_prompt, add_special_tokens=False)
+    else:
+        prompt_token_ids = tokenizer.encode(prompt_text, add_special_tokens=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Prompt ({len(prompt_token_ids)} tokens):\n{prompt_text}\n")
@@ -182,6 +193,7 @@ def run_autoregressive(
                 "prompt_file": str(prompt_file),
                 "prompt_text": prompt_text,
                 "prompt_token_ids": prompt_token_ids,
+                "chat_template": chat_template,
                 "max_new_tokens": max_new_tokens,
                 "hf": {"token_ids": list(hf_tokens), "num_tokens": len(hf_tokens)},
                 "tt": {"token_ids": list(tt_tokens), "num_tokens": len(tt_tokens)},
@@ -226,6 +238,11 @@ def _main() -> None:
         default=DEFAULT_MAX_NEW_TOKENS,
         help=f"Decode-step budget per side; both stop early on EOS (default {DEFAULT_MAX_NEW_TOKENS}).",
     )
+    parser.add_argument(
+        "--chat-template",
+        action="store_true",
+        help="Render the prompt as one user turn with the tokenizer's chat template.",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir or (args.model_dir / "readiness_autoregressive")
@@ -239,6 +256,7 @@ def _main() -> None:
             mesh_device=mesh_device,
             output_dir=output_dir.resolve(),
             max_new_tokens=args.max_new_tokens,
+            chat_template=args.chat_template,
         )
     finally:
         close_readiness_mesh_device(mesh_device, args.fabric_config)

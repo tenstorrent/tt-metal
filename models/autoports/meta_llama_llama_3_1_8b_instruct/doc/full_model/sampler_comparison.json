@@ -1,0 +1,61 @@
+{
+  "common_sampler_selection": {
+    "selected": {
+      "implementation": "models/common/modules/sampling/sampling_1d.py",
+      "path": "Sampling1D",
+      "reason": "Direct 1D TP4 fit with one exact packed rank-candidate gather, fixed batch-32 state, stable tt_out_tok, and trace-compatible caller-owned parameters and seeds."
+    },
+    "rejected": {
+      "implementation": "models/common/sampling/SamplingGenerator",
+      "path": "SamplingGenerator/TTSampling",
+      "disposition": "source-contract rejection; no misleading non-equivalent hardware benchmark",
+      "blockers": [
+        {
+          "id": "one_link_split",
+          "evidence": "models/common/sampling/tt_sampling.py:157-164,552-587",
+          "reason": "With max_top_k=32 it derives one gather link instead of the required two."
+        },
+        {
+          "id": "explicit_seed_trace",
+          "evidence": "models/common/sampling/generator.py:384-418,856-932",
+          "reason": "Explicit request seeds copy H2D every token and disable internal trace replay."
+        },
+        {
+          "id": "args_adapter",
+          "evidence": "models/common/sampling/tt_sampling.py:124-181",
+          "reason": "FullModelConfig does not implement the legacy sampler's required args interface."
+        }
+      ],
+      "compatible_features": [
+        "1x4 sharded vocabulary",
+        "padded vocabulary offsets",
+        "fixed and inactive slots",
+        "tt_out_tok output buffer",
+        "top-k, top-p, and temperature",
+        "presence, frequency, and repetition penalties"
+      ],
+      "p300_limitations": [
+        "on-device logprobs are unsupported on four devices",
+        "penalty accumulator update is outside the internal sampling trace"
+      ]
+    }
+  },
+  "sampling1d_greedy_strategy_comparison": {
+    "selected": {
+      "path": "exact local argmax plus packed FP32 rank-candidate gather",
+      "top_k": 1,
+      "top_p": 0.0,
+      "device_temperature": 1.0,
+      "full_stack_eager_ms_per_call": 0.9739843662828207,
+      "trace_ms_per_token": 0.7946211192756891
+    },
+    "rejected": {
+      "path": "full-vocabulary force-argmax",
+      "full_stack_eager_ms_per_call": 1.2415332021191716,
+      "reason": "Same greedy token, but slower eager and requires a full-logits collective."
+    },
+    "semantic_greedy_match": true,
+    "sampling_fraction_of_separate_trace_time": 0.08836856804104933,
+    "canonical_sampler_dominates_token_out": false
+  }
+}

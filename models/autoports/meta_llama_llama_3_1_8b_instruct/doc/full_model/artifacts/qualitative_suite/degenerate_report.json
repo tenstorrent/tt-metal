@@ -1,0 +1,90 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_00/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 13,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2308
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_00/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 14,
+      "compared_tokens": 16
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_01/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 73,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0822
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_01/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 4,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_02/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 80,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0375
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_02/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 12,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_03/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 83,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0723
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_03/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 22,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_04/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 62,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0968
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_04/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 26,
+      "compared_tokens": 77
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_05/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 63,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0952
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/qualitative_suite/prompt_05/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 5,
+      "compared_tokens": 100
+    }
+  ],
+  "exit_code": 0
+}

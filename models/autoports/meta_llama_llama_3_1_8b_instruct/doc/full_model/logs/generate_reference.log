@@ -1,0 +1,7 @@
+<frozen runpy>:128: RuntimeWarning: 'models.common.readiness_check.generate' found in sys.modules after import of package 'models.common.readiness_check', but prior to execution of 'models.common.readiness_check.generate'; this may result in unpredictable behaviour
+Loading model /home/mvasiljevic/hf-cache/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659 on cpu...
+Loading weights:   0%|          | 0/291 [00:00<?, ?it/s]Loading weights: 100%|██████████| 291/291 [00:00<00:00, 4400.62it/s]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Using aime24 prompt with 184 tokens after chat-template tokenization
+Generated 100 continuation tokens
+Reference saved to: models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/artifacts/aime24_chat_100.refpt

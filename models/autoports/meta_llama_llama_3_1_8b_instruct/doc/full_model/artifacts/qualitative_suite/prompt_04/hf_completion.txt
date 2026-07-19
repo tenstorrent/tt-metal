@@ -1,0 +1,9 @@
+The translation of "Hello, how are you today?" to French is:
+
+"Bonjour, comment allez-vous aujourd'hui?"
+
+However, a more common and informal way to say it in French would be:
+
+"Salut, comment ça va?"
+
+"Bonjour" is a more formal greeting, while "Salut" is more casual and used with friends or people you know well.<|eot_id|>

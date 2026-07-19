@@ -1,0 +1,8 @@
+To solve this problem, we need to first find the values of s and t.
+
+Given that when Aya walks at a constant speed of s kilometers per hour, the walk takes her 4 hours, including t minutes spent in the coffee shop. We can convert 4 hours to minutes, which is 240 minutes.
+
+We can set up the equation:
+9/s + t/60 = 240
+
+Given that when she walks s+2 kilometers per hour, the walk takes

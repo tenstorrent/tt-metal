@@ -1,0 +1,78 @@
+{
+  "mesh": "P300 1x4 FABRIC_1D_RING TP=4",
+  "num_layers": 1,
+  "prompt_tokens": 184,
+  "cache_dtype": "BFP8",
+  "memory_after_weights": {
+    "banks": 8,
+    "total_bytes": 33378731008,
+    "allocated_bytes": 617100288,
+    "free_bytes": 32761630720,
+    "largest_contiguous_free_per_bank": 4095203840
+  },
+  "memory_after_full_context_cache": {
+    "banks": 8,
+    "total_bytes": 33378731008,
+    "allocated_bytes": 688403456,
+    "free_bytes": 32690327552,
+    "largest_contiguous_free_per_bank": 4086290944
+  },
+  "cold_prefill_ms": 132.93830398470163,
+  "warm_prefill_ms": 3.2869898714125156,
+  "samplers": {
+    "split_greedy_token": 101081,
+    "force_argmax_token": 101081,
+    "semantic_match": true,
+    "iterations": 1,
+    "split_greedy_ms_per_call": 212.30013808235526,
+    "force_argmax_ms_per_call": 1.879855990409851,
+    "selected": "Sampling1D exact local argmax plus one packed FP32 rank-candidate gather",
+    "rejected": "Sampling1D full-vocabulary all-gather plus argmax"
+  },
+  "trace": {
+    "generated_tokens": [
+      101081,
+      111723,
+      79752,
+      113338,
+      12847
+    ],
+    "trace_stats_after_five_tokens": {
+      "captures": 1,
+      "replays": 4,
+      "releases": 0,
+      "prefill_captures": 1,
+      "prefill_replays": 1,
+      "prefill_releases": 0,
+      "decode_warmups": 1,
+      "token_host_copies": 4,
+      "position_host_copies": 8,
+      "page_table_host_copies": 4,
+      "sampling_param_host_copies": 0,
+      "sampling_seed_host_copies": 0,
+      "caller_token_readbacks": 7,
+      "explicit_synchronizations": 12
+    },
+    "expected_position_after_four_decode_replays": 188,
+    "position_after_generation": 188,
+    "rope_after_generation": 188,
+    "feedback_token_matches_last_output": true,
+    "unchanged_page_table_host_copy_delta": 0,
+    "expanded_page_table_host_copy_delta": 0,
+    "changed_page_table_host_copy_delta": 1,
+    "replay_iterations": 1,
+    "pair_position_after_replays": 185,
+    "pair_rope_after_replays": 185,
+    "pair_final_token": 220
+  },
+  "performance": {
+    "cold_ttft_ms_including_split_sampler": 345.2384420670569,
+    "warm_ttft_ms_including_split_sampler": 215.58712795376778,
+    "trace_pair_elapsed_s": 0.0017208727076649666,
+    "trace_pair_t_s_u": 581.1005053109878,
+    "warm_teacher_forcing_t_s_u": 546.5286192304208,
+    "model_trace_ms_per_token": 0.8874330669641495,
+    "sampling_trace_ms_per_token": 0.8333991281688213,
+    "sampling_fraction_of_separate_trace_time": 0.48430005582527097
+  }
+}

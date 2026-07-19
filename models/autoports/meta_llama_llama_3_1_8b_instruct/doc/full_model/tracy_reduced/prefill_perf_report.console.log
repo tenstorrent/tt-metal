@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'start FULL_MODEL_REDUCED_PREFILL'.
+Using operations until 'stop FULL_MODEL_REDUCED_PREFILL'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/tracy_reduced/prefill_perf_report.csv
+Overall DRAM roofline (modeled ops): 25.8% (132 GB/s)
+Warning: Unclassified operation 'AllGatherAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReduceScatterMinimalAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/tracy_reduced/prefill_op_summary.csv
+Plotting PNG stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/tracy_reduced/prefill_op_summary.png
