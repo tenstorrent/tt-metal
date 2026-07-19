@@ -129,7 +129,13 @@ static inline __attribute__((noreturn)) void return_to_idle_fw(void) {
 /* Drain this hart's slice of cores into its LIM SPSC, injecting a STICKY-SRC before each (core,risc)'s
  * data. Blocks on a full SPSC (the relay drains cons). Runs until P_STOP and no worker data remains. */
 static void reader_run(
-    uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, uint64_t nread, uint64_t read_noc, uint64_t fullread) {
+    uint64_t hartid,
+    uint64_t num_cores,
+    uint64_t prof_l1,
+    uint64_t nread,
+    uint64_t read_noc,
+    uint64_t fullread,
+    uint64_t bulkcore) {
     uint64_t q = (num_cores + nread - 1) / nread;
     uint64_t lo = hartid * q, hi = lo + q;
     if (hi > num_cores) {
@@ -180,6 +186,51 @@ static void reader_run(
             uint64_t rbufs = cbase + 128;
             uint32_t tails[NRISC];
             read_tails(cbase + 5u * 4, tails); /* all 5 RISC tails in one NoC read */
+            if (bulkcore) {
+                /* ONE bulk NoC read of the WHOLE core: its 5 RISC rings are contiguous in L1 (ring r @
+                 * rbufs + r*2048), so 5*RING_CAP = 2560 words in a single streaming read -> amortizes the NoC
+                 * round-trip like the rdrbench large-K regime (>2 GB/s), and drops the per-risc tail
+                 * round-robin. Full-buffer read (peak: we know it's full); heads advance to the real tails so
+                 * producers stay consistent. LOSSY bench: one sticky per core (host demux not meaningful). */
+                uint32_t run = NRISC * RING_CAP; /* 2560 words = whole core */
+                uint32_t need = 2u + run;
+                uint64_t tw = rdcycle();
+                while ((uint32_t)(STAGE_WORDS - (prod - r32(CONS(hartid)))) < need) {
+                    cpu_pause();
+                }
+                t_wait += rdcycle() - tw;
+                uint64_t tc = rdcycle();
+                uint64_t lut = SRCLUT_BASE + (c * NRISC) * 8;
+                w32(sbase + (uint64_t)(prod % STAGE_WORDS) * 4, r32(lut));
+                w32(sbase + (uint64_t)((prod + 1) % STAGE_WORDS) * 4, r32(lut + 4));
+                prod += 2;
+                uint64_t src = rbufs; /* ring 0 NoC addr; the 5 rings follow contiguously */
+                uint32_t di = prod, leftw = run;
+                while (leftw) {
+                    uint32_t sslot = di % STAGE_WORDS;
+                    uint32_t chunk = leftw;
+                    if (chunk > STAGE_WORDS - sslot) {
+                        chunk = STAGE_WORDS - sslot;
+                    }
+                    copy_words(sbase + (uint64_t)sslot * 4, src, chunk); /* one streaming bulk read */
+                    src += (uint64_t)chunk * 4;
+                    di += chunk;
+                    leftw -= chunk;
+                }
+                prod += run;
+                total += run;
+                t_copy += rdcycle() - tc;
+                for (uint32_t r = 0; r < NRISC; r++) {
+                    heads[c * NRISC + r] = tails[r];
+                    w32(cbase + r * 4, tails[r]); /* advance each head -> producers unblock */
+                }
+                fence_();
+                w32(PROD(hartid), prod);
+                visits++;
+                polls += NRISC;
+                pending = 1;
+                continue;
+            }
             for (uint32_t r = 0; r < NRISC; r++) {
                 uint64_t L = c * NRISC + r;
                 uint32_t tail = tails[r];
@@ -537,6 +588,7 @@ int main(uint64_t hartid) {
     uint64_t splitnoc = (r64(P_NONCE) >> 9) & 1ull; /* NONCE bit 9: each drain hart reads over NoC (hartid&1) */
     uint64_t wnoc = (r64(P_NONCE) >> 11) & 1ull;    /* NONCE bit 11: route the posted PCIe write over NoC1 */
     uint64_t fullread = (r64(P_NONCE) >> 13) & 1ull; /* NONCE bit 13: reader always drains a FULL buffer (bench) */
+    uint64_t bulkcore = (r64(P_NONCE) >> 14) & 1ull; /* NONCE bit 14: one bulk NoC read per core (all 5 rings) */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -572,7 +624,7 @@ int main(uint64_t hartid) {
         uint64_t eff_noc = splitnoc ? (hartid & 1ull) : read_noc; /* split reads across NoC0/NoC1 per hart */
         drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, eff_noc, wnoc);
     } else if (hartid < nread) {
-        reader_run(hartid, num_cores, prof_l1, nread, read_noc, fullread);
+        reader_run(hartid, num_cores, prof_l1, nread, read_noc, fullread, bulkcore);
     } else {
         relay_run(hartid, host_base, nread, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull);
     }

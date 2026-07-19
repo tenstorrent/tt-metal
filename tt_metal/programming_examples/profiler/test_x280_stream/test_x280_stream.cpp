@@ -90,6 +90,8 @@ int main(int argc, char** argv) {
                                // (isolates whether the reader is throttled by the host sink; LOSSY on purpose)
     bool fullread = false;     // --fullread: "all buffers full" bench -- reader ignores tail, always drains a
                                // full RING_CAP buffer per (core,risc). Deterministic max-drain load; LOSSY.
+    bool bulkcore = false;     // --bulkcore: one bulk NoC read of the whole core (all 5 rings, 2560 words) --
+                               // amortizes NoC latency (rdrbench >2GB/s regime), drops per-risc round-robin. LOSSY.
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -137,6 +139,9 @@ int main(int argc, char** argv) {
             nodrain = true;
         } else if (a == "--fullread") {
             fullread = true;
+        } else if (a == "--bulkcore") {
+            bulkcore = true;
+            fullread = true;  // bulkcore is inherently a full-buffer read
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -261,8 +266,8 @@ int main(int argc, char** argv) {
         params,
         0x30,
         read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) | (wnoc1 ? 0x800ull : 0ull) |
-            (nodrain ? 0x1000ull : 0ull) |
-            (fullread ? 0x2000ull : 0ull));  // bit8=direct bit9=splitnoc bit11=wnoc1 bit12=nohostfc bit13=fullread
+            (nodrain ? 0x1000ull : 0ull) | (fullread ? 0x2000ull : 0ull) |
+            (bulkcore ? 0x4000ull : 0ull));  // bit8=direct 9=splitnoc 11=wnoc1 12=nohostfc 13=fullread 14=bulkcore
     pack<uint64_t>(params, 0x38, direct ? ndrain : nread);                // P_NREAD = drain-hart count in direct mode
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
     uint64_t nharts = direct ? ndrain : nread + 1;
