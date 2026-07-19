@@ -79,11 +79,6 @@ on:
         type: string
         default: "1000"
         description: "perf sample frequency in Hz"
-      perf-install-package:
-        required: false
-        type: string
-        default: "linux-tools-common linux-tools-generic"
-        description: "packages to install for perf"
       # Pre-built artifacts (optional - if provided, skips build-artifact job)
       dev-docker-image:
         required: false
@@ -190,11 +185,6 @@ on:
         type: string
         default: "1000"
         description: "perf sample frequency in Hz"
-      perf-install-package:
-        required: false
-        type: string
-        default: "linux-tools-common linux-tools-generic"
-        description: "packages to install for perf"
   push:
     branches: ["main"]
 
@@ -330,7 +320,6 @@ jobs:
       enable-perf-host-profiling: ${{ inputs.enable-perf-host-profiling || false }}
       perf-target-group: ${{ inputs.perf-target-group || '' }}
       perf-sample-frequency: ${{ inputs.perf-sample-frequency || '1000' }}
-      perf-install-package: ${{ inputs.perf-install-package || 'linux-tools-common linux-tools-generic' }}
   t3000-apc-fast-tests:
     if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
     needs: [resolve-artifacts, tests-to-run]

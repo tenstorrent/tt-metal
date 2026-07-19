@@ -61,11 +61,6 @@ on:
         type: string
         default: "1000"
         description: "perf sample frequency in Hz"
-      perf-install-package:
-        required: false
-        type: string
-        default: "linux-tools-common linux-tools-generic"
-        description: "packages to install for perf"
 
 jobs:
   load-test-matrix:
@@ -277,38 +272,16 @@ jobs:
 
       - name: Install perf (host profiling)
         if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
-        env:
-          # Optional override: a space/comma-separated list of package names. Validated below and
-          # split into a safe array; never spliced verbatim into the apt-get command line.
-          PERF_INSTALL_PACKAGE: ${{ inputs.perf-install-package }}
         run: |
           # Non-failing on purpose: if the perf package can't be installed (kernel/version mismatch
           # on the runner), leave a clear signal in the logs but don't fail the job.
           #
-          # SECURITY: build the package list into a bash array. Accept only well-formed package
-          # names ([A-Za-z0-9][A-Za-z0-9+._-]*), rejecting anything that could carry shell
-          # metacharacters or extra apt-get flags. Fall back to a fixed default set if the input
-          # is empty or contains no valid names.
-          #
-          # The runner's perf binary must match the host kernel. We therefore include the
-          # kernel-specific linux-tools package (e.g. linux-tools-5.15.0-185-generic) in the
-          # default set, with generic fallbacks if that exact package is unavailable.
+          # The runner's perf binary must match the host kernel. We therefore install the
+          # kernel-specific linux-tools package (e.g. linux-tools-5.15.0-185-generic) with the
+          # generic package as a fallback. The package list is hardcoded to avoid exposing a
+          # user-controlled input that could be used for command injection.
           kernel_pkg="linux-tools-$(uname -r)-generic"
-          default_pkgs=(linux-tools-common "$kernel_pkg" linux-tools-generic)
-          pkgs=()
-          # Split on whitespace and commas only.
-          IFS=', ' read -r -a raw_pkgs <<< "$PERF_INSTALL_PACKAGE"
-          for p in "${raw_pkgs[@]}"; do
-            if [[ "$p" =~ ^[A-Za-z0-9][A-Za-z0-9+._-]*$ ]]; then
-              pkgs+=("$p")
-            elif [ -n "$p" ]; then
-              echo "::warning::Ignoring invalid perf package name: '$p'"
-            fi
-          done
-          if [ "${#pkgs[@]}" -eq 0 ]; then
-            echo "No valid packages supplied; using default set: ${default_pkgs[*]}"
-            pkgs=("${default_pkgs[@]}")
-          fi
+          pkgs=(linux-tools-common "$kernel_pkg" linux-tools-generic)
           echo "Installing perf packages: ${pkgs[*]}"
           apt-get update || true
           apt-get install -y -- "${pkgs[@]}" || true
