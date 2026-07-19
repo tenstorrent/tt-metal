@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ckernel.h"
+
 void kernel_main() {
     uint32_t src0_dram = get_arg_val<uint32_t>(0);
     uint32_t src1_dram = get_arg_val<uint32_t>(1);
@@ -39,6 +41,15 @@ void kernel_main() {
     DPRINT("Adding integers: {} + {}\n", *dat0, *dat1);
 
     (*out0) = (*dat0) + (*dat1);
+
+    // The line above is a baby-RISCV store to L1. Such a store can *retire* before its write-request is
+    // actually processed into the L1 bank, and the RISCV core and the NoC are different L1 clients with no
+    // program-order guarantee between them (see WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). The
+    // noc_async_write below reads dst_l1 as its *source*, so without forcing the store to land first the
+    // NoC could read a stale value. load_blocking issues the load, blocks the pipeline on a dependent
+    // instruction, and adds a memory clobber; per the ISA doc this guarantees the store has been processed
+    // before the subsequent NoC request is issued. (issue #50154 finding #8)
+    (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1));
 
     // Write data from L1 -> DRAM. Again this is a non-blocking operation.
     // Thus we need to use noc_async_write_barrier() to wait until the data is
