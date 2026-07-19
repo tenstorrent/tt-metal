@@ -433,16 +433,55 @@ jobs:
             echo "Wrote summary: ${f%.data}.report.txt"
           done || true
 
+      - name: Generate flame graph (host profiling)
+        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+        run: |
+          # Best-effort flame graph generation from the captured perf.data. Clone Brendan Gregg's
+          # FlameGraph tools into /tmp and use them to produce an SVG. This runs in the CI container
+          # which already has perf installed, so we don't need to transfer the data elsewhere.
+          shopt -s nullglob
+          for f in /work/perf_*.data; do
+            [ -f "$f" ] || continue
+            echo "Generating flame graph for: $f"
+            if ! command -v perf >/dev/null 2>&1; then
+              echo "perf not available; skipping flame graph generation."
+              continue
+            fi
+            # Limit to ~500MB perf.data to keep the script step fast.
+            size_bytes=$(stat -c %s "$f" 2>/dev/null || echo 0)
+            if [ "$size_bytes" -gt 524288000 ]; then
+              echo "perf.data larger than 500MB; skipping flame graph generation."
+              continue
+            fi
+            # Clone FlameGraph tooling if not already present.
+            fg_dir="/tmp/FlameGraph"
+            if [ ! -d "$fg_dir" ]; then
+              git clone --depth 1 https://github.com/brendangregg/FlameGraph.git "$fg_dir" || true
+            fi
+            if [ -f "$fg_dir/flamegraph.pl" ] && [ -f "$fg_dir/stackcollapse-perf.pl" ]; then
+              svg_out="${f%.data}.svg"
+              perf script -i "$f" 2>/dev/null | "$fg_dir/stackcollapse-perf.pl" 2>/dev/null | "$fg_dir/flamegraph.pl" --title "perf: $(basename "$f" .data)" > "$svg_out" 2>/dev/null || true
+              if [ -s "$svg_out" ]; then
+                echo "Wrote flame graph: $svg_out ($(du -h "$svg_out" | cut -f1))"
+              else
+                echo "Flame graph generation produced an empty file; removing."
+                rm -f "$svg_out"
+              fi
+            else
+              echo "FlameGraph tooling not available; skipping flame graph generation."
+            fi
+          done || true
       - name: Upload perf profile (host profiling)
         if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: perf-host-profile-${{ matrix.test-group.name }}
           # /docker-job/ is the host-side mount of the container's /work/ directory. The profiled
-          # test step writes perf_<sanitized>.data (and an optional .report.txt) to /work.
+          # test step writes perf_<sanitized>.data (and an optional .report.txt / .svg) to /work.
           path: |
             ${{ github.workspace }}/docker-job/perf_*.data
             ${{ github.workspace }}/docker-job/perf_*.report.txt
+            ${{ github.workspace }}/docker-job/perf_*.svg
           if-no-files-found: warn
           retention-days: 14
 
