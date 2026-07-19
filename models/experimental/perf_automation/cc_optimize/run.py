@@ -571,20 +571,8 @@ def _llm_depth_env(model_root: Path, cov: int) -> dict:
     return {str(k): str(v) for k, v in d.items() if str(k)}
 
 
-def _layer_signal(seq) -> int:
-    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
-    if not ops:
-        return 0
-    from collections import Counter
-
-    counts = Counter(ops)
-    repeats = [c for c in counts.values() if c > 1]
-    if repeats:
-        return Counter(repeats).most_common(1)[0][0]
-    blk = _blocks_ran(seq)
-    if blk > 0:
-        return blk
-    return len(ops)
+def _work_signal(seq) -> int:
+    return sum(1 for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:"))
 
 
 def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, cov: int, full_hint: int = 0) -> dict:
@@ -601,25 +589,25 @@ def _bridge_depth_env(repo_root: Path, mcp_env: dict, devices: str, node, case, 
     full = int(full_hint)
     if full <= 0:
         _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
-        full = _layer_signal(seq)
+        full = _work_signal(seq)
     if full <= 0:
-        print("  [optimize/cc] depth-knob bridge: full-model layer-signal is 0 (probe empty); skipping")
+        print("  [optimize/cc] depth-knob bridge: full-model work-signal is 0 (probe empty); skipping")
         _depth_cache_put(repo_root, node, {})
         return {}
     env = _llm_depth_env(model_root, cov)
     if not env:
-        print(f"  [optimize/cc] depth-knob bridge: no depth knob found (layer-signal {full})")
+        print(f"  [optimize/cc] depth-knob bridge: no depth knob found (work-signal {full})")
         _depth_cache_put(repo_root, node, {})
         return {}
     probe_env = dict(mcp_env)
     probe_env.update(env)
     _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
-    capped = _layer_signal(seq2)
+    capped = _work_signal(seq2)
     if capped <= 0 or capped >= full * 0.7:
-        print(f"  [optimize/cc] depth-knob bridge: {env} did not reduce layers (signal {full}->{capped}); ignoring")
+        print(f"  [optimize/cc] depth-knob bridge: {env} did not reduce work (signal {full}->{capped}); ignoring")
         _depth_cache_put(repo_root, node, {})
         return {}
-    print(f"  [optimize/cc] depth-knob bridge: enforcing {env} (layer-signal {full}->{capped})")
+    print(f"  [optimize/cc] depth-knob bridge: enforcing {env} (work-signal {full}->{capped})")
     _depth_cache_put(repo_root, node, env)
     return env
 
@@ -652,7 +640,7 @@ def _coverage_layers(
     if sigs:
         facts = _parse_facts(raw, sigs)
         facts["all_ops"] = sorted(sigs)
-        facts["full_signal"] = _layer_signal(seq)
+        facts["full_signal"] = _work_signal(seq)
         first_block: dict = {}
         cur = 0
         for tok in seq or []:
