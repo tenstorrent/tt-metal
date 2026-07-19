@@ -338,6 +338,10 @@ void kernel_main() {
             // read each iteration we can spin forever on a stale data_avail==0 (deadlock) or read
             // stale route_info and forward garbage route/dst over the fabric. Mirrors the sibling
             // reader_combine.cpp poll loop.
+            // On Wormhole this is unnecessary: the RISC has no L1 read cache at all (the whole
+            // set_l1_data_cache() control is Blackhole-only), so L1 reads always go straight to L1
+            // and observe the latest NoC write -- there is nothing to invalidate. invalidate_l1_cache()
+            // is an empty no-op there, so keeping the call unconditional is both correct and free.
             invalidate_l1_cache();
             if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
                 uint32_t slot = consumed[s] % writer_cb_size;
