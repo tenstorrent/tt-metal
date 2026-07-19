@@ -263,9 +263,14 @@ int main(int argc, char** argv) {
     }
     printf("[boot] idle up, profstream RUNNING, %llu readers + 1 relay\n", (unsigned long long)nread);
 
-    // ---- host consumer: drain the ONE host ring, demux by sticky ----
+    // ---- host consumer: drain the ONE host ring into a RAW capture buffer as fast as possible; the
+    // sticky-demux + verify happen OFFLINE after the run, so the hot loop is just a bulk memcpy (keeps the
+    // host ahead of the relay -> the ring never wraps -> no torn reads). This is also how a real profiler
+    // would work: capture raw, post-process. ----
     std::atomic<bool> producers_done{false};
-    std::vector<std::vector<uint32_t>> accum(NL);  // demuxed per-lane marker/meta stream
+    std::vector<std::vector<uint32_t>> accum(NL);  // demuxed per-lane stream (filled offline)
+    std::vector<uint32_t> capture;                 // the raw linearized stream, appended in order
+    capture.reserve((size_t)NL * (nmarkers + 8) * 2 + 64);
     uint64_t total_words = 0;
     std::atomic<uint64_t> overflow{0};
     uint64_t h_polls = 0, h_us_hsent = 0, h_us_ring = 0, h_us_hacked = 0;  // consumer op timing (us)
@@ -273,13 +278,7 @@ int main(int argc, char** argv) {
         auto us = [](auto a, auto b) {
             return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
         };
-        std::vector<uint32_t> ring(hring_words);
-        uint32_t acked = 0;              // words the host has consumed
-        uint32_t last_hsent = 0;         // for the landing margin
-        const uint32_t MARGIN = 2048;    // leave the newest words while the relay is actively writing (posted
-                                         // PCIe payload may not have landed yet); drain them once it pauses
-        uint32_t cur_lane = 0xFFFFFFFF;  // set by STICKY-SRC
-        int pend = 0;                    // 0 = expecting w0, 1 = have w0, waiting w0 pair handled inline
+        uint32_t acked = 0;  // words the host has consumed
         int empty = 0;
         auto start = std::chrono::steady_clock::now();
         auto next_log = start + std::chrono::seconds(1);
@@ -290,11 +289,10 @@ int main(int argc, char** argv) {
                 drv.read_block(reinterpret_cast<uint8_t*>(&hs), 4, HSENT_ADDR);
                 drv.read_block(reinterpret_cast<uint8_t*>(&ha), 4, HACKED_ADDR);
                 printf(
-                    "  [consumer] total=%llu hsent=%u acked=%u cur_lane=%u done=%d\n",
+                    "  [consumer] total=%llu hsent=%u acked=%u done=%d\n",
                     (unsigned long long)total_words,
                     hs,
                     ha,
-                    cur_lane,
                     (int)producers_done.load());
                 next_log = now + std::chrono::seconds(1);
             }
@@ -323,28 +321,35 @@ int main(int argc, char** argv) {
                 drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR);
                 continue;
             }
-            (void)last_hsent;
-            (void)MARGIN;
             uint32_t drain = avail & ~1u;  // 2-word aligned
+            // read ONLY the new [acked, acked+drain) region straight into the capture buffer (1-2 contiguous
+            // reads across the ring wrap) -- no whole-ring read, no per-marker decode.
+            size_t base = capture.size();
+            capture.resize(base + drain);
+            uint32_t start = acked % hring_words;
             auto tr = std::chrono::steady_clock::now();
-            cluster.read_sysmem(reinterpret_cast<uint8_t*>(ring.data()), hring_bytes, data_off, device_id, 0);
+            if (start + drain <= hring_words) {
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(&capture[base]),
+                    drain * 4,
+                    data_off + (uint64_t)start * 4,
+                    device_id,
+                    0);
+            } else {
+                uint32_t first = hring_words - start;
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(&capture[base]),
+                    first * 4,
+                    data_off + (uint64_t)start * 4,
+                    device_id,
+                    0);
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(&capture[base + first]), (drain - first) * 4, data_off, device_id, 0);
+            }
             h_us_ring += us(tr, std::chrono::steady_clock::now());
             h_polls++;
-            // decode word-pairs; the stream is 2-word aligned (sticky-src / meta / marker are all 8 B).
-            for (uint32_t w = 0; w + 1 < drain; w += 2) {
-                uint32_t w0 = ring[(acked + w) % hring_words];
-                uint32_t w1 = ring[(acked + w + 1) % hring_words];
-                if (pp_is_src(w0)) {
-                    cur_lane = pp_src_lane(w0);
-                } else if (cur_lane < NL) {
-                    accum[cur_lane].push_back(w0);
-                    accum[cur_lane].push_back(w1);
-                }
-                (void)pend;
-            }
-            uint32_t consumed = drain;  // already 2-word aligned; margin leaves the rest for next poll
-            acked += consumed;
-            total_words += consumed;
+            acked += drain;
+            total_words += drain;
             auto th = std::chrono::steady_clock::now();
             drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR);
             h_us_hacked += us(th, std::chrono::steady_clock::now());
@@ -450,6 +455,21 @@ int main(int argc, char** argv) {
         (unsigned long long)(h_us_ring / (h_polls + 1)),
         (unsigned long long)(h_us_hsent / 1000),
         (unsigned long long)(h_us_hacked / 1000));
+
+    // ---- offline demux: walk the raw captured stream, bind each marker/meta to the current STICKY-SRC ----
+    {
+        uint32_t cur_lane = 0xFFFFFFFF;
+        for (size_t p = 0; p + 1 < capture.size(); p += 2) {
+            uint32_t w0 = capture[p], w1 = capture[p + 1];
+            if (pp_is_src(w0)) {
+                cur_lane = pp_src_lane(w0);
+            } else if (cur_lane < NL) {
+                accum[cur_lane].push_back(w0);
+                accum[cur_lane].push_back(w1);
+            }
+        }
+    }
+    printf("  [capture] %zu raw words drained\n", capture.size());
 
     // ---- verify each DEMUXED lane is complete + gap-free ----
     uint32_t active_lanes = num_cores * active_riscs;

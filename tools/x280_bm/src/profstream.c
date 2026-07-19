@@ -279,10 +279,23 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
             }
             uint32_t run = avail < hspace ? avail : hspace;
             uint64_t tc = rdcycle();
-            for (uint32_t i = 0; i < run; i++) {
-                uint32_t sslot = (cn + i) % STAGE_WORDS;
-                uint32_t hslot = (hsent + i) % (uint32_t)hring_words;
-                w32(hbase + (uint64_t)hslot * 4, r32(sbase + (uint64_t)sslot * 4));
+            /* copy the reader SPSC words -> host ring in contiguous chunks (split at BOTH the SPSC wrap and
+             * the host-ring wrap), each chunk moved with wide RVV (vle32 from LIM, vse32 posted to host). */
+            uint32_t si = cn, di = hsent, leftw = run;
+            while (leftw) {
+                uint32_t sslot = si % STAGE_WORDS;
+                uint32_t hslot = di % (uint32_t)hring_words;
+                uint32_t chunk = leftw;
+                if (chunk > STAGE_WORDS - sslot) {
+                    chunk = STAGE_WORDS - sslot;
+                }
+                if (chunk > (uint32_t)hring_words - hslot) {
+                    chunk = (uint32_t)hring_words - hslot;
+                }
+                copy_words(hbase + (uint64_t)hslot * 4, sbase + (uint64_t)sslot * 4, chunk);
+                si += chunk;
+                di += chunk;
+                leftw -= chunk;
             }
             t_copy += rdcycle() - tc;
             cn += run;
