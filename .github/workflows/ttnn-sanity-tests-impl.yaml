@@ -58,8 +58,8 @@ on:
         description: "Exact matrix test-group name to profile with perf (e.g. 'ttnn eltwise group 1'). Required when enable-perf-host-profiling is true."
       perf-sample-frequency:
         required: false
-        type: number
-        default: 1000
+        type: string
+        default: "1000"
         description: "perf sample frequency in Hz"
       perf-install-package:
         required: false

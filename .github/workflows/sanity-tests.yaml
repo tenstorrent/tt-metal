@@ -76,8 +76,8 @@ on:
         description: "Exact TTNN sanity test-group name to profile (e.g. 'ttnn eltwise group 1'). Required when enable-perf-host-profiling is true."
       perf-sample-frequency:
         required: false
-        type: number
-        default: 1000
+        type: string
+        default: "1000"
         description: "perf sample frequency in Hz"
       perf-install-package:
         required: false
@@ -187,8 +187,8 @@ on:
         description: "Exact TTNN sanity test-group name to profile (e.g. 'ttnn eltwise group 1'). Required when enable-perf-host-profiling is true."
       perf-sample-frequency:
         required: false
-        type: number
-        default: 1000
+        type: string
+        default: "1000"
         description: "perf sample frequency in Hz"
       perf-install-package:
         required: false
@@ -329,7 +329,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
       enable-perf-host-profiling: ${{ inputs.enable-perf-host-profiling || false }}
       perf-target-group: ${{ inputs.perf-target-group || '' }}
-      perf-sample-frequency: ${{ inputs.perf-sample-frequency || 1000 }}
+      perf-sample-frequency: ${{ inputs.perf-sample-frequency || '1000' }}
       perf-install-package: ${{ inputs.perf-install-package || 'linux-tools-common linux-tools-generic' }}
   t3000-apc-fast-tests:
     if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
