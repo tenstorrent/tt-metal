@@ -98,13 +98,6 @@ def _mark_optimized(demo_dir, module, status, result) -> None:
         pass
 
 
-def _clear_optimized(demo_dir) -> None:
-    try:
-        _opt_state_path(demo_dir).unlink()
-    except Exception:
-        pass
-
-
 def _module_status(result) -> str:
     if not result:
         return "failed"
@@ -142,9 +135,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         return 1
 
     reverify = bool(getattr(args, "reverify", False))
-    if reverify:
-        _clear_optimized(demo_dir)
-    else:
+    if not reverify:
         done = _load_optimized(demo_dir)
         skip = [m for m in mods if m in done]
         if skip:
