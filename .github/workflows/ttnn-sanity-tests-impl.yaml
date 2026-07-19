@@ -46,6 +46,21 @@ on:
         type: boolean
         default: false
         description: "When true, collect LLVM profraw data and upload per-job profdata artifact for coverage aggregation."
+      enable-perf-host-profiling:
+        required: false
+        type: boolean
+        default: false
+        description: "EXPERIMENT: run the selected HW test group under `perf record -g` and upload perf.data as an artifact. Default off, no overhead when disabled."
+      perf-target-group:
+        required: false
+        type: string
+        default: ""
+        description: "Exact matrix test-group name to profile with perf (e.g. 'ttnn eltwise group 1'). Required when enable-perf-host-profiling is true."
+      perf-sample-frequency:
+        required: false
+        type: string
+        default: "1000"
+        description: "perf sample frequency in Hz"
 
 jobs:
   load-test-matrix:
@@ -234,14 +249,116 @@ jobs:
           mkdir -p /work/coverage
           echo "LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw" >> "$GITHUB_ENV"
 
+      # EXPERIMENT (perf host profiling): the following steps are only active when
+      # inputs.enable-perf-host-profiling is true. They validate the target group, install
+      # linux perf on the HW runner, and probe whether perf can actually *record* (not just
+      # exist). All are no-ops (skipped) when the experiment is disabled, so there is zero
+      # overhead on the default path.
+      #
+      # SECURITY: user-controlled inputs (perf-target-group, perf-install-package) are never
+      # interpolated into a shell body via ${{ ... }}; they are passed through `env:` and only
+      # expanded as quoted "$VAR" at runtime so they cannot inject shell.
+      - name: Validate perf profiling target (host profiling)
+        if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') }}
+        env:
+          PERF_TARGET_GROUP: ${{ inputs.perf-target-group }}
+        run: |
+          if [ -z "$PERF_TARGET_GROUP" ]; then
+            echo "::error::enable-perf-host-profiling is true but perf-target-group is empty."
+            echo "::error::You must supply the exact matrix test-group name to profile (e.g. 'ttnn eltwise group 1')."
+            exit 1
+          fi
+          echo "perf host profiling requested for target group: '$PERF_TARGET_GROUP'"
+
+      - name: Install perf (host profiling)
+        if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+        run: |
+          # Non-failing on purpose: if the perf package can't be installed (kernel/version mismatch
+          # on the runner), leave a clear signal in the logs but don't fail the job.
+          #
+          # The runner's perf binary must match the host kernel. We therefore install the
+          # kernel-specific linux-tools package (e.g. linux-tools-5.15.0-185-generic) with the
+          # generic package as a fallback. The package list is hardcoded to avoid exposing a
+          # user-controlled input that could be used for command injection.
+          kernel_pkg="linux-tools-$(uname -r)"
+          pkgs=(linux-tools-common "$kernel_pkg" linux-tools-generic)
+          echo "Installing perf packages: ${pkgs[*]}"
+          apt-get update || true
+          apt-get install -y -- "${pkgs[@]}" || true
+
+      # Probe whether perf can actually RECORD, not merely that the binary exists. `command -v`
+      # only proves the executable is present; on many CI runners perf_event_open is denied
+      # (kernel.perf_event_paranoid, seccomp, missing CAP_PERFMON, etc.). Run a real, throwaway
+      # `perf record ... -- true` and only mark perf_ready=true if it succeeds. Never fails the
+      # step, so the selected group still tests even when recording is denied.
+      - name: Probe perf recording capability (host profiling)
+        id: perf-probe
+        if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+        env:
+          PERF_SAMPLE_FREQUENCY: ${{ inputs.perf-sample-frequency }}
+        run: |
+          perf_ready=false
+          if command -v perf >/dev/null 2>&1; then
+            perf --version || true
+            if perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o /tmp/perf_probe.data -- true >/dev/null 2>&1; then
+              perf_ready=true
+              echo "perf recording probe succeeded; the target group will be profiled."
+            else
+              echo "::warning::perf is installed but cannot record (perf_event_open likely denied); the group will run without profiling."
+            fi
+            rm -f /tmp/perf_probe.data || true
+          else
+            echo "::warning::perf is not available; the group will run without profiling."
+          fi
+          echo "perf_ready=$perf_ready" >> "$GITHUB_OUTPUT"
+
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        env:
+          # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
+          # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
+          PERF_PROFILE_THIS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+          # Whether the probe confirmed perf can actually record. Empty when the probe step was
+          # skipped (experiment off / not the target group); treated as "not ready".
+          PERF_READY: ${{ steps.perf-probe.outputs.perf_ready }}
+          PERF_SAMPLE_FREQUENCY: ${{ inputs.perf-sample-frequency }}
+          PERF_TARGET_GROUP: ${{ inputs.perf-target-group }}
+          TEST_GROUP_NAME: ${{ matrix.test-group.name }}
+          TEST_GROUP_CMD: ${{ matrix.test-group.cmd }}
         run: |
+          # Build the inner command passed to the power sidecar's `bash -c`. Use a shell variable
+          # for the pytest command (from $TEST_GROUP_CMD) to avoid YAML/shell quoting hell.
+          #
+          # Non-profiled path (default): byte-for-byte the original behaviour — run the group cmd
+          # directly under the power sidecar.
+          # Profiled path (experiment): wrap the group cmd in `perf record -g -F <freq> -o <out>`,
+          # writing perf.data to /work so the host mount at ${{ github.workspace }}/docker-job can
+          # upload it. Only wrap when the recording-capability probe (perf-probe step) succeeded;
+          # otherwise fall back to running the cmd unwrapped so the group still tests.
+          #
+          # The whole group cmd is wrapped in `perf record ... -- bash -c '<cmd>'` so that a group
+          # command with chained commands (e.g. `pytest ... && pytest ...`) is captured in full,
+          # not just the first simple command. $TEST_GROUP_CMD is passed as a positional arg to the
+          # inner `bash -c` (see the sidecar invocation below), never spliced into a string, so its
+          # &&/quotes survive intact and it can't inject into the perf command line.
+          if [ "$PERF_PROFILE_THIS" = "true" ] && [ "$PERF_READY" = "true" ]; then
+            # Sanitize the group name for use in a filename: spaces and any non [A-Za-z0-9._-] -> '_'.
+            SANITIZED=$(printf '%s' "$TEST_GROUP_NAME" | sed -E 's/[^A-Za-z0-9._-]+/_/g')
+            PERF_OUTPUT="/work/perf_${SANITIZED}.data"
+            echo "perf host profiling ENABLED for '$TEST_GROUP_NAME' -> $PERF_OUTPUT (freq ${PERF_SAMPLE_FREQUENCY}Hz)"
+            RUNNER=(perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o "${PERF_OUTPUT}" -- bash -c "$TEST_GROUP_CMD")
+          else
+            if [ "$PERF_PROFILE_THIS" = "true" ]; then
+              echo "::warning::perf recording not available; running '$TEST_GROUP_NAME' without profiling."
+            fi
+            RUNNER=(bash -c "$TEST_GROUP_CMD")
+          fi
+
           python3 tools/tt-power-sidecar/tt_power_sidecar.py \
             --backend sysfs \
             --out /work/power_report.json \
-            -- bash -c '${{ matrix.test-group.cmd }}'
+            -- "${RUNNER[@]}"
 
       # Simulator runs have no hardware power telemetry, so swap the HW power sidecar for the
       # host-load sidecar — it reports host CPU/memory/disk/network usage (a "mem report", not
@@ -290,6 +407,84 @@ jobs:
           path: ${{ github.workspace }}/docker-job/power_report.json
           if-no-files-found: warn
           retention-days: 30
+
+      # EXPERIMENT (perf host profiling): summarize + upload perf.data. Guarded so it only runs
+      # for the chosen HW group when the experiment is enabled; otherwise skipped (no overhead).
+      - name: Summarize perf profile (host profiling)
+        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+        run: |
+          # Best-effort human-readable summary next to the perf.data. Only attempt when a perf.data
+          # exists, perf is available, and the file is a sane size (skip huge captures to keep this
+          # step cheap). Never fails the job.
+          shopt -s nullglob
+          for f in /work/perf_*.data; do
+            echo "Found perf capture: $f ($(du -h "$f" | cut -f1))"
+            if ! command -v perf >/dev/null 2>&1; then
+              echo "perf not available; skipping report generation."
+              continue
+            fi
+            # Skip summarizing captures larger than ~500MB to keep this step fast.
+            size_bytes=$(stat -c %s "$f" 2>/dev/null || echo 0)
+            if [ "$size_bytes" -gt 524288000 ]; then
+              echo "perf.data larger than 500MB; skipping report generation."
+              continue
+            fi
+            perf report --stdio -i "$f" 2>/dev/null | head -100 > "${f%.data}.report.txt" || true
+            echo "Wrote summary: ${f%.data}.report.txt"
+          done || true
+
+      - name: Generate flame graph (host profiling)
+        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+        run: |
+          # Best-effort flame graph generation from the captured perf.data. Clone Brendan Gregg's
+          # FlameGraph tools into /tmp and use them to produce an SVG. This runs in the CI container
+          # which already has perf installed, so we don't need to transfer the data elsewhere.
+          shopt -s nullglob
+          for f in /work/perf_*.data; do
+            [ -f "$f" ] || continue
+            echo "Generating flame graph for: $f"
+            if ! command -v perf >/dev/null 2>&1; then
+              echo "perf not available; skipping flame graph generation."
+              continue
+            fi
+            # Limit to ~500MB perf.data to keep the script step fast.
+            size_bytes=$(stat -c %s "$f" 2>/dev/null || echo 0)
+            if [ "$size_bytes" -gt 524288000 ]; then
+              echo "perf.data larger than 500MB; skipping flame graph generation."
+              continue
+            fi
+            # Clone FlameGraph tooling if not already present.
+            fg_dir="/tmp/FlameGraph"
+            if [ ! -d "$fg_dir" ]; then
+              git clone --depth 1 https://github.com/brendangregg/FlameGraph.git "$fg_dir" || true
+            fi
+            if [ -f "$fg_dir/flamegraph.pl" ] && [ -f "$fg_dir/stackcollapse-perf.pl" ]; then
+              svg_out="${f%.data}.svg"
+              perf script -i "$f" 2>/dev/null | "$fg_dir/stackcollapse-perf.pl" 2>/dev/null | "$fg_dir/flamegraph.pl" --title "perf: $(basename "$f" .data)" > "$svg_out" 2>/dev/null || true
+              if [ -s "$svg_out" ]; then
+                echo "Wrote flame graph: $svg_out ($(du -h "$svg_out" | cut -f1))"
+              else
+                echo "Flame graph generation produced an empty file; removing."
+                rm -f "$svg_out"
+              fi
+            else
+              echo "FlameGraph tooling not available; skipping flame graph generation."
+            fi
+          done || true
+
+      - name: Upload perf profile (host profiling)
+        if: ${{ !cancelled() && inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: perf-host-profile-${{ matrix.test-group.name }}
+          # /docker-job/ is the host-side mount of the container's /work/ directory. The profiled
+          # test step writes perf_<sanitized>.data (and an optional .report.txt / .svg) to /work.
+          path: |
+            ${{ github.workspace }}/docker-job/perf_*.data
+            ${{ github.workspace }}/docker-job/perf_*.report.txt
+            ${{ github.workspace }}/docker-job/perf_*.svg
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload mem report
         if: ${{ !cancelled() && startsWith(matrix.test-group.sku, 'sim_') }}
