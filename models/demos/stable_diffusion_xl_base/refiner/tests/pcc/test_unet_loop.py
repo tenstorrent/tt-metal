@@ -357,7 +357,8 @@ def run_unet_inference(
                     guidance_scale=guidance_scale,
                     extra_step_kwargs=extra_step_kwargs,
                 )
-                golden_latents.append(latents.detach().clone())
+                if use_golden:
+                    golden_latents.append(latents.detach().clone())
 
             ttnn.synchronize_device(ttnn_device)
             if i < (len(ttnn_timesteps) - 1):

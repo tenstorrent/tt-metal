@@ -30,7 +30,7 @@ def load_golden(name, expected_metadata):
         logger.info(f"SDXL golden: {path} not found; computing torch reference")
         return None
     try:
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        payload = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as e:
         logger.warning(f"SDXL golden: failed to read {path} ({e}); computing torch reference")
         return None
