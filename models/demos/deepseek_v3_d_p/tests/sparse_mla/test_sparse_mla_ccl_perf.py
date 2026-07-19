@@ -54,6 +54,7 @@ class Workload:
     num_attention_heads: int
     kv_lora_rank: int
     qk_rope_head_dim: int
+    cache_rows_per_page: int = 1
 
     @property
     def kvpe_dim(self) -> int:
@@ -170,13 +171,15 @@ def _kvpe_logical_shape(w: Workload, mesh_shape) -> list:
     # KVPE runs only on SP=GALAXY_SP meshes, so the global prefix (cache + the just-written chunk) needs
     # no proxy scaling — sharding it over SP already yields the Galaxy per-chip depth.
     total_tokens = w.cache_tokens + w.chunk_tokens
-    return [1, 1, total_tokens, w.kvpe_dim]
+    assert total_tokens % w.cache_rows_per_page == 0
+    return [1, 1, total_tokens // w.cache_rows_per_page, w.kvpe_dim * w.cache_rows_per_page]
 
 
 def _kvpe_local_input_shape(w: Workload, mesh_shape) -> list:
     sp, _ = mesh_shape
     total_tokens = w.cache_tokens + w.chunk_tokens
-    return [1, 1, total_tokens // sp, w.kvpe_dim]
+    assert total_tokens % (sp * w.cache_rows_per_page) == 0
+    return [1, 1, total_tokens // (sp * w.cache_rows_per_page), w.kvpe_dim * w.cache_rows_per_page]
 
 
 def _head_to_sequence_logical_shape(w: Workload, mesh_shape) -> list:
@@ -263,6 +266,11 @@ def ccl_mesh_param(collective_axis: int):
     row) for SP collectives, or a 2x4 mesh preserving TP=4 for TP collectives.
     """
     num_devices = detect_num_devices()
+    packet_size_override = os.environ.get("MLA_CCL_PACKET_SIZE")
+    use_ring_proxy = os.environ.get("MLA_CCL_RING_PROXY") == "1"
+    if packet_size_override is not None:
+        packet_size = int(packet_size_override)
+        assert packet_size > 0 and packet_size % 32 == 0, "MLA_CCL_PACKET_SIZE must be a positive 32-byte multiple"
     canonical_fabric = {  # matches the deepseek conftest FABRIC_2D params (fabric router + reliability mode)
         "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
@@ -282,9 +290,11 @@ def ccl_mesh_param(collective_axis: int):
             mesh_shape, mesh_topology = (8, 1), "line"
             device_params = {
                 "trace_region_size": 100000,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if use_ring_proxy else ttnn.FabricConfig.FABRIC_1D,
                 "l1_small_size": L1_SMALL_SIZE,
             }
+            if packet_size_override is not None:
+                device_params["fabric_router_config"] = create_fabric_router_config(max_payload_size=packet_size)
         else:
             mesh_shape, mesh_topology, device_params = (2, 4), "mesh-2x4", fabric_2d
     else:
@@ -305,7 +315,7 @@ def resolve_runtime_system(mesh_device, path: CollectivePath) -> RuntimeSystem:
     # Every path — Galaxy 8x4 and both LoudBox proxies — runs the all-gather on a line, matching
     # production (mla.py:259). The roofline models this topology; a ring path would double the sustained
     # bandwidth (see CCLTraffic.sustained_directions).
-    topology = ttnn.Topology.Linear
+    topology = ttnn.Topology.Ring if os.environ.get("MLA_CCL_RING_PROXY") == "1" else ttnn.Topology.Linear
     default_gbps = _GALAXY_LINK_GBPS_PER_DIRECTION if math.prod(mesh_shape) == 32 else _LOUDBOX_LINK_GBPS_PER_DIRECTION
     link_gbps = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", default_gbps))
     return RuntimeSystem(mesh_shape, topology, NUM_LINKS, link_gbps)
@@ -619,12 +629,15 @@ def _scenario_id(scenario):
 
 def _workload(scenario):
     config = glm_hf_config()
+    cache_rows_per_page = int(os.environ.get("MLA_CCL_CACHE_ROWS_PER_PAGE", "1"))
+    assert cache_rows_per_page > 0, "MLA_CCL_CACHE_ROWS_PER_PAGE must be positive"
     return Workload(
         chunk_tokens=CHUNK_TOKENS,
         cache_tokens=SCENARIOS[scenario]["cache"],
         num_attention_heads=config.num_attention_heads,
         kv_lora_rank=config.kv_lora_rank,
         qk_rope_head_dim=config.qk_rope_head_dim,
+        cache_rows_per_page=cache_rows_per_page,
     )
 
 

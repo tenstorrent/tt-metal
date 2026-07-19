@@ -88,8 +88,11 @@ Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenario
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
 generated/profiler/{variant}_{mode}_mla_perf/), DS_PERF_RT_TIMEOUT (realtime-profiler record drain
-ceiling in seconds, default 30). DS_PERF_CHUNK is the Galaxy-global target chunk; smaller boxes scale
-BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk multiple. DS_PERF_VARIANT /
+ceiling in seconds, default 30), and DS_PERF_MESH_SHAPE (optional explicit `SPxTP`, whose product must
+equal the detected chip count). DS_PERF_CHUNK is the Galaxy-global target chunk; smaller boxes scale
+BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk multiple. The mesh override
+exists to measure an alternate supported axis such as SP=4 x TP=2 on an 8-chip box; it is recorded in
+the manifest and must not be described as the production Galaxy SP=8 x TP=4 topology. DS_PERF_VARIANT /
 DS_PERF_SCENARIO / DS_PERF_ATTN_MODE remain as the module-level defaults used for mesh-shape detection,
 but the test itself sweeps the full matrix via parametrization.
 
@@ -267,7 +270,9 @@ def _git_head() -> dict:
         return {"commit": None, "branch": None}
 
 
-def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, kv_cache_format, command, workload) -> None:
+def _write_run_manifest(
+    report_dir, *, variant, scenario, attn_mode, kv_cache_format, command, workload, receiver_program_count
+) -> None:
     """Drop a lean run_manifest_<scenario>.json into the output dir. Records ONLY what cannot be
     reconstructed from git (given the commit) or from the co-located ops CSV:
       * commit / branch — the code-state anchor (read subprocess-free from .git; no dirty flag — the
@@ -285,9 +290,14 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, kv_cache_fo
             if os.path.exists(so)
             else None
         )
+        mesh_override = os.environ.get("DS_PERF_MESH_SHAPE", "").strip()
+        mesh_prefix = f"DS_PERF_MESH_SHAPE={mesh_override} " if mesh_override else ""
+        receiver_mode = os.environ.get("TTNN_ALL_GATHER_RECEIVER_L1_MODE", "auto")
         reproducer = (
-            f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} "
-            f"{command} -k '{variant} and {scenario} and {attn_mode}'"
+            f"{mesh_prefix}TTNN_ALL_GATHER_RECEIVER_L1_MODE={receiver_mode} "
+            f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} "
+            f"DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} {command} "
+            f"-k '{variant} and {scenario} and {attn_mode}'"
         )
         head = _git_head()
         manifest = {
@@ -307,6 +317,10 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, kv_cache_fo
                 "fabric": getattr(PERF_FABRIC, "name", str(PERF_FABRIC)),
             },
             "build": {"so_mtime": so_mtime},
+            "all_gather_receiver_l1": {
+                "mode": os.environ.get("TTNN_ALL_GATHER_RECEIVER_L1_MODE", "auto"),
+                "observed_program_count": receiver_program_count,
+            },
             "command": reproducer,
         }
         path = os.path.join(report_dir, f"run_manifest_{scenario}.json")
@@ -365,6 +379,45 @@ _SYSTEM_BY_DEVICE_COUNT = {
 }
 
 
+def _parse_perf_mesh_shape(value: str | None, num_devices: int, default_shape: tuple[int, int]) -> tuple[int, int]:
+    if value is None or not value.strip():
+        return default_shape
+
+    fields = value.lower().replace(" ", "").split("x")
+    try:
+        if len(fields) != 2:
+            raise ValueError
+        sp, tp = (int(field) for field in fields)
+    except ValueError as error:
+        raise ValueError(f"DS_PERF_MESH_SHAPE={value!r} must have the form SPxTP, for example 4x2") from error
+
+    if sp <= 0 or tp <= 0 or sp * tp != num_devices:
+        raise ValueError(
+            f"DS_PERF_MESH_SHAPE={value!r} must contain positive dimensions whose product is "
+            f"the detected device count ({num_devices})"
+        )
+    return sp, tp
+
+
+@pytest.mark.parametrize(
+    "value,num_devices,default_shape,expected",
+    [
+        (None, 8, (2, 4), (2, 4)),
+        ("", 8, (2, 4), (2, 4)),
+        ("4x2", 8, (2, 4), (4, 2)),
+        (" 8 X 1 ", 8, (2, 4), (8, 1)),
+    ],
+)
+def test_parse_perf_mesh_shape(value, num_devices, default_shape, expected):
+    assert _parse_perf_mesh_shape(value, num_devices, default_shape) == expected
+
+
+@pytest.mark.parametrize("value", ["4", "4x0", "3x2", "axb", "4x2x1"])
+def test_parse_perf_mesh_shape_rejects_invalid_product(value, expect_error):
+    with expect_error(ValueError, "DS_PERF_MESH_SHAPE"):
+        _parse_perf_mesh_shape(value, 8, (2, 4))
+
+
 def _exact_div(numerator: int, denominator: int, label: str) -> int:
     if numerator % denominator != 0:
         raise ValueError(f"{label}={numerator} must be divisible by {denominator}")
@@ -380,21 +433,24 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
             "sparse MLA perf supports Blackhole QuietBox/LoudBox/Galaxy only " f"(detected {num_devices} chips)"
         )
 
-    system_name, mesh_shape = system
+    system_name, default_mesh_shape = system
+    mesh_shape = _parse_perf_mesh_shape(os.environ.get("DS_PERF_MESH_SHAPE"), num_devices, default_mesh_shape)
+    if mesh_shape != default_mesh_shape:
+        system_name = f"{system_name}-{mesh_shape[0]}x{mesh_shape[1]}"
     sp, tp = mesh_shape
     # Head counts come from the single-source reference config for the variant (deepseek_v32: 128/64,
     # glm_5_1: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.
     cfg = _CONFIG_BUILDERS[variant_name]()
     local_chunk = _exact_div(CHUNK_TOKENS, GALAXY_SP, "DS_PERF_CHUNK")
-    local_heads = _exact_div(cfg.num_attention_heads, GALAXY_TP, f"{variant_name}.num_attention_heads")
-    local_index_heads = _exact_div(cfg.index_n_heads, GALAXY_TP, f"{variant_name}.index_n_heads")
+    _exact_div(cfg.num_attention_heads, tp, f"{variant_name}.num_attention_heads")
+    _exact_div(cfg.index_n_heads, tp, f"{variant_name}.index_n_heads")
     workload = PerfWorkload(
         system_name=system_name,
         num_devices=num_devices,
         mesh_shape=mesh_shape,
         chunk_tokens=local_chunk * sp,
-        num_attention_heads=local_heads * tp,
-        index_n_heads=local_index_heads * tp,
+        num_attention_heads=cfg.num_attention_heads,
+        index_n_heads=cfg.index_n_heads,
     )
     return workload, None
 
@@ -541,6 +597,15 @@ def _profile_forward(mesh_device, run_fn) -> dict:
             current["duration_ns"] = max(current["duration_ns"], duration_ns)
     assert per_program, "real-time profiler returned no valid program records for the measured forward"
     return per_program
+
+
+def _receiver_program_count(forwards: list[dict]) -> int:
+    return sum(
+        1
+        for per_program in forwards
+        for info in per_program.values()
+        if any("multicast_receiver_writer.cpp" in source for source in info["kernel_sources"])
+    )
 
 
 def _programs_to_frame(per_program: dict, dur_col: str) -> pd.DataFrame:
@@ -720,6 +785,14 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         ttnn.synchronize_device(mesh_device)  # drain prior programs so only this forward contributes records
         forwards.append(_profile_forward(mesh_device, lambda start=start: _one_forward(start)))
 
+    receiver_program_count = _receiver_program_count(forwards)
+    expected_receiver = os.environ.get("TTNN_EXPECT_RECEIVER_L1")
+    if expected_receiver is not None:
+        assert expected_receiver in ("0", "1"), "TTNN_EXPECT_RECEIVER_L1 must be 0 or 1"
+        assert (receiver_program_count > 0) == (
+            expected_receiver == "1"
+        ), f"expected receiver path={expected_receiver}, observed {receiver_program_count} receiver programs"
+
     dur_col = "DEVICE KERNEL DURATION [ns]"  # kept for downstream compatibility (holds RT critical-path ns)
     frame = pd.concat([_programs_to_frame(pp, dur_col) for pp in forwards], ignore_index=True)
     assert len(frame), "no device programs in the measured region — was the impl skipped (wrong device count)?"
@@ -740,10 +813,11 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             f"{workload.system_name} proxy "
             f"{workload.chunk_tokens}-tok chunk, {span}, SP={workload.sp}×TP={workload.tp}",
             f"Galaxy target: {CHUNK_TOKENS}-tok chunk @ {galaxy_cache}-tok cache, SP={GALAXY_SP}×TP={GALAXY_TP}; "
-            f"local chunk={CHUNK_TOKENS // GALAXY_SP}, local MLA heads={workload.num_attention_heads // GALAXY_TP}",
+            f"local chunk={CHUNK_TOKENS // GALAXY_SP}, local MLA heads={workload.num_attention_heads // workload.tp}",
             f"critical-path device-kernel time over the {'prefill' if is_cold else 'chunk'} "
             f"(realtime profiler; per-program max across chips): "
             f"{total_ns/1e6:.3f} ms across {int(by_op['count'].sum())} device programs",
+            f"receiver-L1 programs observed: {receiver_program_count}",
             "(OP CODE = tracy-style op code mapped from kernel sources; see module docstring)",
             header,
             "-" * len(header),
@@ -776,6 +850,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         kv_cache_format=kv_cache_format,
         command=command,
         workload=workload,
+        receiver_program_count=receiver_program_count,
     )
 
     # cold only: per-cache-fill-iteration breakdown. The aggregate above sums all chunks; this shows how

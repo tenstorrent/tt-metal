@@ -1048,9 +1048,10 @@ class ttMLA:
             cluster_axis=self.sp_axis,
         )
 
-    @staticmethod
-    def _deallocate_kv(value) -> None:
-        ttnn.deallocate(value.tensor if isinstance(value, SparseKVCache) else value)
+    def _deallocate_kv(self, value) -> None:
+        tensor = value.tensor if isinstance(value, SparseKVCache) else value
+        if not self.tt_ccl.is_mla_all_gather_buffer(tensor):
+            ttnn.deallocate(tensor)
 
     def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Shared nlp_concat_heads -> o_proj -> TP reduce-scatter epilogue."""
@@ -1397,7 +1398,15 @@ class ttMLA:
     # only sparse-specific gather/attention helpers live below.
     # ----------------------------------------------------------------------------------------
 
-    def _all_gather(self, t, dim, cluster_axis, batch_slice_idx=None, valid_gather_extent=None):
+    def _all_gather(
+        self,
+        t,
+        dim,
+        cluster_axis,
+        batch_slice_idx=None,
+        valid_gather_extent=None,
+        persistent_buffer_key=None,
+    ):
         """All-gather across a mesh cluster axis → replicated on that axis. factor==1: no-op.
         cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor."""
         factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
@@ -1405,14 +1414,29 @@ class ttMLA:
             if batch_slice_idx is not None and t.shape[0] > 1:
                 return ttnn.slice(t, [batch_slice_idx, 0, 0, 0], [batch_slice_idx + 1, 1, t.shape[2], t.shape[3]])
             return t
-        return ttnn.all_gather(
+        persistent_output_tensor = None
+        if persistent_buffer_key is not None:
+            persistent_output_tensor = self.tt_ccl.get_mla_all_gather_buffer(
+                purpose=persistent_buffer_key,
+                input_tensor=t,
+                dim=dim,
+                cluster_axis=cluster_axis,
+                batch_slice_idx=batch_slice_idx,
+            )
+        gathered = ttnn.all_gather(
             t,
             dim=dim,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=cluster_axis,
+            output_tensor=persistent_output_tensor,
             batch_slice_idx=batch_slice_idx,
             valid_gather_extent=valid_gather_extent,
         )
+        # The binding returns a distinct Python Tensor wrapper even when an
+        # output tensor is supplied.  Return the cache-owned wrapper so
+        # downstream lifetime checks cannot deallocate the persistent buffer
+        # through the temporary alias after the first forward.
+        return persistent_output_tensor if persistent_output_tensor is not None else gathered
 
     def _all_gather_kv(self, value, dim, cluster_axis):
         if not isinstance(value, SparseKVCache):
@@ -1553,6 +1577,7 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 batch_slice_idx=cache_batch_idx if cache.shape[0] > 1 else None,
                 valid_gather_extent=valid_gather_extent,
+                persistent_buffer_key="sparse_mla_kvpe_prefix",
             )
         if not isinstance(kvpe_cache, SparseKVCache):
             return gathered

@@ -16,6 +16,34 @@
 
 namespace ttnn::operations::ccl {
 
+enum class ReceiverL1TestMode : uint8_t { Auto, ForceDirect, ForceReceiver };
+enum class ReceiverL1StageMode : uint8_t { Combined, L1Sink, L1Overwrite, DrainOnly };
+enum class ReceiverL1NotifyMode : uint8_t { Fused, Split };
+enum class ReceiverL1CreditMode : uint8_t { PerSlot, Window };
+enum class BankOwnedRunPolicy : uint8_t { Divisor, MaxTail };
+
+// Test and attribution controls are read once when the operation arguments are
+// built. Keeping the resolved policy in AllGatherParams makes it structural:
+// changing an environment-controlled experiment cannot reuse a program that
+// was compiled for a different receiver protocol or kernel schedule.
+struct AllGatherReceiverPolicy {
+    ReceiverL1TestMode test_mode = ReceiverL1TestMode::Auto;
+    ReceiverL1StageMode stage_mode = ReceiverL1StageMode::Combined;
+    ReceiverL1NotifyMode notify_mode = ReceiverL1NotifyMode::Fused;
+    ReceiverL1CreditMode credit_mode = ReceiverL1CreditMode::Window;
+    bool attribution_enabled = false;
+    bool address_attribution_enabled = false;
+    bool bank_owned_links = false;
+    uint32_t bank_owned_coalesce_mask = 0;
+    BankOwnedRunPolicy bank_owned_run_policy = BankOwnedRunPolicy::MaxTail;
+    // Zero means dtype-aware automatic selection.
+    uint32_t drain_risc_count = 0;
+    // Zero means derive the maximum safe value from ordinary-L1 capacity.
+    uint32_t slot_count = 0;
+    // Zero means the maximum number of rows allowed by the Fabric payload.
+    uint32_t batch_rows = 0;
+};
+
 // The program-cache hash is computed automatically by reflecting over the members
 // below and hashing each one. This is safe only because every field here is a
 // stable, structural value.
@@ -29,6 +57,7 @@ struct AllGatherParams {
     std::optional<uint32_t> cluster_axis;
 
     // Fabric setup info
+    tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     // Per-axis info (an inactive axis has num_devices = 1, num_links = 0, and Linear topology)
     std::array<tt::tt_fabric::Topology, 2> axis_topology{};
     std::array<uint32_t, 2> axis_num_devices{};
@@ -39,6 +68,8 @@ struct AllGatherParams {
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
+
+    AllGatherReceiverPolicy receiver_policy;
 
     // Optional direct-gather geometry. batch_slice_idx selects one dim-0 slab and
     // valid_gather_extent limits the leading per-device extent along dim.

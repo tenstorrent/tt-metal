@@ -39,7 +39,8 @@ public:
             alternate_routes ? PacketHeaderPool::allocate_header_n(num_connections) : unicast_route_id_1},
         use_route_1{true},
         scatter_header({}, {}),
-        chunk_count{0} {
+        chunk_count{0},
+        chunks_are_contiguous{true} {
         std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
         std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
         chunk_sizes.fill(page_size);
@@ -102,24 +103,18 @@ public:
             // Note: currently, scatter_write necessitates chunk_count >= 2.
             if (chunk_count == 0) {
                 start_l1_addr = l1_addr;
+                chunks_are_contiguous = true;
+            } else {
+                // A logical run may also be one physical NOC range (for example concat chunks within one
+                // output page). In that case a single unicast write has less command/header work than a
+                // scatter packet. Interleaved tensor pages normally resolve to different NOC coordinates and
+                // fail this exact-address proof, retaining the generic scatter path.
+                chunks_are_contiguous &= remote_noc_addr == scatter_header.noc_address[chunk_count - 1] + page_size;
             }
             scatter_header.noc_address[chunk_count++] = remote_noc_addr;
 
             if (chunk_count == pages_per_packet) {
-                noc.async_writes_flushed();
-                scatter_header.chunk_count = chunk_count;
-                fabric_api::fabric_multicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                    fabric_connection,
-                    use_route_1 ? scatter_route_id_1 : scatter_route_id_2,
-                    start_l1_addr,
-                    scatter_header,
-                    payload_size);
-
-                chunk_count = 0;
-                if constexpr (alternate_routes) {
-                    use_route_1 = !use_route_1;  // alternate between routes for load balancing
-                }
+                send_queued_chunks();
             }
         } else {
             // Send a single page using multiple packets.
@@ -141,6 +136,10 @@ public:
         }
     }
 
+    // Common transport surface used by the compile-time selected sender loop.
+    // This overload is unreachable for direct-scatter instantiations.
+    void async_write(uint32_t, uint32_t, uint64_t, uint64_t) { ASSERT(false); }
+
     // Call this before popping CB entry
     void async_writes_flushed() {
         if constexpr (use_scatter_write) {
@@ -148,33 +147,7 @@ public:
             // divide by pages per packet.
             static_assert(min_pages_per_packet == 2, "hardcoded to assume scatter_write min_pages_per_packet == 2");
             if (chunk_count > 0) {
-                noc.async_writes_flushed();
-                if (chunk_count == 1) {
-                    // Note: currently, scatter_write necessitates chunk_count >= 2, so we use unicast_write
-                    // for chunk_count == 1.
-                    // Note: this is hardcoded assuming NOC_SCATTER_WRITE_MIN_CHUNKS == 2. Else need to put
-                    // the below unicast_write in a loop.
-                    fabric_api::fabric_multicast_noc_unicast_write_with_state<
-                        UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                        fabric_connection,
-                        use_route_1 ? unicast_route_id_1 : unicast_route_id_2,
-                        start_l1_addr,
-                        tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
-                        page_size);
-                } else {
-                    scatter_header.chunk_count = chunk_count;
-                    fabric_api::fabric_multicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                        fabric_connection,
-                        use_route_1 ? scatter_route_id_1 : scatter_route_id_2,
-                        start_l1_addr,
-                        scatter_header,
-                        chunk_count * page_size);
-                }
-                chunk_count = 0;
-                if constexpr (alternate_routes) {
-                    use_route_1 = !use_route_1;  // alternate between routes for load balancing
-                }
+                send_queued_chunks();
             }
         } else {
             // no remaining data to send here
@@ -184,6 +157,32 @@ public:
     }
 
 private:
+    void send_queued_chunks() {
+        noc.async_writes_flushed();
+        if (chunk_count == 1 || chunks_are_contiguous) {
+            fabric_api::fabric_multicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                fabric_connection,
+                use_route_1 ? unicast_route_id_1 : unicast_route_id_2,
+                start_l1_addr,
+                tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
+                chunk_count * page_size);
+        } else {
+            scatter_header.chunk_count = chunk_count;
+            fabric_api::fabric_multicast_noc_scatter_write_with_state<
+                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
+                fabric_connection,
+                use_route_1 ? scatter_route_id_1 : scatter_route_id_2,
+                start_l1_addr,
+                scatter_header,
+                chunk_count * page_size);
+        }
+        chunk_count = 0;
+        if constexpr (alternate_routes) {
+            use_route_1 = !use_route_1;
+        }
+    }
+
     // Fabric limits
     static constexpr uint32_t max_pages_per_packet = NOC_SCATTER_WRITE_MAX_CHUNKS;
     static constexpr uint32_t min_pages_per_packet = NOC_SCATTER_WRITE_MIN_CHUNKS;
@@ -208,4 +207,138 @@ private:
     NocUnicastScatterCommandHeader scatter_header;
     uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
     uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks
+    bool chunks_are_contiguous;
+};
+
+// Send one contiguous transport batch to a mirrored Tensix L1 slot on every device
+// covered by the route.  The fused atomic increment is ordered after the payload and
+// tells the receiver that the slot is ready to drain.  Unlike FabricWriter, destination
+// tensor pages are deliberately not encoded here: the receiver owns the final DRAM
+// address generation and can fan the batch out across interleaved banks locally.
+template <uint32_t packet_size, bool alternate_routes, bool fused_notify>
+class FabricL1Writer {
+public:
+    FabricL1Writer(
+        const Noc& noc,
+        tt::tt_fabric::RoutingPlaneConnectionManager& manager,
+        uint32_t num_connections,
+        FabricRange* ranges,
+        FabricRange* ranges_alt = nullptr) :
+        noc{noc},
+        fabric_connection{manager},
+        payload_route_id_1{PacketHeaderPool::allocate_header_n(num_connections)},
+        payload_route_id_2{
+            alternate_routes ? PacketHeaderPool::allocate_header_n(num_connections) : payload_route_id_1},
+        notify_route_id_1{fused_notify ? payload_route_id_1 : PacketHeaderPool::allocate_header_n(num_connections)},
+        notify_route_id_2{
+            fused_notify
+                ? payload_route_id_2
+                : (alternate_routes ? PacketHeaderPool::allocate_header_n(num_connections) : notify_route_id_1)},
+        use_route_1{true} {
+        uint8_t starts[1] = {1};
+        if constexpr (fused_notify) {
+            fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+                UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                fabric_connection,
+                payload_route_id_1,
+#ifndef FABRIC_2D
+                starts,
+#endif
+                ranges,
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, 1, true});
+        } else {
+            fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+                fabric_connection,
+                payload_route_id_1,
+#ifndef FABRIC_2D
+                starts,
+#endif
+                ranges);
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                fabric_connection,
+                notify_route_id_1,
+#ifndef FABRIC_2D
+                starts,
+#endif
+                ranges,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+        }
+
+        if constexpr (alternate_routes) {
+            if constexpr (fused_notify) {
+                fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+                    UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                    fabric_connection,
+                    payload_route_id_2,
+#ifndef FABRIC_2D
+                    starts,
+#endif
+                    ranges_alt,
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, 1, true});
+            } else {
+                fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+                    fabric_connection,
+                    payload_route_id_2,
+#ifndef FABRIC_2D
+                    starts,
+#endif
+                    ranges_alt);
+                fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
+                    UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                    fabric_connection,
+                    notify_route_id_2,
+#ifndef FABRIC_2D
+                    starts,
+#endif
+                    ranges_alt,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+            }
+        }
+    }
+
+    void async_write(uint32_t l1_addr, uint32_t payload_size, uint64_t remote_l1_addr, uint64_t produced_sem_addr) {
+        ASSERT(payload_size > 0 && payload_size <= packet_size);
+        noc.async_writes_flushed();
+        if constexpr (fused_notify) {
+            fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
+                UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
+                UnicastFusedAtomicIncUpdateMask::PayloadSize>(
+                fabric_connection,
+                use_route_1 ? payload_route_id_1 : payload_route_id_2,
+                l1_addr,
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{remote_l1_addr, produced_sem_addr, 0, true},
+                payload_size);
+        } else {
+            fabric_api::fabric_multicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                fabric_connection,
+                use_route_1 ? payload_route_id_1 : payload_route_id_2,
+                l1_addr,
+                tt::tt_fabric::NocUnicastCommandHeader{remote_l1_addr},
+                payload_size);
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection,
+                use_route_1 ? notify_route_id_1 : notify_route_id_2,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{produced_sem_addr, 0});
+        }
+        if constexpr (alternate_routes) {
+            use_route_1 = !use_route_1;
+        }
+    }
+
+    // Common transport surface used by the compile-time selected sender loop.
+    // This overload is unreachable for receiver-L1 instantiations.
+    void async_write(uint32_t, uint64_t) { ASSERT(false); }
+
+    void async_writes_flushed() { noc.async_writes_flushed(); }
+
+private:
+    const Noc& noc;
+    tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection;
+    uint8_t payload_route_id_1;
+    uint8_t payload_route_id_2;
+    uint8_t notify_route_id_1;
+    uint8_t notify_route_id_2;
+    bool use_route_1;
 };

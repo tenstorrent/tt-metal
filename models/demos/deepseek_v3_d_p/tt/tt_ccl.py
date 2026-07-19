@@ -121,6 +121,12 @@ class TT_CCL:
         # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Stable native all-gather outputs for sparse MLA cache read-back. These are scratch, not
+        # cache state: layers execute sequentially and may share one purpose/shape buffer. Keeping
+        # them alive is required by the receiver-L1 all-gather path and avoids allocating a fresh
+        # full-prefix output on every forward.
+        self.mla_all_gather_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
     def get_mla_ring_attention_buffers(
         self,
         *,
@@ -206,6 +212,33 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_mla_all_gather_buffer(
+        self, *, purpose: str, input_tensor: ttnn.Tensor, dim: int, cluster_axis: int, batch_slice_idx=None
+    ) -> ttnn.Tensor:
+        """Return a replicated, interleaved-DRAM output with the exact native all-gather geometry.
+
+        `purpose` prevents two logically concurrent consumers with an otherwise identical shape from
+        aliasing. The selected cache batch still writes a batch-1 output, while valid-prefix gathers
+        retain the full allocated height because the native program patches only the active extent.
+        """
+        output_shape = list(input_tensor.shape)
+        if batch_slice_idx is not None:
+            output_shape[0] = 1
+        output_shape[dim] *= self.mesh_device.shape[cluster_axis]
+        key = (purpose, tuple(output_shape), input_tensor.dtype, input_tensor.layout)
+        if key not in self.mla_all_gather_buffers:
+            self.mla_all_gather_buffers[key] = ttnn.empty(
+                output_shape,
+                dtype=input_tensor.dtype,
+                layout=input_tensor.layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self.mla_all_gather_buffers[key]
+
+    def is_mla_all_gather_buffer(self, tensor: ttnn.Tensor) -> bool:
+        return any(tensor is buffer for buffer in self.mla_all_gather_buffers.values())
 
     def get_shared_rs_intermediate(self, input_tensor):
         """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
