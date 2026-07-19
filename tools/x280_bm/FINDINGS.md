@@ -827,6 +827,54 @@ retune/kill the backoff vs more reader harts). Next: split the reader wall into 
 - **DMAC at `0x2FF80000`**; LIM at `0x08000000`; NoC TLB cfg `0x2FF00000`,
   2 MiB window data `0x430000000`.
 
+## §21 — Linearized stream (sticky-src) + single-hart direct drain (lossless RT profiler)
+
+`src/profstream.c` + `test_x280_stream`. The per-lane acked-ring D2H design died on a
+multi-lane host-read/ack coherence wall (see memory `x280_lossless_ring_d2h_race`). This
+reverts to the proven single-stream shape and solves lane identity with a **STICKY-SRC**
+header: the drainer emits an 8 B `PP_STICKY_SRC` packet (lane id, precomputed LUT) at each
+source switch; the host demuxes one stream — a STICKY-SRC sets the current (core,risc), every
+marker/meta after it binds to that lane until the next.
+
+**Split (2 readers + 1 relay).** Readers drain worker-L1 → per-reader LIM SPSC; a relay
+round-robins them into one host ring. Vectorized copies (`vsetvli e32,m8` word-copy) took the
+reader NoC read 249 → 7.9 cyc/word and the relay 52 → ~2 cyc/word. **But it corrupts on
+host-ring wrap under saturation** (~tens-of-k seq gaps). Root-caused by elimination: host is
+x86_64 (PCIe DMA is coherent — host read not stale), ordered notify didn't fix it (not a
+landing race), relay OVERWRITE detector = 0 (flow control sound). Remaining cause = the relay
+reads **stale data from the cross-hart LIM SPSC** (reader writes, relay reads; L2CPU L1 holds a
+prior generation of a wrapped slot) — the same cross-hart LIM incoherence that forced local
+PROD/CONS pointers and killed per-lane HACKED. `cbo` cache maintenance HANGS the X280 and LIM
+has no easy uncached alias, so the split can only be kept lossless by never wrapping the ring.
+
+**Direct drain (`--direct`, NONCE bit 8) — the fix.** ONE hart reads worker-L1 over NoC
+(coherent) and writes the single host ring DIRECTLY, injecting sticky-src inline — no LIM SPSC,
+no cross-hart handoff, no relay. **UNCONDITIONALLY LOSSLESS**: 550/550 lanes, 0 seq gaps at
+every rate (proddelay 0..6000), full burst, high volume (2000 markers/lane ≈ 13 host-ring
+wraps), on the normal wrapping ring. The exact configs the split corrupted are clean. Proves
+the cross-hart LIM SPSC was the sole root cause.
+
+**BW + stall knee (bh-11, 550 lanes, `pll=1000` → 1 cyc = 1 ns).** The drainer is a steady
+**6.5 cyc/word ≈ 615 MB/s raw** (read worker-L1 + write host ring, per 4 B word); end-to-end at
+full burst is **~410 MB/s** (drain hart only ~65 % copy-busy, rest is host-ring flow-control
+wait). Producers back-pressure whenever the 550 lanes collectively outrun the one hart:
+
+| proddelay (iters/marker) | producers stalled | total spins |
+|---|---|---|
+| 0 (full burst) | 550/550 | 957 M |
+| 500 | 550/550 | 576 M |
+| 1000 | 550/550 | 180 M |
+| 1200 | 440/550 (tail) | 32 M |
+| **1350** | **0/550** | **0** |
+| 2000 | 0/550 | 0 |
+
+**Knee ≈ 1300 iters/marker.** Below it → workers stall; at/above → zero stall. Critically,
+**stalling ≠ loss**: every run incl. full burst was 0 seq gaps — back-pressure only perturbs
+workload *timing*, never drops markers. At ~615 MB/s / 8 B this is ~77 M markers/s aggregate
+(~140k/s/lane) before the knee; real kernels emit at zone boundaries, orders of magnitude
+below, so the operating point sits well under the stall threshold. More headroom later = a 2nd
+independent drain hart on its own host ring (no shared LIM), ~1.9× per rdrbench (§ RDRBENCH).
+
 ## Gotchas (saved time → don't relearn)
 
 - **`tt-smi -r` does NOT clear LIM SRAM** → a re-run of the same FW sees the prior
@@ -865,6 +913,7 @@ Firmware — `tools/x280_bm/`:
 | `src/profcons_split.c` | §15 reader/relay-hart split, two-sided ILP-4, NOC split (1097 MB/s) |
 | `src/profsock.c` | §19 D2H-socket sender bench (`--socktest`: 1566 MB/s isolated push on bh-11, §20) |
 | `src/profzone.c` | §20 PRODUCTION drainer: 2 readers (ILP `vle64`→LIM scratch, reshape) + 1 relay |
+| `src/profstream.c` | §21 linearized sticky-src stream: split (2 rd + 1 relay) + single-hart `--direct` (lossless, ~615 MB/s, stall knee ~1300) |
 
 Producer backend — `tt_metal/tools/profiler/`:
 | File | Purpose |
@@ -877,4 +926,5 @@ Host examples — `tt_metal/programming_examples/profiler/`:
 `test_x280_dma_probe`, `test_x280_grid_drain`, `test_x280_grid_drain4`,
 `test_x280_poll4`, `test_x280_noc1_probe`, `test_x280_poll4n1`,
 `test_x280_poll6n1`, `test_x280_pollmp`, `test_x280_gridilp`, `test_x280_d2hbw`,
-`test_x280_profrelay`, `test_x280_profcons`, `test_x280_profsplit`.
+`test_x280_profrelay`, `test_x280_profcons`, `test_x280_profsplit`,
+`test_x280_stream` (§21, `--direct` single-hart lossless drain).
