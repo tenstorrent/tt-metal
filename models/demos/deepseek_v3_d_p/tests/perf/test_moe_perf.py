@@ -50,7 +50,7 @@ def test_deepseek_v3_moe_perf_loudbox():
         # device fill). The 8x1 proxy (perf-host-64) is fill-dominated — it filled the
         # full capacity buffer for only 64 active tokens — so it drops the most:
         # 35.08 ms -> 27.59 ms. Was 35_082_637.
-        expected_ns_8x1=27_587_332,
+        expected_ns_8x1=17_151_588,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
         # Recalibrated 2026-06-24 on BH LoudBox 2x4 for the same in-place direct-write
@@ -75,7 +75,7 @@ def test_deepseek_v3_moe_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        expected_device_perf_ns_per_iteration=32_766_805,  # Recalibrated 2026-07-07 (perf improvement, was 41_294_210).
+        expected_device_perf_ns_per_iteration=22_492_126,  # Recalibrated 2026-07-20 (perf improvement, was 32_766_805).
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
