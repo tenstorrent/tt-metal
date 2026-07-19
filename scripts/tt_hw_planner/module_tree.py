@@ -491,7 +491,12 @@ def discover_components_from_hf_id(
         if load_weights:
             return AutoModel.from_pretrained(model_id, low_cpu_mem_usage=True, **kwargs)
         config = AutoConfig.from_pretrained(model_id, **kwargs)
-        return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
+        try:
+            from accelerate import init_empty_weights
+        except Exception:
+            return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
+        with init_empty_weights():
+            return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
 
     if install_cpu_compat is not None:
         install_cpu_compat()
