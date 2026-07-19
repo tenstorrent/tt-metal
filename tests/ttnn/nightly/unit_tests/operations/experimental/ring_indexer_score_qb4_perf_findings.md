@@ -59,41 +59,69 @@ The QB4 standalone indexer matches the deployed per-device latency and utilizati
 
 ### Fused vs separate — `num_links = 2`, 10×10 grids (µs, profiler-off trace)
 
+Two columns: **before** = the original striped `i % cols_used` band→column assignment; **after** = the
+readiness-balanced assignment (commit *readiness-balanced band→column assignment*).
+
 **GLM-5.1 (32 heads)**
 
-| k_chunk | AG | indexer | separate (AG+idx) | **FUSED** | AG hidden | speedup |
-|---|--:|--:|--:|--:|--:|--:|
-| 256 (prod, KC8) | 215 | 355 | 570 | 552 | 8 % | 1.03× |
-| **160 (aligned, KC5)** | 215 | 366 | 582 | **464** | **55 %** | **1.25×** |
+| k_chunk | AG | indexer | **FUSED** before | hidden | **FUSED** after | hidden | speedup |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| 256 (prod, KC8) | 215 | 355 | 552 | 8 % | **457** | **53 %** | 1.25× |
+| **160 (aligned, KC5)** | 215 | 365 | 464 | 55 % | **396** | **86 %** | **1.47×** |
 
 **DeepSeek-V3.2 (64 heads)**
 
-| k_chunk | AG | indexer | separate (AG+idx) | **FUSED** | AG hidden | speedup |
-|---|--:|--:|--:|--:|--:|--:|
-| 128 (prod, KC4) | 215 | 694 | 909 | 883 | 12 % | 1.03× |
-| **160 (aligned, KC5)** | 215 | 709 | 924 | **799** | **58 %** | **1.16×** |
+| k_chunk | AG | indexer | **FUSED** before | hidden | **FUSED** after | hidden | speedup |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| 128 (prod, KC4) | 215 | 694 | 883 | 12 % | **785** | **58 %** | 1.16× |
+| **160 (aligned, KC5)** | 215 | 709 | 799 | 58 % | **719** | **95 %** | **1.29×** |
 
 ## Findings
 
-1. **The fusion pays off only with a fusion-aligned `k_chunk`.** The overlap requires `KC | cl_t`
-   (cl_t = 5 tiles here). Neither production k_chunk divides 5 (KC 8 / 4), so bands straddle SP-shard
-   boundaries and back-load the ring-arrival tail → **8–12 % hidden, ~1.03×**. Setting `k_chunk = 160`
-   (KC=5, the only divisor of 5 that is L1-safe) hides **55–58 %** → **1.16–1.25×**, for a ~2–3 %
-   standalone slowdown. **Recommendation: both GLM and DeepSeek should use `k_chunk = 160` on the fused
-   path.**
+1. **Readiness-balanced band→column assignment is the dominant AG-overlap lever.** Per-core Tracy shows the
+   co-scheduled all-gather finishes on time (~220 µs, == standalone) and the compute starts immediately, yet
+   before the fix one column stalled ~95 µs on a remote shard at its *very first band*. Cause: the striped
+   `i % cols_used` assignment correlated SP shard with column — a block-cyclic band maps to shard
+   `(first_tile / cl_t) % ring` and to column `band % cols_used`, so at 10 cols × ring 4 (gcd 2) each column
+   saw only **2 of 4 shards** and *half the columns held no local band*. Those columns could not front-load
+   local work; they gated on a remote shard immediately and exposed the entire first-slab arrival. Assigning
+   bands round-robin *within each ring-arrival readiness level* balances local (readiness-0) work across all
+   columns → **hidden 55→86 % (GLM), 58→95 % (DeepSeek)** at the aligned k_chunk; production k_chunk also
+   jumps (8→53 %, 12→58 %).
 
-2. **The AG scales with T; `num_links = 2` is the right setting.** At the deployed T = 56320 each device
-   gathers ~10.8 MB; AG ≈ 410 µs at nl1 → **≈ 215 µs at nl2** (~2× fabric BW). The smaller AG is much
-   easier to bury under the compute — this test fixes `num_links = 2`.
+2. **The fusion still pays off most with a fusion-aligned `k_chunk`.** `KC | cl_t` (cl_t = 5) keeps a band
+   inside one SP shard so its readiness is a single arrival level. `k_chunk = 160` (KC 5) hides **86–95 %**
+   vs **53–58 %** at the misaligned production k_chunk. **Recommendation: `k_chunk = 160` on the fused path.**
 
-3. **The standalone indexer is compute-bound at ~75–77 % matmul util.** It is *not* reader/DRAM-bound:
-   both Q (across rows) and K (down columns) are multicast (verified `k_mcast_on = q_mcast_on = 1`), so
-   inputs are read once and reused; the reader thread has slack. The residual to 100 % is the SFPU
-   (`relu` + per-head weighted sum) sharing the math pipeline and the output-matrix write, not a memory
-   bottleneck.
+3. **Residual exposure is the whole-slab gating floor, set by the first-shard arrival (~120 µs at nl2).**
+   The AG signals the fused reader once *per whole SP slab*; the compute cannot start a remote shard until
+   its slab has fully arrived. At nl2 the nearest (1-hop) slab arrives at ~120 µs (the AG splits bandwidth
+   across both ring directions, so a 3.6 MB slab lands at ~½ the 220 µs gather, not its ~36 µs
+   bandwidth-only time). Per-device local work is C/4 = **91 µs (GLM) / 177 µs (DeepSeek)**:
+   - **DeepSeek** (177 > 120) can fully cover the arrival → floor ≈ 0; measured residual 10 µs is minor
+     load imbalance (95 % hidden).
+   - **GLM** (91 < 120) runs out of local work 29 µs before the first slab → **~29 µs floor**; measured
+     30 µs (86 % hidden) is essentially at the floor.
+   Beating the GLM floor needs the AG to deliver the nearest shard *sooner* — sub-slab (finer-grained)
+   signaling or delivering the 1-hop slab at full bandwidth first — a change to the shared ring-attention
+   all-gather, not the indexer. `num_links` > 2 also shrinks the first-slab arrival (see the sweep below),
+   but the deployed setting is fixed at nl2.
 
-4. **AG-hiding grows with the compute/AG ratio.** DeepSeek (heavier 64-head compute) hides more of the
-   AG than GLM at the same AG size.
+   **`num_links` sweep (aligned k_chunk, readiness-balanced, profiler-off trace):**
+
+   | | nl1 (AG 413) | **nl2 (AG 215)** | nl3 (AG 170) | nl4 (AG 139) |
+   |---|--:|--:|--:|--:|
+   | GLM exposed / hidden | 169 µs / 59 % | **31 µs / 86 %** | 9 µs / 95 % | 8 µs / 94 % |
+   | DeepSeek exposed / hidden | 48 µs / 89 % | **10 µs / 95 %** | 12 µs / 93 % | 12 µs / 92 % |
+
+   GLM's exposure tracks the AG size (first-slab arrival) straight down to the ~8–10 µs floor at nl3+;
+   DeepSeek is already at that floor at nl2 (its exposure is nl-independent load imbalance, not AG arrival).
+   The **~8–10 µs floor** common to both is the residual band-load imbalance across columns plus the last
+   whole-slab tail — the practical limit of the whole-slab-gated schedule.
+
+4. **The standalone indexer is compute-bound at ~75–77 % matmul util** (both Q across rows and K down
+   columns are multicast; the reader has slack). **AG-hiding grows with the compute/AG ratio** — DeepSeek's
+   heavier 64-head compute buries more of the same-size AG than GLM.
 
 ## Files
 
