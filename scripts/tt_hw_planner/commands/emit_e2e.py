@@ -1124,6 +1124,8 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     print("\n" + sep)
     print(f"  cc engine: rounds={res['rounds']} can_stop={final.get('can_stop')} halted={res['halted']}")
     print(sep)
+    if final.get("can_stop"):
+        emit_e2e_report(model_id, demo_dir, verdict="PASS")
     return 0 if final.get("can_stop") else 1
 
 
@@ -1274,64 +1276,14 @@ def _emit_e2e_phase_a(args) -> int:
     else:
         print("  ✓ builder finished (exit 0)")
 
-    if engine == "cc":
-        return _run_emit_e2e_cc(
-            model_id=model_id,
-            demo_dir=demo_dir,
-            pcc=pcc,
-            timeout_s=timeout_s,
-            agent_bin=agent_bin,
-            max_rounds=max_grade_rounds,
-        )
-
-    if skip_grade:
-        print("\n  (--no-grade) skipping independent grader phase.\n")
-        # No grader report to render; show a clean (markdown-stripped) build summary.
-        if (build_final or "").strip():
-            print(_md_to_terminal(build_final))
-        emit_e2e_report(model_id, demo_dir, verdict="(no-grade)")
-        return 0
-
-    rule = "  " + "─" * 74
-    for rnd in range(1, max_grade_rounds + 1):
-        print(f"\n  ===== PHASE 3: DETERMINISTIC GATES (tool-run, round {rnd}/{max_grade_rounds}) =====\n")
-        ok, reasons = _run_deterministic_gates(demo_dir, pcc, timeout_s)
-        print(rule)
-        print(f"  GATES (tool-enforced, not agent-reported): {'PASS' if ok else 'FAIL'}")
-        for r in reasons:
-            print(f"    - {r}")
-        print(rule)
-        _render_compute_split(model_id)
-
-        if ok:
-            print("\n" + sep)
-            print(f"  ✓ TOOL-ENFORCED GATES: PASS (round {rnd}) — verdict computed by the tool")
-            print(sep)
-            emit_e2e_report(model_id, demo_dir, verdict="PASS")
-            return 0
-        if rnd == max_grade_rounds:
-            break
-        print(f"\n  ===== FIX agent (round {rnd}/{max_grade_rounds - 1}) — addressing gate failures =====\n")
-        fix_prompt = _build_fix_prompt(
-            model_id=model_id,
-            demo_dir=demo_dir,
-            pcc=pcc,
-            grader_findings="TOOL-ENFORCED GATES FAILED (fix these, do not weaken them):\n"
-            + "\n".join(f"  - {r}" for r in reasons),
-        )
-        _run_agent(
-            prompt=fix_prompt,
-            agent_bin=agent_bin,
-            agent_model=agent_model,
-            timeout_s=timeout_s,
-            label="fix",
-            log_path=full_log,
-        )
-
-    print("\n" + sep)
-    print(f"  ✗ TOOL-ENFORCED GATES: did NOT pass within {max_grade_rounds} round(s)")
-    print(sep)
-    return 1
+    return _run_emit_e2e_cc(
+        model_id=model_id,
+        demo_dir=demo_dir,
+        pcc=pcc,
+        timeout_s=timeout_s,
+        agent_bin=agent_bin,
+        max_rounds=max_grade_rounds,
+    )
 
 
 def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int, label="agent", log_path: Path = None):
