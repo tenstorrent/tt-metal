@@ -425,18 +425,20 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> rs(0x40);
         drv.read_block(rs.data(), 0x40, 0x08011040ULL + h * 0x40);
         const uint64_t* v = reinterpret_cast<const uint64_t*>(rs.data());
-        uint64_t bytes = v[0], t_copy = v[1], t_total = v[2], aux1 = v[4], aux2 = v[5];
+        uint64_t bytes = v[0], t_copy = v[1], t_total = v[2], aux1 = v[4], aux2 = v[5], breach = v[6];
         uint64_t words = bytes / 4 + 1;
         double busy = t_total ? 100.0 * (double)t_copy / (double)t_total : 0.0;
         if (h == nread) {
             printf(
-                "  relay : %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  hostfull=%llu idle=%llu\n",
+                "  relay : %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  hostfull=%llu idle=%llu "
+                "OVERWRITE=%llu\n",
                 (unsigned long long)(bytes / 1024),
                 (unsigned long long)(t_total / 1000000),
                 busy,
                 (double)t_copy / (double)words,
                 (unsigned long long)aux1,
-                (unsigned long long)aux2);
+                (unsigned long long)aux2,
+                (unsigned long long)breach);
         } else {
             printf(
                 "  reader%llu: %6llu KB  wall=%lluM  copy=%5.1f%%  %.1f cyc/word  spsc-wait=%lluM cyc\n",

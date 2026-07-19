@@ -257,7 +257,7 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
     uint64_t total = 0;
     /* PROFILE: t_copy = cycles moving LIM->host; hostfull = passes we skipped on a full host ring (host too
      * slow); idle = full round-robin passes with NO reader data (readers too slow). */
-    uint64_t t_copy = 0, hostfull = 0, idle = 0;
+    uint64_t t_copy = 0, hostfull = 0, idle = 0, breach = 0;
     uint64_t t0 = rdcycle();
 
     for (;;) {
@@ -278,6 +278,15 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
                 continue; /* host ring full -> try the other reader, come back */
             }
             uint32_t run = avail < hspace ? avail : hspace;
+            /* DEBUG: re-read HACKED fresh right before writing. If (hsent+run) - fresh > hring, we are about
+             * to overwrite unacked ring data -> the hacked we flow-controlled with was STALE-HIGH (host->X280
+             * LIM read incoherence). This is decisive for relay-overwrite vs host-side. */
+            {
+                uint32_t fresh = r32(HACKED_ADDR);
+                if ((int32_t)((hsent + run) - (fresh + (uint32_t)hring_words)) > 0) {
+                    breach++;
+                }
+            }
             uint64_t tc = rdcycle();
             /* copy the reader SPSC words -> host ring in contiguous chunks (split at BOTH the SPSC wrap and
              * the host-ring wrap), each chunk moved with wide RVV (vle32 from LIM, vse32 posted to host). */
@@ -329,6 +338,7 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
     w64(RES_SLOT(hartid) + 0x10, t_total);  /* RES_TTOTAL */
     w64(RES_SLOT(hartid) + 0x20, hostfull); /* passes skipped: host ring full */
     w64(RES_SLOT(hartid) + 0x28, idle);     /* passes with no reader data */
+    w64(RES_SLOT(hartid) + 0x30, breach);   /* about-to-overwrite-unacked events (stale-high HACKED) */
     w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
     fence_();
 }
