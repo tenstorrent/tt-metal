@@ -77,19 +77,6 @@ def _verbose() -> bool:
     return os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
 
 
-def _md_to_terminal(text: str) -> str:
-    """Strip the markdown markup (** , `, leading #) the agent emits so a
-    fallback summary reads cleanly on a terminal instead of as raw .md source."""
-    out = []
-    for ln in (text or "").splitlines():
-        s = re.sub(r"\*\*(.+?)\*\*", r"\1", ln)
-        s = re.sub(r"`([^`]+)`", r"\1", s)
-        s = s.replace("**", "")
-        s = re.sub(r"^\s{0,3}#{1,6}\s*", "", s)
-        out.append("  " + s)
-    return "\n".join(out)
-
-
 def _render_grader_report(demo_dir: Path) -> bool:
     """Render the structured grader_report.json as a clean, aligned terminal
     block (no markdown). Returns True if rendered, False if unavailable —
@@ -143,29 +130,6 @@ def _render_grader_report(demo_dir: Path) -> bool:
     lines.append(rule)
     print("\n" + "\n".join(lines))
     return True
-
-
-def _render_compute_split(model_id: str) -> None:
-    """Show how much of the pipeline runs natively on the TT device vs torch on
-    CPU — reusing the exact split the auto-iterate loop prints (component-level
-    + op-level), read from bringup_status.json + the op-synth manifests."""
-    try:
-        from ..cli import _format_compute_split, _format_op_split
-    except Exception:
-        return
-    lines = []
-    try:
-        lines += _format_compute_split(model_id, label="compute split (TT device vs CPU)")
-    except Exception:
-        pass
-    try:
-        lines += _format_op_split(model_id, label="operations")
-    except Exception:
-        pass
-    if lines:
-        print()
-        for ln in lines:
-            print(ln)
 
 
 def _e2e_cell(rel: str, sub: str, f) -> str:
@@ -1162,7 +1126,6 @@ def _emit_e2e_phase_a(args) -> int:
     agent_model = getattr(args, "model", None) or "opus"
     agent_bin = getattr(args, "agent_bin", "claude") or "claude"
     timeout_s = int(getattr(args, "agent_timeout_s", 0) or 0) or 14400
-    skip_grade = bool(getattr(args, "no_grade", False))
     max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 20
 
     # One consolidated full log for the whole run (builder + grader + fix
@@ -1447,45 +1410,6 @@ def _fmt_tool(name: str, inp: dict) -> str:
         return f"{name} {json.dumps(inp)[:120]}"
     except Exception:
         return name
-
-
-def _build_fix_prompt(*, model_id: str, demo_dir: Path, pcc: float, grader_findings: str) -> str:
-    return f"""The TOOL-ENFORCED end-to-end gates FAILED for `{model_id}` at {demo_dir}.
-The verdict is computed by the tool itself (it runs tests/e2e on the device and
-reads pass/fail) — you CANNOT pass by editing a report; you must make the gates
-genuinely pass when the tool re-runs them.
-
-Gate failures to fix:
-{grader_findings}
-
-Fix rules:
-  - Failures here are WIRING/ASSEMBLY, not component math. The components are
-    already graduated and PCC-verified in isolation — do NOT change stub math or
-    re-run per-component PCC. Make every flagged module genuinely on the real
-    compute path: fed by the previous TT stage's real output, its output flowing
-    into the FINAL output. NO off-path side-runs, NO matched/reference tensor
-    injected at a joint, NO counter bumped while the real compute bypasses the
-    stub.
-  - GENERATIVE heads (reference is `model.generate()`): reproduce generate()'s
-    real chain and compare to it. Keep the gate fast by capping BOTH sides to the
-    same small N (e.g. 40): pass `max_new_tokens=N` to `model.generate()` AND stop
-    the TT decode loop at N, then compare the first-N sequence (+ per-step PCC).
-    Do NOT run full-length generation (the gate times out). Do NOT cap only the
-    TT side while HF runs full (lengths won't match → false fail, and HF stays
-    slow).
-  - Do NOT weaken any gate, lower a threshold, add pytest.skip/assert True, or
-    relax no-waste. Keep input from the real HF processor/tokenizer and the
-    golden from the real HF reference (`model.generate()`).
-  - STRUCTURE/demo failures: emit-e2e's deliverable is a runnable demo. Ensure
-    `demo/demo_<task>.py` entrypoints exist (each with `__main__` + argparse),
-    plus `tt/` and `README.md`. The demo MUST call the SAME shared pipeline in
-    `tt/` that the e2e test calls — do NOT give the demo its own copy of the
-    wiring (it will drift and ship broken while the test stays green). Fix the
-    demo by routing it through the test's pipeline, not by rewriting wiring.
-  - Keep the demo package structure (demo/ + tt/ + tests/ + README) intact.
-  - Re-run tests/e2e on the device yourself and confirm they pass before finishing.
-{_TT_ONLY_CONTRACT}
-Report what you changed and the device re-run result."""
 
 
 def _build_grader_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
