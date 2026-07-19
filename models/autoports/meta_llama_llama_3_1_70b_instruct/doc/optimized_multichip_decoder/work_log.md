@@ -717,7 +717,9 @@ scope boundaries.
 - `README.md`: compact handoff and inter-layer contract.
 
 Starting commit is `9280cf5c2b0`; completed multichip implementation commit is
-`1087041f65f`. Stage-review verdict and local stage commit SHAs are appended
-after the independent review gate. The pre-existing unrelated
+`1087041f65f`. Independent stage review returned `clean-pass`; the stage-owned
+optimization checkpoint is `fbb63a3245a`. A metadata-only follow-up records
+that checkpoint in this log; its SHA is reported in the final handoff because
+a commit cannot record its own final SHA. The pre-existing unrelated
 `.agents/skills/forge-functional-decoder-from-ir/SKILL.md` modification is not
 stage-owned and will not be committed.
