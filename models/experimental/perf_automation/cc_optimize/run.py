@@ -1218,19 +1218,24 @@ def _progress_token(repo_root: Path, kernel_log: str):
 
 
 def _apply_adaptive_round_timers(baseline_wall_s) -> None:
-    """Scale the module-level round hard-cap and full-model measure timeout to this
-    module's observed baseline measurement wall, so a small module stops waiting the
-    fixed 2400s/1200s before the watchdog acts while a large one keeps proportional
-    headroom. The FROZEN stall check is untouched (it adapts by liveness signal, not
-    clock). Only applied under module-level optimize."""
+    """Scale the module-level round hard-cap (PERF_MCP_ROUND_MAX_SEC) and the MEASURE
+    backstop (PERF_MCP_MEASURE_BACKSTOP) to this module's observed baseline measurement
+    wall, so a small module stops waiting the fixed full-optimize ceilings (2400s / 3600s)
+    before the watchdog acts while a large one keeps proportional headroom. Both hard-caps
+    are floored at their soft STALL tier (ROUND_STALL / MEASURE_STALL) and capped at the
+    full-optimize defaults, so the two-tier invariant stall <= hardcap <= full-default holds
+    exactly as in full-optimize (no inversion). The soft stall tiers are left untouched.
+    Only applied under module-level optimize."""
     w = max(1.0, float(baseline_wall_s or 0.0))
-    max_no_progress = int(min(2400, max(300, 8.0 * w)))
-    measure_backstop = int(min(1200, max(300, 6.0 * w)))
+    round_stall = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "600") or "600")
+    measure_stall = int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600")
+    max_no_progress = int(min(2400, max(round_stall, 8.0 * w)))
+    measure_backstop = int(min(3600, max(measure_stall, 6.0 * w)))
     os.environ["PERF_MCP_ROUND_MAX_SEC"] = str(max_no_progress)
     os.environ["PERF_MCP_MEASURE_BACKSTOP"] = str(measure_backstop)
     print(
-        "  [optimize/cc] adaptive per-module timers (baseline wall %.0fs): round hard-cap %ds, "
-        "measure backstop %ds (adaptive stall floor unchanged)" % (w, max_no_progress, measure_backstop),
+        "  [optimize/cc] adaptive per-module timers (baseline wall %.0fs): round hard-cap %ds (>= stall %ds), "
+        "measure backstop %ds (>= stall %ds)" % (w, max_no_progress, round_stall, measure_backstop, measure_stall),
         flush=True,
     )
 
