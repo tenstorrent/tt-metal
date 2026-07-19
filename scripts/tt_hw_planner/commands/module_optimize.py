@@ -122,6 +122,8 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
     if not mods:
         print("  [optimize/module] no graduated native modules found (need .bringup_cc_state.json).")
         return 1
+    all_grad = list(mods)
+    total = len(all_grad)
 
     want = getattr(args, "modules", None)
     if want:
@@ -153,17 +155,19 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
     os.environ.setdefault("PERF_MCP_VALIDATE_STALL_SEC", "120")
     print("  [optimize/module] module-level optimize over %d graduated module(s): %s" % (len(mods), mods))
     rows = []
-    for i, m in enumerate(mods, 1):
+    for m in mods:
+        pos = (all_grad.index(m) + 1) if m in all_grad else 0
+        idx = "%d/%d" % (pos, total)
         node = pcc_test_node(demo_dir, m, repo_root)
         if node is None:
-            print("  [optimize/module] %d/%d %s: no PCC test node — skipped" % (i, len(mods), m))
+            print("  [optimize/module] %s %s: no PCC test node — skipped" % (idx, m))
             rows.append((m, "no-pcc-test", None))
             continue
-        print("\n  [optimize/module] === %d/%d module: %s (pcc %s) ===" % (i, len(mods), m, node))
+        print("\n  [optimize/module] === %s module: %s (pcc %s) ===" % (idx, m, node))
         os.environ["PERF_MCP_REPORT_KEY"] = "module:%s" % m
         os.environ["PERF_MCP_REPORT_MODULE"] = m
         os.environ["PERF_MCP_REPORT_PCC"] = node
-        os.environ["PERF_MCP_REPORT_INDEX"] = "%d/%d" % (i, len(mods))
+        os.environ["PERF_MCP_REPORT_INDEX"] = idx
         os.environ["PERF_MCP_TASK"] = m
         try:
             result = run_cc(
@@ -189,7 +193,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         rows.append((m, status, result))
         if status in ("converged", "ran"):
             _mark_optimized(demo_dir, m, status, result)
-        _rekey_module_section(demo_dir, m, node, status, upsert_report_section, index="%d/%d" % (i, len(mods)))
+        _rekey_module_section(demo_dir, m, node, status, upsert_report_section, index=idx)
 
     _write_rollup(demo_dir, rows, upsert_report_section)
 
