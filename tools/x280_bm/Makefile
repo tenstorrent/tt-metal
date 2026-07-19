@@ -39,6 +39,39 @@ $(BUILD)/rdrbench.bin: $(BUILD)/rdrbench.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "rdrbench.bin: $$(wc -c < $@) bytes"
 
+# profll: per-lane lossless drainer (step-0 active FW; handoff skeleton + profcons per-lane drain).
+$(BUILD)/profll.o: src/profll.c include/noc.h include/x280_boot.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/profll.elf: $(BUILD)/entry.o $(BUILD)/profll.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/profll.o
+
+$(BUILD)/profll.bin: $(BUILD)/profll.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "profll.bin: $$(wc -c < $@) bytes"
+
+# profstream: linearized pipeline (2 readers + 1 relay + single host ring), sticky-src identity.
+$(BUILD)/profstream.o: src/profstream.c include/noc.h include/x280_boot.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/profstream.elf: $(BUILD)/entry.o $(BUILD)/profstream.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/profstream.o
+
+$(BUILD)/profstream.bin: $(BUILD)/profstream.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "profstream.bin: $$(wc -c < $@) bytes"
+
+# lim_idle: resident idle / boot-handoff FW at 0x08000000 (its own LD script; ORIGIN differs).
+$(BUILD)/lim_idle.o: src/lim_idle.c include/noc.h include/x280_boot.h | $(BUILD) toolchain
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/lim_idle.elf: $(BUILD)/entry.o $(BUILD)/lim_idle.o ld/x280-lim-idle.ld | toolchain
+	$(CC) -nostdlib -T ld/x280-lim-idle.ld $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/lim_idle.o
+
+$(BUILD)/lim_idle.bin: $(BUILD)/lim_idle.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "lim_idle.bin: $$(wc -c < $@) bytes"
+
 $(BUILD)/eccscrub.o: src/eccscrub.c | $(BUILD) toolchain
 	$(CC) $(CFLAGS) -c -o $@ $<
 

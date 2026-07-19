@@ -27,6 +27,8 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_poll6n1)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_pollmp)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_gridilp)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_rdrbench)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_lossless)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_stream)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_d2hbw)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profrelay)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profcons)
@@ -47,6 +49,8 @@ add_custom_target(
         test_x280_poll6n1
         test_x280_pollmp
         test_x280_gridilp
+        test_x280_lossless
+        test_x280_stream
         test_x280_d2hbw
         test_x280_profrelay
         test_x280_profcons
