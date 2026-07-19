@@ -1230,29 +1230,6 @@ def _progress_token(repo_root: Path, kernel_log: str):
     return (_git(repo_root, "rev-parse", "HEAD"), mt)
 
 
-def _apply_adaptive_round_timers(baseline_wall_s) -> None:
-    """Scale the module-level round hard-cap (PERF_MCP_ROUND_MAX_SEC) and the MEASURE
-    backstop (PERF_MCP_MEASURE_BACKSTOP) to this module's observed baseline measurement
-    wall, so a small module stops waiting the fixed full-optimize ceilings (2400s / 3600s)
-    before the watchdog acts while a large one keeps proportional headroom. Both hard-caps
-    are floored at their soft STALL tier (ROUND_STALL / MEASURE_STALL) and capped at the
-    full-optimize defaults, so the two-tier invariant stall <= hardcap <= full-default holds
-    exactly as in full-optimize (no inversion). The soft stall tiers are left untouched.
-    Only applied under module-level optimize."""
-    w = max(1.0, float(baseline_wall_s or 0.0))
-    round_stall = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "600") or "600")
-    measure_stall = int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600")
-    max_no_progress = int(min(2400, max(round_stall, 8.0 * w)))
-    measure_backstop = int(min(3600, max(measure_stall, 6.0 * w)))
-    os.environ["PERF_MCP_ROUND_MAX_SEC"] = str(max_no_progress)
-    os.environ["PERF_MCP_MEASURE_BACKSTOP"] = str(measure_backstop)
-    print(
-        "  [optimize/cc] adaptive per-module timers (baseline wall %.0fs): round hard-cap %ds (>= stall %ds), "
-        "measure backstop %ds (>= stall %ds)" % (w, max_no_progress, round_stall, measure_backstop, measure_stall),
-        flush=True,
-    )
-
-
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
     """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
@@ -1560,10 +1537,7 @@ def optimize_pipeline(
         (Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json").unlink()
     except Exception:
         pass
-    _bl_t0 = time.monotonic()
     before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
-    if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
-        _apply_adaptive_round_timers(time.monotonic() - _bl_t0)
     rounds, can_stop, halted = 0, False, False
     stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "600") or "600")
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
