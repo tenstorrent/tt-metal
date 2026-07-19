@@ -192,3 +192,88 @@ def test_place_weight_single_device_places_host_weight_and_matmul_is_correct(dev
         pcc_threshold=0.999,
         check_ulp=False,
     )
+
+
+# (label, K, N) for the core GPT-OSS GEMMs plus a large generic shape. GPT-OSS
+# (both 20b and 120b) uses hidden=2880, heads*head_dim=64*64=4096, and a fused
+# QKV width of 4096 + 512 + 512 = 5120.
+_MODEL_SHAPES = [
+    ("qkv_proj", 2880, 5120),
+    ("o_proj", 4096, 2880),
+    ("mlp_w", 2880, 2880),
+    ("generic_4k", 4096, 4096),
+]
+# M = batch * seq: a decode-like and a prefill-like token count.
+_M_VALUES = [32, 512]
+# (name, dtype, correctness pcc threshold)
+_DTYPES = [("bf16", ttnn.bfloat16, 0.99), ("bf8", ttnn.bfloat8_b, 0.97)]
+
+
+def _measured_default_and_winner(result):
+    """Extract the measured default candidate and the selected winner from an explain report.
+
+    Both are measured in the same on-device session, so ``winner_us <= default_us`` is a
+    consistency invariant (the winner is the fastest measured candidate) and the ratio is
+    the per-shape default-vs-auto-tuned speedup.
+    """
+    ok = [entry for entry in result["candidate_timings_us"] if entry["status"] == "ok"]
+    winner = next((entry for entry in ok if entry["descriptor"] == result["winner"]), None)
+    default = next((entry for entry in ok if str(entry["descriptor"].get("kind", "")).startswith("default")), None)
+    return default, winner, ok
+
+
+@pytest.mark.parametrize("dname, dtype, pcc", _DTYPES, ids=lambda p: p if isinstance(p, str) else "")
+@pytest.mark.parametrize("label, K, N", _MODEL_SHAPES)
+@pytest.mark.parametrize("M", _M_VALUES)
+@pytest.mark.parametrize("is_linear", [False, True], ids=["matmul", "linear"])
+def test_auto_config_model_shapes_correct_and_not_slower_than_default(
+    device, M, label, K, N, dname, dtype, pcc, is_linear
+):
+    """Exhaustive matmul/linear matrix over real GPT-OSS shapes.
+
+    For every shape/dtype/op it (1) checks the public auto-config entrypoint against a
+    torch golden and (2) proves via a single ``explain_matmul`` report that the selected
+    winner is never slower than the plain default candidate, printing the measured
+    default-vs-auto-tuned timings so the per-shape speedup is visible.
+    """
+    torch.manual_seed(0)
+    torch_a = torch_random((1, 1, M, K), -0.1, 0.1, dtype=torch.float32)
+    torch_b = torch_random((K, N), -0.1, 0.1, dtype=torch.float32)
+    torch_bias = torch_random((N,), -0.1, 0.1, dtype=torch.float32) if is_linear else None
+
+    golden = torch_a @ torch_b
+    if torch_bias is not None:
+        golden = golden + torch_bias
+
+    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    b = ttnn.from_torch(torch_b, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = (
+        ttnn.from_torch(torch_bias.reshape(1, N), dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        if torch_bias is not None
+        else None
+    )
+
+    # (1) Correctness through the public auto-config entrypoint.
+    if is_linear:
+        out = ttnn.to_torch(ttnn.linear(a, b, bias=tt_bias, dtype=dtype))
+    else:
+        out = ttnn.to_torch(ttnn.matmul(a, b, dtype=dtype))
+    assert_numeric_metrics(golden, out, pcc_threshold=pcc, check_allclose=False, check_frobenius=False, check_ulp=False)
+
+    # (2) Measured default vs auto-tuned, from one benchmarking session.
+    result = ttnn.experimental.auto_config.explain_matmul(
+        a, b, bias=tt_bias, is_linear=is_linear, dtype=dtype, allow_tuning=True
+    )
+    default, winner, ok = _measured_default_and_winner(result)
+    assert winner is not None, "selector returned no measured winner"
+    assert ok, "expected at least one successfully measured candidate"
+
+    if default is not None:
+        # Winner is the fastest measured candidate, so it must not be slower than default.
+        assert winner["average_us"] <= default["average_us"] + 1e-9
+        speedup = default["average_us"] / winner["average_us"]
+        print(
+            f"PERF {label} M={M} K={K} N={N} dtype={dname} op={'linear' if is_linear else 'matmul'} "
+            f"default_us={default['average_us']:.3f} tuned_us={winner['average_us']:.3f} "
+            f"speedup={speedup:.3f}x winner={result['winner'].get('kind')}"
+        )
