@@ -79,7 +79,14 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<uint32_t>& input_m_tiles = std::nullopt,
     bool read_x_at_offset = false,
     bool x_is_row_major = false,
-    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu,
+    // chunk_sizing_m_tiles: optional expected ACTIVE token count in tiles, used
+    // only to size chunk_M_tiles / per_core_M. Defaults to input_m_tiles (the
+    // allocation) => unchanged. Supply the real/expected count so an over-
+    // allocated buffer does not pay phantom per_core_M work; correctness is
+    // unaffected (the device count bounds effective_chunks, input_m_tiles bounds
+    // OOB guards), so a too-small value only adds chunks, never drops tokens.
+    const std::optional<uint32_t>& chunk_sizing_m_tiles = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling
@@ -102,7 +109,12 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu,
+    // expected_tokens_per_expert: optional typical/expected per-expert active
+    // token count (NOT the capacity). Sizes chunk_M_tiles / per_core_M to the
+    // real load instead of max_dispatched_tokens_per_expert. Default => capacity
+    // (unchanged). Correctness holds for any actual count (device-bounded).
+    const std::optional<uint32_t>& expected_tokens_per_expert = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

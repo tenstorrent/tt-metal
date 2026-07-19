@@ -90,6 +90,12 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 before the matmul (fusing to_layout). Default False (TILE bf8_b).
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
+            chunk_sizing_m_tiles (int, optional): expected ACTIVE token count in
+                tiles, used only to size chunk_M_tiles / per_core_M. Defaults to
+                input_m_tiles (the allocation), so the pick is unchanged when not
+                supplied. Supply the real/expected count so an over-allocated
+                buffer does not pay phantom per_core_M work; correctness is
+                unaffected (a too-small value only adds chunks, never drops tokens).
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -109,7 +115,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("input_m_tiles") = nb::none(),
         nb::arg("read_x_at_offset") = false,
         nb::arg("x_is_row_major") = false,
-        nb::arg("activation") = RoutedExpertActivation::Silu);
+        nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("chunk_sizing_m_tiles") = nb::none());
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -142,6 +149,12 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
+            expected_tokens_per_expert (int, optional): typical/expected active
+                token count per expert (NOT the capacity, and in tokens not tiles).
+                Sizes chunk_M_tiles / per_core_M to the real load instead of
+                max_dispatched_tokens_per_expert. Defaults to None => size to
+                capacity (unchanged). Correctness holds for any actual count (a
+                too-small estimate only adds chunks, never drops tokens).
 
         Returns:
             ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
@@ -157,7 +170,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("activation") = RoutedExpertActivation::Silu);
+        nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("expected_tokens_per_expert") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

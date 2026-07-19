@@ -25,7 +25,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<uint32_t>& input_m_tiles,
     bool read_x_at_offset,
     bool x_is_row_major,
-    RoutedExpertActivation activation) {
+    RoutedExpertActivation activation,
+    const std::optional<uint32_t>& chunk_sizing_m_tiles) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
@@ -39,24 +40,38 @@ ttnn::Tensor unified_routed_expert_ffn(
     // ceil(M_tiles_full / chunk_M_tiles) chunks, reader zero-fills L1 rows
     // past M_tiles_full in the last chunk, writer skips OOB output writes.
     //
-    // Picker minimizes the number of chunks first (= ceil(M / chunk)). Each
-    // chunk pays ~25 K-block handshakes (14 gate/up + 11 down) regardless of
-    // per_core_M, so fewer chunks wins more than waste hurts compute. On tie
-    // (same num_chunks), prefers smaller waste = closer to-aligned. For
-    // DS-V3 this picks 64 for nearly all sizes; 5k → 64 (3 chunks, was 40
-    // with 4 chunks); 25k → 64 (13 chunks, was 40 with 20 chunks).
+    // Picker minimizes the number of chunks first (= ceil(target / chunk)) over
+    // the SIZING TARGET below. Each chunk pays ~25 K-block handshakes (14 gate/up
+    // + 11 down) regardless of per_core_M, so fewer chunks wins more than waste
+    // hurts compute. On tie (same num_chunks), prefers smaller waste (closer to
+    // chunk-aligned). e.g. target 160 tiles (5,120 tokens) -> 56 (3 chunks, waste
+    // 8); target 64 tiles (2,048 tokens) -> 64 (1 chunk, waste 0).
     constexpr uint32_t kGridY = 8;
     constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
     constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
     // This expert's M in tiles. Defaults to x's allocated M; a caller passing a
     // shared x buffer (wider than one region) supplies the per-expert value.
     const uint32_t M_tiles_full = input_m_tiles.value_or(x.padded_shape()[-2] / 32);
+    // Size chunk_M_tiles (per_core_M = chunk_M_tiles / GRID_Y) to the EXPECTED
+    // active token count, not the allocated buffer M_tiles_full. An over-
+    // allocated / under-filled buffer otherwise makes the picker choose a larger
+    // chunk_M_tiles and pay phantom per_core_M work on every running chunk. Safe:
+    // the device-side count still bounds effective_chunks and M_tiles_full still
+    // bounds every OOB guard, so a too-small target only adds chunks (never drops
+    // tokens). Defaults to M_tiles_full => behavior unchanged when not supplied.
+    uint32_t sizing_m_tiles = chunk_sizing_m_tiles.value_or(M_tiles_full);
+    if (sizing_m_tiles < 1) {
+        sizing_m_tiles = 1;
+    }
+    if (sizing_m_tiles > M_tiles_full) {
+        sizing_m_tiles = M_tiles_full;
+    }
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
+    uint32_t best_num_chunks = (sizing_m_tiles + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
     uint32_t best_waste = kMaxChunkMTiles + 1;
     for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
-        const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
-        const uint32_t rem = M_tiles_full % cand;
+        const uint32_t num_chunks = (sizing_m_tiles + cand - 1) / cand;
+        const uint32_t rem = sizing_m_tiles % cand;
         const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
         const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
         if (better) {
@@ -95,7 +110,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    RoutedExpertActivation activation) {
+    RoutedExpertActivation activation,
+    const std::optional<uint32_t>& expected_tokens_per_expert) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -139,6 +155,12 @@ ttnn::Tensor unified_routed_expert_moe(
                                  tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM})
                        : dispatched_buffer;
     const uint32_t m_tiles = (max_dispatched_tokens_per_expert + 31) / 32;
+    // Chunk-sizing target: the expected active count (in tiles), if the caller
+    // supplied it, else the capacity m_tiles (unchanged). Only affects the
+    // chunk_M_tiles / per_core_M pick; every correctness bound still uses m_tiles.
+    const std::optional<uint32_t> chunk_sizing_m_tiles =
+        expected_tokens_per_expert.has_value() ? std::optional<uint32_t>((expected_tokens_per_expert.value() + 31) / 32)
+                                               : std::nullopt;
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         unified_routed_expert_ffn(
             dispatched_buffer,
@@ -154,7 +176,8 @@ ttnn::Tensor unified_routed_expert_moe(
             m_tiles,
             /*read_x_at_offset=*/true,
             x_is_row_major,
-            activation);
+            activation,
+            chunk_sizing_m_tiles);
     }
     return output;
 }

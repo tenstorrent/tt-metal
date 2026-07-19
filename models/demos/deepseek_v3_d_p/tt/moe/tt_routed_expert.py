@@ -201,6 +201,7 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        expected_tokens_per_expert: Optional[int] = None,
         *,
         activation: "ttnn.RoutedExpertActivation",
     ):
@@ -213,6 +214,12 @@ class TtRoutedExpert(LightweightModule):
             emb_dim: Embedding dimension (default: 7168)
             hidden_dim: Hidden/intermediate dimension (default: 2048)
             max_tokens: Maximum tokens per expert (default: 1600, used for program config)
+            expected_tokens_per_expert: Optional typical/expected ACTIVE token count per
+                          expert (not the capacity). Sizes the FFN's chunk_M_tiles/per_core_M
+                          to the real load instead of max_tokens, so an over-allocated buffer
+                          does not pay phantom per-core work. None (default) sizes to capacity
+                          (unchanged). Correctness holds for any actual count; a too-small
+                          value only adds chunks, never drops tokens.
             torch_weights: Optional list of dicts with keys 'gate_proj', 'up_proj', 'down_proj'
                           containing torch tensors. Length must be num_devices * experts_per_chip
                           (total routed experts), with weights ordered by global expert index.
@@ -237,6 +244,12 @@ class TtRoutedExpert(LightweightModule):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.max_tokens = max_tokens
+        # Expected (typical) active tokens per expert, used only to size the FFN's
+        # chunk_M_tiles/per_core_M to the real load instead of max_tokens (the
+        # capacity). None => size to capacity (unchanged). Correctness is
+        # unaffected for any actual count (device-bounded); a too-small value only
+        # adds chunks.
+        self.expected_tokens_per_expert = expected_tokens_per_expert
         self.num_devices = mesh_device.get_num_devices()
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
@@ -434,6 +447,7 @@ class TtRoutedExpert(LightweightModule):
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
                 activation=self.activation,
+                expected_tokens_per_expert=self.expected_tokens_per_expert,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
