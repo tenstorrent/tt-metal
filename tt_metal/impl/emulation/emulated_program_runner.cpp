@@ -10,6 +10,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/resource.h>  // getrlimit(RLIMIT_NOFILE) — bound JIT compile fan-out under the fd limit
 #include <csignal>
 #if defined(__x86_64__) && defined(__linux__)
 #include <ucontext.h>
@@ -19,6 +20,8 @@
 #include <bit>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
+#include <limits>
 #include <tt_stl/assert.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +34,7 @@
 #include <memory>
 #include <mutex>
 #include <regex>
+#include <semaphore>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -261,7 +265,7 @@ extern "C" void __emule_fiber_park_locked(const void* key) {
 }
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
-extern "C" void __emule_fiber_read_latency(void) { efib::FiberScheduler::instance().latency_park(); }
+extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
 extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
@@ -327,7 +331,7 @@ extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
 // silicon clears the bit and the sender NIU drops the packet at itself ->
 // include_self=false. Sender coords come from the TLS that thread launch
 // wires up (my_x[0], my_y[0]).
-extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self) {
+extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self, uint8_t noc) {
     uint32_t x_end = (mcast_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t y_end = (mcast_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint32_t x_start = (mcast_addr >> (NOC_LOCAL_BITS + 2 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
@@ -350,9 +354,37 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t self_x = my_x[0];
     uint32_t self_y = my_y[0];
 
+    // NOC1 rectangles arrive with start<->end SWAPPED: silicon describes a NOC1
+    // multicast in NOC1's reflected coordinate frame (paired with the DYNAMIC_NOC_X/Y
+    // reflection). Emule models NOC coordinates as identity (DYNAMIC_NOC_X/Y is
+    // identity), so no reflection happens and the swap alone leaves the rectangle
+    // reversed. Undo it so the walk below runs on physical (NOC0-frame) coordinates
+    // for both NOCs. Without this, canonical NOC1 in0/in1-mcast ops (matmul/linear,
+    // multicore argmax) present start>end and the torus walk misreads it as a
+    // wraparound → receivers never see their semaphore → quiescent deadlock.
+    if (noc != 0) {
+        uint32_t t;
+        t = x_start; x_start = x_end; x_end = t;
+        t = y_start; y_start = y_end; y_end = t;
+    }
+
+    // Torus-wraparound walk on physical coords. Silicon's NOC treats the rectangle on
+    // a torus, so a rectangle whose cores straddle the worker-grid seam encodes
+    // start > end and wraps around the NOC node space rather than covering the min..max
+    // bounding box; SDPA S-block multicasts (NOC0) rely on this. Walk each axis
+    // start->end stepping +1 mod the node space; coords with no core in the map are
+    // skipped. For a non-wrapping rectangle (start <= end) this is identical to
+    // min..max — the post-un-swap NOC1 case (matmul/argmax in0-mcast).
+    auto axis_count = [](uint32_t s, uint32_t e) -> uint32_t {
+        return (e >= s ? (e - s) : ((NOC_NODE_MASK + 1 - s) + e)) + 1;
+    };
+    const uint32_t nx = axis_count(x_start, x_end);
+    const uint32_t ny = axis_count(y_start, y_end);
     uint32_t delivered = 0;
-    for (uint32_t x = std::min(x_start, x_end); x <= std::max(x_start, x_end); x++) {
-        for (uint32_t y = std::min(y_start, y_end); y <= std::max(y_start, y_end); y++) {
+    for (uint32_t ix = 0; ix < nx; ix++) {
+        const uint32_t x = (x_start + ix) & NOC_NODE_MASK;
+        for (uint32_t iy = 0; iy < ny; iy++) {
+            const uint32_t y = (y_start + iy) & NOC_NODE_MASK;
             if (!include_self && x == self_x && y == self_y) {
                 continue;
             }
@@ -1725,6 +1757,68 @@ static std::mutex g_compile_inflight_mutex;
 static std::unordered_map<std::string, std::shared_future<std::function<void()>>> g_compile_inflight;
 static std::atomic<uint64_t> g_compile_tmp_seq{0};
 
+// Max jit_compile_kernel calls allowed to run concurrently. Each in-flight compile
+// holds a burst of open file descriptors (patched-header mirror writes, header reads,
+// the clang subprocess pipes — order tens of fds each), so an UNBOUNDED std::async
+// fan-out over every cache-miss makes peak fd use scale with the kernel count.
+// A large mesh program (8-chip loudbox on the full 14x10 grid compiles ~hundreds
+// of distinct kernels) then blows past a container's RLIMIT_NOFILE soft limit
+// (commonly 1024) → open() fails mid-compile → "kernel_patcher: cannot read/write"
+// (and the failing file varies run-to-run with the interleaving). A dev box with a
+// high fd limit (e.g. 65536) never hits it, so this is CI/container-only. Bounding
+// concurrent compiles keeps peak fds (and concurrent clang processes) under the
+// limit. Note this bounds concurrent *compiles*, not the thread count: std::async
+// still spawns one thread per cache-miss which then blocks on the gate — the fd/
+// clang-process footprint is what EMFILE cares about here.
+static unsigned jit_compile_concurrency_cap() {
+    // First, opportunistically raise the soft fd limit to the hard limit — unprivileged
+    // and enough on its own in most containers (large hard limit), so the throttle
+    // rarely engages on well-provisioned hosts. Kept as a floor because some containers
+    // pin the hard limit at 1024 too; derive the cap from the (possibly raised) soft limit.
+    struct rlimit rl {};
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != rl.rlim_max) {
+        rl.rlim_cur = rl.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &rl);
+        getrlimit(RLIMIT_NOFILE, &rl);  // re-read the effective soft limit
+    }
+
+    unsigned cap = std::max(1u, std::thread::hardware_concurrency());
+    if (rl.rlim_cur != RLIM_INFINITY) {
+        // Budget the fd limit across concurrent compiles. kReserve covers the process's
+        // baseline fds (libs, python, fibers, the cached kernel .sos); kFdsPerCompile is
+        // an estimate of the fds one compile holds at its peak (patched-header writes +
+        // header reads + clang pipes). Both are conservative estimates, not measured; the
+        // soft→hard raise above and TT_EMULE_JIT_COMPILE_JOBS relieve any over-throttling.
+        constexpr rlim_t kReserve = 512;
+        constexpr rlim_t kFdsPerCompile = 48;
+        rlim_t budget = rl.rlim_cur > kReserve ? (rl.rlim_cur - kReserve) / kFdsPerCompile : 1;
+        cap = std::min<unsigned>(cap, std::max<rlim_t>(1, budget));
+    }
+
+    // Explicit override for tuning/debug. Only a fully-parsed, in-range, nonzero value
+    // wins; anything malformed (sign, trailing junk, overflow, 0) keeps the fd-derived
+    // cap rather than silently disabling the gate (e.g. "-1" must not become UINT_MAX).
+    if (const char* s = std::getenv("TT_EMULE_JIT_COMPILE_JOBS")) {
+        errno = 0;
+        char* end = nullptr;
+        unsigned long v = std::strtoul(s, &end, 10);
+        if (end != s && *end == '\0' && errno == 0 && v > 0 && v <= std::numeric_limits<unsigned>::max()) {
+            cap = static_cast<unsigned>(v);
+        }
+    }
+    return std::max(1u, cap);
+}
+
+// Counting gate limiting concurrently-executing jit_compile_kernel calls to the
+// fd-safe cap above. Process-global so it also bounds the total across the several
+// jit_compile_pending calls a multi-chip mesh setup may run in parallel. Each
+// compile acquires a slot for the duration of its (fd-heavy) work and releases it
+// via RAII, so peak open fds stay bounded regardless of the kernel count.
+static std::counting_semaphore<>& compile_slots() {
+    static std::counting_semaphore<> slots(jit_compile_concurrency_cap());
+    return slots;
+}
+
 static void jit_compile_pending(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
@@ -1756,6 +1850,14 @@ static void jit_compile_pending(
                     std::string cache_path = disk_cache_so_path(key);
                     DeferredCompile dc_copy = dc;  // own a copy: the future may outlive this call's map
                     fut = std::async(std::launch::async, [dc_copy, cache_path]() {
+                              // Bound concurrent compiles to the fd-safe cap: a slot is
+                              // held for the whole (fd-heavy) compile and released even if
+                              // it throws. std::async spawns the thread eagerly, but the
+                              // fd-consuming work waits here until a slot frees.
+                              compile_slots().acquire();
+                              struct SlotGuard {
+                                  ~SlotGuard() { compile_slots().release(); }
+                              } slot_guard;
                               std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid()) + "." +
                                                      std::to_string(g_compile_tmp_seq.fetch_add(1));
                               auto fn = jit_compile_kernel(
