@@ -571,19 +571,16 @@ def _llm_depth_env(model_root: Path, cov: int) -> dict:
     return {str(k): str(v) for k, v in d.items() if str(k)}
 
 
-_ANCHOR_KEYS = ("flash", "sdpa", "attention", "attn", "mla")
-
-
 def _layer_signal(seq) -> int:
     ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
     if not ops:
         return 0
     from collections import Counter
 
-    names = Counter(o.split("(", 1)[0].strip().lower() for o in ops)
-    anchor = sum(n for name, n in names.items() if any(k in name for k in _ANCHOR_KEYS))
-    if anchor > 0:
-        return anchor
+    counts = Counter(ops)
+    repeats = [c for c in counts.values() if c > 1]
+    if repeats:
+        return Counter(repeats).most_common(1)[0][0]
     blk = _blocks_ran(seq)
     if blk > 0:
         return blk
