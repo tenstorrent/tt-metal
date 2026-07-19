@@ -909,9 +909,16 @@ def _stub_import_path(demo_dir: Path, component_safe: str, repo_root: Path) -> s
     return ".".join(rel.with_suffix("").parts)
 
 
+_FORWARD_TORCH_CALL_RE = re.compile(r"\btorch\.[A-Za-z_]\w*\s*\(")
+
+
 def _stub_body_is_native(stub_path: Path) -> bool:
-    """True iff no forward-method delegates to torch fallback. Helper defs of the same names are
-    tolerated. Does NOT check for a snapshot — compose with the caller's snapshot check."""
+    """True iff the stub is a PURE ttnn forward: it must not delegate to the torch reference AND its
+    compute path (every method except __init__) must not call torch (`torch.<fn>(`) or read data off the
+    device (`.to_torch(`). Weight prep in __init__ (torch.cat/detach/float staged via ttnn.from_torch) is
+    allowed; isinstance/type refs are not calls and are allowed. Host reimplementation — torch math or a
+    device->host readback anywhere in the forward — is rejected even at PCC 1.0. Does NOT check for a
+    snapshot — compose with the caller's snapshot check."""
     if not stub_path.is_file():
         return False
     try:
@@ -1007,7 +1014,7 @@ def _stub_body_is_native(stub_path: Path) -> bool:
             if seg:
                 compute.append(seg)
     compute_src = "\n".join(compute)
-    if re.search(r"\.to_torch\s*\(", compute_src) and re.search(r"\btorch\.[A-Za-z_]\w*\s*\(", compute_src):
+    if _FORWARD_TORCH_CALL_RE.search(compute_src) or re.search(r"\.to_torch\s*\(", compute_src):
         return False
     return True
 
