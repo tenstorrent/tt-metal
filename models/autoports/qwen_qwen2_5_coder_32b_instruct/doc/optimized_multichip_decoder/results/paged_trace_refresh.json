@@ -1,0 +1,21 @@
+{
+  "advanced_position": 65,
+  "mesh": [
+    1,
+    4
+  ],
+  "original_position": 64,
+  "page_block_size": 64,
+  "page_table_change": "reverse the unused second physical page across all 32 users",
+  "pcc": {
+    "advanced_position_key": 1.0,
+    "advanced_position_output": 1.0,
+    "advanced_position_value": 1.0,
+    "original_table_output": 1.0,
+    "refreshed_table_key": 1.0,
+    "refreshed_table_output": 1.0,
+    "refreshed_table_value": 1.0
+  },
+  "policy": "attention_bfp8_lofi_mlp_bfp4_lofi",
+  "prefill_sequence_length": 64
+}

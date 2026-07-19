@@ -1,0 +1,7 @@
+
+check_eth_status.py:
+  pass
+    Device 0: Skipping: noc_read(): incompatible function arguments. The following argument types are supported:\n    1. noc_read(self, core_x: int, core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview
+    Device 1: Skipping: noc_read(): incompatible function arguments. The following argument types are supported:\n    1. noc_read(self, core_x: int, core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview
+    Device 2: Skipping: noc_read(): incompatible function arguments. The following argument types are supported:\n    1. noc_read(self, core_x: int, core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview
+    Device 3: Skipping: noc_read(): incompatible function arguments. The following argument types are supported:\n    1. noc_read(self, core_x: int, core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview

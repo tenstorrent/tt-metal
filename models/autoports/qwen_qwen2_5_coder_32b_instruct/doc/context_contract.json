@@ -20,7 +20,7 @@
       "post_workspace_l1_snapshot_allocated_bytes_per_device": 901120,
       "post_workspace_l1_snapshot_free_bytes_per_device": 159864320,
       "largest_contiguous_l1_bytes_free_per_core": 1453312,
-      "artifact": "doc/multichip_decoder/results/capacity_seq12224.json"
+      "artifact": "doc/optimized_multichip_decoder/results/capacity_seq12224.json"
     },
     "adjacent_failing_probe": {
       "sequence_length": 12225,
@@ -31,7 +31,7 @@
       "requested_bytes_per_bank": 200802304,
       "free_bytes_per_bank": 191272064,
       "largest_free_block_bytes_per_bank": 191272064,
-      "artifact": "doc/multichip_decoder/results/capacity_seq12225.json"
+      "artifact": "doc/optimized_multichip_decoder/results/capacity_seq12225.json"
     },
     "advertised_context_impossibility": {
       "all_layer_local_bfp8_kv_bytes_per_device": 36507222016,
@@ -95,11 +95,12 @@
     "multichip_precision_policy": {
       "mesh": "1x4 FABRIC_1D_RING, TP=4 on mesh axis 1, two links",
       "stack_residual": "BF16 hidden-width-sharded, 1280 logical channels/device",
-      "local_attention": "10 Q heads and 2 KV heads/device; BFP8/HiFi2 weights; QKV local logical 1792 padded with 256 inert channels to physical 2048",
-      "local_mlp": "6912 logical intermediate channels/device padded with 256 inert channels to physical 7168; BFP4/LoFi gate, up, and down weights",
+      "local_attention": "10 Q heads and 2 KV heads/device; BFP8/LoFi weights; QKV local logical 1792 padded with 256 inert channels to physical 2048; decode SDPA uses an 8x4 grid and owns the internal GQA head padding",
+      "local_mlp": "6912 logical intermediate channels/device padded with 256 inert channels to physical 7168; one packed BFP4/LoFi gate+up projection on 32 cores and a BFP4/LoFi down projection on 16 cores",
       "kv_cache": "BFP8, 2 local KV heads/device for both contiguous and paged cache",
-      "collectives": "BF16 Ring; two all-gathers and two reduce-scatters/layer; two-link persistent decode buffers",
-      "decode_grids": "20-core local residual, 16-core full norm/QKV/gate/up/down, independently tuned 8-core O projection",
+      "collectives": "BF16 Ring; two hidden all-gathers and two row-parallel reduce-scatters/layer; two-link persistent decode buffers shared across sequential layers; no layer-boundary gather, reduce, or reshard",
+      "decode_residual_contract": "BF16 TILE L1 WIDTH_SHARDED hidden-width fracture, logical [1,32,1,1280] per rank; the canonical consumer view is [1,1,32,1280] on a 10x2 grid with [32,64] shards; public-view reshape metadata is ignored when physical placement is identical",
+      "decode_grids": "20-core local residual, 16-core full norm/QKV/down, 32-core packed gate+up, independently tuned 8-core O projection, and 8x4 SDPA",
       "prefill_program": "10x10 grid with in0-block limit 10; retained after a measured 8x10 and block-limit 10/16/20/32 sweep, with larger candidates rejected by latency or exact L1 circular-buffer limits",
       "prefill_memory": "packed gate/up; projection chunks are at most 640 rows; row-parallel O/down chunks reduce-scatter before concatenation"
     }

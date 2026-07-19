@@ -1,0 +1,264 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL'.
+Using operations until 'PERF_PREFILL_END'.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                   Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  953    0.7 %         ReshapeViewDeviceOperation                      1        44 μs                  110                                                       BF16 => BF16
+  955    6.7 %         AllGatherAsyncDeviceOperation                   0        83 μs        346 μs     12                                                       BF16 => BF16
+  960    1.2 %         LayerNormDeviceOperation                        2        75 μs          1 μs     17                                                 BF16, BF16 => BF16
+  966    1.1 %   SLOW  MatmulDeviceOperation 544 x 5120 x 2048         0        72 μs          1 μs     90  253 GB/s  49.4 %  157.8 TFLOPs   31.7 %  LoFi BF16 x BFP8 => BF16
+  970    0.5 %         BinaryNgDeviceOperation                         0        17 μs         17 μs    110                                                 BF16, BF16 => BF16
+  974    0.9 %         SliceDeviceOperation                            0        14 μs         47 μs    110                                                       BF16 => BF16
+  976    1.7 %         ReshapeViewDeviceOperation                      2        75 μs         35 μs    110                                                       BF16 => BF16
+  981    0.4 %         NlpCreateHeadsDeviceOperation                   1        28 μs          1 μs     32                                                       BF16 => BF16
+  986    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      4                                                       BF16 => BF16
+  988    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      4                                                       BF16 => BF16
+  993    1.6 %         RotaryEmbeddingDeviceOperation                  1        54 μs         48 μs    110                                                 BF16, BF16 => BF16
+  997    0.3 %         RotaryEmbeddingDeviceOperation                  1        18 μs          0 μs     64                                                 BF16, BF16 => BF16
+ 1001    0.4 %         SliceDeviceOperation                            1        16 μs         10 μs    110                                                       BF16 => BF16
+ 1004    0.5 %         SliceDeviceOperation                            2         3 μs         32 μs    110                                                       BF16 => BF16
+ 1009    0.4 %         SliceDeviceOperation                            1         1 μs         26 μs      8                                                       BF16 => BF16
+ 1013    0.6 %         CloneOperation                                  1         1 μs         36 μs      8                                                       BF16 => BFP8
+ 1015    0.5 %         UpdateKVCacheOperation                          3         2 μs         31 μs      2                                                 BFP8, BFP8 => BFP8
+ 1021    0.5 %         SliceDeviceOperation                            1         1 μs         32 μs      8                                                       BF16 => BF16
+ 1025    0.4 %         CloneOperation                                  1         1 μs         25 μs      8                                                       BF16 => BFP8
+ 1030    0.2 %         UpdateKVCacheOperation                          0         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1034    0.8 %         SliceDeviceOperation                            0         1 μs         52 μs      8                                                       BF16 => BF16
+ 1037    0.4 %         CloneOperation                                  1         1 μs         24 μs      8                                                       BF16 => BFP8
+ 1041    0.2 %         UpdateKVCacheOperation                          1         2 μs         14 μs      2                                                 BFP8, BFP8 => BFP8
+ 1043    0.4 %         SliceDeviceOperation                            3         1 μs         27 μs      8                                                       BF16 => BF16
+ 1050    0.3 %         CloneOperation                                  0         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1051    0.2 %         UpdateKVCacheOperation                          3         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1056    0.4 %         SliceDeviceOperation                            2         1 μs         26 μs      8                                                       BF16 => BF16
+ 1059    0.4 %         CloneOperation                                  3         1 μs         26 μs      8                                                       BF16 => BFP8
+ 1066    0.2 %         UpdateKVCacheOperation                          0         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1069    0.4 %         SliceDeviceOperation                            1         1 μs         25 μs      8                                                       BF16 => BF16
+ 1071    0.3 %         CloneOperation                                  3         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1075    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1079    0.4 %         SliceDeviceOperation                            3         1 μs         24 μs      8                                                       BF16 => BF16
+ 1086    0.3 %         CloneOperation                                  0         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1087    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1091    0.4 %         SliceDeviceOperation                            3         1 μs         24 μs      8                                                       BF16 => BF16
+ 1095    0.3 %         CloneOperation                                  3         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1100    0.2 %         UpdateKVCacheOperation                          2         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1106    0.4 %         SliceDeviceOperation                            0         1 μs         26 μs      8                                                       BF16 => BF16
+ 1107    0.3 %         CloneOperation                                  3         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1112    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1116    0.4 %         SliceDeviceOperation                            2         1 μs         24 μs      8                                                       BF16 => BF16
+ 1122    0.3 %         CloneOperation                                  0         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1125    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1127    0.4 %         SliceDeviceOperation                            3         1 μs         24 μs      8                                                       BF16 => BF16
+ 1131    0.3 %         CloneOperation                                  3         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1138    0.2 %         UpdateKVCacheOperation                          0         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1139    0.4 %         SliceDeviceOperation                            3         1 μs         25 μs      8                                                       BF16 => BF16
+ 1146    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1148    0.2 %         UpdateKVCacheOperation                          2         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1154    0.4 %         SliceDeviceOperation                            0         1 μs         24 μs      8                                                       BF16 => BF16
+ 1156    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1160    0.2 %         UpdateKVCacheOperation                          2         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1164    0.4 %         SliceDeviceOperation                            2         1 μs         26 μs      8                                                       BF16 => BF16
+ 1169    0.3 %         CloneOperation                                  1         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1174    0.2 %         UpdateKVCacheOperation                          0         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1178    0.4 %         SliceDeviceOperation                            0         1 μs         24 μs      8                                                       BF16 => BF16
+ 1182    0.3 %         CloneOperation                                  0         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1184    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1188    0.4 %         SliceDeviceOperation                            2         1 μs         24 μs      8                                                       BF16 => BF16
+ 1192    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1197    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1201    0.4 %         SliceDeviceOperation                            1         1 μs         25 μs      8                                                       BF16 => BF16
+ 1204    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1207    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1214    0.4 %         SliceDeviceOperation                            0         1 μs         24 μs      8                                                       BF16 => BF16
+ 1215    0.3 %         CloneOperation                                  3         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1221    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1224    0.4 %         SliceDeviceOperation                            2         1 μs         23 μs      8                                                       BF16 => BF16
+ 1227    0.4 %         CloneOperation                                  3         1 μs         23 μs      8                                                       BF16 => BFP8
+ 1232    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1236    0.4 %         SliceDeviceOperation                            2         1 μs         23 μs      8                                                       BF16 => BF16
+ 1242    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1243    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1247    0.4 %         SliceDeviceOperation                            3         1 μs         24 μs      8                                                       BF16 => BF16
+ 1254    0.3 %         CloneOperation                                  0         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1257    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1260    0.4 %         SliceDeviceOperation                            2         1 μs         26 μs      8                                                       BF16 => BF16
+ 1264    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1270    0.2 %         UpdateKVCacheOperation                          0         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1274    0.4 %         SliceDeviceOperation                            0         1 μs         24 μs      8                                                       BF16 => BF16
+ 1276    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1282    0.2 %         UpdateKVCacheOperation                          0         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1285    0.4 %         SliceDeviceOperation                            1         1 μs         23 μs      8                                                       BF16 => BF16
+ 1288    0.4 %         CloneOperation                                  2         1 μs         23 μs      8                                                       BF16 => BFP8
+ 1291    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1298    0.4 %         SliceDeviceOperation                            0         1 μs         25 μs      8                                                       BF16 => BF16
+ 1300    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1303    0.2 %         UpdateKVCacheOperation                          3         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1307    0.4 %         SliceDeviceOperation                            3         1 μs         24 μs      8                                                       BF16 => BF16
+ 1311    0.3 %         CloneOperation                                  3         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1317    0.3 %         UpdateKVCacheOperation                          1         2 μs         15 μs      2                                                 BFP8, BFP8 => BFP8
+ 1320    0.4 %         SliceDeviceOperation                            2         1 μs         25 μs      8                                                       BF16 => BF16
+ 1323    0.3 %         CloneOperation                                  3         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1329    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1333    0.4 %         SliceDeviceOperation                            1         1 μs         23 μs      8                                                       BF16 => BF16
+ 1335    0.4 %         CloneOperation                                  3         1 μs         22 μs      8                                                       BF16 => BFP8
+ 1341    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1345    0.4 %         SliceDeviceOperation                            1         1 μs         23 μs      8                                                       BF16 => BF16
+ 1350    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1353    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1357    0.4 %         SliceDeviceOperation                            1         1 μs         24 μs      8                                                       BF16 => BF16
+ 1360    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1364    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1369    0.4 %         SliceDeviceOperation                            1         1 μs         23 μs      8                                                       BF16 => BF16
+ 1374    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1377    0.2 %         UpdateKVCacheOperation                          1         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1381    0.4 %         SliceDeviceOperation                            1         1 μs         24 μs      8                                                       BF16 => BF16
+ 1384    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1388    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1392    0.4 %         SliceDeviceOperation                            2         1 μs         22 μs      8                                                       BF16 => BF16
+ 1396    0.3 %         CloneOperation                                  2         1 μs         18 μs      8                                                       BF16 => BFP8
+ 1399    0.2 %         UpdateKVCacheOperation                          3         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1405    0.3 %         SliceDeviceOperation                            1         1 μs         21 μs      8                                                       BF16 => BF16
+ 1407    0.3 %         CloneOperation                                  3         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1412    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1418    0.3 %         SliceDeviceOperation                            0         1 μs         19 μs      8                                                       BF16 => BF16
+ 1422    0.3 %         CloneOperation                                  0         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1424    0.2 %         UpdateKVCacheOperation                          2         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1427    0.3 %         SliceDeviceOperation                            3         1 μs         18 μs      8                                                       BF16 => BF16
+ 1431    0.3 %         CloneOperation                                  3         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1436    0.3 %         UpdateKVCacheOperation                          2         2 μs         15 μs      2                                                 BFP8, BFP8 => BFP8
+ 1442    0.3 %         SliceDeviceOperation                            0         1 μs         18 μs      8                                                       BF16 => BF16
+ 1444    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1449    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1452    0.3 %         SliceDeviceOperation                            2         1 μs         17 μs      8                                                       BF16 => BF16
+ 1455    0.3 %         CloneOperation                                  3         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1461    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1464    0.3 %         SliceDeviceOperation                            2         1 μs         18 μs      8                                                       BF16 => BF16
+ 1468    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1473    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1477    0.3 %         SliceDeviceOperation                            1         1 μs         19 μs      8                                                       BF16 => BF16
+ 1479    0.3 %         CloneOperation                                  3         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1483    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1489    0.3 %         SliceDeviceOperation                            1         1 μs         17 μs      8                                                       BF16 => BF16
+ 1491    0.3 %         CloneOperation                                  3         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1496    0.2 %         UpdateKVCacheOperation                          2         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1502    0.3 %         SliceDeviceOperation                            0         1 μs         18 μs      8                                                       BF16 => BF16
+ 1506    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1507    0.2 %         UpdateKVCacheOperation                          3         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1512    0.3 %         SliceDeviceOperation                            2         1 μs         19 μs      8                                                       BF16 => BF16
+ 1518    0.4 %         CloneOperation                                  0         1 μs         23 μs      8                                                       BF16 => BFP8
+ 1519    0.2 %         UpdateKVCacheOperation                          3         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1524    0.3 %         SliceDeviceOperation                            2         1 μs         20 μs      8                                                       BF16 => BF16
+ 1528    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1532    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1535    0.3 %         SliceDeviceOperation                            3         1 μs         20 μs      8                                                       BF16 => BF16
+ 1539    0.3 %         CloneOperation                                  3         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1545    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1550    0.3 %         SliceDeviceOperation                            0         1 μs         19 μs      8                                                       BF16 => BF16
+ 1551    0.3 %         CloneOperation                                  3         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1555    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1562    0.3 %         SliceDeviceOperation                            0         1 μs         18 μs      8                                                       BF16 => BF16
+ 1566    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1567    0.2 %         UpdateKVCacheOperation                          3         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1573    0.3 %         SliceDeviceOperation                            1         1 μs         20 μs      8                                                       BF16 => BF16
+ 1575    0.3 %         CloneOperation                                  3         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1581    0.2 %         UpdateKVCacheOperation                          1         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1585    0.3 %         SliceDeviceOperation                            1         1 μs         19 μs      8                                                       BF16 => BF16
+ 1588    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1593    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1595    0.3 %         SliceDeviceOperation                            3         1 μs         19 μs      8                                                       BF16 => BF16
+ 1601    0.3 %         CloneOperation                                  1         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1605    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1607    0.3 %         SliceDeviceOperation                            3         1 μs         19 μs      8                                                       BF16 => BF16
+ 1612    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1618    0.2 %         UpdateKVCacheOperation                          0         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1621    0.3 %         SliceDeviceOperation                            1         1 μs         18 μs      8                                                       BF16 => BF16
+ 1625    0.3 %         CloneOperation                                  1         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1628    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1634    0.3 %         SliceDeviceOperation                            0         1 μs         22 μs      8                                                       BF16 => BF16
+ 1638    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1642    0.2 %         UpdateKVCacheOperation                          0         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1644    0.3 %         SliceDeviceOperation                            2         1 μs         19 μs      8                                                       BF16 => BF16
+ 1648    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1652    0.2 %         UpdateKVCacheOperation                          2         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1655    0.3 %         SliceDeviceOperation                            3         1 μs         21 μs      8                                                       BF16 => BF16
+ 1660    0.3 %         CloneOperation                                  2         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1666    0.2 %         UpdateKVCacheOperation                          0         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1669    0.3 %         SliceDeviceOperation                            1         1 μs         19 μs      8                                                       BF16 => BF16
+ 1673    0.3 %         CloneOperation                                  1         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1678    0.2 %         UpdateKVCacheOperation                          0         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1682    0.3 %         SliceDeviceOperation                            0         1 μs         19 μs      8                                                       BF16 => BF16
+ 1685    0.3 %         CloneOperation                                  1         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1688    0.2 %         UpdateKVCacheOperation                          2         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1691    0.3 %         SliceDeviceOperation                            3         1 μs         20 μs      8                                                       BF16 => BF16
+ 1696    0.3 %         CloneOperation                                  2         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1700    0.2 %         UpdateKVCacheOperation                          2         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1703    0.3 %         SliceDeviceOperation                            3         1 μs         19 μs      8                                                       BF16 => BF16
+ 1709    0.3 %         CloneOperation                                  1         1 μs         19 μs      8                                                       BF16 => BFP8
+ 1712    0.2 %         UpdateKVCacheOperation                          2         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1715    0.3 %         SliceDeviceOperation                            3         1 μs         19 μs      8                                                       BF16 => BF16
+ 1721    0.3 %         CloneOperation                                  1         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1725    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1728    0.3 %         SliceDeviceOperation                            2         1 μs         20 μs      8                                                       BF16 => BF16
+ 1733    0.4 %         CloneOperation                                  1         1 μs         22 μs      8                                                       BF16 => BFP8
+ 1736    0.2 %         UpdateKVCacheOperation                          2         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1742    0.3 %         SliceDeviceOperation                            0         1 μs         19 μs      8                                                       BF16 => BF16
+ 1746    0.4 %         CloneOperation                                  0         1 μs         22 μs      8                                                       BF16 => BFP8
+ 1747    0.2 %         UpdateKVCacheOperation                          3         2 μs         13 μs      2                                                 BFP8, BFP8 => BFP8
+ 1751    0.3 %         SliceDeviceOperation                            3         1 μs         20 μs      8                                                       BF16 => BF16
+ 1755    0.3 %         CloneOperation                                  3         1 μs         21 μs      8                                                       BF16 => BFP8
+ 1762    0.2 %         UpdateKVCacheOperation                          0         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1763    0.3 %         SliceDeviceOperation                            3         1 μs         19 μs      8                                                       BF16 => BF16
+ 1770    0.3 %         CloneOperation                                  0         1 μs         20 μs      8                                                       BF16 => BFP8
+ 1772    0.2 %         UpdateKVCacheOperation                          2         2 μs         14 μs      2                                                 BFP8, BFP8 => BFP8
+ 1775    1.3 %         SDPAOperation                                   3        28 μs         55 μs     64                                                 BF16, BF16 => BF16
+ 1779    0.6 %         NLPConcatHeadsDeviceOperation                   3        21 μs         16 μs     32                                                       BF16 => BF16
+ 1786    1.0 %         ReshapeViewDeviceOperation                      0        44 μs         21 μs    110                                                       BF16 => BF16
+ 1789    1.2 %   SLOW  MatmulDeviceOperation 544 x 1280 x 5120         1        57 μs         19 μs     90  237 GB/s  46.2 %  124.8 TFLOPs   25.1 %  LoFi BF16 x BFP8 => BF16
+ 1791    4.1 %         ReduceScatterMinimalAsyncDeviceOperation        0        87 μs        178 μs     12                                                       BF16 => BF16
+ 1797    0.2 %         BinaryNgDeviceOperation                         1        12 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1799    2.5 %         AllGatherAsyncDeviceOperation                   0        81 μs         80 μs     12                                                       BF16 => BF16
+ 1805    1.2 %         LayerNormDeviceOperation                        1        75 μs          1 μs     17                                                 BF16, BF16 => BF16
+ 1809    5.5 %   SLOW  MatmulDeviceOperation 544 x 5120 x 14336        1       356 μs          1 μs     90  162 GB/s  31.7 %  224.1 TFLOPs   45.0 %  LoFi BF16 x BFP4 => BF16
+ 1814    0.6 %         SliceDeviceOperation                            0        41 μs          1 μs    110                                                       BF16 => BF16
+ 1817    0.7 %         SliceDeviceOperation                            1        42 μs          1 μs    110                                                       BF16 => BF16
+ 1820    1.0 %         BinaryNgDeviceOperation                         2        63 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1823    2.9 %   SLOW  MatmulDeviceOperation 544 x 7168 x 5120         3       185 μs          1 μs     90  171 GB/s  33.5 %  215.8 TFLOPs   43.4 %  LoFi BF16 x BFP4 => BF16
+ 1827    1.4 %         ReduceScatterMinimalAsyncDeviceOperation        0        90 μs          1 μs     12                                                       BF16 => BF16
+ 1833    0.2 %         BinaryNgDeviceOperation                         1        12 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1836    0.8 %         ReshapeViewDeviceOperation                      2        49 μs          0 μs    110                                                       BF16 => BF16
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         222 device ops, 0 host ops, 0 signposts               1,992 μs      4,443 μs          61 GB/s  11.9 %
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UpdateKVCacheOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReduceScatterMinimalAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                          Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+33.67 %  MatmulDeviceOperation (in0:dram_interleaved)                           670.80 μs         4      Compute    25.07 %    45.04 %     36.29 %     9.55 %              41.44 %
+10.60 %  ReshapeViewDeviceOperation (in0:dram_interleaved)                      211.15 μs         4        Other
+ 8.90 %  ReduceScatterMinimalAsyncDeviceOperation (in0:dram_interleaved)        177.25 μs         2        Other
+ 8.74 %  SliceDeviceOperation (in0:dram_interleaved)                            174.17 μs        71           TM
+ 8.24 %  AllGatherAsyncDeviceOperation (in0:dram_interleaved)                   164.11 μs         2        Other
+ 7.50 %  LayerNormDeviceOperation (in0:dram_interleaved)                        149.40 μs         2      Compute
+ 6.49 %  UpdateKVCacheOperation (in0:dram_interleaved)                          129.29 μs        64        Other
+ 5.19 %  BinaryNgDeviceOperation (in0:dram_interleaved)                         103.49 μs         4      Compute
+ 3.58 %  RotaryEmbeddingDeviceOperation (in0:dram_interleaved)                   71.40 μs         2        Other
+ 3.25 %  CloneOperation (in0:dram_interleaved)                                   64.68 μs        64           DM
+ 1.41 %  SDPAOperation (in0:dram_interleaved)                                    28.13 μs         1      Compute
+ 1.40 %  NlpCreateHeadsDeviceOperation (in0:dram_interleaved)                    27.80 μs         1           TM
+ 1.03 %  NLPConcatHeadsDeviceOperation (in0:dram_interleaved)                    20.51 μs         1           TM
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Writing CSV stacked report to models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/optimized_multichip_decoder/tracy/layer32/prefill_summary.csv.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/optimized_multichip_decoder/tracy/layer32/prefill_summary.csv.png

@@ -1,0 +1,17 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/optimized_multichip_decoder/tracy/layer32/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 23.7% (121 GB/s)
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReduceScatterMinimalAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/optimized_multichip_decoder/tracy/layer32/decode_perf_report_stacked.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/optimized_multichip_decoder/tracy/layer32/decode_perf_report_stacked.png

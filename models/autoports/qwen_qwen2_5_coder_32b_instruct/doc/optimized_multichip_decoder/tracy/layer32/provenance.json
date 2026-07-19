@@ -1,0 +1,28 @@
+{
+  "stage": "optimized-multichip-decoder",
+  "capture_date_utc": "2026-07-19",
+  "source_head_at_capture": "860d7d688063c51fcc41a49c9d7611a1f761d535",
+  "branch": "mvasiljevic/model/qwen-qwen2.5-coder-32b-instruct",
+  "model": "Qwen/Qwen2.5-Coder-32B-Instruct",
+  "weights_revision": "381fc969f78efac66bc87ff7ddeadb7e73c218a7",
+  "representative_layer": 32,
+  "hardware": "four Blackhole p300c devices, MeshShape(1,4), FABRIC_1D_RING",
+  "command": "QWEN2_5_CODER_32B_REAL_WEIGHT_DIR=<revision-path> QWEN2_5_CODER_32B_MULTICHIP_RUN_PROFILE=1 python_env/bin/python -m tracy -r -p -v -o models/autoports/qwen_qwen2_5_coder_32b_instruct/doc/optimized_multichip_decoder/tracy/layer32 -n final_default -m pytest models/autoports/qwen_qwen2_5_coder_32b_instruct/tests/test_multichip_decoder.py::test_profile_selected_multichip_decoder -q -s",
+  "signpost_windows": [
+    "PERF_PREFILL..PERF_PREFILL_END",
+    "PERF_DECODE..PERF_DECODE_END"
+  ],
+  "raw_capture": {
+    "ops_perf_results_sha256": "ab491bcae098f9883491ee534a98609a8e7445a048152f46bd44a25e1f77cc6d",
+    "profile_log_device_sha256": "26ecfa9dd8dad16ae3f1440e04dbddfbffb31fe83167380046ae109508966122",
+    "tracy_ops_times_sha256": "ae0aaf068d766b074a67615e8fa838b1c9943dfa0332766574869a15f2a058d6",
+    "retention": "Raw profiler files were intentionally omitted from git after compact tt-perf-report tables were generated."
+  },
+  "compact_outputs": {
+    "decode_perf_report.csv": "008e0ac348b9a4ade60edb9e9ed5b88a16067eaf7ddc31b5b41df3bf47e5d080",
+    "decode_perf_report.txt": "c100ec11221a4cdebedea0346c030af1c0bb81b65eddd4661c41c10e4f3be3b9",
+    "prefill_perf_report.csv": "2a9866b09adf1773abe6211b8d2a1aadd0b43e63acd20884ba1b200c565d0504",
+    "prefill_perf_report.txt": "d66969b1abc277cb478ed796cbac0f25d59efd31ddb1a8f6501356e918c9ff0c"
+  },
+  "interpretation": "The merged four-device device-work totals are 595 us for decode and 1992 us for prefill. Host op-to-op totals in this one-shot profiler capture include cross-device/signpost merge gaps and are not the end-to-end headline; the warmed trace benchmark is authoritative."
+}
