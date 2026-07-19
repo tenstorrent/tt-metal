@@ -48,7 +48,12 @@ def _optional_env_int(name: str) -> int | None:
 
 
 def _write_result(name: str, payload: dict) -> Path:
-    output_dir = Path(os.getenv(RESULTS_DIR_ENV, Path(__file__).resolve().parents[1] / "doc/multichip_decoder/results"))
+    output_dir = Path(
+        os.getenv(
+            RESULTS_DIR_ENV,
+            Path(__file__).resolve().parents[1] / "doc/optimized_multichip_decoder/results",
+        )
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     decoder_path = Path(__file__).resolve().parents[1] / "tt/multichip_decoder.py"
     test_path = Path(__file__).resolve()
@@ -209,7 +214,9 @@ def test_multichip_synthetic_non_aligned_prefill_matches_hf(mesh_device):
         "multichip local-head value cache",
     )
 
-    stacked_reference, _, _, _ = _reference_layer(reference_layer, reference, config)
+    stacked_reference, _, _, stacked_reference_cache = _reference_layer(
+        reference_layer, reference, config
+    )
     stacked_key, stacked_value = model.allocate_kv_cache()
     stacked_output = model.prefill_forward(output, stacked_key, stacked_value)
     ttnn.synchronize_device(mesh_device)
@@ -258,6 +265,30 @@ def test_multichip_synthetic_non_aligned_prefill_matches_hf(mesh_device):
         0.98,
         "multichip conservative synthetic decode",
     )
+    for shard in ttnn.get_device_tensors(decode_output):
+        assert shard.is_sharded()
+        assert shard.memory_config().buffer_type == ttnn.BufferType.L1
+    stacked_expected_decode, _, _, _ = _reference_layer(
+        reference_layer,
+        expected_decode,
+        config,
+        start_pos=seq_len,
+        cache=stacked_reference_cache,
+    )
+    stacked_decode_output = model.decode_forward(
+        decode_output,
+        stacked_key,
+        stacked_value,
+        current_pos=seq_len,
+    )
+    ttnn.synchronize_device(mesh_device)
+    _assert_pcc(
+        stacked_expected_decode,
+        _compose_hidden(stacked_decode_output, mesh_device),
+        0.98,
+        "direct TP-sharded decoder-to-decoder decode contract",
+    )
+    ttnn.deallocate(stacked_decode_output, True)
 
     permutation = torch.arange(2 * EMITTED_BATCH - 1, -1, -1, dtype=torch.int32)
     host_page_table = permutation.reshape(EMITTED_BATCH, 2)
@@ -630,7 +661,10 @@ def test_multichip_real_layer_matches_optimized_single_chip_baseline(mesh_device
         fault_patterns = ("error", "assert", "hang", "stuck", "timeout")
         matches = [pattern for pattern in fault_patterns if pattern in watcher_text.lower()]
         assert not matches, f"watcher fault signatures: {matches}"
-        retained_watcher_path = Path(__file__).resolve().parents[1] / "doc/multichip_decoder/results/watcher_clean.log"
+        retained_watcher_path = (
+            Path(__file__).resolve().parents[1]
+            / "doc/optimized_multichip_decoder/results/watcher_clean.log"
+        )
         retained_watcher_path.write_text(watcher_text)
         _write_result(
             "watcher_clean.json",
@@ -1040,13 +1074,25 @@ def test_multichip_warmed_prefill_and_traced_decode(mesh_device):
         decode_qkv_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_QKV_CORES"),
         decode_o_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_O_CORES"),
         decode_gate_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_GATE_CORES"),
+        decode_packed_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_PACKED_CORES"),
         decode_qkv_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_QKV_IN0"),
         decode_o_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_O_IN0"),
         decode_gate_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_GATE_IN0"),
+        decode_packed_in0_block_w_limit=(
+            _optional_env_int("QWEN3_32B_MULTICHIP_PACKED_IN0")
+            or _optional_env_int("QWEN3_32B_MULTICHIP_GATE_IN0")
+        ),
         decode_down_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_DOWN_IN0"),
         ccl_payload_dtype=ccl_dtype,
         use_persistent_decode_collectives=use_persistent_collectives,
         use_fused_decode_reduce_scatter=use_fused_reduce_scatter,
+        use_packed_mlp=os.getenv("QWEN3_32B_MULTICHIP_PACKED_MLP", "1") == "1",
+        packed_mlp_split_layout=os.getenv("QWEN3_32B_MULTICHIP_PACKED_SPLIT", "dram"),
+        keep_decode_output_sharded=os.getenv("QWEN3_32B_MULTICHIP_KEEP_OUTPUT_SHARDED", "1") == "1",
+        use_distributed_decode_norm=os.getenv("QWEN3_32B_MULTICHIP_DISTRIBUTED_NORM", "0") == "1",
+        use_fused_decode_all_gather_matmul=os.getenv("QWEN3_32B_MULTICHIP_FUSED_AGMM", "0") == "1",
+        decode_matmul_mode=os.getenv("QWEN3_32B_MULTICHIP_DECODE_MATMUL_MODE", "dram_sharded"),
+        prefill_matmul_input_l1=os.getenv("QWEN3_32B_MULTICHIP_PREFILL_INPUT_L1", "0") == "1",
     )
     prefill_hidden, activation_metadata = _recorded_hidden(0, 17)
     decode_hidden, _ = _recorded_hidden(17, 1)
@@ -1166,9 +1212,14 @@ def test_profile_selected_multichip_decoder(mesh_device):
         decode_qkv_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_QKV_CORES"),
         decode_o_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_O_CORES"),
         decode_gate_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_GATE_CORES"),
+        decode_packed_target_cores=_optional_env_int("QWEN3_32B_MULTICHIP_PACKED_CORES"),
         decode_qkv_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_QKV_IN0"),
         decode_o_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_O_IN0"),
         decode_gate_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_GATE_IN0"),
+        decode_packed_in0_block_w_limit=(
+            _optional_env_int("QWEN3_32B_MULTICHIP_PACKED_IN0")
+            or _optional_env_int("QWEN3_32B_MULTICHIP_GATE_IN0")
+        ),
         decode_down_in0_block_w_limit=_optional_env_int("QWEN3_32B_MULTICHIP_DOWN_IN0"),
         ccl_payload_dtype={
             "bf16": ttnn.bfloat16,
@@ -1176,6 +1227,13 @@ def test_profile_selected_multichip_decoder(mesh_device):
         }[os.getenv("QWEN3_32B_MULTICHIP_CCL_DTYPE", "bf16")],
         use_persistent_decode_collectives=os.getenv("QWEN3_32B_MULTICHIP_PERSISTENT_CCL", "1") == "1",
         use_fused_decode_reduce_scatter=os.getenv("QWEN3_32B_MULTICHIP_FUSED_RS", "0") == "1",
+        use_packed_mlp=os.getenv("QWEN3_32B_MULTICHIP_PACKED_MLP", "1") == "1",
+        packed_mlp_split_layout=os.getenv("QWEN3_32B_MULTICHIP_PACKED_SPLIT", "dram"),
+        keep_decode_output_sharded=os.getenv("QWEN3_32B_MULTICHIP_KEEP_OUTPUT_SHARDED", "1") == "1",
+        use_distributed_decode_norm=os.getenv("QWEN3_32B_MULTICHIP_DISTRIBUTED_NORM", "0") == "1",
+        use_fused_decode_all_gather_matmul=os.getenv("QWEN3_32B_MULTICHIP_FUSED_AGMM", "0") == "1",
+        decode_matmul_mode=os.getenv("QWEN3_32B_MULTICHIP_DECODE_MATMUL_MODE", "dram_sharded"),
+        prefill_matmul_input_l1=os.getenv("QWEN3_32B_MULTICHIP_PREFILL_INPUT_L1", "0") == "1",
     )
     prefill_hidden, activation_metadata = _recorded_hidden(0, 17)
     decode_hidden, _ = _recorded_hidden(17, 1)
@@ -1185,8 +1243,10 @@ def test_profile_selected_multichip_decoder(mesh_device):
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(warm, True)
     signpost(header="MULTICHIP_PREFILL")
+    start = time.perf_counter()
     profile_prefill = model.prefill_forward(stable_prefill, key_cache, value_cache)
     ttnn.synchronize_device(mesh_device)
+    profiled_prefill_wall_ms = (time.perf_counter() - start) * 1000.0
     signpost(header="MULTICHIP_PREFILL_END")
 
     stable_decode = _tp_hidden(decode_hidden, mesh_device)
@@ -1230,6 +1290,7 @@ def test_profile_selected_multichip_decoder(mesh_device):
             "sequence_length": 17,
             "decode_position": 17,
             "trace_replays": 3,
+            "profiled_prefill_wall_ms": profiled_prefill_wall_ms,
             "profiled_wall_ms_per_replay": profiled_wall_ms_per_replay,
             "mesh_plan": model.mesh_plan_summary(),
         },

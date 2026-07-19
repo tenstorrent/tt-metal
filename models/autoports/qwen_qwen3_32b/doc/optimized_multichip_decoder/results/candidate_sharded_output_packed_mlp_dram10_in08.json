@@ -1,0 +1,421 @@
+{
+  "activation_kind": "prompt-derived HF layer-32 input",
+  "activation_metadata": {
+    "artifact_path": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_32b/doc/optimized_decoder/activations/layer32_prompt_inputs.pt",
+    "artifact_sha256": "03cd6658c365761d09a30b9f1d357bbd8b6daec6420eec72e3d95c4fe691ad3e",
+    "batch_policy": "repeat one prompt-derived HF boundary activation across 32 decoder slots",
+    "captured_boundary": "input_to_model.layers.32",
+    "checkpoint_revision": "9216db5781bf21249d130ec9da846c4624c16137",
+    "config_sha256": "855a9d23f97f8771c84280619ae156c8f73c9cd64a5d53a059125b4aecab12d4",
+    "dtype": "torch.bfloat16",
+    "index_sha256": "bed42c6c55274bc08a1f616bceb3bcb84b3f02cb6584c573bd18c6519291ecd0",
+    "model": "Qwen/Qwen3-32B",
+    "reference_tokens_sha256": "d705dc91bde379e29c9cad92b94d4e1eb9dfeae2aa1256c5d47618625a6e7da5",
+    "shape": [
+      1,
+      21,
+      5120
+    ],
+    "used_shards": {
+      "model-00001-of-00017.safetensors": "52562b2ff97b61764260273e71bf5b4cf8a66f569399398f26dec0300fcf1316",
+      "model-00002-of-00017.safetensors": "e26764b2c6878e3fb7198895fa833ec62838d84a19665e6abfbae43c6daf02b3",
+      "model-00003-of-00017.safetensors": "6c5ba7bed9c52bc121e75cbe8a7be46936d0006cc80f42a6d5886ed40b4c2a62",
+      "model-00004-of-00017.safetensors": "f736f6ac4d8c30866107fb1185a05b3c3cfce9717720082f466fa44e691bcec8",
+      "model-00005-of-00017.safetensors": "a52ed375c083209c54d42ac510afeb1fbb5af4f193be2dc7d103f665a0f212d3",
+      "model-00006-of-00017.safetensors": "37fae28990b0e4a70228549d040c0393e87bee3820d59e58e47844974d8dff5b",
+      "model-00007-of-00017.safetensors": "37776006aeaba29eca8bc73b2b963fe3477e1c2e3f6a27cb9527be75b905e1bf",
+      "model-00008-of-00017.safetensors": "73e74e9129674fe330948005075d70ab4fa0b92b68fb220c5a693f9cea553730",
+      "model-00009-of-00017.safetensors": "a044b3602a01bd8ea62ff51badf9cc038ab1d73d97399480e6a55b4c86fa7fa6"
+    }
+  },
+  "batch": 32,
+  "decode_pcc": 0.9999724364868658,
+  "decode_position": 17,
+  "decode_replays_per_trial": 100,
+  "decode_trace_median_ms": 0.616888739168644,
+  "decode_trace_samples_ms": [
+    0.6168716214597225,
+    0.616888739168644,
+    0.6168582802638412,
+    0.6168992584571242,
+    0.616917503066361
+  ],
+  "mesh_plan": {
+    "baseline": "OptimizedDecoder/all_bfp4_lofi",
+    "ccl_payload_dtype": "DataType.BFLOAT16",
+    "collectives_per_layer": {
+      "all_gather": 2,
+      "decode_all_gather_input_bytes_per_rank": 81920,
+      "decode_all_gather_output_bytes_per_rank": 327680,
+      "decode_reduce_scatter_input_bytes_per_rank": 327680,
+      "decode_reduce_scatter_output_bytes_per_rank": 81920,
+      "estimated_ring_wire_bytes_per_rank_per_collective": 245760,
+      "estimated_total_ring_wire_bytes_per_rank_per_layer": 983040,
+      "layer_boundary_gather": 0,
+      "reduce_scatter": 2,
+      "semantic_collectives": "2 hidden all-gathers + 2 row-parallel reduce-scatters"
+    },
+    "decode_grids": {
+      "down": {
+        "cores": 20,
+        "x": 10,
+        "y": 2
+      },
+      "full_residual_norm": {
+        "cores": 20,
+        "x": 10,
+        "y": 2
+      },
+      "gate_up": {
+        "cores": 20,
+        "x": 10,
+        "y": 2
+      },
+      "local_residual": {
+        "cores": 20,
+        "x": 10,
+        "y": 2
+      },
+      "o": {
+        "cores": 8,
+        "x": 8,
+        "y": 1
+      },
+      "packed_gate_up": {
+        "cores": 10,
+        "x": 10,
+        "y": 1
+      },
+      "qkv": {
+        "cores": 20,
+        "x": 10,
+        "y": 2
+      }
+    },
+    "decode_output_sharded": true,
+    "decode_shards_and_programs": {
+      "decode_heads": {
+        "height_shard_grid": [
+          8,
+          4
+        ],
+        "height_shard_shape": [
+          32,
+          128
+        ],
+        "kv": [
+          1,
+          32,
+          2,
+          128
+        ],
+        "physical_q_padding": "16 logical Q heads duplicated to 32 for Blackhole SDPA; selected back to 16",
+        "q": [
+          1,
+          32,
+          32,
+          128
+        ]
+      },
+      "down": {
+        "activation_memory": "L1 WIDTH_SHARDED",
+        "activation_shard_shape": [
+          32,
+          320
+        ],
+        "grid": {
+          "cores": 20,
+          "x": 10,
+          "y": 2
+        },
+        "input_logical_shape": [
+          1,
+          1,
+          32,
+          6400
+        ],
+        "math_fidelity": "MathFidelity.LoFi",
+        "output_logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "output_memory": "L1 WIDTH_SHARDED",
+        "output_shard_shape": [
+          32,
+          256
+        ],
+        "padding": {
+          "k_channels": 0,
+          "m_rows": 0,
+          "n_channels": 0
+        },
+        "program_config": {
+          "in0_block_w": 10,
+          "output_subblock": "not exposed by DRAM-sharded program config",
+          "per_core_M": 1,
+          "per_core_N": 8,
+          "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+        },
+        "weight_logical_shape": [
+          6400,
+          5120
+        ],
+        "weight_memory": "DRAM WIDTH_SHARDED",
+        "weight_shard_shape": [
+          6400,
+          640
+        ]
+      },
+      "full_residual_norm": {
+        "grid": {
+          "cores": 20,
+          "x": 10,
+          "y": 2
+        },
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "memory": "L1 WIDTH_SHARDED",
+        "program_config": {
+          "block_h": 1,
+          "block_w": 8,
+          "subblock_w": 4
+        },
+        "shard_shape": [
+          32,
+          256
+        ]
+      },
+      "gate_up": {
+        "activation_memory": "L1 WIDTH_SHARDED",
+        "activation_shard_shape": [
+          32,
+          256
+        ],
+        "grid": {
+          "cores": 20,
+          "x": 10,
+          "y": 2
+        },
+        "input_logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "math_fidelity": "MathFidelity.LoFi",
+        "output_logical_shape": [
+          1,
+          1,
+          32,
+          6400
+        ],
+        "output_memory": "L1 WIDTH_SHARDED",
+        "output_shard_shape": [
+          32,
+          320
+        ],
+        "padding": {
+          "k_channels": 0,
+          "m_rows": 0,
+          "n_channels": 0
+        },
+        "program_config": {
+          "in0_block_w": 8,
+          "output_subblock": "not exposed by DRAM-sharded program config",
+          "per_core_M": 1,
+          "per_core_N": 10,
+          "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+        },
+        "weight_logical_shape": [
+          5120,
+          6400
+        ],
+        "weight_memory": "DRAM WIDTH_SHARDED",
+        "weight_shard_shape": [
+          5120,
+          800
+        ]
+      },
+      "kv_cache": {
+        "contiguous_per_rank": [
+          32,
+          2,
+          128,
+          128
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "memory": "DRAM INTERLEAVED",
+        "paged_per_rank": [
+          64,
+          2,
+          64,
+          128
+        ]
+      },
+      "local_residual": {
+        "grid": {
+          "cores": 20,
+          "x": 10,
+          "y": 2
+        },
+        "logical_shape": [
+          1,
+          1,
+          32,
+          1280
+        ],
+        "memory": "L1 WIDTH_SHARDED",
+        "shard_shape": [
+          32,
+          64
+        ]
+      },
+      "o": {
+        "activation_memory": "L1 WIDTH_SHARDED",
+        "activation_shard_shape": [
+          32,
+          256
+        ],
+        "grid": {
+          "cores": 8,
+          "x": 8,
+          "y": 1
+        },
+        "input_logical_shape": [
+          1,
+          1,
+          32,
+          2048
+        ],
+        "math_fidelity": "MathFidelity.LoFi",
+        "output_logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "output_memory": "L1 WIDTH_SHARDED",
+        "output_shard_shape": [
+          32,
+          640
+        ],
+        "padding": {
+          "k_channels": 0,
+          "m_rows": 0,
+          "n_channels": 0
+        },
+        "program_config": {
+          "in0_block_w": 8,
+          "output_subblock": "not exposed by DRAM-sharded program config",
+          "per_core_M": 1,
+          "per_core_N": 20,
+          "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+        },
+        "weight_logical_shape": [
+          2048,
+          5120
+        ],
+        "weight_memory": "DRAM WIDTH_SHARDED",
+        "weight_shard_shape": [
+          2048,
+          640
+        ]
+      },
+      "qkv": {
+        "activation_memory": "L1 WIDTH_SHARDED",
+        "activation_shard_shape": [
+          32,
+          256
+        ],
+        "grid": {
+          "cores": 20,
+          "x": 10,
+          "y": 2
+        },
+        "input_logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "math_fidelity": "MathFidelity.LoFi",
+        "output_logical_shape": [
+          1,
+          1,
+          32,
+          2560
+        ],
+        "output_memory": "L1 WIDTH_SHARDED",
+        "output_shard_shape": [
+          32,
+          128
+        ],
+        "padding": {
+          "k_channels": 0,
+          "m_rows": 0,
+          "n_channels": 0
+        },
+        "program_config": {
+          "in0_block_w": 8,
+          "output_subblock": "not exposed by DRAM-sharded program config",
+          "per_core_M": 1,
+          "per_core_N": 4,
+          "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+        },
+        "weight_logical_shape": [
+          5120,
+          2560
+        ],
+        "weight_memory": "DRAM WIDTH_SHARDED",
+        "weight_shard_shape": [
+          5120,
+          320
+        ]
+      }
+    },
+    "fused_decode_reduce_scatter": false,
+    "kv_cache_dtype": "DataType.BFLOAT8_B",
+    "local_shapes": {
+      "attention": 2048,
+      "intermediate": 6400,
+      "kv_heads": 2,
+      "q_heads": 16,
+      "qkv": 2560,
+      "residual": 1280
+    },
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "num_links": 2,
+    "packed_gate_up": true,
+    "packed_gate_up_split_layout": "dram",
+    "persistent_decode_collectives": true,
+    "precision_policy": "all_bfp4_lofi",
+    "residual_contract": "hidden-width-sharded input/output; 1280 channels per rank",
+    "topology": "Ring",
+    "tp_axis": 1,
+    "tp_degree": 4
+  },
+  "prefill_median_ms": 3.47583694383502,
+  "prefill_pcc": 0.9999999536268244,
+  "prefill_samples_ms": [
+    4.4181630946695805,
+    3.4793829545378685,
+    3.2770680263638496,
+    3.47583694383502,
+    3.408207092434168
+  ],
+  "provenance": {
+    "decoder_sha256": "5f0f833b555a928c2e9280beaf3726ccda9fb7b3b5f54c2eb7dfe3e9240d0c60",
+    "hardware": "4x Blackhole p300c, 1x4 FABRIC_1D_RING",
+    "test_sha256": "7184a59843d233faf7304ef9c6198593100fc1d4067d827ed94e9d3fb1330ced"
+  },
+  "sequence_length": 17
+}

@@ -1,0 +1,32 @@
+=== Final-IR layout & reshard summary (authoritative) ===
+
+-- Op layouts (from final TTNN IR) --
+[0] ttnn.matmul  ->  l1/width_sharded/1x80 cores=(0,0)-(10,6)   [matmul_multi_core_reuse_multi_cast_1d @11x8]
+
+-- Reshards (1) [from final IR] --
+    matmul -> return: l1/width_sharded/1x80 cores=(0,0)-(10,6) -> dram/interleaved/1x1  [to_memory_config]  (output revert)
+
+=== L1 Sharding Advisor: decode_qkv ===
+ops: 2  beam_width: 8
+
+-- Per-op layouts (validated survivors -> FINAL) --
+[0] ttnn.matmul  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x80  [L1 cores=80 l1=2.0 KB]
+      rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x40  [L1 cores=40 l1=4.0 KB]
+      rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x27  [L1 cores=27 l1=6.0 KB]
+      rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x20  [L1 cores=20 l1=8.0 KB]
+      rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x10  [L1 cores=10 l1=16.0 KB]
+      rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x9  [L1 cores=9 l1=18.0 KB]
+      rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x8  [L1 cores=8 l1=20.0 KB]
+      rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x7  [L1 cores=7 l1=24.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x80
+[1] func.return  @ loc(unknown)
+    => FINAL: ?
+
+-- Reshards decided by greedy pass (0) --
+   (rationale only; authoritative reshards are in the IR summary)
+    no reshards inserted
+
+-- L1 spill accounting --
+    budget=1.3 MB  final_occupied=2.0 KB (0.1%)  live_tensors=1  total_spills=0
+    no pressure events

@@ -1,0 +1,43 @@
+{
+  "function": "decode_o",
+  "optimization_level": 2,
+  "pipeline": "ttnn",
+  "total_ops": 2,
+  "final_choices": 1,
+  "spill": {
+    "ran": true,
+    "total_spills": 0
+  },
+  "unfixable_ops": [],
+  "ops": [
+    {
+      "index": 0,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @11x8"
+    }
+  ],
+  "reshards": [
+    {
+      "kind": "to_memory_config",
+      "producer": "input",
+      "consumer": "matmul",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x32 cores=(0,0)-(10,1)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "matmul",
+      "consumer": "return",
+      "from": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "to": "dram/interleaved/1x1",
+      "output_revert": true
+    }
+  ],
+  "artifacts": {
+    "final_ir": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_32b/doc/optimized_multichip_decoder/shard_advise/o/final_ir.mlir",
+    "report_txt": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_32b/doc/optimized_multichip_decoder/shard_advise/o/report.txt",
+    "decision_trace": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_32b/doc/optimized_multichip_decoder/shard_advise/o/decision_trace/decode_o_decision_trace.json"
+  }
+}

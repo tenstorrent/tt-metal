@@ -1,0 +1,23 @@
+{
+  "disabled_features": [
+    "ETH"
+  ],
+  "enabled": "10",
+  "eth_disable_reason": "full Watcher instrumentation makes the active-Ethernet ring firmware 27,920 bytes, exceeding the 25,600-byte kernel-config buffer",
+  "fault_patterns": [
+    "error",
+    "assert",
+    "hang",
+    "stuck",
+    "timeout"
+  ],
+  "log_path": "models/autoports/qwen_qwen3_32b/doc/optimized_multichip_decoder/results/watcher_clean.log",
+  "log_sha256": "ee439baa627976def5e7063cc7eba6ca8eaf764c519eb8fd72fb27b4a8df0b9f",
+  "matches": [],
+  "provenance": {
+    "decoder_sha256": "8e8ae469407a0888e29dc2d388eac3292cdf76613b66e1c244d3873750989ba9",
+    "hardware": "4x Blackhole p300c, 1x4 FABRIC_1D_RING",
+    "test_sha256": "db4c864b629ec1c8171dc7080fcbcd81c74fcc94c6f7557bfeaa2fe3ca5e0198"
+  },
+  "test": "real layer-32 prefill/decode versus optimized TTNN baseline"
+}

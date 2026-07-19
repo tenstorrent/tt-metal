@@ -1,0 +1,47 @@
+{
+  "accounting": {
+    "bf16_rope_bytes_per_device_per_token": 65536,
+    "bfp8_kv_bytes_per_device_per_token": 1114112,
+    "duplicated_bfp4_weight_bytes_per_device": 8776581120,
+    "norm_weight_bytes_per_device": 1343488,
+    "persistent_ccl_bytes_per_device": 94371840,
+    "prefill_peak_live_bytes_per_device_per_token": 737280,
+    "trace_region_size_parameter_bytes_per_bank": 200000000,
+    "trace_reserved_bytes_per_device": 1600000000
+  },
+  "batch": 32,
+  "error": null,
+  "failed_stage": null,
+  "page_block_size": 64,
+  "physical_cache_length": 12352,
+  "provenance": {
+    "decoder_sha256": "8e8ae469407a0888e29dc2d388eac3292cdf76613b66e1c244d3873750989ba9",
+    "hardware": "4x Blackhole p300c, 1x4 FABRIC_1D_RING",
+    "test_sha256": "db4c864b629ec1c8171dc7080fcbcd81c74fcc94c6f7557bfeaa2fe3ca5e0198"
+  },
+  "result": "pass",
+  "sequence_length": 12352,
+  "snapshots": {
+    "full_stack_static": {
+      "allocated_bytes": 23443308544,
+      "free_bytes": 9135422464,
+      "largest_contiguous_bytes_free_per_bank": 1141927808,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    },
+    "mesh_open": {
+      "allocated_bytes": 0,
+      "free_bytes": 32578731008,
+      "largest_contiguous_bytes_free_per_bank": 4072341376,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    },
+    "prefill_peak": {
+      "allocated_bytes": 32550191104,
+      "free_bytes": 28539904,
+      "largest_contiguous_bytes_free_per_bank": 3567488,
+      "num_banks": 8,
+      "total_bytes": 32578731008
+    }
+  }
+}
