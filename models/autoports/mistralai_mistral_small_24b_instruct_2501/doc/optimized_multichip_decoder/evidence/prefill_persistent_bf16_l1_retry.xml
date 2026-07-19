@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="14.019" timestamp="2026-07-19T00:55:06.856218+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]" time="13.316"><properties><property name="start_timestamp" value="2026-07-19T00:55:07" /><property name="end_timestamp" value="2026-07-19T00:55:20" /></properties><failure message="RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception&#10;info:&#10;Statically allocated circular buffers on core range [0-0 - 0-0] grow to 2732800 B which is beyond max L1 size of 1572864 B&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x79b75304e4ca]&#10; --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)&#10; --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)&#10; --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&amp;, tt::tt_metal::distributed::MeshWorkload&amp;, bool)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21TilizeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x33e) [0x79b75259b34e]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xba0654) [0x79b7525a0654]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21TilizeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x83) [0x79b75259a0d3]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21TilizeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x22e) [0x79b752598e8e]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21TilizeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2d3) [0x79b7525981c3]&#10; --- ttnn::prim::tilize(tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::DataType&gt; const&amp;, bool, bool, bool, bool, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xb97cc0) [0x79b752597cc0]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xb0d39b) [0x79b75250d39b]&#10; --- ttnn::tilize(tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::DataType&gt;, bool, bool, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xad0153) [0x79b7524d0153]&#10; --- ttnn::to_layout(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Layout, std::optional&lt;tt::tt_metal::DataType&gt; const&amp;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;, float)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x755007) [0x79b752155007]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn34convert_python_tensor_to_tt_tensorERKN2tt8tt_metal5ShapeENS1_8DataTypeENS1_6LayoutERKSt8optionalINS1_4TileEERKNS1_12MemoryConfigENS_7PyDTypeERKSt8functionIFNS1_10HostBufferES5_EES7_IPNS1_11distributed10MeshDeviceEES7_IN4ttsl10StrongTypeIhNS1_10QueueIdTagEEEEPKNS_11distributed12TensorToMeshES7_IfEbbb+0xdfe) [0x79b7521523ae]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c2b28) [0x79b753bc2b28]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c2729) [0x79b753bc2729]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x79b753b15575]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x31b305) [0x79b753b1b305]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79b79a1cc1ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79b79a1cc28b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_prefill_layout_perf(mesh_device):
+        """Compare repeated public prefill transposes with one stack-boundary conversion."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "10"))
+        config = _config()
+        state = _real_state()
+        prefill_collective_family = os.environ.get(PREFILL_COLLECTIVE_FAMILY_ENV, "default")
+        prefill_collective_dtype = os.environ.get(PREFILL_COLLECTIVE_DTYPE_ENV, "bf16")
+&gt;       first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:915:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:656: in from_state_dict
+    decoder.prefill_collective_workspace = _replicate_to_mesh(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:129: in _replicate_to_mesh
+    return ttnn.from_torch(
+ttnn/ttnn/decorators.py:473: in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tensor = tensor([[[[0., 0., 0.,  ..., 0., 0., 0.],
+          [0., 0., 0.,  ..., 0., 0., 0.],
+          [0., 0., 0.,  ..., 0., 0..., 0., 0.],
+          [0., 0., 0.,  ..., 0., 0., 0.],
+          [0., 0., 0.,  ..., 0., 0., 0.]]]], dtype=torch.bfloat16)
+dtype = DataType.BFLOAT16
+
+    @ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)
+    def from_torch(
+        tensor: Optional["torch.Tensor"],
+        dtype: Optional[ttnn.DataType] = None,
+        *,
+        spec: Optional[ttnn.TensorSpec] = None,
+        tile: Optional[ttnn.Tile] = None,
+        pad_value: Optional[float] = None,
+        layout: Optional[ttnn.Layout] = None,
+        device: Optional[ttnn.MeshDevice] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
+        mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+        cq_id: Optional[int] = None,
+        preserve_nan_values: bool = False,
+        col_tilize: bool = False,
+        enable_bfloat_opt: bool = False,
+    ) -&gt; Optional[ttnn.Tensor]:
+        """
+        Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
+
+        For bfloat8_b or bfloat4_b format, the function itself is called twice,
+        first call runs in bfloat16 format, and calls to_layout to convert from row_major layout to tile layout (for padding purpose in case input
+        is not tile padded). Second call runs in desired format and does not call to_layout for bfloat8_b or bfloat4_b as we now convert
+        to tile layout during tensor creation (ttnn.Tensor).
+
+        Args:
+            tensor (torch.Tensor | None): the input tensor. If `tensor` is `None`, the function returns `None`.
+            dtype (ttnn.DataType, optional): the desired `ttnn` data type. Defaults to `None`.
+
+        Keyword Args:
+            spec (ttnn.TensorSpec, optional): the desired `ttnn` tensor spec. Defaults to `None`.
+            tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
+            pad_value (float, optional): the desired padding value for tiling. Only used if `layout` is `TILE_LAYOUT`. Defaults to `None`.
+            layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            device (ttnn.MeshDevice, optional): the desired `ttnn` device. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
+            mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
+            cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+            col_tilize (bool, optional): If True, transpose the last two dimensions of the tensor in host
+                memory (float32) before BFP tile encoding.  In BFP format one exponent byte is shared
+                across 16 consecutive datums within a tile face row; transposing before packing redirects
+                that sharing onto the column dimension of the original tensor.  The returned tensor has
+                shape (..., N, K) instead of (..., K, N).  This transpose is applied to the raw float32
+                host data and is unrelated to Tile-level transpose flags (transpose_within_face /
+                transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim &gt;= 2, spec=None.
+                Defaults to `False`.
+            enable_bfloat_opt (bool, optional): If True, use a fast bf4/8 dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
+
+        Returns:
+            ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
+        """
+
+        if tensor is None:
+            return None
+
+        if col_tilize:
+            if spec is not None:
+                raise RuntimeError("ttnn.from_torch: col_tilize=True is not supported with spec")
+            if dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                raise RuntimeError("ttnn.from_torch: col_tilize=True requires BFP dtype (bfloat8_b or bfloat4_b)")
+            if tensor.ndim &lt; 2:
+                raise RuntimeError("ttnn.from_torch: col_tilize=True requires tensor.ndim &gt;= 2")
+            if layout is not None and layout is not ttnn.TILE_LAYOUT:
+                raise RuntimeError("ttnn.from_torch: col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT")
+
+        if spec is not None:
+            if spec.shape != tensor.shape:
+                raise RuntimeError(
+                    f"ttnn.from_torch: spec shape {spec.shape} must be the same as tensor shape {tensor.shape}"
+                )
+            if dtype is not None:
+                raise RuntimeError("ttnn.from_torch: dtype must be None when spec is specified")
+            if layout is not None:
+                raise RuntimeError("ttnn.from_torch: layout must be None when spec is specified")
+            if memory_config is not None:
+                raise RuntimeError("ttnn.from_torch: memory_config must be None when spec is specified")
+            if tile is not None:
+                raise RuntimeError("ttnn.from_torch: tile must be None when spec is specified")
+
+            dtype = spec.dtype
+            layout = spec.layout
+            memory_config = spec.memory_config
+            tile = spec.tile
+
+        if memory_config is not None and memory_config.is_sharded():
+            if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
+                raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
+
+        import torch
+        import numpy as np
+
+        if isinstance(tensor, np.ndarray):
+            # We use bf16 as an intermediate type between types unsupported by ttnn (e.g., int64)
+            # and types unsupported by Torch/NumPy (e.g., bfloat8).
+            # This allows type conversion: int64 -&gt; bf16 -&gt; bf8/4.
+            # NumPy does not support bfloat16, so we use a Torch tensor instead.
+            # float32 as an intermediate type is not used due to limited amount of L1 memory.
+            tensor = torch.from_numpy(tensor)
+
+        # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -&gt; FP8_E4M3
+        # path is wired up in transform_buffers via static_cast&lt;float8_e4m3&gt;; other source dtypes
+        # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
+        # "FP8_E4M3 cross-type conversion is only supported to/from FLOAT32" deeper in to_dtype.
+        # The float32 path is supported for unit tests.
+        fp8_target = dtype == ttnn.DataType.FP8_E4M3 or (spec is not None and spec.dtype == ttnn.DataType.FP8_E4M3)
+        if fp8_target and tensor.dtype != torch.float32:
+            raise RuntimeError(
+                f"ttnn.from_torch: source dtype {tensor.dtype} is not supported when target is "
+                "ttnn.fp8_e4m3; only float32 input is supported. Cast to torch.float32 first."
+            )
+
+&gt;       return ttnn.Tensor(
+            tensor=tensor,
+            data_type=dtype,
+            device=device,
+            layout=layout,
+            mem_config=memory_config,
+            tile=tile,
+            cq_id=cq_id,
+            pad_value=pad_value,
+            mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+            preserve_nan_values=preserve_nan_values,
+            col_tilize=col_tilize,
+            enable_bfloat_opt=enable_bfloat_opt,
+        )
+E       RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+E       info:
+E       Statically allocated circular buffers on core range [0-0 - 0-0] grow to 2732800 B which is beyond max L1 size of 1572864 B
+E       backtrace:
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x79b75304e4ca]
+E        --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E        --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+E        --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&amp;, tt::tt_metal::distributed::MeshWorkload&amp;, bool)
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21TilizeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x33e) [0x79b75259b34e]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xba0654) [0x79b7525a0654]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21TilizeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x83) [0x79b75259a0d3]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21TilizeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x22e) [0x79b752598e8e]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21TilizeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2d3) [0x79b7525981c3]
+E        --- ttnn::prim::tilize(tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::DataType&gt; const&amp;, bool, bool, bool, bool, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xb97cc0) [0x79b752597cc0]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xb0d39b) [0x79b75250d39b]
+E        --- ttnn::tilize(tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::DataType&gt;, bool, bool, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;)
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xad0153) [0x79b7524d0153]
+E        --- ttnn::to_layout(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Layout, std::optional&lt;tt::tt_metal::DataType&gt; const&amp;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;tt::tt_metal::CoreRangeSet&gt; const&amp;, float)
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x755007) [0x79b752155007]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn34convert_python_tensor_to_tt_tensorERKN2tt8tt_metal5ShapeENS1_8DataTypeENS1_6LayoutERKSt8optionalINS1_4TileEERKNS1_12MemoryConfigENS_7PyDTypeERKSt8functionIFNS1_10HostBufferES5_EES7_IPNS1_11distributed10MeshDeviceEES7_IN4ttsl10StrongTypeIhNS1_10QueueIdTagEEEEPKNS_11distributed12TensorToMeshES7_IfEbbb+0xdfe) [0x79b7521523ae]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c2b28) [0x79b753bc2b28]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c2729) [0x79b753bc2729]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x79b753b15575]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x31b305) [0x79b753b1b305]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79b79a1cc1ca]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79b79a1cc28b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/operations/core.py:352: RuntimeError</failure></testcase></testsuite></testsuites>

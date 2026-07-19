@@ -71,6 +71,11 @@
     "tensor_parallel_degree": 4,
     "target_advertised_context": 32768,
     "batch": 32,
+    "primary_optimized_active_batch": 1,
+    "supported_active_batches": [
+      1,
+      32
+    ],
     "per_device_local_query_heads": 8,
     "per_device_local_kv_heads": 2,
     "per_device_local_intermediate_size": 8192,
@@ -86,6 +91,10 @@
     "per_device_shared_position_index_bytes_at_advertised_context": 131072,
     "per_device_page_table_bytes_at_advertised_context": 131072,
     "per_device_persistent_decode_position_bytes": 128,
+    "per_device_shared_persistent_collective_workspace_l1_bytes": 1310720,
+    "decode_collective_output_dtype": "BFP8_B",
+    "decode_collective_workspace_dtype": "BF16",
+    "prefill_collective_output_dtype": "BF16",
     "per_device_variable_bytes_per_logical_token": 697352,
     "per_device_weights_plus_kv_bytes_at_advertised_context": 26640711680,
     "per_device_full_stack_steady_state_bytes_at_advertised_context": 26674528384,
@@ -93,12 +102,12 @@
     "runtime_reserve_bytes": 4294967296,
     "per_device_margin_after_runtime_reserve_at_advertised_context": 3209235328,
     "calculated_context_ceiling_with_reserve": 37344,
-    "calculation_policy": "Tile-aware physical storage: BFP4_B=576 bytes per 32x32 tile, BFP8_B=1088 bytes per tile, BF16=2048 bytes per tile. The fixed lifetime includes one decode matrix representation for each of 40 layers, tiled replicated layer/final norms, TP4 BF16 embedding and untied LM head, and one persistent position vector. RoPE prefill+decode tables, shared position indices, page table, and all 40 local K/V pairs scale with logical context. Interleaved prefill matrix copies are released before the long-lived decode phase.",
+    "calculation_policy": "Tile-aware physical DRAM storage: BFP4_B=576 bytes per 32x32 tile, BFP8_B=1088 bytes per tile, BF16=2048 bytes per tile. The fixed DRAM lifetime includes one decode matrix representation for each of 40 layers, tiled replicated layer/final norms, TP4 BF16 embedding and untied LM head, and one persistent position vector. RoPE prefill+decode tables, shared position indices, page table, and all 40 local K/V pairs scale with logical context. Interleaved prefill matrix copies are released before the long-lived decode phase. The optimized decoder keeps one 1,310,720-byte BF16 L1 collective workspace shared by all sequential layers and emits decode collective results in BFP8_B; neither is a DRAM lifetime and neither reduces the DRAM-derived context ceiling.",
     "prefill_policy": "The 32K cache and weights fit, but a replicated batch-32 full-width 32K BF16 residual is 10,737,418,240 bytes per rank. Full-context prefill must therefore stream/chunk internal work while preserving arbitrary logical lengths.",
     "capacity_probe_command": "MISTRAL_SMALL_24B_MULTICHIP_CAPACITY=1 TT_LOGGER_LEVEL=fatal pytest -q -s models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity",
-    "capacity_probe_artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/multichip_decoder/evidence/final_full_gate.xml",
-    "capacity_probe_log": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/multichip_decoder/evidence/final_full_gate.log",
-        "capacity_probe_result": {
+    "capacity_probe_artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_current_source_gate_bfp8.xml",
+    "capacity_probe_log": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_current_source_gate_bfp8.log",
+    "capacity_probe_result": {
       "logical_max_cache_len": 32768,
       "logical_current_pos": 32767,
       "page_block_size": 32,
@@ -106,6 +115,7 @@
       "resident_kv_cache_pairs": 40,
       "resident_tp_embedding_and_lm_head": true,
       "shared_rope_across_layers": true,
+      "shared_collective_workspace_across_layers": true,
       "prefill_weights_released_before_decode": true,
       "physically_allocated_runtime_reserve_bytes_per_device": 4294967296,
       "per_device_cache_shape_each_k_or_v": [
@@ -113,44 +123,63 @@
         2,
         32,
         128
-            ],
-            "result": "pass"
-        },
-        "real_optimized_baseline_pcc": {
-            "prefill_logical_seq_17": 0.9999942795761649,
-            "decode_current_pos_17": 0.9999903842345634,
-            "key_cache_through_pos_17": 1.0,
-            "value_cache_through_pos_17": 1.0,
-            "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/multichip_decoder/evidence/real_optimized_baseline_compare.log"
-        },
-        "paged_cache_contract": {
-            "page_table_distribution": "replicated",
-            "page_table_test_mapping": "reverse logical-to-physical block order",
-            "per_device_kv_head_layout": "local contiguous KV heads [batch_or_blocks,2,logical_seq_or_block_size,128]",
-            "paged_prefill_hf_pcc": 0.9953562692303087,
-            "paged_decode_hf_pcc": 0.9950111683001641,
-            "paged_vs_contiguous_prefill_pcc": 1.0,
-            "paged_vs_contiguous_logical_kv_pcc": 1.0,
-            "paged_vs_contiguous_decode_pcc": 1.0,
-            "physical_key_mapping_hf_pcc": 0.9937459049428374,
-            "physical_value_mapping_hf_pcc": 0.9936687720571902,
-            "decode_sdpa_k_chunk_size": 128
-        },
-        "trace_position_contract": {
-            "persistent_tensor_shape": [32],
-            "persistent_tensor_dtype": "INT32",
-            "distribution": "replicated",
-            "roles": [
-                "RoPE row lookup",
-                "paged or contiguous cache write index",
-                "SDPA causal position"
-            ],
-            "nonuniform_positions_tested": true,
-            "mutable_across_replays": true,
-            "contiguous_and_reversed_page_table_tested": true,
-            "repeated_replay_deterministic": true
-        },
-        "claim": "The calculation and real TP4 allocation/high-position decoder probe show no physical weight/KV reason to reduce the HF 32768-token contract. current_supported_context is raised to the HF limit for the multichip decoder/full-model cache handoff."
+      ],
+      "result": "pass"
+    },
+    "real_optimized_baseline_pcc": {
+      "prefill_logical_seq_17": 0.9999942795761649,
+      "decode_current_pos_17": 0.999988553264758,
+      "key_cache_through_pos_17": 1.0,
+      "value_cache_through_pos_17": 1.0,
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_current_real_tp1_compare.log"
+    },
+    "paged_cache_contract": {
+      "page_table_distribution": "replicated",
+      "page_table_test_mapping": "reverse logical-to-physical block order",
+      "per_device_kv_head_layout": "local contiguous KV heads [batch_or_blocks,2,logical_seq_or_block_size,128]",
+      "paged_prefill_hf_pcc": 0.9953562692303087,
+      "paged_decode_hf_pcc": 0.9949219160358479,
+      "paged_vs_contiguous_prefill_pcc": 1.0,
+      "paged_vs_contiguous_logical_kv_pcc": 1.0,
+      "paged_vs_contiguous_decode_pcc": 1.0,
+      "physical_key_mapping_hf_pcc": 0.9937459049428374,
+      "physical_value_mapping_hf_pcc": 0.9936687720571902,
+      "decode_sdpa_k_chunk_size": 128
+    },
+    "trace_position_contract": {
+      "persistent_tensor_shape": [
+        32
+      ],
+      "persistent_tensor_dtype": "INT32",
+      "distribution": "replicated",
+      "roles": [
+        "RoPE row lookup",
+        "paged or contiguous cache write index",
+        "SDPA causal position"
+      ],
+      "nonuniform_positions_tested": true,
+      "mutable_across_replays": true,
+      "contiguous_and_reversed_page_table_tested": true,
+      "repeated_replay_deterministic": true
+    },
+    "active_batch_contract": {
+      "primary_batch": 1,
+      "secondary_capacity_batch": 32,
+      "decode_public_shape": "[1,batch,1,5120]",
+      "decode_stacked_shape": "[1,1,batch,5120]",
+      "prefill_public_shape": "[1,batch,logical_seq_len,5120]",
+      "prefill_stacked_shape": "[1,1,batch*logical_seq_len,5120]",
+      "tile_padding_policy": "decoder owned; batch-1 padded physical rows are sliced to the logical active batch on device before the next layer or public finish",
+      "collective_phase_policy": "explicit prefill/decode mode; batch-1 prefill always uses the selected prefill CCL family",
+      "batch1_real_tp1_pcc": {
+        "prefill": 0.9999852841997362,
+        "decode": 0.9999896115276853,
+        "key_cache": 1.0,
+        "value_cache": 1.0,
+        "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_batch1_real_tp1_compare.log"
+      }
+    },
+    "claim": "The calculation and real TP4 allocation/high-position decoder probe show no physical weight/KV reason to reduce the HF 32768-token contract. current_supported_context is raised to the HF limit for the multichip decoder/full-model cache handoff."
   },
   "paths": {
     "prefill": {
@@ -168,6 +197,7 @@
       ],
       "capacity_tested_sequence_length": 3583,
       "tested_batches": [
+        1,
         13,
         32
       ]
@@ -185,6 +215,7 @@
         18
       ],
       "tested_batches": [
+        1,
         13,
         32
       ]

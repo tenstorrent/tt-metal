@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'MULTICHIP_INTERNAL_STACK_PREFILL'.
+Using operations until 'MULTICHIP_INTERNAL_STACK_PREFILL_END'.
+Detected data from 4 devices. Keeping separate device data...
+Writing CSV output to /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16_pass/prefill_ops_per_device.csv
+Overall DRAM roofline (modeled ops): 19.9% (102 GB/s)
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UpdateKVCacheOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16_pass/prefill_summary_per_device.csv
+Plotting PNG stacked report to /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16_pass/prefill_summary_per_device.png

@@ -1,0 +1,510 @@
+Script started on 2026-07-19 01:38:02+00:00 [COMMAND="tt-perf-report 'models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8/reports/2026_07_19_01_37_20/ops_perf_results_2026_07_19_01_37_20.csv' --start-signpost MULTICHIP_INTERNAL_STACK_PREFILL --end-signpost MULTICHIP_INTERNAL_STACK_PREFILL_END --no-color --no-summary" <not executed on terminal>]
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'MULTICHIP_INTERNAL_STACK_PREFILL'.
+Using operations until 'MULTICHIP_INTERNAL_STACK_PREFILL_END'.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                   Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 1282    1.4 %         LayerNormDeviceOperation                        0        86 μs                   18                                                 BF16, BF16 => BF16
+ 1286    1.0 %   SLOW  MatmulDeviceOperation 576 x 5120 x 1536         0        58 μs          1 μs     72  201 GB/s  39.4 %  157.4 TFLOPs   39.5 %  LoFi BF16 x BFP4 => BF16
+ 1289    0.7 %         TransposeDeviceOperation                        1        39 μs          1 μs    110                                                       BF16 => BF16
+ 1292    0.4 %         NlpCreateHeadsDeviceOperation                   2        24 μs          1 μs     32                                                       BF16 => BF16
+ 1297    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      4                                                       BF16 => BF16
+ 1301    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      4                                                       BF16 => BF16
+ 1304    0.9 %         RotaryEmbeddingDeviceOperation                  2        52 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 1310    0.3 %         RotaryEmbeddingDeviceOperation                  0        18 μs          0 μs     64                                                 BF16, BF16 => BF16
+ 1312    0.2 %         SliceDeviceOperation                            2        12 μs          0 μs    110                                                       BF16 => BF16
+ 1316    0.1 %         SliceDeviceOperation                            2         3 μs          1 μs    110                                                       BF16 => BF16
+ 1319    0.1 %         TypecastDeviceOperation                         3         3 μs          0 μs    110                                                       BF16 => BFP8
+ 1326    0.1 %         TypecastDeviceOperation                         0         3 μs          0 μs    110                                                       BF16 => BFP8
+ 1330    0.0 %         SliceDeviceOperation                            0         1 μs          1 μs      8                                                       BFP8 => BFP8
+ 1332    0.0 %         SliceDeviceOperation                            2         1 μs          1 μs      8                                                       BFP8 => BFP8
+ 1335    0.3 %         UpdateKVCacheOperation                          3         2 μs         15 μs      2                                                 BFP8, BFP8 => BFP8
+ 1339    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1343    0.2 %         SliceDeviceOperation                            3         1 μs         11 μs      8                                                       BFP8 => BFP8
+ 1350    0.3 %         SliceDeviceOperation                            0         1 μs         17 μs      8                                                       BFP8 => BFP8
+ 1353    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1355    0.1 %         UpdateKVCacheOperation                          3         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1359    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1365    0.2 %         SliceDeviceOperation                            1         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1369    0.2 %         UpdateKVCacheOperation                          1         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1373    0.1 %         UpdateKVCacheOperation                          1         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1375    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1380    0.2 %         SliceDeviceOperation                            2         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1383    0.2 %         UpdateKVCacheOperation                          3         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1388    0.1 %         UpdateKVCacheOperation                          2         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1391    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1398    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1400    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1405    0.2 %         UpdateKVCacheOperation                          1         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1408    0.2 %         SliceDeviceOperation                            2         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1412    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1416    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1422    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1426    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1430    0.2 %         SliceDeviceOperation                            0         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1431    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1435    0.1 %         UpdateKVCacheOperation                          3         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1442    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1446    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1448    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1451    0.1 %         UpdateKVCacheOperation                          3         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1456    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1459    0.3 %         SliceDeviceOperation                            3         1 μs         15 μs      8                                                       BFP8 => BFP8
+ 1465    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1469    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1472    0.2 %         SliceDeviceOperation                            2         1 μs         11 μs      8                                                       BFP8 => BFP8
+ 1477    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1480    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1486    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1490    0.2 %         SliceDeviceOperation                            0         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1492    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1495    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1500    0.2 %         UpdateKVCacheOperation                          2         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1506    0.2 %         SliceDeviceOperation                            0         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1509    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1514    0.2 %         UpdateKVCacheOperation                          0         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1516    0.1 %         UpdateKVCacheOperation                          2         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1522    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1523    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1528    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1531    0.1 %         UpdateKVCacheOperation                          3         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1536    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1539    0.3 %         SliceDeviceOperation                            3         1 μs         15 μs      8                                                       BFP8 => BFP8
+ 1546    0.2 %         UpdateKVCacheOperation                          0         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1547    0.1 %         UpdateKVCacheOperation                          3         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1553    0.2 %         SliceDeviceOperation                            1         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1556    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1560    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1566    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1569    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1572    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1576    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1581    0.1 %         UpdateKVCacheOperation                          1         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1584    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1588    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1593    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1596    0.1 %         UpdateKVCacheOperation                          2         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1600    0.2 %         SliceDeviceOperation                            2         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1603    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1609    0.2 %         UpdateKVCacheOperation                          1         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1612    0.1 %         UpdateKVCacheOperation                          2         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1616    0.2 %         SliceDeviceOperation                            2         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1619    0.2 %         SliceDeviceOperation                            3         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1624    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1630    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1631    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1638    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1640    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1645    0.1 %         UpdateKVCacheOperation                          1         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1649    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1652    0.2 %         SliceDeviceOperation                            2         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1655    0.2 %         UpdateKVCacheOperation                          3         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1662    0.2 %         UpdateKVCacheOperation                          0         2 μs          8 μs      2                                                 BFP8, BFP8 => BFP8
+ 1666    0.2 %         SliceDeviceOperation                            0         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1670    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1673    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1675    0.1 %         UpdateKVCacheOperation                          3         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1681    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1683    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1687    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1692    0.2 %         UpdateKVCacheOperation                          2         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1695    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1700    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1704    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1709    0.1 %         UpdateKVCacheOperation                          1         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1712    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1715    0.2 %         SliceDeviceOperation                            3         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1719    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1724    0.1 %         UpdateKVCacheOperation                          2         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1730    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1733    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1736    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1742    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1746    0.2 %         SliceDeviceOperation                            0         1 μs         11 μs      8                                                       BFP8 => BFP8
+ 1749    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1753    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1755    0.1 %         UpdateKVCacheOperation                          3         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1759    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1764    0.2 %         SliceDeviceOperation                            2         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1768    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1774    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1775    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1780    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1785    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1790    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1791    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1795    0.3 %         SliceDeviceOperation                            3         1 μs         20 μs      8                                                       BFP8 => BFP8
+ 1800    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1803    0.2 %         UpdateKVCacheOperation                          3         2 μs          8 μs      2                                                 BFP8, BFP8 => BFP8
+ 1807    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1813    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1815    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1820    0.1 %         UpdateKVCacheOperation                          2         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 1825    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1830    0.2 %         SliceDeviceOperation                            0         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1833    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1837    0.1 %         UpdateKVCacheOperation                          1         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1839    0.8 %         SDPAOperation                                   3        27 μs         23 μs     64                                                 BF16, BF16 => BF16
+ 1843    0.3 %         NLPConcatHeadsDeviceOperation                   3        18 μs          1 μs     32                                                       BF16 => BF16
+ 1849    0.7 %         TransposeDeviceOperation                        1        25 μs         16 μs    110                                                       BF16 => BF16
+ 1853    0.9 %   SLOW  MatmulDeviceOperation 576 x 1024 x 5120         1        50 μs          7 μs     90  195 GB/s  38.1 %  121.4 TFLOPs   24.4 %  LoFi BF16 x BFP4 => BF16
+ 1855    3.7 %         ReduceScatterDeviceOperation                    0       122 μs        101 μs     18                                                       BF16 => BF16
+ 1859    2.0 %         AllGatherDeviceOperation                        0       121 μs          0 μs     18                                                       BF16 => BF16
+ 1863    0.7 %         BinaryNgDeviceOperation                         3        42 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1868    1.4 %         LayerNormDeviceOperation                        2        86 μs          0 μs     18                                                 BF16, BF16 => BF16
+ 1873    6.8 %   SLOW  MatmulDeviceOperation 576 x 5120 x 16384        1       406 μs          1 μs     99  164 GB/s  32.1 %  238.3 TFLOPs   43.5 %  LoFi BF16 x BFP4 => BF16
+ 1877    0.8 %         SliceDeviceOperation                            1        50 μs          1 μs    110                                                       BF16 => BF16
+ 1881    0.9 %         SliceDeviceOperation                            1        51 μs          1 μs    110                                                       BF16 => BF16
+ 1884    1.3 %         BinaryNgDeviceOperation                         2        75 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1890    3.7 %   SLOW  MatmulDeviceOperation 576 x 8192 x 5120         0       218 μs          0 μs     90  166 GB/s  32.5 %  221.3 TFLOPs   44.5 %  LoFi BF16 x BFP4 => BF16
+ 1891    2.1 %         ReduceScatterDeviceOperation                    0       123 μs          1 μs     18                                                       BF16 => BF16
+ 1895    2.1 %         AllGatherDeviceOperation                        0       123 μs          0 μs     18                                                       BF16 => BF16
+ 1900    0.7 %         BinaryNgDeviceOperation                         2        43 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1905    1.4 %         LayerNormDeviceOperation                        1        86 μs          1 μs     18                                                 BF16, BF16 => BF16
+ 1907    1.0 %   SLOW  MatmulDeviceOperation 576 x 5120 x 1536         3        58 μs          1 μs     72  201 GB/s  39.2 %  156.9 TFLOPs   39.4 %  LoFi BF16 x BFP4 => BF16
+ 1914    0.7 %         TransposeDeviceOperation                        0        40 μs          1 μs    110                                                       BF16 => BF16
+ 1918    0.4 %         NlpCreateHeadsDeviceOperation                   0        24 μs          1 μs     32                                                       BF16 => BF16
+ 1921    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      4                                                       BF16 => BF16
+ 1926    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      4                                                       BF16 => BF16
+ 1928    0.9 %         RotaryEmbeddingDeviceOperation                  2        52 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 1934    0.3 %         RotaryEmbeddingDeviceOperation                  0        18 μs          0 μs     64                                                 BF16, BF16 => BF16
+ 1936    0.2 %         SliceDeviceOperation                            2        12 μs          0 μs    110                                                       BF16 => BF16
+ 1941    0.1 %         SliceDeviceOperation                            1         3 μs          1 μs    110                                                       BF16 => BF16
+ 1944    0.1 %         TypecastDeviceOperation                         2         3 μs          0 μs    110                                                       BF16 => BFP8
+ 1950    0.1 %         TypecastDeviceOperation                         0         3 μs          0 μs    110                                                       BF16 => BFP8
+ 1954    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 1958    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 1960    0.1 %         UpdateKVCacheOperation                          2         2 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 1964    0.1 %         UpdateKVCacheOperation                          2         2 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 1967    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 1973    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 1976    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 1982    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 1986    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 1989    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 1994    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 1996    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2001    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2004    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2009    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2013    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2018    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2022    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2025    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2029    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2032    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2038    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2040    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2044    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2049    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2053    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2057    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2061    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2066    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2070    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2072    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2075    0.1 %         UpdateKVCacheOperation                          3         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2080    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2084    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2087    0.1 %         UpdateKVCacheOperation                          3         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2094    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2096    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2100    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2106    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2108    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2113    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2117    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2122    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2126    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2130    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2133    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2137    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2141    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2144    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2148    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2154    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2156    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2160    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2164    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2169    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2174    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2177    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2181    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2186    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2190    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2192    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2195    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2199    0.1 %         UpdateKVCacheOperation                          3         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2203    0.1 %         UpdateKVCacheOperation                          3         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2209    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2214    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2218    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2222    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2223    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2227    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2231    0.1 %         UpdateKVCacheOperation                          3         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2238    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2242    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2245    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2249    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2253    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2257    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2261    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2265    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2269    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2271    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2275    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2281    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2286    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2290    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2293    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2297    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2299    0.1 %         UpdateKVCacheOperation                          3         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2305    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2307    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2313    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2317    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2319    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2325    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2330    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2334    0.1 %         UpdateKVCacheOperation                          0         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2335    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2340    0.0 %         SliceDeviceOperation                            2         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2343    0.1 %         UpdateKVCacheOperation                          3         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2348    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2354    0.0 %         SliceDeviceOperation                            0         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2357    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2360    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2365    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2369    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2371    0.0 %         SliceDeviceOperation                            3         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2376    0.1 %         UpdateKVCacheOperation                          2         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2381    0.1 %         UpdateKVCacheOperation                          1         3 μs          1 μs      2                                                 BFP8, BFP8 => BFP8
+ 2385    0.0 %         SliceDeviceOperation                            1         2 μs          1 μs      8                                                       BFP8 => BFP8
+ 2388    0.2 %         SliceDeviceOperation                            2         1 μs         14 μs      8                                                       BFP8 => BFP8
+ 2393    0.2 %         UpdateKVCacheOperation                          1         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 2398    0.1 %         UpdateKVCacheOperation                          0         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 2399    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 2403    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2410    0.2 %         UpdateKVCacheOperation                          0         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 2413    0.1 %         UpdateKVCacheOperation                          1         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 2417    0.2 %         SliceDeviceOperation                            1         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 2421    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2423    0.2 %         UpdateKVCacheOperation                          3         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 2429    0.2 %         UpdateKVCacheOperation                          1         2 μs          8 μs      2                                                 BFP8, BFP8 => BFP8
+ 2431    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 2435    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2441    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 2444    0.1 %         UpdateKVCacheOperation                          2         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 2448    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 2451    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2456    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 2460    0.1 %         UpdateKVCacheOperation                          2         2 μs          6 μs      2                                                 BFP8, BFP8 => BFP8
+ 2465    0.8 %         SDPAOperation                                   1        27 μs         21 μs     64                                                 BF16, BF16 => BF16
+ 2469    0.3 %         NLPConcatHeadsDeviceOperation                   1        17 μs          1 μs     32                                                       BF16 => BF16
+ 2472    0.6 %         TransposeDeviceOperation                        2        25 μs         11 μs    110                                                       BF16 => BF16
+ 2477    0.9 %   SLOW  MatmulDeviceOperation 576 x 1024 x 5120         1        49 μs          6 μs     90  197 GB/s  38.4 %  122.5 TFLOPs   24.6 %  LoFi BF16 x BFP4 => BF16
+ 2479    3.1 %         ReduceScatterDeviceOperation                    0       123 μs         62 μs     18                                                       BF16 => BF16
+ 2483    2.1 %         AllGatherDeviceOperation                        0       123 μs          0 μs     18                                                       BF16 => BF16
+ 2487    0.7 %         BinaryNgDeviceOperation                         3        40 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2494    1.4 %         LayerNormDeviceOperation                        0        86 μs          1 μs     18                                                 BF16, BF16 => BF16
+ 2496    6.8 %   SLOW  MatmulDeviceOperation 576 x 5120 x 16384        2       406 μs          1 μs     99  164 GB/s  32.1 %  238.0 TFLOPs   43.5 %  LoFi BF16 x BFP4 => BF16
+ 2500    0.9 %         SliceDeviceOperation                            2        50 μs          1 μs    110                                                       BF16 => BF16
+ 2504    0.9 %         SliceDeviceOperation                            2        51 μs          1 μs    110                                                       BF16 => BF16
+ 2508    1.3 %         BinaryNgDeviceOperation                         2        75 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2511    3.7 %   SLOW  MatmulDeviceOperation 576 x 8192 x 5120         3       218 μs          0 μs     90  166 GB/s  32.5 %  221.3 TFLOPs   44.5 %  LoFi BF16 x BFP4 => BF16
+ 2515    2.5 %         ReduceScatterDeviceOperation                    0       152 μs          1 μs     18                                                       BF16 => BF16
+ 2519    2.1 %         AllGatherDeviceOperation                        0       124 μs          1 μs     18                                                       BF16 => BF16
+ 2524    0.7 %         BinaryNgDeviceOperation                         2        41 μs          1 μs    110                                                 BF16, BF16 => BF16
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         312 device ops, 0 host ops, 0 signposts               4,244 μs      1,750 μs          59 GB/s  11.4 %
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 1335    0.3 %         UpdateKVCacheOperation                          3         2 μs         15 μs      2                                                 BFP8, BFP8 => BFP8
+ 1339    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1343    0.2 %         SliceDeviceOperation                            3         1 μs         11 μs      8                                                       BFP8 => BFP8
+ 1350    0.3 %         SliceDeviceOperation                            0         1 μs         17 μs      8                                                       BFP8 => BFP8
+ 1353    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1359    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1365    0.2 %         SliceDeviceOperation                            1         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1369    0.2 %         UpdateKVCacheOperation                          1         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1375    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1380    0.2 %         SliceDeviceOperation                            2         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1383    0.2 %         UpdateKVCacheOperation                          3         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1391    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1398    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1400    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1405    0.2 %         UpdateKVCacheOperation                          1         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1408    0.2 %         SliceDeviceOperation                            2         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1412    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1416    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1426    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1430    0.2 %         SliceDeviceOperation                            0         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1431    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1442    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1446    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1448    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1456    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1459    0.3 %         SliceDeviceOperation                            3         1 μs         15 μs      8                                                       BFP8 => BFP8
+ 1465    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1469    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1472    0.2 %         SliceDeviceOperation                            2         1 μs         11 μs      8                                                       BFP8 => BFP8
+ 1477    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1480    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1490    0.2 %         SliceDeviceOperation                            0         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1492    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1495    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1500    0.2 %         UpdateKVCacheOperation                          2         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1506    0.2 %         SliceDeviceOperation                            0         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1509    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1514    0.2 %         UpdateKVCacheOperation                          0         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1522    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1523    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1528    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1536    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1539    0.3 %         SliceDeviceOperation                            3         1 μs         15 μs      8                                                       BFP8 => BFP8
+ 1546    0.2 %         UpdateKVCacheOperation                          0         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1553    0.2 %         SliceDeviceOperation                            1         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1556    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1560    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1569    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1572    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1576    0.2 %         UpdateKVCacheOperation                          2         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1581    0.1 %         UpdateKVCacheOperation                          1         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1584    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1588    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1593    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1600    0.2 %         SliceDeviceOperation                            2         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1603    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1609    0.2 %         UpdateKVCacheOperation                          1         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1616    0.2 %         SliceDeviceOperation                            2         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1619    0.2 %         SliceDeviceOperation                            3         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1624    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1631    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1638    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1640    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1649    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1652    0.2 %         SliceDeviceOperation                            2         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1655    0.2 %         UpdateKVCacheOperation                          3         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1662    0.2 %         UpdateKVCacheOperation                          0         2 μs          8 μs      2                                                 BFP8, BFP8 => BFP8
+ 1666    0.2 %         SliceDeviceOperation                            0         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1670    0.2 %         SliceDeviceOperation                            0         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1673    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1675    0.1 %         UpdateKVCacheOperation                          3         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1681    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1683    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1687    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1692    0.2 %         UpdateKVCacheOperation                          2         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1695    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1700    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1704    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1712    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1715    0.2 %         SliceDeviceOperation                            3         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1719    0.2 %         UpdateKVCacheOperation                          3         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 1730    0.2 %         SliceDeviceOperation                            0         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1733    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1736    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1746    0.2 %         SliceDeviceOperation                            0         1 μs         11 μs      8                                                       BFP8 => BFP8
+ 1749    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1753    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1755    0.1 %         UpdateKVCacheOperation                          3         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1759    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1764    0.2 %         SliceDeviceOperation                            2         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1768    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1775    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1780    0.2 %         SliceDeviceOperation                            2         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1785    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1791    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1795    0.3 %         SliceDeviceOperation                            3         1 μs         20 μs      8                                                       BFP8 => BFP8
+ 1800    0.2 %         UpdateKVCacheOperation                          2         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 1803    0.2 %         UpdateKVCacheOperation                          3         2 μs          8 μs      2                                                 BFP8, BFP8 => BFP8
+ 1807    0.2 %         SliceDeviceOperation                            3         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 1813    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 1815    0.2 %         UpdateKVCacheOperation                          3         2 μs         11 μs      2                                                 BFP8, BFP8 => BFP8
+ 1825    0.2 %         SliceDeviceOperation                            1         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 1830    0.2 %         SliceDeviceOperation                            0         1 μs         13 μs      8                                                       BFP8 => BFP8
+ 1833    0.2 %         UpdateKVCacheOperation                          1         2 μs         12 μs      2                                                 BFP8, BFP8 => BFP8
+ 1837    0.1 %         UpdateKVCacheOperation                          1         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 1839    0.8 %         SDPAOperation                                   3        27 μs         23 μs     64                                                 BF16, BF16 => BF16
+ 1849    0.7 %         TransposeDeviceOperation                        1        25 μs         16 μs    110                                                       BF16 => BF16
+ 1853    0.9 %   SLOW  MatmulDeviceOperation 576 x 1024 x 5120         1        50 μs          7 μs     90  195 GB/s  38.1 %  121.4 TFLOPs   24.4 %  LoFi BF16 x BFP4 => BF16
+ 1855    3.7 %         ReduceScatterDeviceOperation                    0       122 μs        101 μs     18                                                       BF16 => BF16
+ 2388    0.2 %         SliceDeviceOperation                            2         1 μs         14 μs      8                                                       BFP8 => BFP8
+ 2393    0.2 %         UpdateKVCacheOperation                          1         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 2399    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 2403    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2410    0.2 %         UpdateKVCacheOperation                          0         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 2417    0.2 %         SliceDeviceOperation                            1         1 μs         10 μs      8                                                       BFP8 => BFP8
+ 2421    0.2 %         SliceDeviceOperation                            1         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2423    0.2 %         UpdateKVCacheOperation                          3         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 2429    0.2 %         UpdateKVCacheOperation                          1         2 μs          8 μs      2                                                 BFP8, BFP8 => BFP8
+ 2431    0.2 %         SliceDeviceOperation                            3         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 2435    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2441    0.2 %         UpdateKVCacheOperation                          1         2 μs         10 μs      2                                                 BFP8, BFP8 => BFP8
+ 2444    0.1 %         UpdateKVCacheOperation                          2         2 μs          7 μs      2                                                 BFP8, BFP8 => BFP8
+ 2448    0.2 %         SliceDeviceOperation                            2         1 μs          9 μs      8                                                       BFP8 => BFP8
+ 2451    0.2 %         SliceDeviceOperation                            3         1 μs         12 μs      8                                                       BFP8 => BFP8
+ 2456    0.2 %         UpdateKVCacheOperation                          2         2 μs          9 μs      2                                                 BFP8, BFP8 => BFP8
+ 2465    0.8 %         SDPAOperation                                   1        27 μs         21 μs     64                                                 BF16, BF16 => BF16
+ 2472    0.6 %         TransposeDeviceOperation                        2        25 μs         11 μs    110                                                       BF16 => BF16
+ 2479    3.1 %         ReduceScatterDeviceOperation                    0       123 μs         62 μs     18                                                       BF16 => BF16
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 733 μs (12.2% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 1286    1.0 %   SLOW  MatmulDeviceOperation 576 x 5120 x 1536         0        58 μs          1 μs     72  201 GB/s  39.4 %  157.4 TFLOPs   39.5 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=8 and output subblock 2x2 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 1853    0.9 %   SLOW  MatmulDeviceOperation 576 x 1024 x 5120         1        50 μs          7 μs     90  195 GB/s  38.1 %  121.4 TFLOPs   24.4 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=8 and output subblock 2x2 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 1873    6.8 %   SLOW  MatmulDeviceOperation 576 x 5120 x 16384        1       406 μs          1 μs     99  164 GB/s  32.1 %  238.3 TFLOPs   43.5 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x1 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 1890    3.7 %   SLOW  MatmulDeviceOperation 576 x 8192 x 5120         0       218 μs          0 μs     90  166 GB/s  32.5 %  221.3 TFLOPs   44.5 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=4 and output subblock 2x2 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 1907    1.0 %   SLOW  MatmulDeviceOperation 576 x 5120 x 1536         3        58 μs          1 μs     72  201 GB/s  39.2 %  156.9 TFLOPs   39.4 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=8 and output subblock 2x2 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 2477    0.9 %   SLOW  MatmulDeviceOperation 576 x 1024 x 5120         1        49 μs          6 μs     90  197 GB/s  38.4 %  122.5 TFLOPs   24.6 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=8 and output subblock 2x2 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 2496    6.8 %   SLOW  MatmulDeviceOperation 576 x 5120 x 16384        2       406 μs          1 μs     99  164 GB/s  32.1 %  238.0 TFLOPs   43.5 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x1 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 2511    3.7 %   SLOW  MatmulDeviceOperation 576 x 8192 x 5120         3       218 μs          0 μs     90  166 GB/s  32.5 %  221.3 TFLOPs   44.5 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=4 and output subblock 2x2 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+
+Script done on 2026-07-19 01:38:02+00:00 [COMMAND_EXIT_CODE="0"]

@@ -1,0 +1,11 @@
+path,session_or_metric,device_kernel_duration_us_per_layer,wall_us_per_layer,theoretical_roofline_us_per_layer,pm_ideal_us_per_layer,pm_compute_us_per_layer,pm_bandwidth_us_per_layer,merged_dram_roofline_percent,per_device_dram_roofline_percent,weights_and_norm_bytes_per_rank,kv_read_bytes_per_rank,aggregate_bytes_per_layer,aggregate_dram_bytes_per_second
+decode,positive_session_min,398.166,,,,,,,,,,,
+decode,positive_session_median,399.426,402.990,,279.810,41.713,253.698,33.1,34.0,,,,
+decode,positive_session_max,400.827,,,,,,,,,,,
+prefill,across_device_min,2078.558,,,,,,,,,,,
+prefill,warmed_reference,,2224.263,,578.956,560.573,435.721,11.4,11.5,,,,
+prefill,across_device_max,2135.854,,,,,,,,,,,
+batch1_decode,profile_capture,348.538,456.946,153.954,,,,32.4,33.4,78807040,17408,315297792,2048000000000
+batch1_decode,canonical_100_replay,348.538,414.822,153.954,,,,32.4,33.4,78807040,17408,315297792,2048000000000
+batch1_prefill,canonical_100_iteration,,948.012,,,,,19.8,19.9,,,,
+batch1_prefill,trace_100_replay,,700.584,,,,,,,,,,

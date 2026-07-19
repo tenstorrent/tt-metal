@@ -1,0 +1,144 @@
+2026-07-19 02:40:10.475 | INFO     | __main__:main:189 - Setting profiler artifacts folder to /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16
+2026-07-19 02:40:10.476 | INFO     | __main__:main:395 - Using port 8086
+2026-07-19 02:40:10.476 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-07-19 02:40:10.478 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/mvasiljevic/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-07-19 02:40:10.483 | INFO     | __main__:main:413 - Test process started
+2026-07-19 02:40:11.189 | INFO     | __main__:main:189 - Setting profiler artifacts folder to /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16
+2026-07-19 02:40:11.420 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.4e5d0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 02:40:14.394 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 02:40:14.394 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 02:40:15.150 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+FAILED2026-07-19 02:40:28.095 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_profile_internal_stacked_prefill(mesh_device):
+        """Profile only the stack-preserving two-layer prefill region."""
+
+        if os.environ.get(PROFILE_STACKED_PREFILL_ENV) != "1":
+            pytest.skip(f"Set {PROFILE_STACKED_PREFILL_ENV}=1 to profile stacked prefill")
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "1"))
+        active_batch = int(os.environ.get(ACTIVE_BATCH_ENV, EMITTED_BATCH))
+        config = _config()
+        decoder = MultichipDecoder.from_state_dict(
+            _real_state(), hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device
+        )
+        first_caches = _multichip_caches(config, mesh_device)
+        second_caches = _multichip_caches(config, mesh_device)
+        generator = torch.Generator().manual_seed(2519)
+        hidden = torch.randn(
+            (1, active_batch, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+>       stacked_input, logical_seq_len = decoder.prepare_prefill_residual(_mesh_input(hidden, mesh_device))
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:1067:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:974: in prepare_prefill_residual
+    seq_len = self._validate_hidden_states(hidden_states)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.multichip_decoder.MultichipDecoder object at 0x75110d1bd220>
+hidden_states = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 3.4943e-03,  2.5391e-02,  ..., -6.3281e-01, -1.7891e+00],
+      ...e+00,  ...,  7.1875e-01,  2.0156e+00]]]], shape=Shape([1, 1, 18, 5120]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+expected_seq_len = None
+
+    def _validate_hidden_states(self, hidden_states, expected_seq_len: int | None = None) -> int:
+        shape = tuple(hidden_states.shape)
+        if len(shape) != 4 or shape[0] != 1 or shape[1] != self.batch or shape[3] != self.hidden_size:
+>           raise ValueError(f"hidden_states must have shape [1, {self.batch}, seq, {self.hidden_size}], got {shape}")
+E           ValueError: hidden_states must have shape [1, 32, seq, 5120], got (1, 1, 18, 5120)
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/functional_decoder.py:244: ValueError
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_batch1_profile_stacked_prefill_bf16_tracy.xml -
+============================== slowest durations ===============================
+11.75s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+1.49s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+1.15s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+============================== 1 failed in 15.44s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x751134c45f08 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x75112c30c4c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function "subtract"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "merge"
+ - leaked function "compute_with_storage_grid_size"
+ - leaked function "__repr__"
+ - leaked function "volume"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 27.79 s
+Zones: 28,709
+Elapsed time: 19.01 s
+Saving trace... done!
+Trace size 485.41 KB (19.29% ratio)
+2026-07-19 02:40:30.596 | INFO     | __main__:main:452 - Copying /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/test_multichip_decoder_2026_07_19_02_40_30.tracy
+2026-07-19 02:40:30.598 | INFO     | __main__:main:455 - Copied /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/test_multichip_decoder_2026_07_19_02_40_30.tracy
+2026-07-19 02:40:30.598 | INFO     | __main__:main:464 - embed.tracy -> traces/test_multichip_decoder_2026_07_19_02_40_30.tracy
+2026-07-19 02:40:30.598 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-07-19 02:40:30.598 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-07-19 02:40:30.598 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-07-19 02:40:30.620 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16/.logs/tracy_ops_times.csv
+2026-07-19 02:40:30.623 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16/.logs/tracy_ops_data.csv
+2026-07-19 02:40:30.623 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+2026-07-19 02:40:30.656 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-07-19 02:40:30.656 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-07-19 02:40:30.682 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-07-19 02:40:30.682 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-07-19 02:40:30.685 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-07-19 02:40:30.692 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_batch1_profile_stacked_prefill_bf16/reports/2026_07_19_02_40_30/ops_perf_results_2026_07_19_02_40_30.csv

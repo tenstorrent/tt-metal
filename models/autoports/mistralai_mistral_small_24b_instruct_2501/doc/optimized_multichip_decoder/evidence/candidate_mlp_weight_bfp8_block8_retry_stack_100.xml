@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="22.273" timestamp="2026-07-19T01:23:33.286952+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]" time="21.587"><properties><property name="start_timestamp" value="2026-07-19T01:23:33" /><property name="end_timestamp" value="2026-07-19T01:23:55" /></properties><failure message="AssertionError: stack candidate/default output: 0.9993977898843521&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_decode_layout_perf(mesh_device):
+        """Compare repeated public restores with a stack-compatible residual layout."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "50"))
+        config = _config()
+        state = _real_state()
+        dense_kernel_family = os.environ.get(DENSE_KERNEL_FAMILY_ENV, "dram_sharded")
+        mlp_projection_family = os.environ.get(MLP_PROJECTION_FAMILY_ENV, "separate")
+        collective_family = os.environ.get(COLLECTIVE_FAMILY_ENV, "persistent")
+        collective_dtype = os.environ.get(COLLECTIVE_DTYPE_ENV, "bfp8")
+        decode_activation_dtype = os.environ.get(DECODE_ACTIVATION_DTYPE_ENV, "bf16")
+        attention_activation_dtype = os.environ.get(ATTENTION_ACTIVATION_DTYPE_ENV)
+        mlp_activation_dtype = os.environ.get(MLP_ACTIVATION_DTYPE_ENV)
+        attention_geometry = _geometry_from_env(ATTENTION_GEOMETRY_ENV, 6)
+        mlp_geometry = _geometry_from_env(MLP_GEOMETRY_ENV, 5)
+        attention_weight_dtype = _weight_dtype_from_env(ATTENTION_WEIGHT_DTYPE_ENV)
+        mlp_weight_dtype = _weight_dtype_from_env(MLP_WEIGHT_DTYPE_ENV)
+        attention_fidelity = _fidelity_from_env(ATTENTION_FIDELITY_ENV)
+        mlp_fidelity = _fidelity_from_env(MLP_FIDELITY_ENV)
+        decoder_kwargs = {
+            "dense_kernel_family": dense_kernel_family,
+            "mlp_projection_family": mlp_projection_family,
+            "collective_family": collective_family,
+            "collective_dtype": collective_dtype,
+            "decode_activation_dtype": decode_activation_dtype,
+            "attention_activation_dtype": attention_activation_dtype,
+            "mlp_activation_dtype": mlp_activation_dtype,
+        }
+        for name, value in (
+            ("attention_geometry", attention_geometry),
+            ("mlp_geometry", mlp_geometry),
+            ("attention_weight_dtype", attention_weight_dtype),
+            ("mlp_weight_dtype", mlp_weight_dtype),
+            ("attention_math_fidelity", attention_fidelity),
+            ("mlp_math_fidelity", mlp_fidelity),
+        ):
+            if value is not None:
+                decoder_kwargs[name] = value
+        first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            **decoder_kwargs,
+        )
+        second = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            shared_rope=first.shared_rope,
+            shared_collective=first.shared_collective,
+            **decoder_kwargs,
+        )
+        first_caches = _multichip_caches(config, mesh_device)
+        second_caches = _multichip_caches(config, mesh_device)
+        generator = torch.Generator().manual_seed(2514)
+        hidden = torch.randn((1, EMITTED_BATCH, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        tt_hidden = _mesh_input(hidden, mesh_device)
+        current_pos_tensor = _mesh_input(
+            torch.full((EMITTED_BATCH,), EMITTED_PREFILL_SEQUENCE, dtype=torch.int32),
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+        )
+
+        def public_pair():
+            output = first.decode_forward(
+                tt_hidden, *first_caches, current_pos_tensor=current_pos_tensor
+            )
+            return second.decode_forward(
+                output, *second_caches, current_pos_tensor=current_pos_tensor
+            )
+
+        stacked_input = first.prepare_decode_residual(tt_hidden)
+
+        def stacked_pair():
+            output = first.decode_forward_stacked(
+                stacked_input, *first_caches, current_pos_tensor=current_pos_tensor
+            )
+            return second.decode_forward_stacked(
+                output, *second_caches, current_pos_tensor=current_pos_tensor
+            )
+
+        eager_public = public_pair()
+        eager_stacked = stacked_pair()
+        ttnn.synchronize_device(mesh_device)
+        public_host = _replicated_host(eager_public)
+        stacked_host = _replicated_host(eager_stacked).reshape(public_host.shape)
+        _assert_pcc(public_host, stacked_host, 0.9999, "public/stacked two-layer output")
+        geometry_artifact = os.environ.get(GEOMETRY_ARTIFACT_ENV)
+        geometry_artifact_mode = os.environ.get(GEOMETRY_ARTIFACT_MODE_ENV)
+        if geometry_artifact:
+            if geometry_artifact_mode == "write":
+                torch.save(stacked_host, geometry_artifact)
+            elif geometry_artifact_mode == "compare":
+&gt;               _assert_pcc(
+                    torch.load(geometry_artifact, weights_only=True),
+                    stacked_host,
+                    0.9999,
+                    "stack candidate/default output",
+                )
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:885:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[[[-2.0312,  1.3672,  1.0781,  ..., -0.6406,  0.1338, -0.9258]],
+
+         [[-0.3633, -0.7891,  0.1357,  ..., ...25, -0.6758]],
+
+         [[-0.0049, -0.6406, -0.4785,  ..., -0.2637, -0.4668, -0.3496]]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[[-2.0156,  1.3906,  1.1406,  ..., -0.6680,  0.0918, -0.8984]],
+
+         [[-0.3633, -0.7344,  0.2070,  ..., ...56, -0.7109]],
+
+         [[ 0.0137, -0.6562, -0.4473,  ..., -0.1226, -0.5156, -0.3750]]]],
+       dtype=torch.bfloat16)
+threshold = 0.9999, label = 'stack candidate/default output'
+
+    def _assert_pcc(reference, actual, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: stack candidate/default output: 0.9993977898843521
+E       assert False
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_functional_decoder.py:179: AssertionError</failure></testcase></testsuite></testsuites>

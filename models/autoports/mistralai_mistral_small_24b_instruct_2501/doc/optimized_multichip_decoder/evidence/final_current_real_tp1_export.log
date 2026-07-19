@@ -1,0 +1,67 @@
+2026-07-19 03:28:13.705 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_pcc_against_single_chip_optimized_baseline[blackhole-1-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.f1f50000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17489920 B
+--------------------------------------------------------------------------
+2026-07-19 03:28:15.738 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 03:28:15.738 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 03:28:16.408 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+BASELINE_ARTIFACT wrote=/tmp/mistral_multichip_final_current_real_tp1.pt active_batch=32 reference_batch=32
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_current_real_tp1_export.xml -
+============================== slowest durations ===============================
+12.03s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_pcc_against_single_chip_optimized_baseline[blackhole-1-device_params0]
+1.36s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_pcc_against_single_chip_optimized_baseline[blackhole-1-device_params0]
+0.11s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_pcc_against_single_chip_optimized_baseline[blackhole-1-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_pcc_against_single_chip_optimized_baseline[blackhole-1-device_params0]
+============================== 1 passed in 14.17s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7e0faab29ea8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7e0faa370408 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "enable_program_cache"
+ - leaked function "num_program_cache_entries"
+ - leaked function "load_sub_device_manager"
+ - leaked function "sfpu_inf"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "buffer_num_pages"
+ - leaked function "get_device_id"
+ - leaked function "__repr__"
+ - leaked function "from_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

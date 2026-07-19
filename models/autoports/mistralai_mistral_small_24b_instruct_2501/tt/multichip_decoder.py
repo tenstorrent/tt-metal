@@ -12,6 +12,7 @@ and their partial hidden tensors are all-reduced before residual addition.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 import torch
@@ -30,6 +31,7 @@ from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.optimized_dec
     _advisor_decode_norm_configs,
     _dram_matmul_program_config,
     _dram_sharded_weight_memory_config,
+    _l1_padded_width_sharded_memory_config,
     _l1_width_sharded_memory_config,
     _prefill_matmul_program_config,
 )
@@ -38,13 +40,113 @@ TP_DEGREE = 4
 TP_AXIS = 1
 
 
-def _replicate_to_mesh(tensor: torch.Tensor, mesh_device, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+def _l1_prefill_qkv_input_memory_config(mesh_device, token_count: int, hidden_size: int):
+    """Block-shard the tuned prefill QKV input without padding its K dimension."""
+
+    hidden_tiles = hidden_size // ttnn.TILE_SIZE
+    input_grid_width = 5
+    input_grid_height = 9
+    if hidden_size % ttnn.TILE_SIZE or hidden_tiles % input_grid_width:
+        raise ValueError(f"hidden_size={hidden_size} cannot use the prefill QKV input grid")
+    grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(input_grid_width - 1, input_grid_height - 1),
+            )
+        }
+    )
+    shard_height = math.ceil(token_count / (ttnn.TILE_SIZE * input_grid_height)) * ttnn.TILE_SIZE
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            grid,
+            [shard_height, hidden_size // input_grid_width],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+def _l1_prefill_norm_configs(mesh_device, hidden_size: int, *, consumer: str):
+    """Shard a one-tile-row norm directly in its QKV/MLP consumer layout."""
+
+    if consumer not in {"qkv", "mlp"}:
+        raise ValueError(f"prefill norm consumer must be qkv|mlp, got {consumer!r}")
+    num_cores = 8 if consumer == "qkv" else 10
+    hidden_tiles = hidden_size // ttnn.TILE_SIZE
+    if hidden_size % ttnn.TILE_SIZE or hidden_tiles % num_cores:
+        raise ValueError(f"hidden_size={hidden_size} cannot use the prefill norm grid")
+    shard_width_tiles = hidden_tiles // num_cores
+    grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_cores - 1, 0),
+            )
+        }
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED if consumer == "qkv" else ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            grid,
+            [ttnn.TILE_SIZE, shard_width_tiles * ttnn.TILE_SIZE],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[num_cores, 1],
+        subblock_w=4,
+        block_h=1,
+        block_w=shard_width_tiles,
+        inplace=False,
+    )
+    return memory_config, program_config
+
+
+def _l1_prefill_collective_memory_config(mesh_device, token_count: int, width: int):
+    """Width-shard one tile-row prefill collective chunk over 40 L1 cores."""
+
+    return _l1_width_sharded_memory_config(mesh_device, token_count, width, 40)
+
+
+def _tp4_advisor_1d_program_config(
+    grid: tuple[int, int],
+    *,
+    in0_block_w: int,
+    per_core_n: int,
+    out_subblock_w: int,
+):
+    """Materialize the exact TP4 rank-local 1D advisor matmul seed."""
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _replicate_to_mesh(
+    tensor: torch.Tensor,
+    mesh_device,
+    *,
+    layout=ttnn.TILE_LAYOUT,
+    dtype=ttnn.bfloat16,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+):
     return ttnn.from_torch(
         tensor.contiguous(),
         device=mesh_device,
         layout=layout,
         dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
@@ -112,7 +214,19 @@ class MultichipDecoder(OptimizedDecoder):
         use_prefill_program_configs: bool = True,
         attention_geometry: tuple[int, int, int, int, int, int] = (10, 12, 16, 8, 10, 4),
         mlp_geometry: tuple[int, int, int, int, int] = (10, 32, 40, 16, 16),
+        dense_kernel_family: str = "dram_sharded",
+        mlp_projection_family: str = "separate",
+        collective_family: str = "persistent",
+        collective_dtype: str = "bfp8",
+        decode_activation_dtype: str = "bf16",
+        attention_activation_dtype: str | None = None,
+        mlp_activation_dtype: str | None = None,
+        prefill_activation_family: str = "dram",
+        prefill_collective_family: str = "default",
+        prefill_collective_dtype: str = "bf16",
         shared_rope: tuple | None = None,
+        shared_collective: tuple | None = None,
+        shared_prefill_collective: tuple | None = None,
         **_kwargs,
     ) -> "MultichipDecoder":
         num_devices = mesh_device.get_num_devices()
@@ -213,6 +327,49 @@ class MultichipDecoder(OptimizedDecoder):
                 "mlp_geometry must be "
                 "(input_cores, intermediate_cores, output_cores, gate_max_block, down_max_block)"
             )
+        if dense_kernel_family not in {"dram_sharded", "advisor_1d"}:
+            raise ValueError(
+                "dense_kernel_family must be 'dram_sharded' or 'advisor_1d', " f"got {dense_kernel_family!r}"
+            )
+        if mlp_projection_family not in {"separate", "packed"}:
+            raise ValueError("mlp_projection_family must be 'separate' or 'packed', " f"got {mlp_projection_family!r}")
+        if collective_family not in {"default", "persistent"}:
+            raise ValueError("collective_family must be 'default' or 'persistent', " f"got {collective_family!r}")
+        if collective_dtype not in {"bf16", "bfp8"}:
+            raise ValueError(f"collective_dtype must be 'bf16' or 'bfp8', got {collective_dtype!r}")
+        if collective_dtype != "bf16" and collective_family != "persistent":
+            raise ValueError("reduced collective dtype requires the explicit persistent collective family")
+        if decode_activation_dtype not in {"bf16", "bfp8"}:
+            raise ValueError("decode_activation_dtype must be 'bf16' or 'bfp8', " f"got {decode_activation_dtype!r}")
+        if attention_activation_dtype is None:
+            attention_activation_dtype = decode_activation_dtype
+        if mlp_activation_dtype is None:
+            mlp_activation_dtype = decode_activation_dtype
+        for name, value in (
+            ("attention_activation_dtype", attention_activation_dtype),
+            ("mlp_activation_dtype", mlp_activation_dtype),
+        ):
+            if value not in {"bf16", "bfp8"}:
+                raise ValueError(f"{name} must be 'bf16' or 'bfp8', got {value!r}")
+        if prefill_activation_family not in {
+            "dram",
+            "l1_qkv",
+            "qkv_sharded_norm",
+            "mlp_sharded_norm",
+            "sharded_norms",
+        }:
+            raise ValueError(
+                "prefill_activation_family must be dram|l1_qkv|qkv_sharded_norm|mlp_sharded_norm|sharded_norms, "
+                f"got {prefill_activation_family!r}"
+            )
+        if prefill_collective_family not in {"default", "persistent"}:
+            raise ValueError(
+                "prefill_collective_family must be 'default' or 'persistent', " f"got {prefill_collective_family!r}"
+            )
+        if prefill_collective_dtype not in {"bf16", "bfp8"}:
+            raise ValueError("prefill_collective_dtype must be 'bf16' or 'bfp8', " f"got {prefill_collective_dtype!r}")
+        if prefill_collective_dtype != "bf16" and prefill_collective_family != "persistent":
+            raise ValueError("reduced prefill collective dtype requires the persistent prefill family")
 
         if shared_rope is None:
             rotary = MistralRotaryEmbedding(hf_config)
@@ -348,6 +505,21 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.use_prefill_program_configs = use_prefill_program_configs
         decoder.use_advisor_decode_layout = True
         decoder.use_advisor_1d_matmuls = False
+        decoder.dense_kernel_family = dense_kernel_family
+        decoder.mlp_projection_family = mlp_projection_family
+        decoder.collective_family = collective_family
+        decoder.collective_dtype = ttnn.bfloat16 if collective_dtype == "bf16" else ttnn.bfloat8_b
+        decoder.attention_activation_dtype = ttnn.bfloat16 if attention_activation_dtype == "bf16" else ttnn.bfloat8_b
+        decoder.mlp_activation_dtype = ttnn.bfloat16 if mlp_activation_dtype == "bf16" else ttnn.bfloat8_b
+        # Retain the combined setting as provenance for older callers.
+        decoder.decode_activation_dtype = (
+            decoder.attention_activation_dtype
+            if decoder.attention_activation_dtype == decoder.mlp_activation_dtype
+            else None
+        )
+        decoder.prefill_activation_family = prefill_activation_family
+        decoder.prefill_collective_family = prefill_collective_family
+        decoder.prefill_collective_dtype = ttnn.bfloat16 if prefill_collective_dtype == "bf16" else ttnn.bfloat8_b
         decoder.mlp_geometry = tuple(int(value) for value in mlp_geometry)
         decoder.attention_geometry = tuple(int(value) for value in attention_geometry)
         decoder.mlp_weight_dtype = mlp_weight_dtype
@@ -431,6 +603,178 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.decode_mlp_output_mem_config = _l1_width_sharded_memory_config(
             mesh_device, ttnn.TILE_SIZE, hidden_size, mlp_output_cores
         )
+        decoder.collective_workspace = None
+        decoder.collective_semaphore = None
+        if collective_family == "persistent":
+            if shared_collective is None:
+                collective_workspace_mem_config = _l1_width_sharded_memory_config(
+                    mesh_device,
+                    ttnn.TILE_SIZE,
+                    hidden_size * TP_DEGREE,
+                    mlp_output_cores,
+                )
+                decoder.collective_workspace = _replicate_to_mesh(
+                    torch.zeros((1, 1, batch, hidden_size * TP_DEGREE), dtype=torch.bfloat16),
+                    mesh_device,
+                    memory_config=collective_workspace_mem_config,
+                )
+                grid_size = mesh_device.compute_with_storage_grid_size()
+                worker_grid = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1),
+                        )
+                    }
+                )
+                decoder.collective_semaphore = ttnn.create_global_semaphore(mesh_device, worker_grid, 0)
+            else:
+                if len(shared_collective) != 2:
+                    raise ValueError("shared_collective must contain (workspace, semaphore)")
+                decoder.collective_workspace, decoder.collective_semaphore = shared_collective
+                expected_workspace_shape = (1, 1, batch, hidden_size * TP_DEGREE)
+                if tuple(decoder.collective_workspace.shape) != expected_workspace_shape:
+                    raise ValueError(
+                        f"shared collective workspace must have shape {expected_workspace_shape}, "
+                        f"got {tuple(decoder.collective_workspace.shape)}"
+                    )
+            decoder.shared_collective = (decoder.collective_workspace, decoder.collective_semaphore)
+        else:
+            if shared_collective is not None:
+                raise ValueError("shared_collective requires collective_family='persistent'")
+            decoder.shared_collective = None
+        decoder.prefill_collective_workspace = None
+        decoder.prefill_collective_semaphore = None
+        if prefill_collective_family == "persistent":
+            if shared_prefill_collective is None:
+                # The async CCL allocates circular buffers from the full
+                # payload, independent of the shard core count.  A full
+                # 576-token workspace exceeds Blackhole L1, so prefill owns
+                # tile-row chunking while preserving the public logical shape.
+                max_prefill_tokens = ttnn.TILE_SIZE
+                decoder.prefill_collective_input_mem_config = _l1_prefill_collective_memory_config(
+                    mesh_device, max_prefill_tokens, hidden_size
+                )
+                decoder.prefill_collective_workspace_mem_config = _l1_prefill_collective_memory_config(
+                    mesh_device, max_prefill_tokens, hidden_size * TP_DEGREE
+                )
+                decoder.prefill_collective_workspace = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, max_prefill_tokens, hidden_size * TP_DEGREE]),
+                    ttnn.bfloat16,
+                    ttnn.TILE_LAYOUT,
+                    mesh_device,
+                    decoder.prefill_collective_workspace_mem_config,
+                )
+                grid_size = mesh_device.compute_with_storage_grid_size()
+                worker_grid = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1),
+                        )
+                    }
+                )
+                decoder.prefill_collective_semaphore = ttnn.create_global_semaphore(mesh_device, worker_grid, 0)
+            else:
+                if len(shared_prefill_collective) != 2:
+                    raise ValueError("shared_prefill_collective must contain (workspace, semaphore)")
+                (
+                    decoder.prefill_collective_workspace,
+                    decoder.prefill_collective_semaphore,
+                ) = shared_prefill_collective
+                expected_prefill_workspace_shape = (
+                    1,
+                    1,
+                    ttnn.TILE_SIZE,
+                    hidden_size * TP_DEGREE,
+                )
+                if tuple(decoder.prefill_collective_workspace.shape) != expected_prefill_workspace_shape:
+                    raise ValueError(
+                        "shared prefill collective workspace must have shape "
+                        f"{expected_prefill_workspace_shape}, got "
+                        f"{tuple(decoder.prefill_collective_workspace.shape)}"
+                    )
+                decoder.prefill_collective_input_mem_config = _l1_prefill_collective_memory_config(
+                    mesh_device, ttnn.TILE_SIZE, hidden_size
+                )
+                decoder.prefill_collective_workspace_mem_config = decoder.prefill_collective_workspace.memory_config()
+            decoder.shared_prefill_collective = (
+                decoder.prefill_collective_workspace,
+                decoder.prefill_collective_semaphore,
+            )
+        else:
+            if shared_prefill_collective is not None:
+                raise ValueError("shared_prefill_collective requires prefill_collective_family='persistent'")
+            decoder.shared_prefill_collective = None
+        decoder.decode_packed_gate_up_weight = None
+        if mlp_projection_family == "packed":
+            decoder.decode_packed_gate_up_weight = _shard_to_mesh(
+                gate_up,
+                mesh_device,
+                dim=-1,
+                dtype=mlp_weight_dtype,
+                memory_config=_dram_sharded_weight_memory_config(mesh_device, hidden_size, 2 * local_intermediate_size),
+            )
+            decoder.decode_packed_gate_up_mem_config = _l1_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, 2 * local_intermediate_size, 64
+            )
+            decoder.decode_packed_gate_up_program_config = _dram_matmul_program_config(
+                ttnn.TILE_SIZE,
+                hidden_size,
+                2 * local_intermediate_size,
+                decoder.mlp_geometry[0],
+                64,
+                # Packed N doubles the output circular buffer; block 16
+                # exceeds Blackhole L1 for this exact local projection.
+                max_in0_block_w=8,
+            )
+        decoder.advisor_qkv_weight = None
+        decoder.advisor_output_weight = None
+        decoder.advisor_gate_weight = None
+        decoder.advisor_up_weight = None
+        decoder.advisor_down_weight = None
+        if dense_kernel_family == "advisor_1d":
+            # These are separate decode-lifetime tensors. They are not aliases
+            # of the releasable large-M prefill copies.
+            decoder.advisor_qkv_weight = _shard_to_mesh(qkv, mesh_device, dim=-1, dtype=attention_weight_dtype)
+            decoder.advisor_output_weight = _shard_to_mesh(o_t, mesh_device, dim=0, dtype=attention_weight_dtype)
+            decoder.advisor_gate_weight = _shard_to_mesh(gate_t, mesh_device, dim=-1, dtype=mlp_weight_dtype)
+            decoder.advisor_up_weight = _shard_to_mesh(up_t, mesh_device, dim=-1, dtype=mlp_weight_dtype)
+            decoder.advisor_down_weight = _shard_to_mesh(down_t, mesh_device, dim=0, dtype=down_weight_dtype)
+            decoder.advisor_qkv_input_mem_config = ttnn.L1_MEMORY_CONFIG
+            decoder.advisor_qkv_output_mem_config = _l1_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, local_qkv_width, 48
+            )
+            decoder.advisor_qkv_program_config = _tp4_advisor_1d_program_config(
+                (11, 5), in0_block_w=8, per_core_n=1, out_subblock_w=1
+            )
+            decoder.advisor_o_input_mem_config = _l1_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, local_attention_width, 16
+            )
+            decoder.advisor_o_output_mem_config = _l1_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, hidden_size, 80
+            )
+            decoder.advisor_o_program_config = _tp4_advisor_1d_program_config(
+                (11, 8), in0_block_w=2, per_core_n=2, out_subblock_w=2
+            )
+            decoder.advisor_mlp_input_mem_config = _l1_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, hidden_size, 80
+            )
+            decoder.advisor_mlp_intermediate_mem_config = _l1_padded_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, local_intermediate_size, 86
+            )
+            decoder.advisor_mlp_down_input_mem_config = _l1_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, local_intermediate_size, 64
+            )
+            decoder.advisor_mlp_output_mem_config = _l1_width_sharded_memory_config(
+                mesh_device, ttnn.TILE_SIZE, hidden_size, 80
+            )
+            decoder.advisor_gate_up_program_config = _tp4_advisor_1d_program_config(
+                (11, 8), in0_block_w=2, per_core_n=3, out_subblock_w=3
+            )
+            decoder.advisor_down_program_config = _tp4_advisor_1d_program_config(
+                (11, 8), in0_block_w=2, per_core_n=2, out_subblock_w=2
+            )
         decoder.prefill_weights_released = False
         return decoder
 
@@ -469,7 +813,59 @@ class MultichipDecoder(OptimizedDecoder):
         if key_shape != expected:
             raise ValueError(f"contiguous caches must have local shape {expected}, got {key_shape}")
 
-    def _all_reduce_hidden(self, partial_hidden):
+    def _all_reduce_hidden(self, partial_hidden, *, mode: str):
+        if mode not in {"prefill", "decode"}:
+            raise ValueError(f"collective mode must be 'prefill' or 'decode', got {mode!r}")
+        # Phase is explicit: a batch-1 prefill can also have M<=32, but it must
+        # not silently inherit the decode CCL dtype/workspace policy.
+        if mode == "decode" and self.collective_family == "persistent":
+            partial_hidden = ttnn.to_memory_config(partial_hidden, self.decode_mlp_output_mem_config)
+            return ttnn.experimental.all_reduce_async(
+                partial_hidden,
+                self.collective_workspace,
+                cluster_axis=self.tp_axis,
+                mesh_device=self.mesh_device,
+                multi_device_global_semaphore=self.collective_semaphore,
+                dtype=self.collective_dtype,
+                memory_config=self.decode_mlp_output_mem_config,
+                topology=self.collective_topology,
+                num_links=self.num_links,
+            )
+        if (
+            mode == "prefill"
+            and self.prefill_collective_family == "persistent"
+            and int(partial_hidden.shape[-2]) <= self.batch * EMITTED_PREFILL_SEQUENCE
+        ):
+            token_count = int(partial_hidden.shape[-2])
+            chunks = []
+            for start in range(0, token_count, ttnn.TILE_SIZE):
+                end = min(start + ttnn.TILE_SIZE, token_count)
+                chunk = ttnn.slice(
+                    partial_hidden,
+                    [0, 0, start, 0],
+                    [
+                        partial_hidden.shape[0],
+                        partial_hidden.shape[1],
+                        end,
+                        partial_hidden.shape[-1],
+                    ],
+                    [1, 1, 1, 1],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                chunk = ttnn.to_memory_config(chunk, self.prefill_collective_input_mem_config)
+                reduced = ttnn.experimental.all_reduce_async(
+                    chunk,
+                    self.prefill_collective_workspace,
+                    cluster_axis=self.tp_axis,
+                    mesh_device=self.mesh_device,
+                    multi_device_global_semaphore=self.prefill_collective_semaphore,
+                    dtype=self.prefill_collective_dtype,
+                    memory_config=self.prefill_collective_input_mem_config,
+                    topology=self.collective_topology,
+                    num_links=self.num_links,
+                )
+                chunks.append(ttnn.to_memory_config(reduced, ttnn.DRAM_MEMORY_CONFIG))
+            return ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if partial_hidden.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             partial_hidden = ttnn.to_memory_config(partial_hidden, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.all_reduce(
@@ -487,46 +883,96 @@ class MultichipDecoder(OptimizedDecoder):
         if physical_height != ttnn.TILE_SIZE:
             return self._packed_mlp_forward(hidden_states, self.prefill_gate_up_weight, self.prefill_down_weight)
 
-        input_cores, intermediate_cores, output_cores, gate_max_block, down_max_block = self.mlp_geometry
-        input_mem_config = _l1_width_sharded_memory_config(
-            self.mesh_device, physical_height, self.hidden_size, input_cores
-        )
-        intermediate_mem_config = _l1_width_sharded_memory_config(
-            self.mesh_device, physical_height, self.intermediate_size, intermediate_cores
-        )
-        gate_program_config = _dram_matmul_program_config(
-            physical_height,
-            self.hidden_size,
-            self.intermediate_size,
-            input_cores,
-            intermediate_cores,
-            max_in0_block_w=gate_max_block,
-        )
-        down_program_config = _dram_matmul_program_config(
-            physical_height,
-            self.intermediate_size,
-            self.hidden_size,
-            intermediate_cores,
-            output_cores,
-            max_in0_block_w=down_max_block,
-        )
+        if self.dense_kernel_family == "advisor_1d":
+            input_mem_config = self.advisor_mlp_input_mem_config
+            intermediate_mem_config = self.advisor_mlp_intermediate_mem_config
+            down_input_mem_config = self.advisor_mlp_down_input_mem_config
+            output_mem_config = self.advisor_mlp_output_mem_config
+            gate_program_config = self.advisor_gate_up_program_config
+            down_program_config = self.advisor_down_program_config
+            gate_weight = self.advisor_gate_weight
+            up_weight = self.advisor_up_weight
+            down_weight = self.advisor_down_weight
+        else:
+            input_cores, intermediate_cores, output_cores, gate_max_block, down_max_block = self.mlp_geometry
+            input_mem_config = _l1_width_sharded_memory_config(
+                self.mesh_device, physical_height, self.hidden_size, input_cores
+            )
+            intermediate_mem_config = _l1_width_sharded_memory_config(
+                self.mesh_device, physical_height, self.intermediate_size, intermediate_cores
+            )
+            down_input_mem_config = intermediate_mem_config
+            output_mem_config = self.decode_mlp_output_mem_config
+            gate_program_config = _dram_matmul_program_config(
+                physical_height,
+                self.hidden_size,
+                self.intermediate_size,
+                input_cores,
+                intermediate_cores,
+                max_in0_block_w=gate_max_block,
+            )
+            down_program_config = _dram_matmul_program_config(
+                physical_height,
+                self.intermediate_size,
+                self.hidden_size,
+                intermediate_cores,
+                output_cores,
+                max_in0_block_w=down_max_block,
+            )
+            gate_weight = self.gate_weight
+            up_weight = self.up_weight
+            down_weight = self.down_weight
         hidden_states = ttnn.to_memory_config(hidden_states, input_mem_config)
-        gate = ttnn.matmul(
-            hidden_states,
-            self.gate_weight,
-            dtype=ttnn.bfloat16,
-            memory_config=intermediate_mem_config,
-            program_config=gate_program_config,
-            compute_kernel_config=self.mlp_compute_kernel_config,
-        )
-        up = ttnn.matmul(
-            hidden_states,
-            self.up_weight,
-            dtype=ttnn.bfloat16,
-            memory_config=intermediate_mem_config,
-            program_config=gate_program_config,
-            compute_kernel_config=self.mlp_compute_kernel_config,
-        )
+        if self.mlp_activation_dtype != ttnn.bfloat16:
+            hidden_states = ttnn.typecast(
+                hidden_states, dtype=self.mlp_activation_dtype, memory_config=input_mem_config
+            )
+        if self.mlp_projection_family == "packed":
+            packed_gate_up = ttnn.matmul(
+                hidden_states,
+                self.decode_packed_gate_up_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=self.decode_packed_gate_up_mem_config,
+                program_config=self.decode_packed_gate_up_program_config,
+                compute_kernel_config=self.mlp_compute_kernel_config,
+            )
+            gate = ttnn.slice(
+                packed_gate_up,
+                [0, 0, 0, 0],
+                [packed_gate_up.shape[0], packed_gate_up.shape[1], packed_gate_up.shape[2], self.intermediate_size],
+                [1, 1, 1, 1],
+                memory_config=intermediate_mem_config,
+            )
+            up = ttnn.slice(
+                packed_gate_up,
+                [0, 0, 0, self.intermediate_size],
+                [
+                    packed_gate_up.shape[0],
+                    packed_gate_up.shape[1],
+                    packed_gate_up.shape[2],
+                    2 * self.intermediate_size,
+                ],
+                [1, 1, 1, 1],
+                memory_config=intermediate_mem_config,
+            )
+            ttnn.deallocate(packed_gate_up)
+        else:
+            gate = ttnn.matmul(
+                hidden_states,
+                gate_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=intermediate_mem_config,
+                program_config=gate_program_config,
+                compute_kernel_config=self.mlp_compute_kernel_config,
+            )
+            up = ttnn.matmul(
+                hidden_states,
+                up_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=intermediate_mem_config,
+                program_config=gate_program_config,
+                compute_kernel_config=self.mlp_compute_kernel_config,
+            )
         ttnn.deallocate(hidden_states)
         gated = ttnn.multiply(
             gate,
@@ -537,34 +983,127 @@ class MultichipDecoder(OptimizedDecoder):
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
+        if self.dense_kernel_family == "advisor_1d":
+            gated = ttnn.to_memory_config(gated, down_input_mem_config)
+        if self.mlp_activation_dtype != ttnn.bfloat16:
+            gated = ttnn.typecast(gated, dtype=self.mlp_activation_dtype, memory_config=down_input_mem_config)
         return ttnn.matmul(
             gated,
-            self.down_weight,
+            down_weight,
             dtype=ttnn.bfloat16,
-            memory_config=self.decode_mlp_output_mem_config,
+            memory_config=output_mem_config,
             program_config=down_program_config,
             compute_kernel_config=self.mlp_compute_kernel_config,
         )
 
-    def prefill_forward(self, hidden_states, key_cache, value_cache, *, page_table=None):
+    def _prefill_rms_norm(self, hidden_states, weight, *, token_count: int, consumer: str):
+        """Run the optional one-tile-row sharded prefill norm family."""
+
+        physical_height = math.ceil(token_count / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        enabled_families = {
+            "qkv": {"qkv_sharded_norm", "sharded_norms"},
+            "mlp": {"mlp_sharded_norm", "sharded_norms"},
+        }
+        if self.prefill_activation_family not in enabled_families[consumer] or physical_height != ttnn.TILE_SIZE:
+            return ttnn.rms_norm(
+                hidden_states,
+                epsilon=self.rms_norm_eps,
+                weight=weight,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        norm_mem_config, norm_program_config = _l1_prefill_norm_configs(
+            self.mesh_device,
+            self.hidden_size,
+            consumer=consumer,
+        )
+        norm_input = ttnn.to_memory_config(hidden_states, norm_mem_config)
+        return ttnn.rms_norm(
+            norm_input,
+            epsilon=self.rms_norm_eps,
+            weight=weight,
+            memory_config=norm_mem_config,
+            program_config=norm_program_config,
+        )
+
+    def prepare_decode_residual(self, hidden_states):
+        """Convert the public decode tensor once at the entrance to a layer stack."""
+
+        self._validate_hidden_states(hidden_states, expected_seq_len=1)
+        hidden_states = ttnn.reshape(hidden_states, [1, 1, self.batch, self.hidden_size])
+        return ttnn.to_memory_config(hidden_states, self.decode_norm_mem_config)
+
+    def finish_decode_residual(self, hidden_states):
+        """Restore the public decode tensor once after the final stacked layer."""
+
+        expected = (1, 1, self.batch, self.hidden_size)
+        if tuple(hidden_states.shape) != expected:
+            raise ValueError(f"stacked decode residual must have shape {expected}, got {tuple(hidden_states.shape)}")
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(hidden_states, [1, self.batch, 1, self.hidden_size])
+
+    def prepare_prefill_residual(self, hidden_states):
+        """Flatten a public prefill tensor once at the entrance to a layer stack."""
+
+        seq_len = self._validate_hidden_states(hidden_states)
+        token_count = seq_len * self.batch
+        hidden_states = ttnn.permute(hidden_states, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(hidden_states, [1, 1, token_count, self.hidden_size]), seq_len
+
+    def finish_prefill_residual(self, hidden_states, *, logical_seq_len: int):
+        """Restore the public prefill tensor once after the final stacked layer."""
+
+        if logical_seq_len < 1:
+            raise ValueError(f"logical_seq_len must be positive, got {logical_seq_len}")
+        expected = (1, 1, self.batch * logical_seq_len, self.hidden_size)
+        if tuple(hidden_states.shape) != expected:
+            raise ValueError(f"stacked prefill residual must have shape {expected}, got {tuple(hidden_states.shape)}")
+        hidden_states = ttnn.reshape(hidden_states, [1, logical_seq_len, self.batch, self.hidden_size])
+        return ttnn.permute(hidden_states, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def prefill_forward(
+        self,
+        hidden_states,
+        key_cache,
+        value_cache,
+        *,
+        page_table=None,
+        stacked_layout: bool = False,
+        logical_seq_len: int | None = None,
+    ):
         if self.prefill_weights_released:
             raise RuntimeError("prefill weights were released for decode-phase capacity and cannot be reused")
-        seq_len = self._validate_hidden_states(hidden_states)
+        if stacked_layout:
+            if logical_seq_len is None or logical_seq_len < 1:
+                raise ValueError("stacked prefill requires a positive logical_seq_len")
+            seq_len = logical_seq_len
+            expected = (1, 1, self.batch * seq_len, self.hidden_size)
+            if tuple(hidden_states.shape) != expected:
+                raise ValueError(f"stacked prefill input must have shape {expected}, got {tuple(hidden_states.shape)}")
+            if hidden_states.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                raise ValueError(
+                    "stacked prefill input must preserve the DRAM-interleaved residual contract; "
+                    f"got {hidden_states.memory_config()}"
+                )
+        else:
+            hidden_states, seq_len = self.prepare_prefill_residual(hidden_states)
         self._validate_caches(key_cache, value_cache, paged=page_table is not None)
         token_count = seq_len * self.batch
         use_tuned_dense_config = (
             self.use_prefill_program_configs and token_count <= EMITTED_BATCH * EMITTED_PREFILL_SEQUENCE
         )
 
-        hidden_states = ttnn.permute(hidden_states, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.reshape(hidden_states, [1, 1, token_count, self.hidden_size])
         residual = hidden_states
-        normed = ttnn.rms_norm(
+        normed = self._prefill_rms_norm(
             hidden_states,
-            epsilon=self.rms_norm_eps,
-            weight=self.input_norm,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            self.input_norm,
+            token_count=token_count,
+            consumer="qkv",
         )
+        if self.prefill_activation_family == "l1_qkv":
+            normed = ttnn.to_memory_config(
+                normed,
+                _l1_prefill_qkv_input_memory_config(self.mesh_device, token_count, self.hidden_size),
+            )
         fused_qkv = ttnn.matmul(
             normed,
             self.prefill_qkv_weight,
@@ -576,8 +1115,8 @@ class MultichipDecoder(OptimizedDecoder):
                     token_count,
                     self.hidden_size,
                     (self.num_heads + 2 * self.num_kv_heads) * self.head_dim,
-                    (8, 9),
-                    8,
+                    ((8, 1) if self.prefill_activation_family in {"qkv_sharded_norm", "sharded_norms"} else (8, 9)),
+                    4 if self.prefill_activation_family in {"qkv_sharded_norm", "sharded_norms"} else 8,
                 )
                 if use_tuned_dense_config
                 else None
@@ -668,21 +1207,42 @@ class MultichipDecoder(OptimizedDecoder):
                 else None
             ),
         )
-        attention = self._all_reduce_hidden(attention)
+        attention = self._all_reduce_hidden(attention, mode="prefill")
         hidden_states = ttnn.add(residual, attention, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         residual = hidden_states
-        hidden_states = ttnn.rms_norm(
+        hidden_states = self._prefill_rms_norm(
             hidden_states,
-            epsilon=self.rms_norm_eps,
-            weight=self.post_attention_norm,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            self.post_attention_norm,
+            token_count=token_count,
+            consumer="mlp",
         )
         hidden_states = self._mlp_forward(hidden_states)
-        hidden_states = self._all_reduce_hidden(hidden_states)
+        hidden_states = self._all_reduce_hidden(hidden_states, mode="prefill")
         hidden_states = ttnn.add(residual, hidden_states, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.reshape(hidden_states, [1, seq_len, self.batch, self.hidden_size])
-        return ttnn.permute(hidden_states, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if stacked_layout:
+            return hidden_states
+        return self.finish_prefill_residual(hidden_states, logical_seq_len=seq_len)
+
+    def prefill_forward_stacked(
+        self,
+        hidden_states,
+        key_cache,
+        value_cache,
+        *,
+        logical_seq_len: int,
+        page_table=None,
+    ):
+        """Prefill one layer while preserving flattened DRAM layout for the next layer."""
+
+        return self.prefill_forward(
+            hidden_states,
+            key_cache,
+            value_cache,
+            page_table=page_table,
+            stacked_layout=True,
+            logical_seq_len=logical_seq_len,
+        )
 
     def decode_forward(
         self,
@@ -693,16 +1253,27 @@ class MultichipDecoder(OptimizedDecoder):
         current_pos: int | None = None,
         page_table=None,
         current_pos_tensor=None,
+        stacked_layout: bool = False,
     ):
-        self._validate_hidden_states(hidden_states, expected_seq_len=1)
+        if stacked_layout:
+            expected = (1, 1, self.batch, self.hidden_size)
+            if tuple(hidden_states.shape) != expected:
+                raise ValueError(f"stacked decode input must have shape {expected}, got {tuple(hidden_states.shape)}")
+            if hidden_states.memory_config() != self.decode_norm_mem_config:
+                raise ValueError(
+                    "stacked decode input must preserve the decoder residual memory config; "
+                    f"got {hidden_states.memory_config()}"
+                )
+        else:
+            self._validate_hidden_states(hidden_states, expected_seq_len=1)
         self._validate_caches(key_cache, value_cache, paged=page_table is not None)
         if (current_pos is None) == (current_pos_tensor is None):
             raise ValueError("decode requires exactly one of current_pos or current_pos_tensor")
         if current_pos is not None and (current_pos < 0 or current_pos >= self.max_cache_len):
             raise ValueError(f"current_pos must be in [0, {self.max_cache_len}), got {current_pos}")
 
-        hidden_states = ttnn.reshape(hidden_states, [1, 1, self.batch, self.hidden_size])
-        hidden_states = ttnn.to_memory_config(hidden_states, self.decode_norm_mem_config)
+        if not stacked_layout:
+            hidden_states = self.prepare_decode_residual(hidden_states)
         residual = hidden_states
         normed = ttnn.rms_norm(
             hidden_states,
@@ -711,13 +1282,31 @@ class MultichipDecoder(OptimizedDecoder):
             memory_config=self.decode_norm_mem_config,
             program_config=self.decode_norm_program_config,
         )
-        normed = ttnn.to_memory_config(normed, self.decode_qkv_input_mem_config)
+        qkv_input_mem_config = (
+            self.advisor_qkv_input_mem_config
+            if self.dense_kernel_family == "advisor_1d"
+            else self.decode_qkv_input_mem_config
+        )
+        qkv_output_mem_config = (
+            self.advisor_qkv_output_mem_config
+            if self.dense_kernel_family == "advisor_1d"
+            else self.decode_qkv_output_mem_config
+        )
+        qkv_program_config = (
+            self.advisor_qkv_program_config
+            if self.dense_kernel_family == "advisor_1d"
+            else self.decode_qkv_program_config
+        )
+        qkv_weight = self.advisor_qkv_weight if self.dense_kernel_family == "advisor_1d" else self.qkv_weight
+        normed = ttnn.to_memory_config(normed, qkv_input_mem_config)
+        if self.attention_activation_dtype != ttnn.bfloat16:
+            normed = ttnn.typecast(normed, dtype=self.attention_activation_dtype, memory_config=qkv_input_mem_config)
         fused_qkv = ttnn.matmul(
             normed,
-            self.qkv_weight,
+            qkv_weight,
             dtype=ttnn.bfloat16,
-            memory_config=self.decode_qkv_output_mem_config,
-            program_config=self.decode_qkv_program_config,
+            memory_config=qkv_output_mem_config,
+            program_config=qkv_program_config,
             compute_kernel_config=self.attention_compute_kernel_config,
         )
         query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -816,19 +1405,37 @@ class MultichipDecoder(OptimizedDecoder):
             sharded_attention, num_heads=self.num_heads, sub_core_grids=self.decode_compute_core_grid
         )
         ttnn.deallocate(sharded_attention)
-        attention = ttnn.to_memory_config(concatenated_attention, self.decode_o_input_mem_config)
+        o_input_mem_config = (
+            self.advisor_o_input_mem_config
+            if self.dense_kernel_family == "advisor_1d"
+            else self.decode_o_input_mem_config
+        )
+        o_output_mem_config = (
+            self.advisor_o_output_mem_config
+            if self.dense_kernel_family == "advisor_1d"
+            else self.decode_o_output_mem_config
+        )
+        o_program_config = (
+            self.advisor_o_program_config if self.dense_kernel_family == "advisor_1d" else self.decode_o_program_config
+        )
+        output_weight = self.advisor_output_weight if self.dense_kernel_family == "advisor_1d" else self.output_weight
+        attention = ttnn.to_memory_config(concatenated_attention, o_input_mem_config)
+        if self.attention_activation_dtype != ttnn.bfloat16:
+            attention = ttnn.typecast(
+                attention, dtype=self.attention_activation_dtype, memory_config=o_input_mem_config
+            )
         # For eight local heads, concat can already produce the exact WO input
         # memory config.  to_memory_config then aliases its input; deallocating
         # concatenated_attention would invalidate attention on every rank.
         attention = ttnn.matmul(
             attention,
-            self.output_weight,
+            output_weight,
             dtype=ttnn.bfloat16,
-            memory_config=self.decode_o_output_mem_config,
-            program_config=self.decode_o_program_config,
+            memory_config=o_output_mem_config,
+            program_config=o_program_config,
             compute_kernel_config=self.attention_compute_kernel_config,
         )
-        attention = self._all_reduce_hidden(attention)
+        attention = self._all_reduce_hidden(attention, mode="decode")
         attention = ttnn.to_memory_config(attention, self.decode_norm_mem_config)
         hidden_states = ttnn.add(residual, attention, dtype=ttnn.bfloat16, memory_config=self.decode_norm_mem_config)
 
@@ -841,13 +1448,44 @@ class MultichipDecoder(OptimizedDecoder):
             program_config=self.decode_norm_program_config,
         )
         hidden_states = self._mlp_forward(hidden_states)
-        hidden_states = self._all_reduce_hidden(hidden_states)
+        hidden_states = self._all_reduce_hidden(hidden_states, mode="decode")
         hidden_states = ttnn.to_memory_config(hidden_states, self.decode_norm_mem_config)
         hidden_states = ttnn.add(
             residual, hidden_states, dtype=ttnn.bfloat16, memory_config=self.decode_norm_mem_config
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.reshape(hidden_states, [1, self.batch, 1, self.hidden_size])
+        if int(hidden_states.shape[-2]) != self.batch:
+            hidden_states = ttnn.slice(
+                hidden_states,
+                [0, 0, 0, 0],
+                [1, 1, self.batch, self.hidden_size],
+                [1, 1, 1, 1],
+                memory_config=self.decode_norm_mem_config,
+            )
+        if stacked_layout:
+            return hidden_states
+        return self.finish_decode_residual(hidden_states)
+
+    def decode_forward_stacked(
+        self,
+        hidden_states,
+        key_cache,
+        value_cache,
+        *,
+        current_pos: int | None = None,
+        page_table=None,
+        current_pos_tensor=None,
+    ):
+        """Decode one layer while preserving the L1 residual contract for the next layer."""
+
+        return self.decode_forward(
+            hidden_states,
+            key_cache,
+            value_cache,
+            current_pos=current_pos,
+            page_table=page_table,
+            current_pos_tensor=current_pos_tensor,
+            stacked_layout=True,
+        )
 
     def forward(
         self,
@@ -859,6 +1497,7 @@ class MultichipDecoder(OptimizedDecoder):
         current_pos: int | None = None,
         page_table=None,
         current_pos_tensor=None,
+        logical_seq_len: int | None = None,
     ):
         if mode == "prefill":
             if current_pos is not None:
@@ -873,7 +1512,26 @@ class MultichipDecoder(OptimizedDecoder):
                 page_table=page_table,
                 current_pos_tensor=current_pos_tensor,
             )
-        raise ValueError(f"mode must be 'prefill' or 'decode', got {mode!r}")
+        if mode == "decode_stack":
+            return self.decode_forward_stacked(
+                hidden_states,
+                key_cache,
+                value_cache,
+                current_pos=current_pos,
+                page_table=page_table,
+                current_pos_tensor=current_pos_tensor,
+            )
+        if mode == "prefill_stack":
+            if logical_seq_len is None:
+                raise ValueError("prefill_stack requires logical_seq_len")
+            return self.prefill_forward_stacked(
+                hidden_states,
+                key_cache,
+                value_cache,
+                logical_seq_len=logical_seq_len,
+                page_table=page_table,
+            )
+        raise ValueError(f"mode must be 'prefill', 'prefill_stack', 'decode', or 'decode_stack', got {mode!r}")
 
 
 __all__ = [

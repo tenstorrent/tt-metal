@@ -1,0 +1,173 @@
+2026-07-19 03:08:45.977 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.37b50000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 03:08:48.002 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 03:08:48.002 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 03:08:48.719 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+public/stacked two-layer prefill: 1.0
+prefill candidate/default output: 0.9997616019589111
+FAILED2026-07-19 03:09:12.296 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_prefill_layout_perf(mesh_device):
+        """Compare repeated public prefill transposes with one stack-boundary conversion."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "10"))
+        active_batch = int(os.environ.get(ACTIVE_BATCH_ENV, EMITTED_BATCH))
+        assert 1 <= active_batch <= EMITTED_BATCH
+        config = _config()
+        state = _real_state()
+        prefill_activation_family = os.environ.get(PREFILL_ACTIVATION_FAMILY_ENV, "dram")
+        prefill_collective_family = os.environ.get(PREFILL_COLLECTIVE_FAMILY_ENV, "default")
+        prefill_collective_dtype = os.environ.get(PREFILL_COLLECTIVE_DTYPE_ENV, "bf16")
+        first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=active_batch,
+            prefill_activation_family=prefill_activation_family,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        second = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=active_batch,
+            shared_rope=first.shared_rope,
+            shared_collective=first.shared_collective,
+            shared_prefill_collective=first.shared_prefill_collective,
+            prefill_activation_family=prefill_activation_family,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        first_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        second_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        generator = torch.Generator().manual_seed(2515)
+        hidden = torch.randn(
+            (1, active_batch, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        tt_hidden = _mesh_input(hidden, mesh_device)
+
+        def public_pair():
+            output = first.prefill_forward(tt_hidden, *first_caches)
+            return second.prefill_forward(output, *second_caches)
+
+        stacked_input, logical_seq_len = first.prepare_prefill_residual(tt_hidden)
+
+        def stacked_pair():
+            output = first.prefill_forward_stacked(stacked_input, *first_caches, logical_seq_len=logical_seq_len)
+            return second.prefill_forward_stacked(output, *second_caches, logical_seq_len=logical_seq_len)
+
+        eager_public = public_pair()
+        eager_stacked = stacked_pair()
+        ttnn.synchronize_device(mesh_device)
+        public_host = _replicated_host(eager_public)
+        stacked_host = (
+            _replicated_host(eager_stacked)
+            .reshape(1, logical_seq_len, active_batch, config.hidden_size)
+            .permute(0, 2, 1, 3)
+        )
+        _assert_pcc(public_host, stacked_host, 0.9999, "public/stacked two-layer prefill")
+        geometry_artifact = os.environ.get(GEOMETRY_ARTIFACT_ENV)
+        geometry_artifact_mode = os.environ.get(GEOMETRY_ARTIFACT_MODE_ENV)
+        if geometry_artifact:
+            if geometry_artifact_mode == "write":
+                torch.save(stacked_host, geometry_artifact)
+            elif geometry_artifact_mode == "compare":
+>               _assert_pcc(
+                    torch.load(geometry_artifact, weights_only=True),
+                    stacked_host,
+                    0.9999,
+                    "prefill candidate/default output",
+                )
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:1027:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[[[-0.1060, -2.6719,  1.2734,  ..., -0.5703, -0.0153, -1.1016],
+          [-0.5664,  1.1016, -0.0908,  ...,  0...9922, -0.5234],
+          [ 0.2012, -1.8203,  0.0850,  ...,  0.3301,  0.2793, -1.4219]]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[[-0.1221, -2.6719,  1.3281,  ..., -0.4941, -0.0063, -1.1250],
+          [-0.6094,  1.0938, -0.0913,  ...,  0...0156, -0.5312],
+          [ 0.1758, -1.8359,  0.1201,  ...,  0.3438,  0.2812, -1.4219]]]],
+       dtype=torch.bfloat16)
+threshold = 0.9999, label = 'prefill candidate/default output'
+
+    def _assert_pcc(reference, actual, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+>       assert passed, f"{label}: {message}"
+E       AssertionError: prefill candidate/default output: 0.9997616019589111
+E       assert False
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_functional_decoder.py:179: AssertionError
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/prefill_sharded_norm_candidate_batch1_block5_retry.xml -
+============================== slowest durations ===============================
+23.41s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+1.41s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+============================== 1 failed in 25.65s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7c3ad3c5c288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7c3ad440e0e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "reshape"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "get_fabric_node_id"
+ - leaked function "from_json"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

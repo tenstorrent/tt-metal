@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="15.775" timestamp="2026-07-19T02:41:02.385722+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]" time="14.692"><properties><property name="start_timestamp" value="2026-07-19T02:41:03" /><property name="end_timestamp" value="2026-07-19T02:41:18" /></properties><failure message="ValueError: contiguous caches must have local shape (1, 2, 128, 128), got (32, 2, 128, 128)">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_profile_internal_stacked_prefill(mesh_device):
+        """Profile only the stack-preserving two-layer prefill region."""
+
+        if os.environ.get(PROFILE_STACKED_PREFILL_ENV) != "1":
+            pytest.skip(f"Set {PROFILE_STACKED_PREFILL_ENV}=1 to profile stacked prefill")
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "1"))
+        active_batch = int(os.environ.get(ACTIVE_BATCH_ENV, EMITTED_BATCH))
+        config = _config()
+        decoder = MultichipDecoder.from_state_dict(
+            _real_state(), hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, batch=active_batch
+        )
+        first_caches = _multichip_caches(config, mesh_device)
+        second_caches = _multichip_caches(config, mesh_device)
+        generator = torch.Generator().manual_seed(2519)
+        hidden = torch.randn(
+            (1, active_batch, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        stacked_input, logical_seq_len = decoder.prepare_prefill_residual(_mesh_input(hidden, mesh_device))
+
+        def stacked_pair():
+            output = decoder.prefill_forward_stacked(stacked_input, *first_caches, logical_seq_len=logical_seq_len)
+            return decoder.prefill_forward_stacked(output, *second_caches, logical_seq_len=logical_seq_len)
+
+&gt;       stacked_pair()
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:1073:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:1070: in stacked_pair
+    output = decoder.prefill_forward_stacked(stacked_input, *first_caches, logical_seq_len=logical_seq_len)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:1165: in prefill_forward_stacked
+    return self.prefill_forward(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:1016: in prefill_forward
+    self._validate_caches(key_cache, value_cache, paged=page_table is not None)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.multichip_decoder.MultichipDecoder object at 0x78d59828f590&gt;
+key_cache = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 0.0000,  0.0000,  ...,  0.0000,  0.0000],
+               [ 0.000...0,  0.0000,  ...,  0.0000,  0.0000]]]], shape=Shape([32, 2, 128, 128]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+value_cache = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 0.0000,  0.0000,  ...,  0.0000,  0.0000],
+               [ 0.000...0,  0.0000,  ...,  0.0000,  0.0000]]]], shape=Shape([32, 2, 128, 128]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+
+    def _validate_caches(self, key_cache, value_cache, *, paged: bool = False) -&gt; None:
+        key_shape = tuple(key_cache.shape)
+        value_shape = tuple(value_cache.shape)
+        if key_shape != value_shape:
+            raise ValueError(f"key/value cache shapes differ: {key_shape} and {value_shape}")
+        if paged:
+            if len(key_shape) != 4 or key_shape[1] != self.num_kv_heads or key_shape[3] != self.head_dim:
+                raise ValueError(
+                    "paged caches must have local shape "
+                    f"[num_blocks, {self.num_kv_heads}, block_size, {self.head_dim}], got {key_shape}"
+                )
+            if key_shape[0] &lt; 1 or key_shape[2] &lt; 1:
+                raise ValueError(f"paged cache num_blocks and block_size must be positive, got {key_shape}")
+            return
+        expected = (self.batch, self.num_kv_heads, self.max_cache_len, self.head_dim)
+        if key_shape != expected:
+&gt;           raise ValueError(f"contiguous caches must have local shape {expected}, got {key_shape}")
+E           ValueError: contiguous caches must have local shape (1, 2, 128, 128), got (32, 2, 128, 128)
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:770: ValueError</failure></testcase></testsuite></testsuites>

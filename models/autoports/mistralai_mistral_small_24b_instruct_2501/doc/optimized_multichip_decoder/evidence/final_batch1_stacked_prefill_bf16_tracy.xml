@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="30.767" timestamp="2026-07-19T02:38:33.869169+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]" time="29.709"><properties><property name="start_timestamp" value="2026-07-19T02:38:34" /><property name="end_timestamp" value="2026-07-19T02:39:04" /></properties><failure message="assert 3.6464910954236984 &lt; 3.361037001013756">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_prefill_layout_perf(mesh_device):
+        """Compare repeated public prefill transposes with one stack-boundary conversion."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "10"))
+        active_batch = int(os.environ.get(ACTIVE_BATCH_ENV, EMITTED_BATCH))
+        assert 1 &lt;= active_batch &lt;= EMITTED_BATCH
+        config = _config()
+        state = _real_state()
+        prefill_collective_family = os.environ.get(PREFILL_COLLECTIVE_FAMILY_ENV, "default")
+        prefill_collective_dtype = os.environ.get(PREFILL_COLLECTIVE_DTYPE_ENV, "bf16")
+        first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=active_batch,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        second = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=active_batch,
+            shared_rope=first.shared_rope,
+            shared_collective=first.shared_collective,
+            shared_prefill_collective=first.shared_prefill_collective,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        first_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        second_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        generator = torch.Generator().manual_seed(2515)
+        hidden = torch.randn(
+            (1, active_batch, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        tt_hidden = _mesh_input(hidden, mesh_device)
+
+        def public_pair():
+            output = first.prefill_forward(tt_hidden, *first_caches)
+            return second.prefill_forward(output, *second_caches)
+
+        stacked_input, logical_seq_len = first.prepare_prefill_residual(tt_hidden)
+
+        def stacked_pair():
+            output = first.prefill_forward_stacked(stacked_input, *first_caches, logical_seq_len=logical_seq_len)
+            return second.prefill_forward_stacked(output, *second_caches, logical_seq_len=logical_seq_len)
+
+        eager_public = public_pair()
+        eager_stacked = stacked_pair()
+        ttnn.synchronize_device(mesh_device)
+        public_host = _replicated_host(eager_public)
+        stacked_host = (
+            _replicated_host(eager_stacked)
+            .reshape(1, logical_seq_len, active_batch, config.hidden_size)
+            .permute(0, 2, 1, 3)
+        )
+        _assert_pcc(public_host, stacked_host, 0.9999, "public/stacked two-layer prefill")
+
+        def time_warmed(run_pair):
+            run_pair()
+            ttnn.synchronize_device(mesh_device)
+            start = time.perf_counter()
+            for _ in range(iterations):
+                run_pair()
+            ttnn.synchronize_device(mesh_device)
+            return (time.perf_counter() - start) * 1000 / iterations
+
+        tracy.signpost("MULTICHIP_PUBLIC_STACK_PREFILL")
+        public_ms = time_warmed(public_pair)
+        tracy.signpost("MULTICHIP_PUBLIC_STACK_PREFILL_END")
+        tracy.signpost("MULTICHIP_INTERNAL_STACK_PREFILL")
+        stacked_ms = time_warmed(stacked_pair)
+        tracy.signpost("MULTICHIP_INTERNAL_STACK_PREFILL_END")
+&gt;       assert stacked_ms &lt; public_ms
+E       assert 3.6464910954236984 &lt; 3.361037001013756
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:1034: AssertionError</failure></testcase></testsuite></testsuites>

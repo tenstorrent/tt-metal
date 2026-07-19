@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="27.945" timestamp="2026-07-19T02:18:38.321276+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]" time="26.995"><properties><property name="start_timestamp" value="2026-07-19T02:18:39" /><property name="end_timestamp" value="2026-07-19T02:19:06" /></properties><failure message="ValueError: stacked decode residual must have shape (1, 1, 1, 5120), got (1, 1, 32, 5120)">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_decode_layout_perf(mesh_device):
+        """Compare repeated public restores with a stack-compatible residual layout."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "50"))
+        active_batch = int(os.environ.get(ACTIVE_BATCH_ENV, EMITTED_BATCH))
+        assert 1 &lt;= active_batch &lt;= EMITTED_BATCH
+        config = _config()
+        state = _real_state()
+        dense_kernel_family = os.environ.get(DENSE_KERNEL_FAMILY_ENV, "dram_sharded")
+        mlp_projection_family = os.environ.get(MLP_PROJECTION_FAMILY_ENV, "separate")
+        collective_family = os.environ.get(COLLECTIVE_FAMILY_ENV, "persistent")
+        collective_dtype = os.environ.get(COLLECTIVE_DTYPE_ENV, "bfp8")
+        decode_activation_dtype = os.environ.get(DECODE_ACTIVATION_DTYPE_ENV, "bf16")
+        attention_activation_dtype = os.environ.get(ATTENTION_ACTIVATION_DTYPE_ENV)
+        mlp_activation_dtype = os.environ.get(MLP_ACTIVATION_DTYPE_ENV)
+        attention_geometry = _geometry_from_env(ATTENTION_GEOMETRY_ENV, 6)
+        mlp_geometry = _geometry_from_env(MLP_GEOMETRY_ENV, 5)
+        attention_weight_dtype = _weight_dtype_from_env(ATTENTION_WEIGHT_DTYPE_ENV)
+        mlp_weight_dtype = _weight_dtype_from_env(MLP_WEIGHT_DTYPE_ENV)
+        attention_fidelity = _fidelity_from_env(ATTENTION_FIDELITY_ENV)
+        mlp_fidelity = _fidelity_from_env(MLP_FIDELITY_ENV)
+        decoder_kwargs = {
+            "dense_kernel_family": dense_kernel_family,
+            "mlp_projection_family": mlp_projection_family,
+            "collective_family": collective_family,
+            "collective_dtype": collective_dtype,
+            "decode_activation_dtype": decode_activation_dtype,
+            "attention_activation_dtype": attention_activation_dtype,
+            "mlp_activation_dtype": mlp_activation_dtype,
+            "batch": active_batch,
+        }
+        for name, value in (
+            ("attention_geometry", attention_geometry),
+            ("mlp_geometry", mlp_geometry),
+            ("attention_weight_dtype", attention_weight_dtype),
+            ("mlp_weight_dtype", mlp_weight_dtype),
+            ("attention_math_fidelity", attention_fidelity),
+            ("mlp_math_fidelity", mlp_fidelity),
+        ):
+            if value is not None:
+                decoder_kwargs[name] = value
+        first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            **decoder_kwargs,
+        )
+        second = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            shared_rope=first.shared_rope,
+            shared_collective=first.shared_collective,
+            **decoder_kwargs,
+        )
+        first_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        second_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        generator = torch.Generator().manual_seed(2514)
+        hidden = torch.randn((1, active_batch, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        tt_hidden = _mesh_input(hidden, mesh_device)
+        current_pos_tensor = _mesh_input(
+            torch.full((active_batch,), EMITTED_PREFILL_SEQUENCE, dtype=torch.int32),
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+        )
+
+        def public_pair():
+            output = first.decode_forward(tt_hidden, *first_caches, current_pos_tensor=current_pos_tensor)
+            return second.decode_forward(output, *second_caches, current_pos_tensor=current_pos_tensor)
+
+        stacked_input = first.prepare_decode_residual(tt_hidden)
+
+        def stacked_pair():
+            output = first.decode_forward_stacked(stacked_input, *first_caches, current_pos_tensor=current_pos_tensor)
+            return second.decode_forward_stacked(output, *second_caches, current_pos_tensor=current_pos_tensor)
+
+&gt;       eager_public = public_pair()
+                       ^^^^^^^^^^^^^
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:868:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:859: in public_pair
+    output = first.decode_forward(tt_hidden, *first_caches, current_pos_tensor=current_pos_tensor)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:1385: in decode_forward
+    return self.finish_decode_residual(hidden_states)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.multichip_decoder.MultichipDecoder object at 0x77746fd54f80&gt;
+hidden_states = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[-1.9375e+00,  1.4219e+00,  ...,  1.1035e-01, -8.2031e-01],
+      ...e+00,  ...,  1.0840e-01, -8.2031e-01]]]], shape=Shape([1, 1, 32, 5120]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+
+    def finish_decode_residual(self, hidden_states):
+        """Restore the public decode tensor once after the final stacked layer."""
+
+        expected = (1, 1, self.batch, self.hidden_size)
+        if tuple(hidden_states.shape) != expected:
+&gt;           raise ValueError(f"stacked decode residual must have shape {expected}, got {tuple(hidden_states.shape)}")
+E           ValueError: stacked decode residual must have shape (1, 1, 1, 5120), got (1, 1, 32, 5120)
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:967: ValueError</failure></testcase></testsuite></testsuites>
