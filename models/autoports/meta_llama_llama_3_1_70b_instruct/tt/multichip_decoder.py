@@ -59,6 +59,8 @@ class MultiChipConfig:
             packed_gate_up=True,
             qkv_cores=16,
             prefill_grid=(8, 8),
+            explicit_sdpa_program_config=True,
+            explicit_sdpa_compute_kernel=True,
         )
     )
     topology: object = ttnn.Topology.Ring
@@ -1051,6 +1053,9 @@ class MultiChipDecoder(OptimizedDecoder):
         self.global_num_kv_heads = global_num_kv_heads
         self.global_intermediate_size = global_intermediate_size
         super().__init__(optimization_config=multichip_config.optimized, **kwargs)
+        # Explicit 8x8 + HiFi2 is the repeated decode winner. Nonaligned
+        # prefill remains faster with the operation's implicit program choice.
+        self.prefill_sdpa_program_config = None
         _check_target_mesh(self.mesh_device)
         if self.global_num_heads != self.num_heads * TARGET_TP_DEGREE:
             raise ValueError("local/global query-head ownership is inconsistent")

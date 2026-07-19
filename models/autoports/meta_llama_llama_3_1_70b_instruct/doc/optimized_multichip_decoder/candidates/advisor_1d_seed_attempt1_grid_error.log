@@ -1,0 +1,248 @@
+2026-07-19 06:18:58.924 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items / 8 deselected / 1 selected
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_geometry_candidate[blackhole-blackhole-1x4-ring] 2026-07-19 06:19:00.716 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-19 06:19:00.716 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-19 06:19:00.716 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-19 06:19:00.716 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-19 06:19:00.718 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-19 06:19:00.718 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-19 06:19:00.722 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-19 06:19:00.942 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-19 06:19:00.942 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-19 06:19:00.942 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-19 06:19:00.942 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-19 06:19:00.944 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-19 06:19:01.108 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.f9910000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17526784 B
+--------------------------------------------------------------------------
+2026-07-19 06:19:01.240 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 06:19:01.240 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 06:19:01.240 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-19 06:19:01.240 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:19:01.240 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-19 06:19:01.240 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-19 06:19:01.245 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:19:01.245 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:19:01.245 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:19:01.245 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:19:01.280 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-19 06:19:01.306 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-19 06:19:01.307 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-19 06:19:01.308 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-19 06:19:01.308 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-19 06:19:01.308 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-19 06:19:01.308 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-19 06:19:01.348 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:19:01.348 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:19:01.348 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:19:01.348 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:19:01.928 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=14450035146624 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:19:01.928 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=14437264880649 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:19:01.929 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=14426487078337 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:19:01.930 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349975 GHz, device_time_at_sync=14465560882979 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:19:01.959 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 06:19:20.487 | critical |          Always | TT_FATAL: Target number of cores 75 is greater than total number of available cores 66 (assert.hpp:104)
+FAILED2026-07-19 06:19:20.660 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+____ test_multichip_decode_geometry_candidate[blackhole-blackhole-1x4-ring] ____
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+record_property = <function record_property.<locals>.append_property at 0x7b243bf58ae0>
+
+    @_mesh_test
+    def test_multichip_decode_geometry_candidate(mesh_device, record_property):
+        """One-real-weight-variable-at-a-time DRAM-sharded geometry sweep."""
+
+        candidate_id = os.environ.get("MULTICHIP_GEOMETRY_CANDIDATE")
+        if candidate_id not in GEOMETRY_CANDIDATES:
+            pytest.skip(f"set MULTICHIP_GEOMETRY_CANDIDATE to one of {sorted(GEOMETRY_CANDIDATES)}")
+>       _run_decode_policy_candidate(
+            mesh_device,
+            record_property,
+            candidate_id=candidate_id,
+            changes=GEOMETRY_CANDIDATES[candidate_id],
+        )
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:874:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:784: in _run_decode_policy_candidate
+    candidate = MultiChipDecoder.from_state_dict(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1403: in from_state_dict
+    return cls(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1223: in __init__
+    self.advisor_gated_output_mem_config = _advisor_width_sharded_l1(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:214: in _advisor_width_sharded_l1
+    core_ranges = ttnn.num_cores_to_corerangeset(cores, ttnn.CoreCoord(grid_x, grid_y), row_wise=True)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+target_num_cores = 75, grid_size = 11-6, row_wise = True
+
+    def num_cores_to_corerangeset(
+        target_num_cores: int,
+        grid_size: ttnn.CoreCoord,
+        row_wise: bool = False,
+    ):
+        """
+        Create a CoreRangeSet containing the specified number of cores
+        """
+>       return ttnn._ttnn.operations.core.num_cores_to_corerangeset(
+            target_num_cores,
+            grid_size,
+            row_wise,
+        )
+E       RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+E       info:
+E       Target number of cores 75 is greater than total number of available cores 66
+E       backtrace:
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d14f1) [0x7b248d7d14f1]
+E        --- tt::tt_metal::num_cores_to_corerangeset(tt::xy_pair, unsigned int, tt::xy_pair, bool)
+E        --- tt::tt_metal::num_cores_to_corerangeset(unsigned int, tt::xy_pair, bool)
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e2658) [0x7b248d7e2658]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315d8e) [0x7b248d715d8e]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x183cef5]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x180256d]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7b24d3cd41ca]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7b24d3cd428b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/core.py:62: RuntimeError
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_70b_instruct/doc/optimized_multichip_decoder/candidates/advisor_1d_seed.xml -
+============================== slowest durations ===============================
+18.53s call     models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_geometry_candidate[blackhole-blackhole-1x4-ring]
+1.45s setup    models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_geometry_candidate[blackhole-blackhole-1x4-ring]
+0.12s teardown models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_geometry_candidate[blackhole-blackhole-1x4-ring]
+=========================== short test summary info ============================
+FAILED models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_geometry_candidate[blackhole-blackhole-1x4-ring] - RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+info:
+Target number of cores 75 is greater than total number of available cores 66
+backtrace:
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d14f1) [0x7b248d7d14f1]
+ --- tt::tt_metal::num_cores_to_corerangeset(tt::xy_pair, unsigned int, tt::xy_pair, bool)
+ --- tt::tt_metal::num_cores_to_corerangeset(unsigned int, tt::xy_pair, bool)
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e2658) [0x7b248d7e2658]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315d8e) [0x7b248d715d8e]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x183cef5]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x180256d]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7b24d3cd41ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7b24d3cd428b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+======================= 1 failed, 8 deselected in 21.05s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7b243fdec1c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7b2440591e48 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 22 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "to_list"
+ - leaked function "subtract"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_tile"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "to_json"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-19 06:19:22.475 | info     |    BuildKernels | JIT cache stats: 60/60 hits (100.0%) [60 cached, 19 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-19 06:19:22.475 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-19 06:19:22.487 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-19 06:19:22.487 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-19 06:19:23.010 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-19 06:19:23.010 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-19 06:19:23.010 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

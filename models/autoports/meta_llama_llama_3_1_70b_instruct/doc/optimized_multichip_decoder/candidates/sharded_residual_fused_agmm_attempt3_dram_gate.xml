@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="23.122" timestamp="2026-07-19T06:36:02.230398+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_multichip_decoder" name="test_multichip_sharded_residual_candidate[blackhole-blackhole-1x4-ring]" time="20.804"><properties><property name="start_timestamp" value="2026-07-19T06:36:02" /><property name="end_timestamp" value="2026-07-19T06:36:25" /></properties><failure message="RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception&#10;info:&#10;Statically allocated circular buffers in program 156 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 1017600 and static circular buffer region ends at 1405760&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ec543) [0x76baedcec543]&#10; --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xbc4d73) [0x76baedfc4d73]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa6c7e3) [0x76baede6c7e3]&#10; --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x76bb34675c79]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x76bb37131aa4]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x76bb371bea64]">mesh_device = MeshDevice(1x4 grid, 4 devices)
+record_property = &lt;function record_property.&lt;locals&gt;.append_property at 0x76ba9f26e0c0&gt;
+
+    @_mesh_test
+    def test_multichip_sharded_residual_candidate(mesh_device, record_property):
+        """Measure a coherent two-layer sharded-residual decode family."""
+
+        candidate_id = os.environ.get("MULTICHIP_RESIDUAL_CANDIDATE")
+        if candidate_id not in RESIDUAL_CANDIDATES:
+            pytest.skip(f"set MULTICHIP_RESIDUAL_CANDIDATE to one of {sorted(RESIDUAL_CANDIDATES)}")
+        config = _config()
+        state = _real_state()
+        ccl = get_tt_ccl(mesh_device)
+        control = MultiChipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=1,
+            max_cache_len=MAX_CACHE_LEN,
+            tt_ccl=ccl,
+        )
+        candidate = MultiChipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=1,
+            max_cache_len=MAX_CACHE_LEN,
+            multichip_config=replace(MultiChipConfig(), **RESIDUAL_CANDIDATES[candidate_id]),
+            tt_ccl=ccl,
+        )
+        host = torch.randn(
+            (1, 1, 1, config.hidden_size),
+            generator=torch.Generator().manual_seed(7211),
+            dtype=torch.bfloat16,
+        )
+        control_input = _mesh_input(host, mesh_device)
+        candidate_input = _mesh_sharded_residual_input(host, mesh_device)
+        control_key_0, control_value_0 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+        control_key_1, control_value_1 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+        candidate_key_0, candidate_value_0 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+        candidate_key_1, candidate_value_1 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+
+        control_layer_0 = control.decode_forward(control_input, control_key_0, control_value_0, current_pos=7)
+        control_layer_1 = control.decode_forward(control_layer_0, control_key_1, control_value_1, current_pos=7)
+&gt;       candidate_layer_0 = candidate.decode_forward(
+            candidate_input, candidate_key_0, candidate_value_0, current_pos=7
+        )
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:959:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:2229: in decode_forward
+    return self._decode_forward_device_position(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:2175: in _decode_forward_device_position
+    hidden_states = self._mlp_decode_flat(hidden_states)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1804: in _mlp_decode_flat
+    gate_up = self._all_gather_matmul_flat(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1726: in _all_gather_matmul_flat
+    _, output = ttnn.experimental.all_gather_matmul_async(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.experimental.all_gather_matmul_async', function=&lt;ttnn._ttnn.operations.experimental.ccl_experimental.all_gather_matmul_async_t object at 0x76baa3850770&gt;, preprocess_golden_function_inputs=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 1.3379e-01,  1.6113e-01,  ..., -8.3008e-02, -6.5430e-02]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[-6.1523e-02, -2.3804e-02,  ...,  3.7598e-02, -1.0400e-01]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[ 7.1289e-02, -1.1670e-01,  ..., -7.2937e-03, -7.2937e-03]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[-1.1670e-01,  1.0352e-01,  ..., -4.4727e-01, -6.6895e-02]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE), device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[-0.0273, -0.0039,  ..., -0.0078,  0.0039],
+               [-0.0039, -0.0039,  ...,  0.0117,  0.0000],
+               ...,
+               [-0.0117,  0.0156,  ...,  0.0000,  0.0039],
+               [ 0.0039,  0.0078,  ...,  0.0000,  0.0234]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[-0.0039,  0.0000,  ..., -0.0039,  0.0000],
+               [ 0.0078, -0.0039,  ...,  0.0000,  0.0000],
+               ...,
+               [-0.0039,  0.0234,  ...,  0.0078,  0.0000],
+               [-0.0078,  0.0039,  ..., -0.0078,  0.0234]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[-0.0078,  0.0117,  ...,  0.0078, -0.0195],
+               [ 0.0000,  0.0117,  ...,  0.0078,  0.0078],
+               ...,
+               [ 0.0156,  0.0234,  ...,  0.0000, -0.0039],
+               [ 0.0000,  0.0000,  ...,  0.0156, -0.0078]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[-0.0039,  0.0078,  ...,  0.0000, -0.0039],
+               [-0.0039, -0.0117,  ...,  0.0039, -0.0039],
+               ...,
+               [ 0.0000,  0.0000,  ..., -0.0039, -0.0117],
+               [ 0.0117,  0.0078,  ...,  0.0000, -0.0156]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE))
+function_kwargs = {'all_gather_core_grid_offset': (0, 4), 'barrier_semaphore': &lt;ttnn._ttnn.global_semaphore.global_semaphore object at 0x76baa038e4f0&gt;, 'chunks_per_sync': 10, 'compute_kernel_config': &lt;ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x76ba9cd08c30&gt;, ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception
+E               info:
+E               Statically allocated circular buffers in program 156 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 1017600 and static circular buffer region ends at 1405760
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ec543) [0x76baedcec543]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xbc4d73) [0x76baedfc4d73]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa6c7e3) [0x76baede6c7e3]
+E                --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x76bb34675c79]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x76bb37131aa4]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x76bb371bea64]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure></testcase></testsuite></testsuites>

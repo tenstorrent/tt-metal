@@ -1,0 +1,304 @@
+2026-07-19 06:34:46.474 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 10 items / 9 deselected / 1 selected
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_sharded_residual_candidate[blackhole-blackhole-1x4-ring] 2026-07-19 06:34:48.011 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-19 06:34:48.011 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-19 06:34:48.011 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-19 06:34:48.011 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-19 06:34:48.012 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-19 06:34:48.012 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-19 06:34:48.017 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-19 06:34:48.237 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-19 06:34:48.237 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-19 06:34:48.237 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-19 06:34:48.237 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-19 06:34:48.239 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-19 06:34:48.320 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.1d510000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 06:34:48.446 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 06:34:48.447 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 06:34:48.447 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-19 06:34:48.447 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 06:34:48.447 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-19 06:34:48.447 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-19 06:34:48.452 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:34:48.452 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:34:48.452 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:34:48.452 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-19 06:34:48.487 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-19 06:34:48.513 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-19 06:34:48.513 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-19 06:34:48.514 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-19 06:34:48.515 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-19 06:34:48.515 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-19 06:34:48.515 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-19 06:34:48.555 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:34:48.555 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:34:48.555 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:34:48.555 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 06:34:49.135 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=15235570907031 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:34:49.135 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=15259884338887 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:34:49.135 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=15246640515663 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:34:49.136 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=15275856325968 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 06:34:49.165 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 06:35:08.013 | warning  |              Op | MatmulDeviceOperation::create_output_tensors: program_config.allowed_worker_cores not populated on a MatmulProgramConfig variant that supports the field. Auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_device_operation.cpp:525)
+2026-07-19 06:35:08.013 | warning  |              Op | MatmulDeviceOperation::compute_output_specs: program_config.allowed_worker_cores not populated on a MatmulProgramConfig variant that supports the field. Auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_device_operation.cpp:525)
+2026-07-19 06:35:08.013 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.014 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.014 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.014 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/17971042185457991573/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/17971042185457991573/brisc/brisck.17199217123773364955.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/17971042185457991573/brisc/brisck.17199217123773364955.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/17971042185457991573/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DOUT_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,80,1280,20,20,16,320,16,1,1,0,0,0,0,20480,1,1,0,0,1,80,5,80,20,80,5,1,5,80,0,1,0,2,576,0,0,1,2048,1,4,80,20,33685762,67240706 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:205:16: warning: variable 's' set but not used [-Wunused-but-set-variable]
+  205 |     const auto s = TensorAccessor(out_args, out_tensor_addr);
+      |                ^
+2026-07-19 06:35:08.610 | warning  |              Op | MatmulDeviceOperation::create_output_tensors: program_config.allowed_worker_cores not populated on a MatmulProgramConfig variant that supports the field. Auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_device_operation.cpp:525)
+2026-07-19 06:35:08.610 | warning  |              Op | MatmulDeviceOperation::compute_output_specs: program_config.allowed_worker_cores not populated on a MatmulProgramConfig variant that supports the field. Auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_device_operation.cpp:525)
+2026-07-19 06:35:08.610 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.611 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.611 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.611 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14228539933589482509/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14228539933589482509/brisc/brisck.17199217123773364955.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14228539933589482509/brisc/brisck.17199217123773364955.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/14228539933589482509/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DOUT_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,64,512,16,16,8,128,32,1,1,0,0,0,0,16384,1,1,0,0,1,64,8,64,16,64,8,1,8,64,0,1,0,2,576,0,0,1,2048,1,4,64,16,33685762,67240706 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:205:16: warning: variable 's' set but not used [-Wunused-but-set-variable]
+  205 |     const auto s = TensorAccessor(out_args, out_tensor_addr);
+      |                ^
+2026-07-19 06:35:08.934 | warning  |              Op | MatmulDeviceOperation::create_output_tensors: program_config.allowed_worker_cores not populated on a MatmulProgramConfig variant that supports the field. Auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_device_operation.cpp:525)
+2026-07-19 06:35:08.934 | warning  |              Op | MatmulDeviceOperation::compute_output_specs: program_config.allowed_worker_cores not populated on a MatmulProgramConfig variant that supports the field. Auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_device_operation.cpp:525)
+2026-07-19 06:35:08.934 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.935 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.935 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+2026-07-19 06:35:08.935 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5318)
+Building brisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14651041402796326198/brisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14651041402796326198/brisc/brisck.17199217123773364955.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14651041402796326198/brisc/brisck.17199217123773364955.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/14651041402796326198/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DOUT_SHARDED='1' -DROUTING_MODE='145' -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,448,3584,112,112,8,896,32,1,1,0,0,0,0,114688,1,1,0,0,1,448,8,448,112,448,8,1,8,448,0,1,0,2,576,0,0,1,2048,1,4,448,112,33685762,67240706 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp:205:16: warning: variable 's' set but not used [-Wunused-but-set-variable]
+  205 |     const auto s = TensorAccessor(out_args, out_tensor_addr);
+      |                ^
+2026-07-19 06:35:09.252 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 150 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 788224 and static circular buffer region ends at 1176384 (assert.hpp:104)
+2026-07-19 06:35:09.252 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 156 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 788224 and static circular buffer region ends at 1176384 (assert.hpp:104)
+2026-07-19 06:35:09.252 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 152 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 788224 and static circular buffer region ends at 1176384 (assert.hpp:104)
+2026-07-19 06:35:09.252 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 154 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 788224 and static circular buffer region ends at 1176384 (assert.hpp:104)
+FAILED2026-07-19 06:35:11.023 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+___ test_multichip_sharded_residual_candidate[blackhole-blackhole-1x4-ring] ____
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+record_property = <function record_property.<locals>.append_property at 0x7e1f7e115da0>
+
+    @_mesh_test
+    def test_multichip_sharded_residual_candidate(mesh_device, record_property):
+        """Measure a coherent two-layer sharded-residual decode family."""
+
+        candidate_id = os.environ.get("MULTICHIP_RESIDUAL_CANDIDATE")
+        if candidate_id not in RESIDUAL_CANDIDATES:
+            pytest.skip(f"set MULTICHIP_RESIDUAL_CANDIDATE to one of {sorted(RESIDUAL_CANDIDATES)}")
+        config = _config()
+        state = _real_state()
+        ccl = get_tt_ccl(mesh_device)
+        control = MultiChipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=1,
+            max_cache_len=MAX_CACHE_LEN,
+            tt_ccl=ccl,
+        )
+        candidate = MultiChipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=1,
+            max_cache_len=MAX_CACHE_LEN,
+            multichip_config=replace(MultiChipConfig(), **RESIDUAL_CANDIDATES[candidate_id]),
+            tt_ccl=ccl,
+        )
+        host = torch.randn(
+            (1, 1, 1, config.hidden_size),
+            generator=torch.Generator().manual_seed(7211),
+            dtype=torch.bfloat16,
+        )
+        control_input = _mesh_input(host, mesh_device)
+        candidate_input = _mesh_sharded_residual_input(host, mesh_device)
+        control_key_0, control_value_0 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+        control_key_1, control_value_1 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+        candidate_key_0, candidate_value_0 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+        candidate_key_1, candidate_value_1 = _mesh_contiguous_caches(config, mesh_device, batch=1)
+
+        control_layer_0 = control.decode_forward(control_input, control_key_0, control_value_0, current_pos=7)
+        control_layer_1 = control.decode_forward(control_layer_0, control_key_1, control_value_1, current_pos=7)
+>       candidate_layer_0 = candidate.decode_forward(
+            candidate_input, candidate_key_0, candidate_value_0, current_pos=7
+        )
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:959:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:2225: in decode_forward
+    return self._decode_forward_device_position(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:2171: in _decode_forward_device_position
+    hidden_states = self._mlp_decode_flat(hidden_states)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1800: in _mlp_decode_flat
+    gate_up = self._all_gather_matmul_flat(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1722: in _all_gather_matmul_flat
+    _, output = ttnn.experimental.all_gather_matmul_async(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.experimental.all_gather_matmul_async', function=<ttnn._ttnn.operations.experimental.ccl_experimental.all_gather_matmul_async_t object at 0x7e1f826ec770>, preprocess_golden_function_inputs=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 1.3379e-01,  1.6113e-01,  ..., -8.3008e-02, -6.5430e-02]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[-6.1523e-02, -2.3804e-02,  ...,  3.7598e-02, -1.0400e-01]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[ 7.1289e-02, -1.1670e-01,  ..., -7.2937e-03, -7.2937e-03]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[-1.1670e-01,  1.0352e-01,  ..., -4.4727e-01, -6.6895e-02]]]], shape=Shape([1, 1, 1, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE), device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[-0.0273, -0.0039,  ..., -0.0078,  0.0039],
+               [-0.0039, -0.0039,  ...,  0.0117,  0.0000],
+               ...,
+               [-0.0117,  0.0156,  ...,  0.0000,  0.0039],
+               [ 0.0039,  0.0078,  ...,  0.0000,  0.0234]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[-0.0039,  0.0000,  ..., -0.0039,  0.0000],
+               [ 0.0078, -0.0039,  ...,  0.0000,  0.0000],
+               ...,
+               [-0.0039,  0.0234,  ...,  0.0078,  0.0000],
+               [-0.0078,  0.0039,  ..., -0.0078,  0.0234]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[-0.0078,  0.0117,  ...,  0.0078, -0.0195],
+               [ 0.0000,  0.0117,  ...,  0.0078,  0.0078],
+               ...,
+               [ 0.0156,  0.0234,  ...,  0.0000, -0.0039],
+               [ 0.0000,  0.0000,  ...,  0.0156, -0.0078]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[-0.0039,  0.0078,  ...,  0.0000, -0.0039],
+               [-0.0039, -0.0117,  ...,  0.0039, -0.0039],
+               ...,
+               [ 0.0000,  0.0000,  ..., -0.0039, -0.0117],
+               [ 0.0117,  0.0078,  ...,  0.0000, -0.0156]]]], shape=Shape([1, 1, 8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE))
+function_kwargs = {'all_gather_core_grid_offset': (0, 4), 'barrier_semaphore': <ttnn._ttnn.global_semaphore.global_semaphore object at 0x7e1f7f22e070>, 'chunks_per_sync': 10, 'compute_kernel_config': <ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e1f7bbe87b0>, ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception
+E               info:
+E               Statically allocated circular buffers in program 156 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 788224 and static circular buffer region ends at 1176384
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ec543) [0x7e1fcccec543]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xbc4d73) [0x7e1fccfc4d73]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa6c7e3) [0x7e1fcce6c7e3]
+E                --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7e20134dbc79]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x7e2015f97aa4]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x7e2016024a64]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_70b_instruct/doc/optimized_multichip_decoder/candidates/sharded_residual_fused_agmm_attempt2.xml -
+============================== slowest durations ===============================
+20.09s call     models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_sharded_residual_candidate[blackhole-blackhole-1x4-ring]
+1.36s setup    models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_sharded_residual_candidate[blackhole-blackhole-1x4-ring]
+0.13s teardown models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_sharded_residual_candidate[blackhole-blackhole-1x4-ring]
+=========================== short test summary info ============================
+FAILED models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py::test_multichip_sharded_residual_candidate[blackhole-blackhole-1x4-ring] - RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception
+info:
+Statically allocated circular buffers in program 156 clash with L1 buffers on core range [0-0 - 3-0]. L1 buffer allocated at 788224 and static circular buffer region ends at 1176384
+backtrace:
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ec543) [0x7e1fcccec543]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xbc4d73) [0x7e1fccfc4d73]
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa6c7e3) [0x7e1fcce6c7e3]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7e20134dbc79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x7e2015f97aa4]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x7e2016024a64]
+======================= 1 failed, 9 deselected in 23.88s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7e1f82050348 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7e1f827e9db8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 22 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "num_program_cache_entries"
+ - leaked function ""
+ - leaked function "get_num_devices"
+ - leaked function "default_core_range"
+ - leaked function "set_sub_device_stall_group"
+ - leaked function "get_dtype"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-19 06:35:12.724 | info     |    BuildKernels | JIT cache stats: 209/223 hits (93.7%) [209 cached, 131 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-19 06:35:12.724 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-19 06:35:12.736 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-19 06:35:12.736 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-19 06:35:13.328 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-19 06:35:13.328 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-19 06:35:13.328 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

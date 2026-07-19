@@ -57,8 +57,22 @@ GEOMETRY_CANDIDATES = {
     "O4": {"output_input_cores": 8, "output_in0_block_w": 8, "output_per_core_n": 4},
     "G1": {"gate_up_input_cores": 32, "gate_up_in0_block_w": 8, "gate_up_per_core_n": 14},
     "G3": {"gate_up_input_cores": 64, "gate_up_in0_block_w": 4, "gate_up_per_core_n": 7},
+    "G4": {"gate_up_input_cores": 16, "gate_up_in0_block_w": 16, "gate_up_per_core_n": 14},
+    "G4A": {"gate_up_input_cores": 16, "gate_up_in0_block_w": 16, "gate_up_per_core_n": 7},
+    "G4B": {"gate_up_input_cores": 16, "gate_up_in0_block_w": 8, "gate_up_per_core_n": 14},
+    "G5": {"gate_up_input_cores": 8, "gate_up_in0_block_w": 32, "gate_up_per_core_n": 14},
+    "G5A": {"gate_up_input_cores": 8, "gate_up_in0_block_w": 32, "gate_up_per_core_n": 7},
+    "G5B": {"gate_up_input_cores": 8, "gate_up_in0_block_w": 16, "gate_up_per_core_n": 14},
+    "G5C": {"gate_up_input_cores": 8, "gate_up_in0_block_w": 8, "gate_up_per_core_n": 14},
     "D1": {"down_input_cores": 16, "down_in0_block_w": 14, "down_per_core_n": 8},
     "D3": {"down_input_cores": 16, "down_in0_block_w": 14, "down_per_core_n": 4},
+    "D4": {"down_input_cores": 8, "down_in0_block_w": 28, "down_per_core_n": 8},
+    "D4A": {"down_input_cores": 8, "down_in0_block_w": 28, "down_per_core_n": 4},
+    "D4B": {"down_input_cores": 8, "down_in0_block_w": 14, "down_per_core_n": 8},
+    "D5": {"down_input_cores": 4, "down_in0_block_w": 56, "down_per_core_n": 8},
+    "D5A": {"down_input_cores": 4, "down_in0_block_w": 56, "down_per_core_n": 4},
+    "D5B": {"down_input_cores": 4, "down_in0_block_w": 28, "down_per_core_n": 8},
+    "D5C": {"down_input_cores": 4, "down_in0_block_w": 14, "down_per_core_n": 8},
 }
 
 TOPOLOGY_CANDIDATES = {
@@ -235,6 +249,9 @@ def test_runtime_path_is_real_multichip_and_host_fallback_free():
     assert TARGET_MESH_SHAPE == (1, 4)
     assert TARGET_TP_DEGREE == 4
     assert (HIDDEN_AXIS, HEAD_AXIS) == (0, 1)
+    assert MultiChipConfig().optimized.explicit_sdpa_program_config
+    assert MultiChipConfig().optimized.explicit_sdpa_compute_kernel
+    assert "self.prefill_sdpa_program_config = None" in inspect.getsource(MultiChipDecoder.__init__)
     for method in (
         MultiChipDecoder._all_reduce_flat,
         MultiChipDecoder._mlp_prefill_flat,
@@ -449,7 +466,7 @@ def test_01_multichip_correctness_paged_trace_and_perf(mesh_device, record_prope
     state = _real_state()
     batch = 1
     seq_len = 39
-    test_policy = MultiChipConfig(prefill_mlp_chunk_size=32)
+    test_policy = MultiChipConfig()
     decoder = MultiChipDecoder.from_state_dict(
         state,
         hf_config=config,
@@ -465,7 +482,13 @@ def test_01_multichip_correctness_paged_trace_and_perf(mesh_device, record_prope
     assert decoder.num_heads == 16
     assert decoder.num_kv_heads == 2
     assert decoder.intermediate_size == 7168
-    assert decoder.multichip_config.prefill_mlp_chunk_size == 32
+    assert decoder.decode_sdpa_program_config is not None
+    assert decoder.decode_sdpa_compute_kernel is not None
+    assert decoder.prefill_sdpa_program_config is None
+    assert decoder.multichip_config.prefill_mlp_chunk_size == 4096
+    record_property("decode_sdpa_policy", "explicit_program_and_compute")
+    record_property("prefill_sdpa_policy", "implicit_program")
+    record_property("default_prefill_mlp_chunk_size", "4096")
 
     prefill_input = _mesh_input(reference["prefill_input"], mesh_device)
     decode_input = _mesh_input(reference["decode_input"], mesh_device)
@@ -488,6 +511,27 @@ def test_01_multichip_correctness_paged_trace_and_perf(mesh_device, record_prope
     assert tuple(prefill_output.shape) == (1, batch, seq_len, 8192)
     assert tuple(decode_output.shape) == (1, batch, 1, 8192)
     assert tuple(key_cache.shape) == (batch, 2, MAX_CACHE_LEN, 128)
+
+    # Keep direct coverage for a nonaligned internal chunk tail without using
+    # the test-only chunk policy for any published default-path timing.
+    tail_key, tail_value = _mesh_contiguous_caches(config, mesh_device, batch=batch)
+    default_policy = decoder.multichip_config
+    decoder.multichip_config = replace(default_policy, prefill_mlp_chunk_size=32)
+    try:
+        tail_output = decoder.prefill_forward(prefill_input, tail_key, tail_value)
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        decoder.multichip_config = default_policy
+    tail_pcc = _measured_pcc(
+        reference["prefill_output"],
+        _compose_residual(tail_output),
+        0.99,
+        "flat TP4 prefill 32+7 internal tail",
+    )
+    record_property("nonaligned_internal_tail_pcc", f"{tail_pcc:.10f}")
+    ttnn.deallocate(tail_output)
+    ttnn.deallocate(tail_key)
+    ttnn.deallocate(tail_value)
 
     stack_key_0, stack_value_0 = _mesh_contiguous_caches(config, mesh_device, batch=batch)
     stack_key_1, stack_value_1 = _mesh_contiguous_caches(config, mesh_device, batch=batch)
@@ -891,6 +935,256 @@ def test_multichip_topology_candidate(mesh_device, record_property):
         candidate_id=candidate_id,
         changes=TOPOLOGY_CANDIDATES[candidate_id],
     )
+
+
+class _PrefillL1InputsDecoder(MultiChipDecoder):
+    """Whole-prefill candidate that applies every profiler L1-input hint."""
+
+    def _prefill_linear(self, x, weight, *, role: str, seq_len: int, k: int, n: int, compute_kernel):
+        l1_input = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        output = super()._prefill_linear(
+            l1_input,
+            weight,
+            role=role,
+            seq_len=seq_len,
+            k=k,
+            n=n,
+            compute_kernel=compute_kernel,
+        )
+        ttnn.deallocate(l1_input)
+        return output
+
+
+@_mesh_test
+def test_multichip_prefill_l1_inputs_candidate(mesh_device, record_property):
+    """Measure all four advised L1 matmul inputs as one prefill family."""
+
+    if os.environ.get("RUN_MULTICHIP_PREFILL_L1_CANDIDATE") != "1":
+        pytest.skip("set RUN_MULTICHIP_PREFILL_L1_CANDIDATE=1 for the prefill L1-input family")
+    config = _config()
+    state = _real_state()
+    ccl = get_tt_ccl(mesh_device)
+    control = MultiChipDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=MAX_CACHE_LEN,
+        tt_ccl=ccl,
+    )
+    candidate = _PrefillL1InputsDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=MAX_CACHE_LEN,
+        tt_ccl=ccl,
+    )
+    host = torch.randn(
+        (1, 1, 7, config.hidden_size),
+        generator=torch.Generator().manual_seed(7411),
+        dtype=torch.bfloat16,
+    )
+    hidden = _mesh_input(host, mesh_device)
+    control_key, control_value = _mesh_contiguous_caches(config, mesh_device, batch=1)
+    candidate_key, candidate_value = _mesh_contiguous_caches(config, mesh_device, batch=1)
+    control_output = control.prefill_forward(hidden, control_key, control_value)
+    candidate_output = candidate.prefill_forward(hidden, candidate_key, candidate_value)
+    ttnn.synchronize_device(mesh_device)
+    output_pcc = _measured_pcc(
+        _compose_residual(control_output),
+        _compose_residual(candidate_output),
+        0.999,
+        "prefill L1-input output",
+    )
+    key_pcc = _measured_pcc(
+        _compose_cache(control_key)[:, :, :7, :],
+        _compose_cache(candidate_key)[:, :, :7, :],
+        0.999,
+        "prefill L1-input key",
+    )
+    value_pcc = _measured_pcc(
+        _compose_cache(control_value)[:, :, :7, :],
+        _compose_cache(candidate_value)[:, :, :7, :],
+        0.999,
+        "prefill L1-input value",
+    )
+    control_ms = _timed_ms(
+        lambda: control.prefill_forward(hidden, control_key, control_value),
+        mesh_device,
+        warmup=5,
+        iterations=30,
+    )
+    candidate_ms = _timed_ms(
+        lambda: candidate.prefill_forward(hidden, candidate_key, candidate_value),
+        mesh_device,
+        warmup=5,
+        iterations=30,
+    )
+    record_property("candidate_id", "prefill_l1_inputs")
+    record_property("logical_seq_len", "7")
+    record_property("output_pcc", f"{output_pcc:.10f}")
+    record_property("key_pcc", f"{key_pcc:.10f}")
+    record_property("value_pcc", f"{value_pcc:.10f}")
+    record_property("control_prefill_ms", f"{control_ms:.6f}")
+    record_property("candidate_prefill_ms", f"{candidate_ms:.6f}")
+    print(f"PREFILL_L1 control_ms={control_ms:.6f} candidate_ms={candidate_ms:.6f}")
+    del control, candidate, state
+    gc.collect()
+
+
+@_mesh_test
+def test_multichip_stage_before_after_candidate(mesh_device, record_property):
+    """Compare the inherited and selected policies with production defaults."""
+
+    if os.environ.get("RUN_MULTICHIP_STAGE_AB") != "1":
+        pytest.skip("set RUN_MULTICHIP_STAGE_AB=1 for the production-default stage A/B")
+    config = _config()
+    state = _real_state()
+    final_policy = MultiChipConfig()
+    starting_policy = replace(
+        final_policy,
+        optimized=replace(
+            final_policy.optimized,
+            explicit_sdpa_program_config=False,
+            explicit_sdpa_compute_kernel=False,
+        ),
+    )
+    ccl = get_tt_ccl(mesh_device)
+    control = MultiChipDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=MAX_CACHE_LEN,
+        multichip_config=starting_policy,
+        tt_ccl=ccl,
+    )
+    candidate = MultiChipDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+        batch=1,
+        max_cache_len=MAX_CACHE_LEN,
+        multichip_config=final_policy,
+        tt_ccl=ccl,
+    )
+    seq_len = 39
+    generator = torch.Generator().manual_seed(7421)
+    prefill_hidden = _mesh_input(
+        torch.randn((1, 1, seq_len, config.hidden_size), generator=generator, dtype=torch.bfloat16),
+        mesh_device,
+    )
+    decode_hidden = _mesh_input(
+        torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16),
+        mesh_device,
+    )
+    control_key, control_value = _mesh_contiguous_caches(config, mesh_device, batch=1)
+    candidate_key, candidate_value = _mesh_contiguous_caches(config, mesh_device, batch=1)
+    control_prefill = control.prefill_forward(prefill_hidden, control_key, control_value)
+    candidate_prefill = candidate.prefill_forward(prefill_hidden, candidate_key, candidate_value)
+    control_decode = control.decode_forward(decode_hidden, control_key, control_value, current_pos=seq_len)
+    candidate_decode = candidate.decode_forward(decode_hidden, candidate_key, candidate_value, current_pos=seq_len)
+    ttnn.synchronize_device(mesh_device)
+    prefill_pcc = _measured_pcc(
+        _compose_residual(control_prefill),
+        _compose_residual(candidate_prefill),
+        0.999,
+        "stage A/B prefill",
+    )
+    decode_pcc = _measured_pcc(
+        _compose_residual(control_decode),
+        _compose_residual(candidate_decode),
+        0.999,
+        "stage A/B decode",
+    )
+    key_pcc = _measured_pcc(
+        _compose_cache(control_key)[:, :, : seq_len + 1, :],
+        _compose_cache(candidate_key)[:, :, : seq_len + 1, :],
+        0.999,
+        "stage A/B key",
+    )
+    value_pcc = _measured_pcc(
+        _compose_cache(control_value)[:, :, : seq_len + 1, :],
+        _compose_cache(candidate_value)[:, :, : seq_len + 1, :],
+        0.999,
+        "stage A/B value",
+    )
+
+    control_prefill_ms = _timed_ms(
+        lambda: control.prefill_forward(prefill_hidden, control_key, control_value),
+        mesh_device,
+        warmup=5,
+        iterations=30,
+    )
+    candidate_prefill_ms = _timed_ms(
+        lambda: candidate.prefill_forward(prefill_hidden, candidate_key, candidate_value),
+        mesh_device,
+        warmup=5,
+        iterations=30,
+    )
+    control_eager_ms = _timed_ms(
+        lambda: control.decode_forward(decode_hidden, control_key, control_value, current_pos=seq_len),
+        mesh_device,
+        warmup=5,
+        iterations=30,
+    )
+    candidate_eager_ms = _timed_ms(
+        lambda: candidate.decode_forward(decode_hidden, candidate_key, candidate_value, current_pos=seq_len),
+        mesh_device,
+        warmup=5,
+        iterations=30,
+    )
+
+    def trace_ms(decoder, key_cache, value_cache):
+        call = lambda: decoder.decode_forward(
+            decode_hidden,
+            key_cache,
+            value_cache,
+            current_pos=seq_len,
+        )
+        call()
+        ttnn.synchronize_device(mesh_device)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_output = call()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        try:
+            started = time.perf_counter()
+            for _ in range(100):
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            elapsed = (time.perf_counter() - started) * 1000.0 / 100
+            assert torch.isfinite(_compose_residual(traced_output)).all()
+            return elapsed
+        finally:
+            ttnn.release_trace(mesh_device, trace_id)
+
+    control_trace_ms = trace_ms(control, control_key, control_value)
+    candidate_trace_ms = trace_ms(candidate, candidate_key, candidate_value)
+    for name, value in (
+        ("prefill_pcc", prefill_pcc),
+        ("decode_pcc", decode_pcc),
+        ("key_pcc", key_pcc),
+        ("value_pcc", value_pcc),
+        ("control_prefill_ms", control_prefill_ms),
+        ("candidate_prefill_ms", candidate_prefill_ms),
+        ("control_eager_ms", control_eager_ms),
+        ("candidate_eager_ms", candidate_eager_ms),
+        ("control_trace_ms", control_trace_ms),
+        ("candidate_trace_ms", candidate_trace_ms),
+    ):
+        record_property(name, f"{value:.10f}" if "pcc" in name else f"{value:.6f}")
+    print(
+        f"STAGE_AB prefill_ms={control_prefill_ms:.6f}/{candidate_prefill_ms:.6f} "
+        f"eager_ms={control_eager_ms:.6f}/{candidate_eager_ms:.6f} "
+        f"trace_ms={control_trace_ms:.6f}/{candidate_trace_ms:.6f}"
+    )
+    del control, candidate, state
+    gc.collect()
 
 
 @_mesh_test

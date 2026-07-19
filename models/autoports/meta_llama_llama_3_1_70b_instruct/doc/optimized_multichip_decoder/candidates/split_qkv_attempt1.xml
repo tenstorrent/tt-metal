@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="17.078" timestamp="2026-07-19T07:11:58.641737+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_multichip_decoder" name="test_multichip_precision_candidate[blackhole-blackhole-1x4-ring]" time="10.955"><properties><property name="start_timestamp" value="2026-07-19T07:11:59" /><property name="end_timestamp" value="2026-07-19T07:12:15" /></properties><failure message="TypeError: FunctionalDecoder.__init__() got an unexpected keyword argument 'split_q_weight'">mesh_device = MeshDevice(1x4 grid, 4 devices)
+record_property = &lt;function record_property.&lt;locals&gt;.append_property at 0x721e5c6456c0&gt;
+
+    @_mesh_test
+    def test_multichip_precision_candidate(mesh_device, record_property):
+        """Cross real-weight projection dtype/fidelity and explicit SDPA policy."""
+
+        candidate_id = os.environ.get("MULTICHIP_PRECISION_CANDIDATE")
+        if candidate_id not in PRECISION_CANDIDATES:
+            pytest.skip(f"set MULTICHIP_PRECISION_CANDIDATE to one of {sorted(PRECISION_CANDIDATES)}")
+&gt;       _run_decode_policy_candidate(
+            mesh_device,
+            record_property,
+            candidate_id=candidate_id,
+            changes=PRECISION_CANDIDATES[candidate_id],
+            pcc_threshold=0.99,
+        )
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:1015:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:863: in _run_decode_policy_candidate
+    control = MultiChipDecoder.from_state_dict(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1642: in from_state_dict
+    return cls(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1112: in __init__
+    super().__init__(optimization_config=multichip_config.optimized, **kwargs)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;models.autoports.meta_llama_llama_3_1_70b_instruct.tt.multichip_decoder.MultiChipDecoder object at 0x721e5a2160c0&gt;
+optimization_config = OptimizationConfig(attention_weight_dtype=DataType.BFLOAT4_B, gate_up_weight_dtype=DataType.BFLOAT4_B, down_weight_dtype=DataType.BFLOAT4_B, attention_math_fidelity=MathFidelity.LoFi, gate_up_math_fidelity=MathFidelity.LoFi, down_math_fidelity=MathFidelity.LoFi, residual_cores=32, qkv_cores=16, output_cores=32, gate_up_cores=32, down_cores=32, qkv_in0_block_w=None, output_in0_block_w=None, gate_up_in0_block_w=4, down_in0_block_w=7, sdpa_grid=(8, 8), explicit_sdpa_program_config=False, explicit_sdpa_compute_kernel=False, prefill_grid=(8, 8), prefill_gate_up_in0_block_w=4, packed_gate_up=True, packed_decode_gate_up=False, decode_matmul_strategy='dram_sharded', fused_cache_update=False, advisor_gate_up_grid=(11, 10), advisor_gate_up_in0_block_w=2, advisor_gate_up_per_core_n=9, advisor_gate_up_out_subblock_w=3, advisor_down_grid=(11, 6), advisor_down_in0_block_w=4, advisor_down_per_core_n=4, advisor_down_out_subblock_w=4, advisor_exact_residual_chain=False)
+prefill_qkv_weight = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[-1.1719e-02, -1.9531e-02,  ...,  0.0000e+00,  3.9062e-03],
+             [-1.1719e-02,  3.9062e-03,  ...,  0.0000e+00,  0.0000e+00],
+             ...,
+             [-2.3438e-02, -3.9062e-03,  ...,  3.9062e-03,  7.8125e-03],
+             [-3.9062e-03,  7.8125e-03,  ...,  3.9062e-03, -2.3438e-02]], shape=Shape([8192, 2560]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[ 3.9062e-03, -1.1719e-02,  ...,  1.1719e-02, -3.9062e-03],
+             [-7.8125e-03,  3.9062e-03,  ..., -5.8594e-03,  9.7656e-03],
+             ...,
+             [ 0.0000e+00, -3.9062e-03,  ...,  3.9062e-03,  1.3672e-02],
+             [ 1.9531e-02, -2.7344e-02,  ..., -1.5625e-02, -3.9062e-03]], shape=Shape([8192, 2560]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[ 1.5625e-02, -7.8125e-03,  ..., -1.5625e-02, -7.8125e-03],
+             [ 7.8125e-03, -7.8125e-03,  ...,  1.5625e-02, -3.9062e-03],
+             ...,
+             [-1.5625e-02, -7.8125e-03,  ..., -1.9531e-03, -3.9062e-03],
+             [ 2.3438e-02,  0.0000e+00,  ...,  1.5625e-02, -7.8125e-03]], shape=Shape([8192, 2560]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[ 0.0000e+00,  7.8125e-03,  ...,  3.9062e-03, -7.8125e-03],
+             [-3.9062e-03, -3.9062e-03,  ...,  0.0000e+00,  3.9062e-03],
+             ...,
+             [ 7.8125e-03, -5.8594e-03,  ..., -1.5625e-02,  1.9531e-02],
+             [-1.1719e-02,  1.1719e-02,  ..., -1.5625e-02, -1.5625e-02]], shape=Shape([8192, 2560]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+prefill_output_weight = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[ 0.0078,  0.0156,  ..., -0.0039, -0.0039],
+             [ 0.0156,  0.0156,  ...,  0.0039,  0.0039],
+             ...,
+             [ 0.0117,  0.0039,  ..., -0.0156, -0.0039],
+             [ 0.0039, -0.0195,  ..., -0.0078, -0.0156]], shape=Shape([2048, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[-0.0195, -0.0156,  ..., -0.0078, -0.0117],
+             [-0.0117,  0.0039,  ..., -0.0078,  0.0000],
+             ...,
+             [-0.0039,  0.0000,  ..., -0.0234, -0.0156],
+             [-0.0039,  0.0078,  ...,  0.0078,  0.0156]], shape=Shape([2048, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[-0.0039, -0.0078,  ..., -0.0078,  0.0117],
+             [-0.0078, -0.0020,  ...,  0.0000,  0.0078],
+             ...,
+             [ 0.0156,  0.0000,  ..., -0.0039, -0.0117],
+             [ 0.0000,  0.0000,  ...,  0.0039,  0.0000]], shape=Shape([2048, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[ 0.0000,  0.0234,  ..., -0.0234,  0.0039],
+             [-0.0078, -0.0078,  ...,  0.0156, -0.0078],
+             ...,
+             [-0.0078,  0.0156,  ..., -0.0156,  0.0039],
+             [ 0.0078, -0.0039,  ..., -0.0078,  0.0078]], shape=Shape([2048, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+prefill_gate_weight = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[-0.0273, -0.0039,  ..., -0.0078,  0.0039],
+             [-0.0039, -0.0039,  ...,  0.0117,  0.0000],
+             ...,
+             [-0.0117,  0.0156,  ...,  0.0000,  0.0039],
+             [ 0.0039,  0.0078,  ...,  0.0000,  0.0234]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[-0.0039,  0.0000,  ..., -0.0039,  0.0000],
+             [ 0.0078, -0.0039,  ...,  0.0000,  0.0000],
+             ...,
+             [-0.0039,  0.0234,  ...,  0.0078,  0.0000],
+             [-0.0078,  0.0039,  ..., -0.0078,  0.0234]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[-0.0078,  0.0117,  ...,  0.0078, -0.0195],
+             [ 0.0000,  0.0117,  ...,  0.0078,  0.0078],
+             ...,
+             [ 0.0156,  0.0234,  ...,  0.0000, -0.0039],
+             [ 0.0000,  0.0000,  ...,  0.0156, -0.0078]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[-0.0039,  0.0078,  ...,  0.0000, -0.0039],
+             [-0.0039, -0.0117,  ...,  0.0039, -0.0039],
+             ...,
+             [ 0.0000,  0.0000,  ..., -0.0039, -0.0117],
+             [ 0.0117,  0.0078,  ...,  0.0000, -0.0156]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+prefill_up_weight = None
+prefill_down_weight = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[-0.0039, -0.0156,  ...,  0.0117,  0.0078],
+             [-0.0117,  0.0039,  ..., -0.0195,  0.0000],
+             ...,
+             [ 0.0039,  0.0078,  ...,  0.0098, -0.0039],
+             [ 0.0117,  0.0078,  ...,  0.0039, -0.0195]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[ 0.0000e+00, -1.5625e-02,  ..., -1.1719e-02,  3.9062e-03],
+             [ 2.3438e-02,  7.8125e-03,  ..., -3.9062e-03,  7.8125e-03],
+             ...,
+             [ 7.8125e-03, -1.5625e-02,  ..., -7.8125e-03,  7.8125e-03],
+             [-7.8125e-03,  0.0000e+00,  ...,  1.9531e-02,  1.1719e-02]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[-0.0039,  0.0273,  ..., -0.0117,  0.0117],
+             [ 0.0000, -0.0156,  ..., -0.0039, -0.0078],
+             ...,
+             [-0.0039,  0.0000,  ..., -0.0078, -0.0059],
+             [-0.0273,  0.0000,  ...,  0.0000, -0.0078]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[ 7.8125e-03,  2.3438e-02,  ...,  0.0000e+00,  3.9062e-03],
+             [-3.9062e-03,  3.9062e-03,  ...,  0.0000e+00, -2.3438e-02],
+             ...,
+             [ 3.9062e-03,  3.9062e-03,  ..., -3.9062e-03,  3.9062e-03],
+             [ 7.8125e-03,  3.9062e-03,  ...,  1.5625e-02,  0.0000e+00]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+kwargs = {'batch': 1, 'down_weight': device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[-0.0039, -0.0156,  ...,  0.0117,  0.0078],
+             [-0.0117,  0.0039,  ..., -0.0195,  0.0000],
+             ...,
+             [ 0.0039,  0.0078,  ...,  0.0098, -0.0039],
+             [ 0.0117,  0.0078,  ...,  0.0039, -0.0195]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[ 0.0000e+00, -1.5625e-02,  ..., -1.1719e-02,  3.9062e-03],
+             [ 2.3438e-02,  7.8125e-03,  ..., -3.9062e-03,  7.8125e-03],
+             ...,
+             [ 7.8125e-03, -1.5625e-02,  ..., -7.8125e-03,  7.8125e-03],
+             [-7.8125e-03,  0.0000e+00,  ...,  1.9531e-02,  1.1719e-02]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[-0.0039,  0.0273,  ..., -0.0117,  0.0117],
+             [ 0.0000, -0.0156,  ..., -0.0039, -0.0078],
+             ...,
+             [-0.0039,  0.0000,  ..., -0.0078, -0.0059],
+             [-0.0273,  0.0000,  ...,  0.0000, -0.0078]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[ 7.8125e-03,  2.3438e-02,  ...,  0.0000e+00,  3.9062e-03],
+             [-3.9062e-03,  3.9062e-03,  ...,  0.0000e+00, -2.3438e-02],
+             ...,
+             [ 3.9062e-03,  3.9062e-03,  ..., -3.9062e-03,  3.9062e-03],
+             [ 7.8125e-03,  3.9062e-03,  ...,  1.5625e-02,  0.0000e+00]], shape=Shape([7168, 8192]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE), 'gate_weight': device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[-0.0273, -0.0039,  ..., -0.0078,  0.0039],
+             [-0.0039, -0.0039,  ...,  0.0117,  0.0000],
+             ...,
+             [-0.0117,  0.0156,  ...,  0.0000,  0.0039],
+             [ 0.0039,  0.0078,  ...,  0.0000,  0.0234]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[-0.0039,  0.0000,  ..., -0.0039,  0.0000],
+             [ 0.0078, -0.0039,  ...,  0.0000,  0.0000],
+             ...,
+             [-0.0039,  0.0234,  ...,  0.0078,  0.0000],
+             [-0.0078,  0.0039,  ..., -0.0078,  0.0234]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[-0.0078,  0.0117,  ...,  0.0078, -0.0195],
+             [ 0.0000,  0.0117,  ...,  0.0078,  0.0078],
+             ...,
+             [ 0.0156,  0.0234,  ...,  0.0000, -0.0039],
+             [ 0.0000,  0.0000,  ...,  0.0156, -0.0078]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[-0.0039,  0.0078,  ...,  0.0000, -0.0039],
+             [-0.0039, -0.0117,  ...,  0.0039, -0.0039],
+             ...,
+             [ 0.0000,  0.0000,  ..., -0.0039, -0.0117],
+             [ 0.0117,  0.0078,  ...,  0.0000, -0.0156]], shape=Shape([8192, 14336]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE), 'head_dim': 128, ...}
+
+    def __init__(
+        self,
+        *,
+        optimization_config: OptimizationConfig,
+        prefill_qkv_weight,
+        prefill_output_weight,
+        prefill_gate_weight,
+        prefill_up_weight,
+        prefill_down_weight,
+        **kwargs,
+    ):
+&gt;       super().__init__(**kwargs)
+E       TypeError: FunctionalDecoder.__init__() got an unexpected keyword argument 'split_q_weight'
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/optimized_decoder.py:276: TypeError</failure></testcase></testsuite></testsuites>

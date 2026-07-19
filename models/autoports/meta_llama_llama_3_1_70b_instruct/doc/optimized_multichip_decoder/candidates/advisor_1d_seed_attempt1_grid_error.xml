@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="21.050" timestamp="2026-07-19T06:18:59.610189+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_multichip_decoder" name="test_multichip_decode_geometry_candidate[blackhole-blackhole-1x4-ring]" time="20.105"><properties><property name="start_timestamp" value="2026-07-19T06:19:00" /><property name="end_timestamp" value="2026-07-19T06:19:20" /></properties><failure message="RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/common/work_split.cpp:98: target_num_cores &lt;= total_available_cores&#10;info:&#10;Target number of cores 75 is greater than total number of available cores 66&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d14f1) [0x7b248d7d14f1]&#10; --- tt::tt_metal::num_cores_to_corerangeset(tt::xy_pair, unsigned int, tt::xy_pair, bool)&#10; --- tt::tt_metal::num_cores_to_corerangeset(unsigned int, tt::xy_pair, bool)&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e2658) [0x7b248d7e2658]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315d8e) [0x7b248d715d8e]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x183cef5]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x180256d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7b24d3cd41ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7b24d3cd428b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]">mesh_device = MeshDevice(1x4 grid, 4 devices)
+record_property = &lt;function record_property.&lt;locals&gt;.append_property at 0x7b243bf58ae0&gt;
+
+    @_mesh_test
+    def test_multichip_decode_geometry_candidate(mesh_device, record_property):
+        """One-real-weight-variable-at-a-time DRAM-sharded geometry sweep."""
+
+        candidate_id = os.environ.get("MULTICHIP_GEOMETRY_CANDIDATE")
+        if candidate_id not in GEOMETRY_CANDIDATES:
+            pytest.skip(f"set MULTICHIP_GEOMETRY_CANDIDATE to one of {sorted(GEOMETRY_CANDIDATES)}")
+&gt;       _run_decode_policy_candidate(
+            mesh_device,
+            record_property,
+            candidate_id=candidate_id,
+            changes=GEOMETRY_CANDIDATES[candidate_id],
+        )
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:874:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:784: in _run_decode_policy_candidate
+    candidate = MultiChipDecoder.from_state_dict(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1403: in from_state_dict
+    return cls(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1223: in __init__
+    self.advisor_gated_output_mem_config = _advisor_width_sharded_l1(
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:214: in _advisor_width_sharded_l1
+    core_ranges = ttnn.num_cores_to_corerangeset(cores, ttnn.CoreCoord(grid_x, grid_y), row_wise=True)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+target_num_cores = 75, grid_size = 11-6, row_wise = True
+
+    def num_cores_to_corerangeset(
+        target_num_cores: int,
+        grid_size: ttnn.CoreCoord,
+        row_wise: bool = False,
+    ):
+        """
+        Create a CoreRangeSet containing the specified number of cores
+        """
+&gt;       return ttnn._ttnn.operations.core.num_cores_to_corerangeset(
+            target_num_cores,
+            grid_size,
+            row_wise,
+        )
+E       RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/common/work_split.cpp:98: target_num_cores &lt;= total_available_cores
+E       info:
+E       Target number of cores 75 is greater than total number of available cores 66
+E       backtrace:
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d14f1) [0x7b248d7d14f1]
+E        --- tt::tt_metal::num_cores_to_corerangeset(tt::xy_pair, unsigned int, tt::xy_pair, bool)
+E        --- tt::tt_metal::num_cores_to_corerangeset(unsigned int, tt::xy_pair, bool)
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e2658) [0x7b248d7e2658]
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315d8e) [0x7b248d715d8e]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x183cef5]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x180256d]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7b24d3cd41ca]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7b24d3cd428b]
+E        --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/core.py:62: RuntimeError</failure></testcase></testsuite></testsuites>
