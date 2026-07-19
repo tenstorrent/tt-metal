@@ -3311,6 +3311,64 @@ TEST_F(ProgramSpecTestGen1, DFBMultipleConsumersOnSameNodeSucceedsWithFlag) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(ProgramSpecTestGen1, DFBMixedKindProducersOnSameNodeFailsWithoutFlag) {
+    // Baseline: a single role mixing a compute and a DM kernel is rejected by the per-role
+    // kind-uniformity check (the DFB's hardware config nominally carries one processor mask per role).
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "mixed_kind";
+
+    auto producer_compute = MakeMinimalGen1ComputeKernel("producer_compute");
+    auto producer_dm = MakeMinimalGen1DMKernel("producer_dm", DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer_compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer_dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer_compute, producer_dm, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "producer_dm", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mixing compute and data-movement kinds")));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBMixedKindProducersOnSameNodeSucceedsWithFlag) {
+    // The escape hatch imposes no RISC-type restriction on Gen1: a compute kernel and a DM kernel may
+    // both produce to one DFB on one node (it lowers to a plain shared circular buffer). Identical to
+    // the FailsWithoutFlag case except for the flag, which is what drops the kind-uniformity check.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "mixed_kind";
+
+    auto producer_compute = MakeMinimalGen1ComputeKernel("producer_compute");
+    auto producer_dm = MakeMinimalGen1DMKernel("producer_dm", DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_instance_multi_binding = true;
+
+    producer_compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer_dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer_compute, producer_dm, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "producer_dm", "consumer"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
 TEST_F(ProgramSpecTestGen1, MultiThreadedDMKernelFails) {
     NodeCoord node{0, 0};
 

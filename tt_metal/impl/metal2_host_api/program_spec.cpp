@@ -1276,11 +1276,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
 
+        // allow_instance_multi_binding (Gen1-only; rejected on Gen2 earlier in this function) turns
+        // the per-node DFB into a plain shared circular buffer, which has no per-role hardware config
+        // to share — no processor mask, DFB scheduler, or credit machinery. Every per-role uniformity
+        // requirement below exists solely to guarantee such a shared config, so none apply under the
+        // flag: the role-uniformity checks are skipped and the per-node census relaxes its "exactly
+        // one" counts to "at least one".
+        const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
+
         // (3) and (4): per-role uniformity of binding-site parameters, plus kernel kind.
         // Kind (compute vs DM) must agree because the DFB's hardware config carries a single
         // processor mask per role, and compute / DM masks live in disjoint bit ranges (bits
         // 0-7 vs 8-15 on Gen2; orthogonal RISC encodings on Gen1) — mismatched kinds cannot
-        // share a mask.
+        // share a mask. (All three are skipped under allow_multi — see above.)
         auto check_role_uniformity = [&](const auto& records, std::string_view role) {
             if (records.size() < 2) {
                 return;
@@ -1321,8 +1329,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     first_is_compute ? "data-movement" : "compute");
             }
         };
-        check_role_uniformity(endpoints.producers, "PRODUCER");
-        check_role_uniformity(endpoints.consumers, "CONSUMER");
+        if (!allow_multi) {
+            check_role_uniformity(endpoints.producers, "PRODUCER");
+            check_role_uniformity(endpoints.consumers, "CONSUMER");
+        }
 
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
         // every node it is instantiated on must run exactly one producer instance and exactly one
@@ -1368,13 +1378,9 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             return names;
         };
 
-        // Normally each node must host *exactly* one producer and one consumer (the local-DFB FIFO
-        // safety invariant). The allow_instance_multi_binding escape hatch (Gen1-only; the flag is
-        // rejected on Gen2 earlier in this function) relaxes the upper bound to permit legacy
-        // multi-producer / multi-consumer circular-buffer patterns, so a node may host more than one
-        // instance of a role. The connectivity requirement stays: every node must still host at least
-        // one producer AND at least one consumer, or the FIFO is half-wired.
-        const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
+        // Per-node census. Under allow_multi (see top of loop) the "exactly one" upper bound relaxes
+        // to "at least one": a node may host multiple instances of a role, but must still host at
+        // least one producer AND one consumer, or the FIFO is half-wired.
         for (const NodeCoord& node : footprint) {
             auto p_it = producers_on_node.find(node);
             auto c_it = consumers_on_node.find(node);
