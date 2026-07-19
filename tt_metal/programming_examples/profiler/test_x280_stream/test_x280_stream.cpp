@@ -88,6 +88,8 @@ int main(int argc, char** argv) {
     bool wnoc1 = false;        // --wnoc1: route the posted PCIe write over NoC1 (reads stay NoC0)
     bool nodrain = false;      // --nodrain: diagnostic -- relay ignores host flow control + no host consumer
                                // (isolates whether the reader is throttled by the host sink; LOSSY on purpose)
+    bool fullread = false;     // --fullread: "all buffers full" bench -- reader ignores tail, always drains a
+                               // full RING_CAP buffer per (core,risc). Deterministic max-drain load; LOSSY.
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -133,6 +135,8 @@ int main(int argc, char** argv) {
             direct = true;
         } else if (a == "--nodrain") {
             nodrain = true;
+        } else if (a == "--fullread") {
+            fullread = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -257,7 +261,8 @@ int main(int argc, char** argv) {
         params,
         0x30,
         read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) | (wnoc1 ? 0x800ull : 0ull) |
-            (nodrain ? 0x1000ull : 0ull));  // bit8=direct bit9=splitnoc bit11=wnoc1 bit12=nohostfc
+            (nodrain ? 0x1000ull : 0ull) |
+            (fullread ? 0x2000ull : 0ull));  // bit8=direct bit9=splitnoc bit11=wnoc1 bit12=nohostfc bit13=fullread
     pack<uint64_t>(params, 0x38, direct ? ndrain : nread);                // P_NREAD = drain-hart count in direct mode
     drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
     uint64_t nharts = direct ? ndrain : nread + 1;

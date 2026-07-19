@@ -128,7 +128,8 @@ static inline __attribute__((noreturn)) void return_to_idle_fw(void) {
 /* ============================== READER ============================== */
 /* Drain this hart's slice of cores into its LIM SPSC, injecting a STICKY-SRC before each (core,risc)'s
  * data. Blocks on a full SPSC (the relay drains cons). Runs until P_STOP and no worker data remains. */
-static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, uint64_t nread, uint64_t read_noc) {
+static void reader_run(
+    uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, uint64_t nread, uint64_t read_noc, uint64_t fullread) {
     uint64_t q = (num_cores + nread - 1) / nread;
     uint64_t lo = hartid * q, hi = lo + q;
     if (hi > num_cores) {
@@ -184,12 +185,21 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
                 uint32_t tail = tails[r];
                 uint32_t head = heads[L];
                 polls++;
-                if (tail == head) {
-                    continue;
+                uint32_t run;
+                if (fullread) {
+                    /* "all buffers full" bench: poll the tail (cost kept) but IGNORE it -- always drain a
+                     * FULL buffer. Copy RING_CAP-2 words from head (over-reads stale past tail, harmless);
+                     * head still advances to the REAL tail so producers stay consistent. Deterministic
+                     * max-drain workload regardless of actual occupancy. */
+                    run = RING_CAP - 2u;
+                } else {
+                    if (tail == head) {
+                        continue;
+                    }
+                    run = tail - head; /* <= RING_CAP (worker flow control) */
                 }
                 pending = 1;
                 visits++;
-                uint32_t run = tail - head; /* <= RING_CAP (worker flow control) */
                 uint32_t need = 2u + run;   /* sticky + data */
                 /* wait for room in our LIM SPSC. We read the RELAY's cons fresh from LIM each spin; our own
                  * prod stays local (only written to LIM for the relay) -- the proven profcons_split pattern. */
@@ -232,7 +242,7 @@ static void reader_run(uint64_t hartid, uint64_t num_cores, uint64_t prof_l1, ui
                 w32(PROD(hartid), prod);  /* publish to the relay */
             }
         }
-        if (r64(P_STOP) && !pending) {
+        if (r64(P_STOP) && (!pending || fullread)) { /* fullread: pending is always 1 -> stop on P_STOP alone */
             break;
         }
     }
@@ -526,6 +536,7 @@ int main(uint64_t hartid) {
     uint64_t direct = (r64(P_NONCE) >> 8) & 1ull;   /* NONCE bit 8: DIRECT drain (no reader/relay split) */
     uint64_t splitnoc = (r64(P_NONCE) >> 9) & 1ull; /* NONCE bit 9: each drain hart reads over NoC (hartid&1) */
     uint64_t wnoc = (r64(P_NONCE) >> 11) & 1ull;    /* NONCE bit 11: route the posted PCIe write over NoC1 */
+    uint64_t fullread = (r64(P_NONCE) >> 13) & 1ull; /* NONCE bit 13: reader always drains a FULL buffer (bench) */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -561,7 +572,7 @@ int main(uint64_t hartid) {
         uint64_t eff_noc = splitnoc ? (hartid & 1ull) : read_noc; /* split reads across NoC0/NoC1 per hart */
         drain_direct(hartid, ndrain, num_cores, prof_l1, host_base, hring_words, pcie_enc, eff_noc, wnoc);
     } else if (hartid < nread) {
-        reader_run(hartid, num_cores, prof_l1, nread, read_noc);
+        reader_run(hartid, num_cores, prof_l1, nread, read_noc, fullread);
     } else {
         relay_run(hartid, host_base, nread, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull);
     }

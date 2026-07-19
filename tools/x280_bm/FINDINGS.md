@@ -888,7 +888,25 @@ more, not finish sooner. The real non-copy ~50 % is PER-VISIT serialization — 
 posted LIM writes before PROD publishes) + head-advance NoC write + PROD/sticky, ~2000 cyc × ~2k visits.
 AND at the real operating point (with the host sink) the SINK dominates anyway (spsc-wait), so reader
 overhead is second-order until fan-out. Lever, if pursued: batch the PROD publish/fence across several
-lanes (X280-internal LIM→relay, no host-heartbeat coupling — unlike the host-publish batching that failed). To get copy-dominant at peak needs BOTH a
+lanes (X280-internal LIM→relay, no host-heartbeat coupling — unlike the host-publish batching that failed).
+
+**CANONICAL "ALL BUFFERS FULL" TEST (`--fullread`, 2026-07-19) — the workload we optimize against.**
+Current `--proddelay 0` "peak" is NOT all-buffers-full: it's a live producer/reader race that settles at
+LOW occupancy (83-97 % of polls find EMPTY lanes — reader out-cycles producers; occupancy is unstable,
+run-length dependent). The toughest workload is all 550 rings full simultaneously. Mock it on the READER
+side: `--fullread` keeps the per-core tail poll (cost) but IGNORES it and always drains a FULL RING_CAP-2
+buffer per (core,risc), advancing head to the real tail so producers stay consistent (over-reads stale past
+tail, harmless; LOSSY). Deterministic max-drain load, `0 % empty`, `avg-run=510`. RESULTS (bh-11, 550 lanes):
+| all buffers full | reader copy% | reader spsc-wait | relay copy% | relay hostfull | wall |
+|---|---|---|---|---|---|
+| with host sink | 34-49 % | 6-9M | 53 % | ~38k | 16-18M |
+| sink removed (`--nodrain`) | **75 %** | **0** | **94 %** | **0** | **9M** |
+Three findings: (1) **the host sink is THE bottleneck** — with it the reader is ~50 % spsc-wait and the relay
+~47 % hostfull-spinning; removing it → reader 75 %, relay 94 %, wall HALVES (fan-out is the fix). (2) **work
+is imbalanced across readers under the sink** (one drains ~2× the other, flips run-to-run — the single relay
++ per-ring host threads service the two rings unevenly); sink-free they're perfectly balanced. (3) even
+sink-free the reader caps ~75 % copy — the remaining ~25 % is the per-visit fence/publish, the reader's true
+internal ceiling at full load. So priority: fan-out the sink first, then batch the reader fence/publish. To get copy-dominant at peak needs BOTH a
 faster sink (fan-out to more rings/threads than readers) AND the reader-overhead fix (bulk-poll the
 tails + batch the PROD publish/fence). Bigger SPSC does NOT help — tried 4096→16384, it made things
 2.5× WORSE (burstier back-pressure, less 3-stage overlap; the small buffer is near-optimal).
