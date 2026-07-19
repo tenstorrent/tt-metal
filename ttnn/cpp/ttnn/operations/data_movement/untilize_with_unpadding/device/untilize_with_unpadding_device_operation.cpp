@@ -133,9 +133,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                     // supported: the writer (writer_unary_unpad_cross_sharded.cpp) addresses the
                     // destination via TensorAccessor page-id routing (page_id = row*KW + col_shard,
                     // identical for WIDTH and BLOCK), so the executing core need not be the
-                    // physically-owning core of the output shard - mirrors ttnn::index_fill's
-                    // sharding support (PR #48423). Currently unbatched-only, matching the
-                    // existing restriction on BLOCK_SHARDED -> interleaved below.
+                    // physically-owning core of the output shard. Currently unbatched-only,
+                    // matching the existing restriction on BLOCK_SHARDED -> interleaved below.
                     bool same_type =
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
                     bool cross_to_width =

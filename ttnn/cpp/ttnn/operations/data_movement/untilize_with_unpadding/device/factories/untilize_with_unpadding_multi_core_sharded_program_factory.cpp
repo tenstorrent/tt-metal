@@ -35,7 +35,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     // Unlike the same-shard-type out_sharded path below (a same-core L1-to-L1 copy via a CB bound
     // directly to the output buffer), the executing core here may not be the physically-owning
     // core of the output shard, so a dedicated writer addresses the destination via TensorAccessor
-    // page-id routing instead. Mirrors the design in ttnn::index_fill's sharding support (PR #48423).
+    // page-id routing instead.
     bool cross_shard_type = out_sharded && output.memory_config().memory_layout() != a.memory_config().memory_layout();
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
