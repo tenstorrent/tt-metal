@@ -275,50 +275,48 @@ static void relay_run(uint64_t hartid, uint64_t host_base, uint64_t nread, uint6
             }
             pending = 1;
             uint64_t sbase = STAGE_BASE + h * STAGE_STRIDE;
-            uint32_t avail = prod - cn;
-            uint32_t hacked = r32(HACKED_ADDR);
-            uint32_t hspace = (uint32_t)hring_words - (hsent - hacked);
-            if (hspace == 0) {
-                hostfull++;
-                continue; /* host ring full -> try the other reader, come back */
-            }
-            uint32_t run = avail < hspace ? avail : hspace;
-            /* DEBUG: re-read HACKED fresh right before writing. If (hsent+run) - fresh > hring, we are about
-             * to overwrite unacked ring data -> the hacked we flow-controlled with was STALE-HIGH (host->X280
-             * LIM read incoherence). This is decisive for relay-overwrite vs host-side. */
-            {
-                uint32_t fresh = r32(HACKED_ADDR);
-                if ((int32_t)((hsent + run) - (fresh + (uint32_t)hring_words)) > 0) {
-                    breach++;
-                }
-            }
+            uint32_t avail = prod - cn; /* WHOLE frames: PROD is only published at (sticky+run) boundaries */
             uint64_t tc = rdcycle();
-            /* copy the reader SPSC words -> host ring in contiguous chunks (split at BOTH the SPSC wrap and
-             * the host-ring wrap), each chunk moved with wide RVV (vle32 from LIM, vse32 posted to host). */
-            uint32_t si = cn, di = hsent, leftw = run;
-            while (leftw) {
-                uint32_t sslot = si % STAGE_WORDS;
-                uint32_t hslot = di % (uint32_t)hring_words;
-                uint32_t chunk = leftw;
-                if (chunk > STAGE_WORDS - sslot) {
-                    chunk = STAGE_WORDS - sslot;
+            /* Drain this reader's WHOLE snapshot before touching the other reader, so its frames stay
+             * CONTIGUOUS in the shared host ring. The old code capped the copy at hspace and moved on --
+             * that splits a reader's data-run and lets the OTHER reader's frame land between the halves; the
+             * continuation then has no STICKY-SRC prefix, so the host binds it to the wrong lane. That was
+             * the "loss" (exact marker count, but ~27% misattributed) -- a framing bug, not LIM coherence.
+             * We publish HSENT incrementally inside the loop so the host keeps draining and frees hspace. */
+            while (avail) {
+                uint32_t hspace = (uint32_t)hring_words - (hsent - r32(HACKED_ADDR));
+                if (hspace == 0) {
+                    hostfull++;
+                    continue; /* spin on the SAME reader until the host frees space -- never interleave */
                 }
-                if (chunk > (uint32_t)hring_words - hslot) {
-                    chunk = (uint32_t)hring_words - hslot;
+                uint32_t run = avail < hspace ? avail : hspace;
+                uint32_t si = cn, di = hsent, leftw = run;
+                while (leftw) {
+                    uint32_t sslot = si % STAGE_WORDS;
+                    uint32_t hslot = di % (uint32_t)hring_words;
+                    uint32_t chunk = leftw;
+                    if (chunk > STAGE_WORDS - sslot) {
+                        chunk = STAGE_WORDS - sslot;
+                    }
+                    if (chunk > (uint32_t)hring_words - hslot) {
+                        chunk = (uint32_t)hring_words - hslot;
+                    }
+                    copy_words(hbase + (uint64_t)hslot * 4, sbase + (uint64_t)sslot * 4, chunk);
+                    si += chunk;
+                    di += chunk;
+                    leftw -= chunk;
                 }
-                copy_words(hbase + (uint64_t)hslot * 4, sbase + (uint64_t)sslot * 4, chunk);
-                si += chunk;
-                di += chunk;
-                leftw -= chunk;
+                cn += run;
+                hsent += run;
+                total += run;
+                avail -= run;
+                fence_();               /* host writes issued before we publish the pointers */
+                w32(CONS(h), cn);       /* free the reader SPSC incrementally */
+                w32(HSENT_ADDR, hsent); /* publish so the host keeps draining -> frees hspace */
             }
-            t_copy += rdcycle() - tc;
-            cn += run;
             cons[h] = cn;
-            hsent += run;
-            total += run;
-            fence_();               /* host writes issued before we publish the pointers */
-            w32(CONS(h), cn);       /* free the reader SPSC */
-            w32(HSENT_ADDR, hsent); /* publish to the host */
+            t_copy += rdcycle() - tc;
+            (void)breach;
         }
         if (!pending) {
             idle++;
