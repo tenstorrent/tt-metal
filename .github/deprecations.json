@@ -24,6 +24,22 @@
       "introduced_by_pr": 23835,
       "grace": "30d",
       "owners": ["ncvetkovicTT"]
+    },
+    {
+      "id": "pack-tile-block-rename",
+      "description": "pack_tile_block in tt_metal/hw/inc/api/compute/pack.h renamed to pack_block for a uniform op_block Compute API surface (tt-metal#47477). The pack_tile_block forwarding shim is retained only for backwards compatibility; delete it once all call sites are migrated to pack_block.",
+      "files": ["tt_metal/hw/inc/api/compute/pack.h"],
+      "introduced_by_pr": 49070,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
+    },
+    {
+      "id": "copy-block-matmul-partials-rename",
+      "description": "copy_block_matmul_partials in tt_metal/hw/inc/api/compute/tile_move_copy.h superseded by the uniform copy_block (functionally equivalent; same block unpack/datacopy paths) as part of the op_block Compute API surface (tt-metal#47477). The copy_block_matmul_partials forwarding shim is retained only for backwards compatibility; delete it once all call sites are migrated to copy_block.",
+      "files": ["tt_metal/hw/inc/api/compute/tile_move_copy.h"],
+      "introduced_by_pr": 49070,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
     }
   ]
 }
