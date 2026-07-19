@@ -289,7 +289,12 @@ jobs:
           # names ([A-Za-z0-9][A-Za-z0-9+._-]*), rejecting anything that could carry shell
           # metacharacters or extra apt-get flags. Fall back to a fixed default set if the input
           # is empty or contains no valid names.
-          default_pkgs=(linux-tools-common linux-tools-generic)
+          #
+          # The runner's perf binary must match the host kernel. We therefore include the
+          # kernel-specific linux-tools package (e.g. linux-tools-5.15.0-185-generic) in the
+          # default set, with generic fallbacks if that exact package is unavailable.
+          kernel_pkg="linux-tools-$(uname -r)-generic"
+          default_pkgs=(linux-tools-common "$kernel_pkg" linux-tools-generic)
           pkgs=()
           # Split on whitespace and commas only.
           IFS=', ' read -r -a raw_pkgs <<< "$PERF_INSTALL_PACKAGE"
