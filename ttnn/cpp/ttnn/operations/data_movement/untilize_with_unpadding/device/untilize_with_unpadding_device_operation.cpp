@@ -19,6 +19,9 @@ namespace ttnn::prim {
 
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    if (input.layout() == Layout::ROW_MAJOR) {
+        return UntilizeWithUnpaddingRowMajorProgramFactory{};
+    }
     if (input.memory_config().is_sharded()) {
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
@@ -30,6 +33,14 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
     }
     if (!operation_attributes.use_multicore) {
         return UntilizeWithUnpaddingSingleCoreProgramFactory{};
+    }
+    // Sharded output from interleaved input is only implemented in the row-split multi-core writer
+    // (writer_unary_stick_layout_split_rows_multicore.cpp, which uses noc_async_write_sharded to
+    // split a row across B/W-sharded output shards). The block-interleaved writer hasn't been
+    // updated for that, so force the row-split factory whenever output is sharded, bypassing both
+    // the enough_space_height flag and the wide-row heuristic below.
+    if (operation_attributes.output_mem_config.is_sharded()) {
+        return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
         return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
@@ -70,7 +81,31 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "Can only untilize tile major or row major data");
+
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        // ROW_MAJOR input has no tile padding to strip, so this degenerates to a plain unpad/copy -
+        // handled by UntilizeWithUnpaddingRowMajorProgramFactory, which reuses ttnn::slice's RM
+        // reader/writer kernels. Those kernels already split a logical row across multiple shards
+        // via noc_async_{read,write}_sharded when needed (see common/kernels/common.hpp), and address
+        // the destination via TensorAccessor (sharding-agnostic), so - unlike the TILE-path writers -
+        // sharded RM input/output is not blocked by a row-per-page assumption. The output shard spec
+        // is used verbatim from the caller (see compute_output_specs()) since RM shards have no
+        // tile-alignment constraint to derive.
+        if (input_tensor_a.memory_config().is_sharded()) {
+            TT_FATAL(
+                input_tensor_a.shard_spec().has_value(),
+                "ND-sharded ROW_MAJOR input is not yet supported for untilize_with_unpadding");
+        }
+        if (operation_attributes.output_mem_config.is_sharded()) {
+            TT_FATAL(
+                operation_attributes.output_mem_config.shard_spec().has_value(),
+                "ND-sharded ROW_MAJOR output is not yet supported for untilize_with_unpadding");
+        }
+        return;
+    }
 
     TT_FATAL(
         input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0,
@@ -88,15 +123,56 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                     input_tensor_a.shard_spec().value().grid.ranges().size() == 1,
                     "Expected single grid range and got {}",
                     input_tensor_a.shard_spec().value().grid.ranges().size());
-                TT_FATAL(
-                    operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-                    "Output memory config layout must be INTERLEAVED for block sharded input but got {}",
-                    operation_attributes.output_mem_config.memory_layout());
-                TT_FATAL(
-                    input_tensor_a.physical_volume() /
-                            (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                        1,
-                    "Can only write unbatched output interleaved");
+                if (operation_attributes.output_mem_config.is_sharded()) {
+                    // The sharded program factory reads output.shard_spec() independently of the
+                    // input's (see out_shard_spec in the sharded factory), the same mechanism
+                    // WIDTH_SHARDED->WIDTH_SHARDED sharded output already relies on below - so
+                    // BLOCK_SHARDED can reuse it as long as the output stays on the same grid.
+                    //
+                    // BLOCK_SHARDED -> WIDTH_SHARDED (matching column shard width) is also
+                    // supported: the writer (writer_unary_unpad_cross_sharded.cpp) addresses the
+                    // destination via TensorAccessor page-id routing (page_id = row*KW + col_shard,
+                    // identical for WIDTH and BLOCK), so the executing core need not be the
+                    // physically-owning core of the output shard - mirrors ttnn::index_fill's
+                    // sharding support (PR #48423). Currently unbatched-only, matching the
+                    // existing restriction on BLOCK_SHARDED -> interleaved below.
+                    bool same_type =
+                        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+                    bool cross_to_width =
+                        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+                    TT_FATAL(
+                        same_type || cross_to_width,
+                        "Output memory config layout ({}) must be BLOCK_SHARDED (or WIDTH_SHARDED with a "
+                        "matching column shard width) when input is BLOCK_SHARDED and output is sharded",
+                        operation_attributes.output_mem_config.memory_layout());
+                    if (cross_to_width) {
+                        TT_FATAL(
+                            operation_attributes.output_mem_config.shard_spec().has_value(),
+                            "Output memory config is sharded but no shard spec is provided");
+                        TT_FATAL(
+                            input_tensor_a.shard_spec().value().shape[1] ==
+                                operation_attributes.output_mem_config.shard_spec().value().shape[1],
+                            "BLOCK_SHARDED -> WIDTH_SHARDED requires matching column shard width; got input={} "
+                            "output={}",
+                            input_tensor_a.shard_spec().value().shape[1],
+                            operation_attributes.output_mem_config.shard_spec().value().shape[1]);
+                        TT_FATAL(
+                            input_tensor_a.physical_volume() /
+                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                1,
+                            "Can only write unbatched output for BLOCK_SHARDED -> WIDTH_SHARDED");
+                    }
+                } else {
+                    TT_FATAL(
+                        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                        "Output memory config layout must be INTERLEAVED for block sharded input but got {}",
+                        operation_attributes.output_mem_config.memory_layout());
+                    TT_FATAL(
+                        input_tensor_a.physical_volume() /
+                                (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                            1,
+                        "Can only write unbatched output interleaved");
+                }
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (operation_attributes.output_mem_config.is_sharded()) {
                     TT_FATAL(
@@ -134,21 +210,45 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         output_shape[i]);
                 }
                 if (operation_attributes.output_mem_config.is_sharded()) {
+                    // WIDTH_SHARDED -> BLOCK_SHARDED (matching column shard width) is supported via
+                    // the same TensorAccessor page-id-routed writer as the BLOCK_SHARDED -> WIDTH_SHARDED
+                    // direction above (writer_unary_unpad_cross_sharded.cpp) - see the comment there.
+                    bool same_type = operation_attributes.output_mem_config.memory_layout() ==
+                                     input_tensor_a.memory_config().memory_layout();
+                    bool cross_to_block =
+                        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
                     TT_FATAL(
-                        operation_attributes.output_mem_config.memory_layout() ==
-                            input_tensor_a.memory_config().memory_layout(),
-                        "Output memory config layout ({}) must match input tensor memory layout ({})",
+                        same_type || cross_to_block,
+                        "Output memory config layout ({}) must match input tensor memory layout ({}) (or be "
+                        "BLOCK_SHARDED with a matching column shard width)",
                         operation_attributes.output_mem_config.memory_layout(),
                         input_tensor_a.memory_config().memory_layout());
-                    TT_FATAL(
-                        input_tensor_a.padded_shape()[-1] == output_shape[-1] ||
-                            (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
-                             input_tensor_a.shard_spec().value().grid.num_cores()),
-                        "Input tensor width ({}) must equal output width ({}) or output width / shard width must equal "
-                        "num "
-                        "cores",
-                        input_tensor_a.padded_shape()[-1],
-                        output_shape[-1]);
+                    if (cross_to_block) {
+                        TT_FATAL(
+                            operation_attributes.output_mem_config.shard_spec().has_value(),
+                            "Output memory config is sharded but no shard spec is provided");
+                        TT_FATAL(
+                            input_tensor_a.shard_spec().value().shape[1] ==
+                                operation_attributes.output_mem_config.shard_spec().value().shape[1],
+                            "WIDTH_SHARDED -> BLOCK_SHARDED requires matching column shard width; got input={} "
+                            "output={}",
+                            input_tensor_a.shard_spec().value().shape[1],
+                            operation_attributes.output_mem_config.shard_spec().value().shape[1]);
+                        TT_FATAL(
+                            input_tensor_a.physical_volume() /
+                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                1,
+                            "Can only write unbatched output for WIDTH_SHARDED -> BLOCK_SHARDED");
+                    } else {
+                        TT_FATAL(
+                            input_tensor_a.padded_shape()[-1] == output_shape[-1] ||
+                                (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
+                                 input_tensor_a.shard_spec().value().grid.num_cores()),
+                            "Input tensor width ({}) must equal output width ({}) or output width / shard width "
+                            "must equal num cores",
+                            input_tensor_a.padded_shape()[-1],
+                            output_shape[-1]);
+                    }
                 } else {
                     TT_FATAL(
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -214,10 +314,20 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor memory layout must be INTERLEAVED but got {}",
             input_tensor_a.memory_config().memory_layout());
-        TT_FATAL(
-            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Output memory config layout must be INTERLEAVED but got {}",
-            operation_attributes.output_mem_config.memory_layout());
+        // Interleaved input can write directly to any 2D-sharded output. The MultiCoreInterleaved
+        // writer (writer_unary_stick_layout_split_rows_multicore.cpp) now uses
+        // noc_async_write_sharded, which splits a logical row across shards via a per-shard page
+        // size override - the same mechanism the ROW_MAJOR-input factory relies on - so
+        // WIDTH_SHARDED/BLOCK_SHARDED output (which split a row across multiple cores) is no longer
+        // blocked by the old row-per-page assumption. An earlier naive host-side-only relaxation
+        // (no kernel change) was hardware-tested and produced wrong data; this is the real fix.
+        // The MultiCoreBlockInterleaved writer (used for the very-wide-row heuristic path) has NOT
+        // been updated yet, so its dispatch is excluded below.
+        if (operation_attributes.output_mem_config.is_sharded()) {
+            TT_FATAL(
+                operation_attributes.output_mem_config.shard_spec().has_value(),
+                "Output memory config is sharded but no shard spec is provided");
+        }
     }
 }
 
@@ -232,6 +342,66 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
     }
     Shape output_shape(std::move(out_shape));
     DataType output_dtype = input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
+    // ROW_MAJOR output shards have no tile-alignment constraint, so the caller's output_mem_config
+    // (including its shard_spec, when sharded) is used as-is via the final fallback return below -
+    // skip the TILE-only shard-shape derivations, which round to tile height/width.
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        return TensorSpec(
+            output_shape,
+            TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
+    }
+    if (!input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded()) {
+        // Interleaved input has no shard spec to inherit a shape from, so derive one the same way
+        // the sharded-input "single matrix split across cores" case does below: round per-core
+        // extents up to a tile multiple. The caller's shard spec still supplies the core grid
+        // (and, for HEIGHT_SHARDED, the width).
+        //
+        // WIDTH_SHARDED/BLOCK_SHARDED split a logical row across multiple shards/cores; this is now
+        // supported because the row-split multi-core writer
+        // (writer_unary_stick_layout_split_rows_multicore.cpp) uses noc_async_write_sharded with a
+        // per-shard page-size override to split each row's write across shard columns - see
+        // select_program_factory(), which forces that factory whenever output is sharded. An earlier
+        // naive host-side-only relaxation (no kernel change) was hardware-tested and produced wrong
+        // data; this is the real fix.
+        ShardSpec shard_spec = operation_attributes.output_mem_config.shard_spec().value();
+        uint32_t fused_height = output_shape.volume() / output_shape[-1];
+        uint32_t tile_height = input_tensor_a.tensor_spec().tile().get_height();
+        uint32_t tile_width = input_tensor_a.tensor_spec().tile().get_width();
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            uint32_t num_cores = shard_spec.num_cores();
+            shard_spec.shape = {fused_height, tt::round_up(tt::div_up(output_shape[-1], num_cores), tile_width)};
+        } else if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            CoreRange bbox = shard_spec.grid.bounding_box();
+            uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
+            uint32_t grid_rows = bbox.end_coord.y - bbox.start_coord.y + 1;
+            if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
+                std::swap(grid_cols, grid_rows);
+            }
+            shard_spec.shape = {
+                tt::round_up(tt::div_up(fused_height, grid_rows), tile_height),
+                tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile_width)};
+        } else {
+            uint32_t num_cores = shard_spec.num_cores();
+            shard_spec.shape = {tt::round_up(tt::div_up(fused_height, num_cores), tile_height), shard_spec.shape[1]};
+        }
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            operation_attributes.output_mem_config.memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);
+        return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
+    }
+    if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded() &&
+        input_tensor_a.shard_spec().has_value() &&
+        operation_attributes.output_mem_config.memory_layout() != input_tensor_a.memory_config().memory_layout()) {
+        // Cross-shard-type (WIDTH_SHARDED <-> BLOCK_SHARDED, matching column shard width - see
+        // validate_on_program_cache_miss()). The caller's output shard spec is used verbatim: unlike
+        // the same-shard-type derivation below (which reshapes a shard inherited from the input's
+        // grid), here the output's grid may differ in shape from the input's, so there is nothing
+        // meaningful to derive from the input side.
+        return TensorSpec(
+            output_shape,
+            TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
+    }
     if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded() &&
         input_tensor_a.shard_spec().has_value()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];
@@ -262,6 +432,21 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
                 shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
             }
             shard_shape = {shard_idx0, output_shape[-1]};
+        } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            // BLOCK_SHARDED splits along both height and width, so both dims of the shard shrink
+            // with unpadding, unlike WIDTH_SHARDED (whole, unsplit height) or HEIGHT_SHARDED (whole,
+            // unsplit width) above. Grid is a single CoreRange (enforced in validate()), so its
+            // bounding box gives the (rows x cols) shard grid directly.
+            const auto tile = input_tensor_a.tensor_spec().tile();
+            CoreRange bbox = shard_spec.grid.bounding_box();
+            uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
+            uint32_t grid_rows = bbox.end_coord.y - bbox.start_coord.y + 1;
+            if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
+                std::swap(grid_cols, grid_rows);
+            }
+            shard_shape = {
+                tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()),
+                tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width())};
         } else {
             shard_shape = {fused_height, shard_spec.shape[1]};
         }

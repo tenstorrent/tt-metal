@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,11 @@
 
 namespace ttnn::prim {
 
-struct UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory {
+// Handles ROW_MAJOR input: there is no tile padding to strip, so this degenerates to a plain
+// unpad/copy - reuses the same reader/writer kernels ttnn::slice already ships for exactly this
+// (read/write only the unpadded sticks, skipping padded ones via per-dim counters), since
+// output_tensor_end always slices from index 0 (unlike slice's arbitrary start offset).
+struct UntilizeWithUnpaddingRowMajorProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output);
 };

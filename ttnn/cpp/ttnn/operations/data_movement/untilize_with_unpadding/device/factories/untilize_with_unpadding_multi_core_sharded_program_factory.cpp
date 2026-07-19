@@ -31,6 +31,12 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
+    // WIDTH_SHARDED <-> BLOCK_SHARDED with a matching column shard width (enforced in validate()).
+    // Unlike the same-shard-type out_sharded path below (a same-core L1-to-L1 copy via a CB bound
+    // directly to the output buffer), the executing core here may not be the physically-owning
+    // core of the output shard, so a dedicated writer addresses the destination via TensorAccessor
+    // page-id routing instead. Mirrors the design in ttnn::index_fill's sharding support (PR #48423).
+    bool cross_shard_type = out_sharded && output.memory_config().memory_layout() != a.memory_config().memory_layout();
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
     // and skip face1 and face3.
@@ -82,6 +88,38 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
         std::swap(end_core.x, end_core.y);
     }
 
+    // Per-core output column-shard index and starting output row, derived from the INPUT's grid
+    // geometry independently of the output's (their grids may differ in shape/orientation between
+    // WIDTH_SHARDED's 1xKW grid and BLOCK_SHARDED's KHxKW grid). cross_kw is the column-shard count,
+    // identical on both sides since validate() requires matching column shard width.
+    struct CrossShardCoreInfo {
+        uint32_t col_shard_id = 0;
+        uint32_t row_start_id = 0;
+    };
+    std::vector<CrossShardCoreInfo> cross_shard_core_infos;
+    uint32_t cross_kw = 0;
+    if (cross_shard_type) {
+        auto in_cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+        cross_shard_core_infos.reserve(in_cores.size());
+        if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            cross_kw = static_cast<uint32_t>(in_cores.size());
+            for (uint32_t i = 0; i < in_cores.size(); ++i) {
+                cross_shard_core_infos.push_back({i, 0});
+            }
+        } else {
+            // BLOCK_SHARDED input
+            CoreRange bbox = all_cores.bounding_box();
+            uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;  // KW
+            uint32_t grid_rows = bbox.end_coord.y - bbox.start_coord.y + 1;  // KH
+            cross_kw = grid_cols;
+            for (uint32_t i = 0; i < in_cores.size(); ++i) {
+                uint32_t kh = row_major ? (i / grid_cols) : (i % grid_rows);
+                uint32_t kw = row_major ? (i % grid_cols) : (i / grid_rows);
+                cross_shard_core_infos.push_back({kw, kh * shard_spec.shape[0]});
+            }
+        }
+    }
+
     constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
     // Input CB: sharded → bind .buffer to the input buffer; framework re-applies
@@ -111,7 +149,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     });
 
     constexpr uint8_t sharded_output_cb_index = tt::CBIndex::c_17;
-    if (out_sharded) {
+    if (out_sharded && !cross_shard_type) {
         // The kernel advances the write pointer by aligned_page_size (which may be
         // larger than block_row_size due to buffer alignment padding), so the CB
         // page size must match to avoid overflow.
@@ -146,7 +184,15 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     /** writer
      */
     KernelDescriptor writer_desc;
-    if (out_sharded) {
+    if (cross_shard_type) {
+        uint32_t cross_writer_page_size = shard_spec.shape[1] * output.element_size();
+        std::vector<uint32_t> writer_ct_args{cross_writer_page_size};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+            "writer_unary_unpad_cross_sharded.cpp";
+        writer_desc.compile_time_args = std::move(writer_ct_args);
+    } else if (out_sharded) {
         std::vector<uint32_t> writer_ct_args{output_cb_index, sharded_output_cb_index, aligned_page_size};
         writer_desc.kernel_source =
             unpad_tensor_w_16
@@ -227,7 +273,33 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
         reader_desc.runtime_args.emplace_back(core, reader_rt_args);
     }
 
-    if (out_sharded) {
+    if (cross_shard_type) {
+        // Per-core row/column-shard indices are independent of the executing core's own position
+        // (see cross_shard_core_infos above), so runtime args differ per core rather than
+        // broadcasting one set to every core like the same-shard-type branch below.
+        uint32_t num_output_rows_cross = output.physical_volume() / output.padded_shape()[-1];
+        writer_desc.runtime_args.reserve(all_core_coords.size());
+        for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
+            const auto& core = all_core_coords[i];
+            const auto& info = cross_shard_core_infos[i];
+            uint32_t this_core_rows = 0;
+            if (info.row_start_id < num_output_rows_cross) {
+                this_core_rows = std::min(shard_spec.shape[0], num_output_rows_cross - info.row_start_id);
+            }
+            uint32_t row_size_unpadded =
+                (info.col_shard_id == cross_kw - 1) ? last_block_row_size_unpadded : block_row_size;
+            writer_desc.emplace_runtime_args(
+                core,
+                {dst_buffer,
+                 ntiles_per_batch,   // num_padded_tiles_per_batch (batch==1, cross-type is unbatched-only)
+                 this_core_rows,     // num_unpadded_rows_per_batch
+                 block_row_size,     // padded_block_row_size_bytes (source CB stride, always full)
+                 row_size_unpadded,  // unpadded_block_row_size_bytes (trimmed for the last column shard)
+                 std::uint32_t{1},   // batch
+                 info.col_shard_id * block_row_size,  // col_byte_offset (row->page split done by TensorAccessor)
+                 info.row_start_id});
+        }
+    } else if (out_sharded) {
         std::vector<uint32_t> writer_rt_args;
         if (unpad_tensor_w_16) {
             writer_rt_args = {num_output_rows_unpadded, num_input_tiles};
