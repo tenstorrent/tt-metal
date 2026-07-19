@@ -322,7 +322,8 @@ class _TtDecoderLayer:
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], inter])
         x2 = ttnn.slice(gu, [0, 0, inter], [gu.shape[0], gu.shape[1], 2 * inter])
         ttnn.deallocate(gu)
-        act = ttnn.multiply(x1, ttnn.silu(x2))
+        # SwiGLU: fuse silu into the multiply (silu(x2) * x1 in one op).
+        act = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         out = ttnn.linear(act, down_w)
@@ -507,13 +508,19 @@ class _TtDecoderLayer:
         residual2 = hidden
         x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
         # Composed graduated MoE (which composes the graduated gate).
-        moe, l_aux = self.moe(x2, return_l_aux=True)
+        if return_l_aux:
+            moe, l_aux = self.moe(x2, return_l_aux=True)
+        else:
+            # inference: skip l_aux (mo_e returns a single tensor).
+            moe = self.moe(x2, return_l_aux=False)
+            l_aux = None
         ttnn.deallocate(x2)
         out = ttnn.add(residual2, moe)
         ttnn.deallocate(moe)
         if return_l_aux:
             return out, l_aux
-        ttnn.deallocate(l_aux)
+        if l_aux is not None:
+            ttnn.deallocate(l_aux)
         return out
 
     # ------------------------------------------------------------------
@@ -528,7 +535,12 @@ class _TtDecoderLayer:
         residual2 = hidden
         x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
         # Composed graduated MoE (which composes the graduated gate), sharded.
-        moe, l_aux = self.moe(x2, return_l_aux=True)
+        if return_l_aux:
+            moe, l_aux = self.moe(x2, return_l_aux=True)
+        else:
+            # inference: skip l_aux (mo_e returns a single tensor).
+            moe = self.moe(x2, return_l_aux=False)
+            l_aux = None
         ttnn.deallocate(x2)
         out = ttnn.add(residual2, moe)
         ttnn.deallocate(moe)
@@ -551,7 +563,12 @@ class _TtDecoderLayer:
 
         residual2 = hidden
         x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
-        moe, l_aux = self.moe(x2, return_l_aux=True)
+        if return_l_aux:
+            moe, l_aux = self.moe(x2, return_l_aux=True)
+        else:
+            # inference: skip l_aux (mo_e returns a single tensor).
+            moe = self.moe(x2, return_l_aux=False)
+            l_aux = None
         ttnn.deallocate(x2)
         out = ttnn.add(residual2, moe)
         ttnn.deallocate(moe)

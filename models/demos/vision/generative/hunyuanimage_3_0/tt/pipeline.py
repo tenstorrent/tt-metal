@@ -397,18 +397,26 @@ class HunyuanImage3Pipeline:
 
         return up(cos), up(sin)
 
-    def _forward_core(self, input_ids_tt, cos_tt, sin_tt):
+    def _forward_core(self, input_ids_tt, cos_tt, sin_tt, need_l_aux=True):
         """Pure-ttnn hot path: embed -> N graduated decoder layers. Reads ONLY
         the given device tensors (no from_torch inside) so it is host-op-free
-        and trace-capturable. Returns (last_hidden_state, total_l_aux)."""
+        and trace-capturable. Returns (last_hidden_state, total_l_aux).
+
+        `need_l_aux=False` (the inference / trace-perf path) propagates
+        return_l_aux=False so every layer SKIPS the ~6 gate load-balance stat ops
+        (l_aux is a training-only co-output the caller discards); total_l_aux is
+        then None. The PCC path keeps the default so l_aux stays exact."""
         hidden = self.embed(input_ids_tt)  # [1, S, hidden]  (TT)
         total_l_aux = None
         for layer in self.layers:
-            hidden, l_aux = layer(hidden, custom_pos_emb=(cos_tt, sin_tt), return_l_aux=True)
-            if total_l_aux is None:
-                total_l_aux = l_aux
+            if need_l_aux:
+                hidden, l_aux = layer(hidden, custom_pos_emb=(cos_tt, sin_tt), return_l_aux=True)
+                if total_l_aux is None:
+                    total_l_aux = l_aux
+                else:
+                    total_l_aux = ttnn.add(total_l_aux, l_aux)
             else:
-                total_l_aux = ttnn.add(total_l_aux, l_aux)
+                hidden = layer(hidden, custom_pos_emb=(cos_tt, sin_tt), return_l_aux=False)
         return hidden, total_l_aux
 
     # -- the ONE real chained forward -------------------------------------
@@ -748,7 +756,9 @@ class HunyuanImage3Pipeline:
         """ONE host-op-free forward at the pinned shape, reading only the
         persistent buffers. Returns last_hidden_state."""
         b = self._trace_buffers
-        hidden, total = self._forward_core(b["input_ids"], b["cos"], b["sin"])
+        # inference/trace-perf path: skip l_aux (training-only load-balance
+        # co-output) so every layer drops its ~6 gate stat ops from the trace.
+        hidden, total = self._forward_core(b["input_ids"], b["cos"], b["sin"], need_l_aux=False)
         if total is not None:
             ttnn.deallocate(total)
         return hidden

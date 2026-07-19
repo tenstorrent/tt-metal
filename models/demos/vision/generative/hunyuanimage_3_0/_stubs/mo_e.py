@@ -245,7 +245,8 @@ class _TtMoE:
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], inter])
         x2 = ttnn.slice(gu, [0, 0, inter], [gu.shape[0], gu.shape[1], 2 * inter])
         ttnn.deallocate(gu)
-        act = ttnn.multiply(x1, ttnn.silu(x2))
+        # SwiGLU: fuse silu into the multiply (silu(x2) * x1 in one op).
+        act = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         out = ttnn.linear(act, down_w)
@@ -260,7 +261,7 @@ class _TtMoE:
         # The gate returns the load-balance l_aux AND the FULL normalized top-k
         # router weights [1, S, E] (replicated across the mesh); this device then
         # selects ITS expert columns out of that replicated router.
-        l_aux, router = self.gate(x, return_router=True)
+        l_aux, router = self.gate(x, return_router=True, need_l_aux=return_l_aux)
 
         router_local = ttnn.matmul(router, self.sel)  # [1, S, epd*I] (per-column weights, expanded)
         ttnn.deallocate(router)
@@ -280,7 +281,8 @@ class _TtMoE:
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], eI])  # gates [1,S,epd*I]
         x2 = ttnn.slice(gu, [0, 0, eI], [gu.shape[0], gu.shape[1], 2 * eI])  # ups   [1,S,epd*I]
         ttnn.deallocate(gu)
-        act = ttnn.multiply(x1, ttnn.silu(x2))  # [1, S, epd*I]
+        # SwiGLU: fuse silu into the multiply (silu(x2) * x1 in one op).
+        act = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])  # [1, S, epd*I]
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         act = ttnn.multiply(act, router_local)  # per-expert-column router weight
@@ -302,7 +304,8 @@ class _TtMoE:
             out = routed
         if return_l_aux:
             return out, l_aux
-        ttnn.deallocate(l_aux)
+        if l_aux is not None:
+            ttnn.deallocate(l_aux)
         return out
 
     # ------------------------------------------------------------------
@@ -316,7 +319,7 @@ class _TtMoE:
         # --- routing via the composed graduated gate (top_k_gate) ---
         # The gate returns the load-balance l_aux AND the normalized top-k
         # router weights [1, S, E] the experts are combined with below.
-        l_aux, router = self.gate(x, return_router=True)
+        l_aux, router = self.gate(x, return_router=True, need_l_aux=return_l_aux)
 
         # --- shared expert ---
         combined = None
@@ -338,7 +341,8 @@ class _TtMoE:
         ttnn.deallocate(router)
         if return_l_aux:
             return combined, l_aux
-        ttnn.deallocate(l_aux)
+        if l_aux is not None:
+            ttnn.deallocate(l_aux)
         return combined
 
 

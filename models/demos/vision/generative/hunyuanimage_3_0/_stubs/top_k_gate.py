@@ -61,57 +61,36 @@ class _TtTopKGate:
         # nn.Linear stores [out, in]; ttnn.linear(x, W) = x @ W needs [in, out].
         wg_t = torch_module.wg.weight.t().contiguous()  # [hidden, num_experts]
         if self.is_mesh:
-            # A router stays functionally REPLICATED (softmax + top-k need every
-            # expert logit), but we still tensor-parallelise its one matmul:
-            # `wg` is COLUMN-parallel (split its num_experts output columns
-            # across the TP mesh axis) and an all_gather over that axis rebuilds
-            # the full logits on every device. This 6U Blackhole Galaxy only
-            # brings the fabric up on the FULL physical mesh, so the harness
-            # opens MeshShape(rows, cols) (e.g. (8, 4)); TP runs across the mesh
-            # axis whose length divides num_experts, DP-replicated across the
-            # other. Gathered logits == single-device logits, so the l_aux /
-            # router the gate returns are byte-for-byte the replicated golden.
+            # LEVER (router all-gather drop): the router stays functionally
+            # REPLICATED (softmax + top-k need every expert logit). The old scheme
+            # column-parallelised `wg` (split its num_experts output columns across
+            # the TP axis) and rebuilt the full logits with a per-layer all_gather.
+            # But the router matmul (hidden -> num_experts=64) is TINY -- far below
+            # the per-op trace floor -- while its all_gather is a real collective
+            # above the floor: parallelising the matmul never paid for the gather.
+            # REPLICATE `wg` (~0.5 MB/chip) so every chip computes the full logits
+            # locally with NO all_gather. Byte-identical logits => byte-identical
+            # l_aux/router. Removes one collective per layer.
             self.mesh_shape = tuple(int(x) for x in device.shape)
-            self.tp_axis = self._pick_tp_axis()
-            self.tp = int(self.mesh_shape[self.tp_axis])
-            assert (
-                self.num_experts % self.tp == 0
-            ), f"TP={self.tp} must divide num_experts={self.num_experts} for column-parallel router"
-            dims = [None, None]
-            dims[self.tp_axis] = -1  # split the output (expert) columns across TP
             self.wg = ttnn.from_torch(
                 wg_t.to(torch.float32),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(dims), mesh_shape=self.mesh_shape),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
         else:
             self.wg = _to_ttnn(wg_t, device)
 
-    def _pick_tp_axis(self) -> int:
-        best = None
-        for ax, sz in enumerate(self.mesh_shape):
-            if sz > 1 and self.num_experts % sz == 0:
-                if best is None or sz > self.mesh_shape[best]:
-                    best = ax
-        return 0 if best is None else best
-
     def _logits(self, x):
-        """Full [1, T, num_experts] router logits. On a mesh the per-device
-        column-parallel matmul is all_gathered over the TP axis to rebuild the
-        full logits (identical on every device); single-device is a plain matmul."""
-        if not self.is_mesh:
-            return ttnn.linear(x, self.wg)
-        logits_local = ttnn.linear(x, self.wg)  # [1, T, num_experts/TP]
-        logits = ttnn.all_gather(
-            logits_local, dim=-1, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear
-        )
-        ttnn.deallocate(logits_local)
-        return logits
+        """Full [1, T, num_experts] router logits via a plain matmul with the
+        REPLICATED router weight `wg` (mesh and single-device alike). No
+        all_gather -- every chip computes the identical full logits locally
+        (see the __init__ router all-gather drop lever)."""
+        return ttnn.linear(x, self.wg)
 
-    def __call__(self, hidden_states, return_router=False, **kwargs):
+    def __call__(self, hidden_states, return_router=False, need_l_aux=True, **kwargs):
         """Graduated load-balance `l_aux`, plus (optionally) the normalized
         top-k router weights the enclosing MoE combines experts with.
 
@@ -119,13 +98,17 @@ class _TtTopKGate:
         expert-combine on the main forward path (Gate 2); `l_aux` is the real
         load-balance co-output the HF `HunyuanTopKGate`/`topkgating` computes on
         every forward. Returns `l_aux` alone (per-component contract) unless
-        `return_router=True`, then `(l_aux, router)`."""
+        `return_router=True`, then `(l_aux, router)`.
+
+        `need_l_aux=False` (the inference path: image-gen / decode, which discard
+        l_aux) SKIPS the ~6 load-balance stat ops per layer and returns l_aux as
+        None. Prefill/component tests keep the default so l_aux stays exact."""
         self.num_calls += 1
         x = hidden_states  # [1, T, hidden]
         T = x.shape[1]
         E = self.num_experts
 
-        logits = self._logits(x)  # [1, T, E] (mesh: column-parallel matmul + all_gather)
+        logits = self._logits(x)  # [1, T, E] (replicated router matmul, no all_gather)
         gates = ttnn.softmax(logits, dim=-1)
         ttnn.deallocate(logits)
 
@@ -152,6 +135,15 @@ class _TtTopKGate:
             router = ttnn.multiply(masked_r, ttnn.reciprocal(denom_r))
             ttnn.deallocate(masked_r)
             ttnn.deallocate(denom_r)
+
+        if not need_l_aux:
+            # inference path (image-gen / decode): l_aux is a training-only
+            # load-balance co-output the caller discards. Skip its ~6 ops.
+            ttnn.deallocate(mask)
+            ttnn.deallocate(gates)
+            if return_router:
+                return None, router
+            return None
 
         # per-expert stats (reduce over the token dim=1)
         inv_T = 1.0 / float(T)
