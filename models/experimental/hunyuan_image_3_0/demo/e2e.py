@@ -79,6 +79,7 @@ os.environ.setdefault("HUNYUAN_MODEL_DIR", WEIGHTS)
 
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
+from models.common.modules.tt_ccl import get_num_links
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
@@ -212,7 +213,7 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
     mesh_device = open_denoise_mesh(ttnn.MeshShape(2, 2), l1_small_size=32768)
     try:
         mesh_device.enable_program_cache()
-        ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+        ccl = CCLManager(mesh_device, num_links=max(1, get_num_links(mesh_device)), topology=ttnn.Topology.Linear)
 
         def rep(t):
             return ttnn.from_torch(
@@ -394,7 +395,7 @@ def run_vae_decode(latent_bchw):
     vae_mesh = open_vae_mesh(ttnn.MeshShape(2, 2))
     try:
         vae_mesh.enable_program_cache()
-        vae_ccl = CCLManager(vae_mesh, num_links=1, topology=ttnn.Topology.Linear)
+        vae_ccl = CCLManager(vae_mesh, num_links=max(1, get_num_links(vae_mesh)), topology=ttnn.Topology.Linear)
         print(f"[e2e] VAE decode (2x2 H/W-spatial) -> {GRID * 16}x{GRID * 16} ...", flush=True)
         img = decode_latent(
             vae_mesh,
