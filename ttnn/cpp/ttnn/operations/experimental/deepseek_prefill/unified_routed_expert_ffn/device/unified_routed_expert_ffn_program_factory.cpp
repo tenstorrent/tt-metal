@@ -394,6 +394,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         chunk_M_tiles = per_core_M * GRID_Y;
     }
 
+    // DIAGNOSTIC (not for merge): force in0_block_w_gu=8 on BOTH layouts to A/B
+    // the gate/up K-block width in isolation — run the TILE path at the same 28
+    // K-blocks the RM path uses. Delete to restore TILE's adaptive ibw (16 here).
+    in0_block_w_gu = 8;
+
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); holds
     // for every value the guard above picks and for the default 16 on all
     // shipped models (emb a multiple of 512 => K_gate_tiles a multiple of 16).
@@ -810,6 +815,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // x_is_row_major — 1 => compute tilizes CB_X_RM -> CB_IN0_X before the
         // gate/up matmul. 0 => x already TILE in CB_IN0_X (no tilize).
         static_cast<uint32_t>(op.x_is_row_major),
+        // Real (unpadded) down-K tile count. Lets the compute skip the down
+        // matmul over the last K-block's tail padding tiles (zero-activated)
+        // instead of computing dead MACs.
+        K_down_tiles,
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
