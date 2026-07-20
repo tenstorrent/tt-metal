@@ -911,6 +911,37 @@ faster sink (fan-out to more rings/threads than readers) AND the reader-overhead
 tails + batch the PROD publish/fence). Bigger SPSC does NOT help — tried 4096→16384, it made things
 2.5× WORSE (burstier back-pressure, less 3-stage overlap; the small buffer is near-optimal).
 
+**PEAK-PATH BUILT: bulkcore + dualrelay + adaptive switch (2026-07-19). BW now (pll=1000, 1 cyc=1 ns):**
+- **`--bulkcore` (1 bulk NoC read/core, 5 contiguous rings = 2560 words)**: reader 4.5→3.6 cyc/word = rdrbench
+  read rate. Per-core tail round-robin gone. Relay becomes the bottleneck (86 %).
+- **`--dualrelay` (1 relay hart PER reader) + runtime SPSC size (bulk=16384, normal=4096, mode-gated)**: both
+  needed together — the 2nd relay alone left readers spsc-wait; the bigger SPSC decouples the 2560-word
+  handshake. `--bulkcore --dualrelay --nodrain`: readers 88 % copy, spsc-wait 0 → **~1.93 GB/s aggregate
+  reader→relay** (lossy bench).
+- **`--adaptive` (per-core switch: fullness ≥ 4·RING_CAP → bulk, else per-risc)**: ONE dynamic switch, not
+  modes. Full burst → bulk fires (1704 cores); slow producer → per-risc (0 bulk). Since the reader out-cycles
+  producers, bulk only fires under real BACKLOG — exactly when amortization pays.
+- **LOSSLESS bulk framing**: bulk case frames 5 per-risc STICKY-SRC + valid `[head,tail)` only (host demuxes
+  unchanged), but BATCHES the fixed cost — **ONE fence + ONE PROD publish per core vs 5 in per-risc mode**
+  (the `fence iorw,iorw` stalls the hart until SPSC writes land before PROD is visible; 1 barrier/core not 5
+  is the batching win). `--adaptive`/`--bulkcore` both 550/550 LOSSLESS (1-relay + dual-relay).
+
+**BW SUMMARY (lossless `--adaptive --dualrelay`, 550 lanes, 8000 mk):**
+| | per reader | aggregate | note |
+|---|---|---|---|
+| reader→relay (`--nodrain`, sink ignored) | 609 MB/s | **~1.22 GB/s** | lossless; readers 83 % copy |
+| end-to-end (real host consumer) | 108 MB/s | **~215 MB/s** | HOST-SINK BOUND (relay 94 % on hostfull=778k) |
+
+Lossless framing costs ~0.6-0.7 GB/s vs the lossy bulk (1.93→1.22): NOT the sticky bytes (10 words/core,
+~0.4 %) but the FRAGMENTATION — 5 per-risc framed reads (~444 words each) lose the single-2560-read NoC
+amortization. It doesn't matter yet: reader→relay (1.22) already has ~6× headroom over the host sink (215).
+**The host consumer is now THE wall** — it reads HSENT from LIM per poll (~18 µs each, 1085 polls) and bursty
+bulk floods it (end-to-end 215 < the steady per-risc split's 666). NEXT = publish HSENT to host sysmem
+(coherent ~ns read) / 2 D2H sockets. To claw back the 0.6 GB/s after that: one core-sticky carrying the 5
+(head,tail) offsets + host-side split — but that ships stale words to the host, so only worth it once the
+sink keeps up. Commits: f29bc7c2279 bulkcore, 0b857b93f82 dualrelay+runtime-SPSC, 40234d9ad48 adaptive,
+8acee90bf63 lossless framing.
+
 **Direct drain (`--direct`, NONCE bit 8).** ONE hart reads worker-L1 over NoC (coherent) and
 writes the single host ring DIRECTLY, injecting sticky-src inline — no LIM SPSC, no cross-hart
 handoff, no relay. UNCONDITIONALLY LOSSLESS: 550/550 lanes, 0 seq gaps at every rate (proddelay
