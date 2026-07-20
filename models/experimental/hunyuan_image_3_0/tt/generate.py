@@ -174,6 +174,14 @@ def make_recaption_logits_fn(
     )
     from models.experimental.hunyuan_image_3_0.tt.kv_cache import HunyuanTtKvCache
 
+    def _mask_has_image_spans(slices) -> bool:
+        """True if any batch item has a bidirectional (image) span."""
+        if not slices:
+            return False
+        if isinstance(slices[0], list):  # per-batch list-of-lists
+            return any(len(spans) > 0 for spans in slices)
+        return len(slices) > 0  # flat list of spans
+
     if wte_tt is None and wte_weight is None:
         raise ValueError("make_recaption_logits_fn requires wte_tt or wte_weight")
     if wte_tt is not None and isinstance(wte_tt, torch.Tensor):
@@ -235,6 +243,16 @@ def make_recaption_logits_fn(
         )
 
     def _upload_mask_full(S: int, B: int):
+        if not _mask_has_image_spans(attn_slices):
+            # Pure-causal prefill (text-only recaption, incl. the max-ISL context):
+            # supply NO mask so SDPA uses its built-in causal path — no S×S host build
+            # + PCIe upload (~1 GB at S=22784, hundreds of ms of device stall) and the
+            # causal SDPA itself is ~3x faster at large ISL than a materialized mask.
+            return None
+        # Image spans present (i2i): build the host mask — SDPA's causal path can't
+        # express the bidirectional image block, and the device span builder is not yet
+        # bitwise-equivalent (test_mask_image_span_bitwise, pre-existing). i2i prefills
+        # run at much smaller S where the upload cost is negligible.
         mask_bool = build_attention_mask(S, attn_slices, bsz=B)
         mask_add = to_additive(mask_bool, dtype=torch.bfloat16).reshape(B, 1, S, S)
         if replicate_to_mesh is not None:
@@ -333,7 +351,8 @@ def make_recaption_logits_fn(
                 decode_step=False,
                 cos_sin=cos_sin,
             )
-            ttnn.deallocate(mask_tt)
+            if mask_tt is not None:  # None on the pure-causal path (is_causal SDPA)
+                ttnn.deallocate(mask_tt)
             ttnn.deallocate(hidden_tt)
             if kv_cache is not None:
                 kv_cache.seq_len = S
