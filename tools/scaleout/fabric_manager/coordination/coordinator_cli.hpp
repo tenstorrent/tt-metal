@@ -18,6 +18,10 @@
 //   * discover-psd         - no-MPI multi-process bring-up check: run physical-system
 //                            discovery over the controller (TCP) against a per-agent mock
 //                            cluster descriptor and assert the merged global PSD converges.
+//   * routing-bringup      - no-MPI multi-process routing bring-up check: construct the full
+//                            ControlPlane (discovery + topology mapping + routing tables) over
+//                            the controller (TCP) against a per-agent mock cluster descriptor and
+//                            assert every agent converges on the identical global fabric mapping.
 //
 // This whole unit is compiled only when FABRIC_MANAGER_WITH_SERVICE_COORDINATOR is
 // defined (CMake option), giving compile-time backend selection with runtime (--role)
@@ -36,6 +40,7 @@ enum class Role : uint8_t {
     Agent,
     SelfTest,
     DiscoverPsd,
+    RoutingBringup,
 };
 
 // Parses --role (default Standalone). Errors on an unknown value.
@@ -55,5 +60,11 @@ void register_agent_coordinator(const std::vector<std::string>& args);
 // Runs the no-MPI multi-process global-PSD bring-up check for one agent. Returns process exit
 // code (0 == the merged global PSD converged to the expected host count).
 int run_discovery_psd(const std::vector<std::string>& args);
+
+// Runs the no-MPI multi-process routing bring-up check for one agent: builds the full ControlPlane
+// (physical discovery + topology mapping + routing tables) with cross-host exchanges routed through
+// the controller, then emits a canonical global fabric-mapping fingerprint. Returns process exit
+// code (0 == routing tables built and the global mapping fingerprint was produced).
+int run_routing_bringup(const std::vector<std::string>& args);
 
 }  // namespace tt::scaleout_tools::fabric_manager

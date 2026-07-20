@@ -103,7 +103,8 @@ void print_usage_info() {
 #if defined(FABRIC_MANAGER_WITH_SERVICE_COORDINATOR)
     std::cout << std::endl;
     std::cout << "Coordinator service (no-MPI, controller + agents):" << std::endl;
-    std::cout << "  --role: standalone (default) | controller | agent | selftest | discover-psd" << std::endl;
+    std::cout << "  --role: standalone (default) | controller | agent | selftest | discover-psd | routing-bringup"
+              << std::endl;
     std::cout << "  controller:   --world-size N [--port P (default 7777)]" << std::endl;
     std::cout << "  agent:        --controller HOST:PORT --world-index I --world-size N" << std::endl;
     std::cout << "                [--mesh-membership meshid:index/count,...] [--mesh-id M --mesh-host-rank R]"
@@ -112,6 +113,11 @@ void print_usage_info() {
     std::cout << "  selftest:     --world-size N (in-process rendezvous check; no hardware)" << std::endl;
     std::cout << "  discover-psd: --controller HOST:PORT --world-index I --world-size N" << std::endl;
     std::cout << "                --mock-cluster-desc PATH (no-MPI global-PSD bring-up check; no hardware)"
+              << std::endl;
+    std::cout << "  routing-bringup: --controller HOST:PORT --world-index I --world-size N" << std::endl;
+    std::cout << "                --mock-cluster-desc PATH --mesh-graph-desc PATH --mesh-id M --mesh-host-rank R"
+              << std::endl;
+    std::cout << "                [--fabric-config FABRIC_2D] (no-MPI routing bring-up check; no hardware)"
               << std::endl;
 #endif
 }
@@ -148,6 +154,7 @@ int main(int argc, char* argv[]) {
         case fabric_manager::Role::Controller: return fabric_manager::run_controller(args_vec);
         case fabric_manager::Role::SelfTest: return fabric_manager::run_selftest(args_vec);
         case fabric_manager::Role::DiscoverPsd: return fabric_manager::run_discovery_psd(args_vec);
+        case fabric_manager::Role::RoutingBringup: return fabric_manager::run_routing_bringup(args_vec);
         case fabric_manager::Role::Agent: fabric_manager::register_agent_coordinator(args_vec); break;
         case fabric_manager::Role::Standalone: break;
     }

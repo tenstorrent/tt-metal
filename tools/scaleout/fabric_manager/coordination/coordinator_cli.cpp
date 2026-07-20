@@ -15,13 +15,22 @@
 #include <thread>
 #include <vector>
 
+#include <cstddef>
+#include <functional>
+#include <map>
+
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/system_coordinator.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_target_device.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/fabric_manager/coordination/controller.hpp"
 #include "tools/scaleout/fabric_manager/coordination/in_process_transport.hpp"
@@ -121,8 +130,13 @@ Role parse_role(const std::vector<std::string>& args) {
     if (role == "discover-psd") {
         return Role::DiscoverPsd;
     }
+    if (role == "routing-bringup") {
+        return Role::RoutingBringup;
+    }
     TT_FATAL(
-        false, "Unknown --role '{}'. Expected one of: standalone, controller, agent, selftest, discover-psd", role);
+        false,
+        "Unknown --role '{}'. Expected one of: standalone, controller, agent, selftest, discover-psd, routing-bringup",
+        role);
     return Role::Standalone;
 }
 
@@ -305,6 +319,133 @@ int run_discovery_psd(const std::vector<std::string>& args) {
     if (!ok) {
         std::cerr << "[fabric-manager discover-psd] agent " << world_index << " expected " << world_size
                   << " hosts in merged PSD but saw " << hostnames.size() << std::endl;
+        return 1;
+    }
+    return 0;
+}
+
+int run_routing_bringup(const std::vector<std::string>& args) {
+    // Multi-process, no-MPI routing bring-up check. Each agent loads its own mock cluster descriptor
+    // and builds a full ControlPlane (physical discovery + topology mapping + routing-table
+    // configuration) with all cross-host exchanges routed through the coordinator (over TCP) instead
+    // of MPI. The final fabric-node -> ASIC mapping is a global quantity, identical on every agent, so
+    // the driver can assert that every agent converges on the same routing bring-up.
+    TT_FATAL(
+        test_args::has_command_option(args, "--mock-cluster-desc"),
+        "routing-bringup role requires --mock-cluster-desc <path to a mock cluster descriptor yaml>");
+    TT_FATAL(
+        test_args::has_command_option(args, "--mesh-graph-desc"),
+        "routing-bringup role requires --mesh-graph-desc <path to a mesh graph descriptor textproto>");
+
+    const std::string mock_desc_path = test_args::get_command_option(args, "--mock-cluster-desc");
+    const std::string mesh_graph_desc = test_args::get_command_option(args, "--mesh-graph-desc");
+
+    // The control plane reads the physical topology from the mock cluster descriptor and the agent's
+    // mesh binding from TT_MESH_ID / TT_MESH_HOST_RANK. Fabric config/routing must run in slow-dispatch.
+    setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH", mock_desc_path.c_str(), 1);
+    setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
+    TT_FATAL(test_args::has_command_option(args, "--mesh-id"), "routing-bringup role requires --mesh-id <mesh id>");
+    setenv("TT_MESH_ID", test_args::get_command_option(args, "--mesh-id").c_str(), 1);
+    TT_FATAL(
+        test_args::has_command_option(args, "--mesh-host-rank"),
+        "routing-bringup role requires --mesh-host-rank <host rank>");
+    setenv("TT_MESH_HOST_RANK", test_args::get_command_option(args, "--mesh-host-rank").c_str(), 1);
+
+    auto coordinator = build_agent_coordinator(args);
+    const int world_index = coordinator->local_index(Scope::world());
+    const int world_size = coordinator->participant_count(Scope::world());
+
+    auto fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
+    if (test_args::has_command_option(args, "--fabric-config")) {
+        auto parsed =
+            enchantum::cast<tt::tt_fabric::FabricConfig>(test_args::get_command_option(args, "--fabric-config"));
+        TT_FATAL(parsed.has_value(), "Invalid --fabric-config value");
+        fabric_config = parsed.value();
+    }
+
+    // Build the control plane directly (mirroring the multi-host gtest harness) but inject the
+    // no-MPI coordinator so its construction-time exchanges (discovery, topology mapping, intermesh,
+    // router-port-directions) all resolve through the controller. The local DistributedContext is
+    // size-1; identity and cross-host collectives come from the coordinator.
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+
+    tt::tt_fabric::ControlPlane control_plane(
+        cluster,
+        rtoptions,
+        hal,
+        distributed_context,
+        mesh_graph_desc,
+        fabric_config,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricTensixConfig::DISABLED,
+        tt::tt_fabric::FabricUDMMode::DISABLED,
+        tt::tt_fabric::FabricRouterConfig{},
+        tt::tt_fabric::FabricManagerMode::DEFAULT,
+        coordinator);
+
+    // Configure routing tables (CPU-only on a mock cluster). This also exercises the coordinator-routed
+    // router-port-directions exchange across hosts.
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
+
+    // Build a canonical, global fabric-mapping fingerprint. get_asic_id_from_fabric_node_id resolves
+    // every mapped node on every agent (the solved mapping is broadcast to all agents), so a correct
+    // no-MPI bring-up yields the identical fingerprint everywhere.
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_all_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end(), [](const auto& a, const auto& b) { return *a < *b; });
+
+    std::ostringstream detail;
+    std::size_t mapped_nodes = 0;
+    for (const auto& mesh_id : mesh_ids) {
+        const auto shape = control_plane.get_physical_mesh_shape(mesh_id, tt::tt_fabric::MeshScope::GLOBAL);
+        detail << "M" << *mesh_id << "=[";
+        for (std::size_t d = 0; d < shape.dims(); ++d) {
+            if (d != 0) {
+                detail << "x";
+            }
+            detail << shape[d];
+        }
+        detail << "]{";
+        bool first = true;
+        for (const auto& [coord, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            const tt::tt_fabric::FabricNodeId fabric_node_id(mesh_id, chip_id);
+            std::uint64_t asic = 0;
+            bool mapped = true;
+            try {
+                asic = *control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+            } catch (const std::exception&) {
+                mapped = false;
+            }
+            if (!first) {
+                detail << ",";
+            }
+            first = false;
+            detail << chip_id << ":";
+            if (mapped) {
+                detail << asic;
+                ++mapped_nodes;
+            } else {
+                detail << "UNMAPPED";
+            }
+        }
+        detail << "}";
+    }
+
+    // Collapse the (possibly large) detail into a stable hash for the primary fingerprint, but also
+    // print the mesh count / mapped-node count so a mismatch is easy to triage.
+    const std::size_t fp_hash = std::hash<std::string>{}(detail.str());
+    std::ostringstream fp;
+    fp << "meshes=" << mesh_ids.size() << " mapped_nodes=" << mapped_nodes << " map_hash=0x" << std::hex << fp_hash;
+
+    const bool ok = mapped_nodes > 0;
+    std::cout << "[fabric-manager routing-bringup] agent " << world_index << "/" << world_size << " "
+              << (ok ? "ROUTING_OK" : "ROUTING_FAIL") << " " << fp.str() << std::endl;
+    if (!ok) {
+        std::cerr << "[fabric-manager routing-bringup] agent " << world_index << " produced an empty fabric mapping"
+                  << std::endl;
         return 1;
     }
     return 0;
