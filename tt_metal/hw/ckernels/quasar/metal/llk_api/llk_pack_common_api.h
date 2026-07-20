@@ -87,6 +87,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  *
  * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
  * @tparam IS_FP32_MATH_DEST_EN: flag to show if math destination register is set to float32 mode
+ *
+ * @warning SYNC SCHEME: dest-dvalid. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  **/
 template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
 inline void llk_pack_dest_dvalid_section_done() {
@@ -104,6 +108,10 @@ inline void llk_pack_dest_dvalid_section_done() {
 /**
  * @brief Waits until math has finished producing data for the current Destination Register section.
  * Blocks on the math–pack semaphore so the packer does not read dest before math has written it.
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_(); }
 
@@ -111,9 +119,13 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * @brief Signals that the packer has finished consuming the current Destination Register section.
  * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
  *
- * @tparam is_fp32_dest_acc_en True if math destination is in 32-bit mode, false for 16-bit mode.
+ * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode.
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
-template <bool is_fp32_dest_acc_en>
+template <bool EN_32BIT_DEST>
 inline void llk_pack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
@@ -121,12 +133,16 @@ inline void llk_pack_dest_section_done() {
             _llk_sync_advance_dest_section_<ckernel::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
         }
     } else {
-        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
     }
 }
 
 /**
  * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 inline void llk_pack_dest_init() { _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>(); }
 
