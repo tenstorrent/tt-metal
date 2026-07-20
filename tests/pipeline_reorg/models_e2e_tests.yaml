@@ -703,7 +703,7 @@
 
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
-- name: SDXL (base) e2e tests
+- name: Stable Diffusion XL (base) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
@@ -719,7 +719,7 @@
   team: shield
 
 # tensor parralel requires 2 chips, so it is split out to a separate test
-- name: SDXL (base tensor-parallel) e2e tests
+- name: Stable Diffusion XL (base tensor-parallel) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600
@@ -731,7 +731,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL (lora) e2e tests
+- name: Stable Diffusion XL (lora) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
@@ -743,7 +743,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL (base + refiner) e2e tests
+- name: Stable Diffusion XL (base + refiner) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
@@ -758,7 +758,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL (img2img + inpainting) e2e tests
+- name: Stable Diffusion XL (img2img + inpainting) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0

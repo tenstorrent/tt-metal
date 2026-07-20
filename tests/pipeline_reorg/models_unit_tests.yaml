@@ -872,7 +872,7 @@
   team: shield
 
 # base and refiner split by variant; WH and BH split because WH needs TT_MM_THROTTLE_PERF=5 (di/dt)
-- name: SDXL base unet-loop unit tests
+- name: Stable Diffusion XL base unet-loop unit tests
   cmd: |
     export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
@@ -891,7 +891,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL base unet-loop unit tests
+- name: Stable Diffusion XL base unet-loop unit tests
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
@@ -906,7 +906,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL refiner unet-loop unit tests
+- name: Stable Diffusion XL refiner unet-loop unit tests
   cmd: |
     export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
@@ -925,7 +925,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL refiner unet-loop unit tests
+- name: Stable Diffusion XL refiner unet-loop unit tests
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0

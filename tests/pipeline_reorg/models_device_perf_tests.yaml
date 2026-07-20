@@ -73,7 +73,7 @@
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
 
-- name: SDXL device-perf tests
+- name: Stable Diffusion XL device-perf tests
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
