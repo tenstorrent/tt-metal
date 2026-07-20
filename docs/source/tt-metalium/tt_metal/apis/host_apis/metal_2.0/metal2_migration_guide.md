@@ -182,8 +182,8 @@ KernelDescriptor reader = {
     .compile_time_args = {src_cb_idx, dst_cb_idx, page_size},
     .runtime_args = {{{0,0}, {start_page, num_pages}}},
     .config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::RISCV_0_default,
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = NOC::NOC_0,
     },
 };
 ```
@@ -207,12 +207,11 @@ KernelSpec reader{
         // Schema only — argument values are set per execution, on ProgramRunArgs.
         .runtime_arg_names = {"start_page", "num_pages"},
     },
-    .hw_config = DataMovementHardwareConfig{
-        // RoleHint is the primary intent knob — READER/WRITER auto-infers the
-        // Gen1 processor/NOC pair (and the Gen2 default config). UNSPECIFIED
-        // requires you to provide gen1_config explicitly (power-user override).
-        .role = DataMovementRoleHint::READER,
-    },
+    // Conventional reader placement (RISCV_1 / NOC_0 on Gen1). hw_config is a
+    // variant over a Gen1 (WH/BH) and a Gen2 config; the reader/writer helpers
+    // build the Gen1 alternative for you. Reach for a raw DataMovementGen1Config
+    // only when the kernel's (processor, NOC) matches neither default.
+    .hw_config = CreateReader1xxDataMovementConfig(),
 };
 
 // ----- WorkUnitSpec: kernel placement and worker assignments -----
@@ -300,7 +299,7 @@ KernelSpec consumer{ /* ... */
 
 **Spec-validator: every DFB needs ≥1 PRODUCER and ≥1 CONSUMER binding.** The host validator rejects programs where a DFB has only producers or only consumers across the kernels that bind it. When kernels have asymmetric conditional usage of the same DFB (e.g., a reader unconditionally produces a tile but a compute kernel only conditionally needs it), satisfy the constraint by declaring the conditional-side `DFBBinding` unconditionally on the host. Do not modify the kernel's `wait_front` / `pop_front` patterns to "balance" the topology: per-execution DFB state is reinitialized at each program enqueue, so a tile produced and never consumed is harmless.
 
-**Spec-validator: `unpack_to_dest_mode` required for Float32 DFB consumers on `fp32_dest_acc_en` compute kernels.** When a compute `KernelSpec` sets `ComputeHardwareConfig::fp32_dest_acc_en = true`, every Float32-formatted DFB it consumes must appear in `ComputeHardwareConfig::unpack_to_dest_mode` (a `Table<DFBSpecName, UnpackToDestMode>`) with an explicit entry. Legacy `ComputeConfig` defaulted silently; Metal 2.0's validator requires the choice to be made explicit. Use `{DFB_UNIQUE_ID, UnpackToDestMode::Default}` to preserve legacy semantics; pick a non-default mode only when the kernel needs it. Symptom of forgetting: the validator complains at program-spec build time with a message pointing at the FP32 DFB.
+**Spec-validator: `unpack_modes` required for Float32 DFB consumers when `enable_32_bit_dest = true`.** When a compute kernel's hardware config sets `enable_32_bit_dest = true`, every Float32-formatted DFB it *consumes* must appear in the config's `unpack_modes` table (a `Table<DFBSpecName, UnpackMode>`) with an explicit entry. Legacy `ComputeConfig` defaulted silently; Metal 2.0's validator requires the choice — `UnpackMode::UnpackToSrc` or `UnpackMode::UnpackToDest` — to be made explicit. Match the legacy value: a legacy `UnpackToDestMode::Default` entry maps to `UnpackMode::UnpackToSrc`, a legacy `UnpackToDestFp32` to `UnpackMode::UnpackToDest`. (This required-entry rule is Float32-only for now; Int32/UInt32 are deferred — issue #49936.) Symptom of forgetting: the validator fails at program-spec build time with a message naming the FP32 DFB.
 
 **Borrowed-memory DFBs.** A DFB can be built on top of an existing `Buffer`'s memory rather than allocating its own L1 storage — the Metal 2.0 form of the legacy "dynamic circular buffer." Set `DataflowBufferSpec::borrowed_from` to the name of a `TensorParameter` whose buffer backs the DFB; the DFB's L1 address resolves at runtime from the corresponding `TensorArgument` in `ProgramRunArgs::tensor_args`.
 
@@ -1026,9 +1025,7 @@ KernelSpec reader{
         .tensor_parameter_name = INPUT,
         .accessor_name = "input",   // kernel accesses as `ta::input`
     }},
-    .hw_config = DataMovementHardwareConfig{
-        .role = DataMovementRoleHint::READER,
-    },
+    .hw_config = CreateReader1xxDataMovementConfig(),
 };
 
 KernelSpec writer{
@@ -1045,9 +1042,7 @@ KernelSpec writer{
         .tensor_parameter_name = OUTPUT,
         .accessor_name = "output",  // kernel accesses as `ta::output`
     }},
-    .hw_config = DataMovementHardwareConfig{
-        .role = DataMovementRoleHint::WRITER,
-    },
+    .hw_config = CreateWriter1xxDataMovementConfig(),
 };
 
 DataflowBufferSpec dfb{
@@ -1221,6 +1216,6 @@ When a build error or spec-validator failure doesn't make the fix obvious, searc
 | Linker: `undefined reference to 'dfb::...'` (e.g. `dfb::cb_scaled`) inside a kernel TU | Kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`; `args::*` lives in `kernel_args_generated.h`. | Remove any explicit include of either generated header. The only include a ported kernel adds is `experimental/kernel_args.h` — the framework injects both. |
 | Spec-validator: DataflowBuffer with 0 producers / 0 consumers | Host-side topology mismatch — the DFB was declared but only one end of its pipeline binds it. The other end is bound to a different DFB, missing entirely, or doesn't appear in any kernel's `kernel_bindings`. | Fix on the host: add the missing binding. **Do not** modify the kernel's `wait_front` / `pop_front` calls to mask the imbalance — per-execution DFB state is reinitialized, so a tile produced and never consumed is harmless. |
 | Spec-validator: TensorParameter with 0 TensorBindings | TensorParameter declared but no kernel binds it. | Bind the tensor on the kernel(s) that use it, or remove the parameter. |
-| Spec-validator: `unpack_to_dest_mode` required (or LLK-side dest-accumulator dtype assert) | Compute kernel sets `fp32_dest_acc_en = true` and consumes a `DataType::Float32` DFB, but no `UnpackToDestMode` was set for that DFB on the compute kernel's `ComputeHardwareConfig`. | On the compute kernel's `hw_config` (a `ComputeHardwareConfig`), add an entry to the `unpack_to_dest_mode` table keyed by the DFB's `DFBSpecName`: `unpack_to_dest_mode = {{DFB_NAME, UnpackToDestMode::UnpackToDestFp32}}`. |
+| Spec-validator: `unpack_modes` required (or LLK-side dest-accumulator dtype assert) | Compute kernel sets `enable_32_bit_dest = true` and consumes a `DataType::Float32` DFB, but no `unpack_modes` entry was set for that DFB on the compute kernel's hardware config. | On the compute kernel's `hw_config`, add an entry to the `unpack_modes` table keyed by the DFB's `DFBSpecName`, choosing the mode to match the legacy config: `unpack_modes = {{DFB_NAME, UnpackMode::UnpackToSrc}}` for a legacy `Default`, or `UnpackMode::UnpackToDest` for a legacy `UnpackToDestFp32`. |
 | Spec-validator: aliased-DFB rule failure (size / strict-clique / borrowed-memory consistency) | The DFBs declared via `advanced_options.alias_with` violate one of the three legality rules. | The error names which rule fails. Most common case: a DFB was added on one member's alias list but missed on the other(s) — `advanced_options.alias_with` must form a strict clique (every member names every other member). |
 | `UpdateTensorArgs` `TensorSpec` legality check fires — typically on a fast-path program-cache hit | The op defines a custom `compute_program_hash` that doesn't fold `TensorSpec` into the hash key. The program cache reports a hit, but the cached `ProgramSpec` was built for a different `TensorSpec`. Metal 2.0's `UpdateTensorArgs` legality check (intentionally kept on) catches the resulting mismatch. | **Do not** attempt to update the custom hash to include `TensorSpec`. Revert the op to use the default TTNN hash (reflection-based, naturally folds in `TensorSpec`). Note the revert in `METAL2_PORT_REPORT.md` under "Open items" so the op author can decide whether to reintroduce a corrected custom hash later. The unnecessary cache misses incurred by reverting are the right trade-off vs. silently-incorrect cache hits. |
