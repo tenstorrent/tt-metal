@@ -93,7 +93,7 @@ enum EDMStatus : uint32_t {
     INITIALIZATION_COMPLETE = 0xBACADAEA
 };
 
-// 3 bits
+// 4 bits
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_UNICAST_INLINE_WRITE = 1,
@@ -103,8 +103,23 @@ enum NocSendType : uint8_t {
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
     NOC_UNICAST_READ = 7,
-    NOC_SEND_TYPE_LAST = NOC_UNICAST_READ
+    // Chip-multicast a single payload to non-contiguous colinear chips, writing a distinct
+    // per-chip destination address (1D only). Unlike scatter (multiple addresses on one chip),
+    // each address here belongs to a different chip along the sparse-multicast line.
+    NOC_SPARSE_MCAST_WRITE = 8,
+    // Highest defined send type. Bounds telemetry iteration and is_valid on LowLatency headers (the
+    // only header type allowed to carry NOC_SPARSE_MCAST_WRITE). The dense standard local-write range
+    // still ends at NOC_UNICAST_SCATTER_WRITE; the reachability guard and non-LowLatency validation
+    // reference that directly, since the gap types (multicast/read) between it and sparse never reach
+    // those paths.
+    NOC_SEND_TYPE_LAST = NOC_SPARSE_MCAST_WRITE
 };
+// Compile-time gate for chip-sparse-multicast handling in the per-packet router/transmission hot
+// paths. When enabled, the sparse path is kept off the common path: WRITE_AND_FORWARD resolves the
+// send type from the packed load it already performs (no extra L1 read), and the local-write dispatch
+// handles sparse as an early unlikely branch so the standard switch keeps its dense jump table.
+// When disabled, all sparse branches fold away and the codegen matches the non-sparse baseline.
+constexpr bool enable_sparse_mcast_write = true;
 // How to send the payload across the cluster
 // 1 bit
 enum ChipSendType : uint8_t { CHIP_UNICAST = 0, CHIP_MULTICAST = 1, CHIP_SEND_TYPE_LAST = CHIP_MULTICAST };
@@ -312,6 +327,22 @@ struct NocMulticastAtomicIncCommandHeader {
     uint8_t size_x;
     uint8_t size_y;
 };
+#define NOC_SPARSE_MCAST_WRITE_MAX_DESTS 4
+struct NocSparseMulticastWriteCommandHeader {
+    // Flat list of fully-resolved destination NOC addresses, one per page, grouped by writing chip in
+    // ascending hop order: counts[c] consecutive addresses belong to the c-th writing chip. A single
+    // payload is delivered to every address, so one chip can receive multiple pages. The router walks
+    // chip_idx over the writing hops; at each it writes counts[chip_idx] pages starting at write_idx,
+    // then advances write_idx by that count and chip_idx by one before forwarding the mutated header
+    // downstream. num_dests is the total page count (== sum of counts, <= MAX_DESTS); num_chips is the
+    // number of writing chips (== set bits in the hop mask).
+    uint64_t noc_address[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
+    uint8_t counts[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
+    uint8_t num_dests;
+    uint8_t num_chips;
+    uint8_t write_idx;
+    uint8_t chip_idx;
+};
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
 static_assert(
@@ -324,6 +355,9 @@ static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
 static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
+static_assert(
+    sizeof(NocSparseMulticastWriteCommandHeader) <= sizeof(NocUnicastScatterCommandHeader),
+    "NocSparseMulticastWriteCommandHeader must fit within the NocCommandFields union");
 
 // NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 union NocCommandFields {
@@ -335,6 +369,7 @@ union NocCommandFields {
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
     NocUnicastScatterCommandHeader unicast_scatter_write;
+    NocSparseMulticastWriteCommandHeader sparse_mcast_write;
 };
 // NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 40 bytes");
@@ -647,6 +682,39 @@ public:
         this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+
+    // Pairs with to_chip_sparse_multicast: carries a flat, hop-ordered list of destination addresses
+    // grouped per writing chip by counts[]. Addresses must be listed nearest writing chip first, with a
+    // chip's pages contiguous, so the router's write_idx/chip_idx advance selects each chip's own pages.
+    volatile Derived* to_noc_sparse_mcast_write(
+        const NocSparseMulticastWriteCommandHeader& sparse_mcast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        this->noc_send_type = NOC_SPARSE_MCAST_WRITE;
+        const uint8_t num_dests = sparse_mcast_command_header.num_dests;
+        ASSERT(num_dests > 0 && num_dests <= NOC_SPARSE_MCAST_WRITE_MAX_DESTS);
+        for (uint8_t i = 0; i < num_dests; i++) {
+            auto noc_address_components = get_noc_address_components(sparse_mcast_command_header.noc_address[i]);
+            this->command_fields.sparse_mcast_write.noc_address[i] = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+        }
+        const uint8_t num_chips = sparse_mcast_command_header.num_chips;
+        ASSERT(num_chips > 0 && num_chips <= num_dests);
+        for (uint8_t i = 0; i < num_chips; i++) {
+            this->command_fields.sparse_mcast_write.counts[i] = sparse_mcast_command_header.counts[i];
+        }
+        this->command_fields.sparse_mcast_write.num_dests = num_dests;
+        this->command_fields.sparse_mcast_write.num_chips = num_chips;
+        this->command_fields.sparse_mcast_write.write_idx = 0;
+        this->command_fields.sparse_mcast_write.chip_idx = 0;
+        this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
+#else
+        TT_THROW("Calling to_noc_sparse_mcast_write from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }

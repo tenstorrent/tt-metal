@@ -882,9 +882,46 @@ FORCE_INLINE void receiver_forward_packet(
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
             case LowLatencyFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                if constexpr (tt::tt_fabric::enable_sparse_mcast_write) {
+                    // Resolve noc_send_type via the same packed 4B load the local-write path uses, then
+                    // reuse it through the _impl entry point so the standard path does no extra L1 read
+                    // versus the non-sparse build. The sparse case is unlikely, keeping the common path hot.
+                    const auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_start);
+                    if (packed.noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) [[unlikely]] {
+                        // This chip writes its own page group (counts[chip_idx] pages from write_idx), then
+                        // write_idx/chip_idx advance so the downstream chip picks the next group. The advance
+                        // must precede the forward because forwarding sends the (mutated) header downstream,
+                        // and must follow the write because the write reads the pre-advance chip_idx.
+                        execute_chip_unicast_to_local_chip_impl(
+                            packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
+                        auto& sparse = packet_start->command_fields.sparse_mcast_write;
+                        sparse.write_idx += sparse.counts[sparse.chip_idx];
+                        sparse.chip_idx++;
+                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                            packet_start,
+                            payload_size_bytes,
+                            cached_routing_fields,
+                            downstream_edm_interface,
+                            transaction_id);
+                    } else {
+                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                            packet_start,
+                            payload_size_bytes,
+                            cached_routing_fields,
+                            downstream_edm_interface,
+                            transaction_id);
+                        execute_chip_unicast_to_local_chip_impl(
+                            packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
+                    }
+                } else {
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interface,
+                        transaction_id);
+                    execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                }
                 // In 1D, the forwarding sender channel is always sender channel 1
                 // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);

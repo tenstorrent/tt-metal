@@ -46,6 +46,9 @@ int parse_noc_send_type(const std::string& name) {
     if (name == "NOC_UNICAST_READ") {
         return NocSendType::NOC_UNICAST_READ;
     }
+    if (name == "NOC_SPARSE_MCAST_WRITE") {
+        return NocSendType::NOC_SPARSE_MCAST_WRITE;
+    }
     return -1;
 }
 

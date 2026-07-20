@@ -330,11 +330,9 @@ void kernel_main() {
                 volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
                 entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
                 entry->token_t = t;
-                entry->routed_expert = (uint32_t)routed_expert;
                 entry->page_idx = page_idx;
                 entry->token_idx = token_idx;
-                // Single aligned 32-bit store: baby-RISC sub-word L1 stores are unreliable on BH.
-                entry->weight_k = pack_weight_k(0, (uint16_t)k);
+                entry->k = (uint32_t)k;
                 // Linearized destination device index. Under 1D it is unused by the fabric writer
                 // (route/distance drive the send); under 2D it is the only routing input — the
                 // writer recomputes the EDM direction and (mesh,chip) header from it.
