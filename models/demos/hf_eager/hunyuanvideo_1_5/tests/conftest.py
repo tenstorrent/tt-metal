@@ -113,17 +113,28 @@ def mesh_device(request, silicon_arch_name, device_params):
         # Fabric is live on the FULL parent; the submesh is just a device-subset
         # view over already-trained links.
         submesh_device = parent_device.create_submesh(ttnn.MeshShape(*req_shape))
-        # On-device VAE / Qwen: carve additional same-shape submeshes on the next
-        # blocks of physical chips (offset by req rows) so each heavy stage runs on
-        # its own chips -- no DRAM co-residence with the resident DiT, no dealloc.
-        if os.environ.get("HY_TT_VAE", "0") == "1" and req_shape[0] * 2 <= parent_shape[0]:
-            _vd.HY_VAE_SUBMESH = parent_device.create_submesh(
-                ttnn.MeshShape(*req_shape), offset=ttnn.MeshCoordinate(req_shape[0], 0)
-            )
-        if os.environ.get("HY_TT_QWEN", "0") == "1" and req_shape[0] * 3 <= parent_shape[0]:
+        want_vae = os.environ.get("HY_TT_VAE", "0") == "1"
+        want_qwen = os.environ.get("HY_TT_QWEN", "0") == "1"
+        rr, rc = req_shape
+        # All-four-modules-on-device 3-way split: pack VAE and Qwen into single ROWS
+        # below the DiT so all fit on one board. Qwen is capped at TP=4 (28 attn / 4
+        # kv heads) so it takes a (1,4) row; VAE takes a (1,rc) row (tile-sharded).
+        # e.g. DiT sp=2 (2,8) rows 0-1 -> VAE (1,8) row 2 -> Qwen (1,4) row 3.
+        if want_vae and want_qwen and rr + 2 <= parent_shape[0] and parent_shape[1] >= 4:
+            _vd.HY_VAE_SUBMESH = parent_device.create_submesh(ttnn.MeshShape(1, rc), offset=ttnn.MeshCoordinate(rr, 0))
             _qe.HY_QWEN_SUBMESH = parent_device.create_submesh(
-                ttnn.MeshShape(*req_shape), offset=ttnn.MeshCoordinate(req_shape[0] * 2, 0)
+                ttnn.MeshShape(1, 4), offset=ttnn.MeshCoordinate(rr + 1, 0)
             )
+        else:
+            # Single extra stage: carve a same-shape submesh on the next block of chips.
+            if want_vae and rr * 2 <= parent_shape[0]:
+                _vd.HY_VAE_SUBMESH = parent_device.create_submesh(
+                    ttnn.MeshShape(*req_shape), offset=ttnn.MeshCoordinate(rr, 0)
+                )
+            if want_qwen and rr * 3 <= parent_shape[0]:
+                _qe.HY_QWEN_SUBMESH = parent_device.create_submesh(
+                    ttnn.MeshShape(*req_shape), offset=ttnn.MeshCoordinate(rr * 2, 0)
+                )
     yielded = submesh_device if submesh_device is not None else parent_device
     from loguru import logger
 
