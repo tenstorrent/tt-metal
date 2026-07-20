@@ -48,7 +48,7 @@ Metal 2.0 introduces a new family of host APIs for Program specification. Metal 
 Key Metal 2.0 changes, at a glance:
  - *Immutable and mutable descriptors*. Like `ProgramDescriptor`, Metal 2.0 is a descriptor-based API. But, it separates the mutable properties of a Program (`ProgramSpec`) from those properties that are updated for each execution (`ProgramRunArgs`).
  - *Dataflow Buffers (DFBs)* replace Circular Buffers (CBs). Both host and device-side syntax is improved.
- - *Kernel arguments* specification (host side) and retrieval (device side) are signficantly improved. (_Note_: Only the first of several improvements is currently available in Metal 2.0; expect further changes to this part of the API.)
+ - *Kernel arguments* specification (host side) and retrieval (device side) are significantly improved. (_Note_: Only the first of several improvements is currently available in Metal 2.0; expect further changes to this part of the API.)
  - *Resource placement* (i.e. `core_ranges`) is inferred where possible to make the API more AI-friendly and more intuitive with Quasar's multi-threaded kernels. The mapping of kernels to worker nodes in the device is communicated via a new top-level concept (`WorkUnitSpec`).
 - *Quasar-specific features* like kernel threading.
 
@@ -76,7 +76,7 @@ Many additional improvements are planned, but are not yet available in the exper
 | `KernelDescriptor::runtime_args` / `common_runtime_args` | **Schema** (names): declared on `KernelSpec::runtime_arg_schema`<br>**Values**: supplied per execution on `ProgramRunArgs::KernelRunArgs` |
 | `CBDescriptor` | `DataflowBufferSpec` (placement derived from kernel bindings) |
 | `SemaphoreDescriptor` | `SemaphoreSpec` |
-| `TensorAccessorArgs<...>` <br> (plumbing + buffer-address RTA) | `TensorAccessor(ta::name)` in the kernel code; <br>`TensorParameter` on `ProgramSpec` (parallel to DFB / Semaphore) |
+| `TensorAccessorArgs<...>` <br> (plumbing + buffer-address RTA) | `TensorAccessor(tensor::name)` in the kernel code; <br>`TensorParameter` on `ProgramSpec` (parallel to DFB / Semaphore) |
 | *(no analogue)* | `WorkUnitSpec` — declares groups of kernels that operate together on a worker node, and on which nodes they run |
 | `CoreCoord` / `CoreRange` / `CoreRangeSet`  | `NodeCoord` / `NodeRange` / `NodeRangeSet` |
 
@@ -320,7 +320,7 @@ Remote DFBs spanning nodes are described in `dataflow_buffer_spec.hpp` but are n
 `SemaphoreSpec` replaces `SemaphoreDescriptor`. Some notes:
 
 1. **Kernel resource binding**: Semaphores are bound by the `KernelSpec`. The kernel code accesses the semaphore by name through the binding's `accessor_name`.
-2. **Initial value**: Semaphores are default-initialized to zero. Semaphores with non-zero initial values are not support in Quasar; they are temporarily available for WH/BH, but support will be deprecated once remote DFB support is available.
+2. **Initial value**: Semaphores are default-initialized to zero. Semaphores with non-zero initial values are not supported in Quasar; they are temporarily available for WH/BH, but support will be deprecated once remote DFB support is available.
 
 **Legacy** (`SemaphoreDescriptor`):
 
@@ -357,7 +357,7 @@ KernelSpec writer{ /* ... */
 
 ### TensorParameter
 
-`TensorParameter` declares a tensor as a Program-scope resource. Kernels access it via `KernelSpec::TensorBinding`; the runtime `MeshTensor` is supplied per execution via `ProgramRunArgs::TensorArgument`. The kernel-author API collapses to a single line: `TensorAccessor(ta::name)`.
+`TensorParameter` declares a tensor as a Program-scope resource. Kernels access it via `KernelSpec::TensorBinding`; the runtime `MeshTensor` is supplied per execution via `ProgramRunArgs::TensorArgument`. The kernel-author API collapses to a single line: `TensorAccessor(tensor::name)`.
 
 Three pieces, paralleling the DFB / Semaphore pattern with one deliberate asymmetry: tensors are *user-managed* resources (you own the lifetime), so the program-scope type is named `TensorParameter` (distinguished from the "Spec" pattern used elsewhere in the API) — echoing the "ProgramSpec is a function signature; ProgramRunArgs is the call args" framing.
 
@@ -407,7 +407,7 @@ spec.tensor_parameters = {
 KernelSpec reader{ /* ... */
     .tensor_bindings = {{
         .tensor_parameter_name = INPUT,
-        .accessor_name = "input",   // kernel accesses as `ta::input`
+        .accessor_name = "input",   // kernel accesses as `tensor::input`
     }},
 };
 spec.kernels = {reader};
@@ -424,7 +424,7 @@ SetProgramRunArgs(program, params);
 
 ```cpp
 // kernel: one line. No CTA-offset bookkeeping, no buffer-address RTA.
-auto input = TensorAccessor(ta::input);
+auto input = TensorAccessor(tensor::input);
 ```
 
 The buffer-address RTA is gone — the binding mechanism auto-injects the per-enqueue base address. The `TensorAccessorArgs<N>()` line is gone too — the layout metadata is packed by the host at program creation.
@@ -436,9 +436,9 @@ For each op:
 1. **Pre-flight.** Grep the op's kernel sources for `ArgConfig::Runtime`. If `RuntimeTensorShape` (or `RuntimeShardShape` / `RuntimeBankCoords`) appears anywhere, the migration is possible but the `TensorParameter`s for the affected tensors need `advanced_options.dynamic_tensor_shape = true` (or the weaker `match_padded_shape_only = true`) — see callout above for the safety and structural caveats before adopting either.
 2. **Find each `TensorAccessor`.** In each kernel, locate every `TensorAccessor(args, addr)` construction. For each, trace `addr` back through the host code to the originating `Tensor`.
 3. **Declare `TensorParameter`s.** Add one entry per tensor to `ProgramSpec::tensor_parameters`, using `tensor.tensor_spec()`. Pick a stable `unique_id`; declare it as a typed constant (`const TensorParamName INPUT{"input"};`) and reuse the constant at each use site.
-4. **Add `TensorBinding`s.** On each `KernelSpec` whose kernel accesses the tensor, add an entry to `tensor_bindings` referencing the parameter by name. The `accessor_name` is the kernel-side identifier — it will appear as `ta::<accessor_name>`.
+4. **Add `TensorBinding`s.** On each `KernelSpec` whose kernel accesses the tensor, add an entry to `tensor_bindings` referencing the parameter by name. The `accessor_name` is the kernel-side identifier — it will appear as `tensor::<accessor_name>`.
 5. **Update kernel code.**
-   - Replace `TensorAccessor(args, addr)` with `TensorAccessor(ta::<accessor_name>)`.
+   - Replace `TensorAccessor(args, addr)` with `TensorAccessor(tensor::<accessor_name>)`.
    - Drop the `TensorAccessorArgs<offset>()` line and any manual `next_compile_time_args_offset()` chaining.
    - Drop the `get_arg_val<uint32_t>(N)` line that retrieved the buffer address — those bytes are no longer in your RTA list, so re-index any RTAs that came after.
 6. **Wire `tensor_args`.** Add one `TensorArgument` per `TensorParameter` to `ProgramRunArgs::tensor_args`, passing the actual `MeshTensor`.
@@ -612,7 +612,7 @@ dfb.push_back(num_entries);
 
 Construction collapses to one line. `TensorAccessor` takes the codegen-emitted token directly; everything else is unchanged from today (`get_noc_addr`, `get_bank_and_offset`, `dspec()`, `noc_async_read_page`, etc.).
 
-The token lives in the `ta::` namespace inside `kernel_bindings_generated.h` (auto-generated from the host-side `TensorBinding`), parallel to the `dfb::` and `sem::` namespaces.
+The token lives in the `tensor::` namespace inside `kernel_bindings_generated.h` (auto-generated from the host-side `TensorBinding`), parallel to the `dfb::` and `sem::` namespaces.
 
 **Legacy:**
 
@@ -631,13 +631,13 @@ auto index = TensorAccessor(index_args, index_addr);
 **Metal 2.0:**
 
 ```cpp
-auto input = TensorAccessor(ta::input);
-auto index = TensorAccessor(ta::index);
+auto input = TensorAccessor(tensor::input);
+auto index = TensorAccessor(tensor::index);
 ```
 
 The `TensorAccessorArgs<N>()` lines, the manual `next_compile_time_args_offset()` chaining for multi-tensor stacking, and the buffer-address RTAs are all gone. Layout metadata is packed by the host into the kernel's compile-time args at program creation, not retrieved by the kernel; the per-enqueue base address rides on a host-managed slot in the kernel's CRTA buffer that the kernel never sees directly.
 
-See [TensorParameter](#tensorparameter) for the host-side declaration that produces the `ta::` namespace.
+See [TensorParameter](#tensorparameter) for the host-side declaration that produces the `tensor::` namespace.
 
 ---
 
@@ -645,7 +645,7 @@ See [TensorParameter](#tensorparameter) for the host-side declaration that produ
 
 The Metal 2.0 host API declares kernel arguments by name; the kernel-side API retrieves them by name. This replaces the legacy positional `get_arg_val<uint32_t>(N)` style.
 
-**The only `#include` a porter adds to a kernel is `experimental/kernel_args.h`** — that pulls in the accessor templates (`get_arg`, `args::`, `dfb::`, `sem::`, `ta::`). The generated headers `kernel_bindings_generated.h` (which carries `dfb::` / `sem::` / `ta::` declarations from the host bindings) and `kernel_args_generated.h` (which carries `args::` declarations from `compile_time_args` + `runtime_arg_schema`) are auto-included by the build system via `<kernel_includes.hpp>` before the kernel source. **Do not** `#include` either generated header from your kernel.
+**The only `#include` a porter adds to a kernel is `experimental/kernel_args.h`** — that pulls in the accessor templates (`get_arg`, `args::`, `dfb::`, `sem::`, `tensor::`). The generated headers `kernel_bindings_generated.h` (which carries `dfb::` / `sem::` / `tensor::` declarations from the host bindings) and `kernel_args_generated.h` (which carries `args::` declarations from `compile_time_args` + `runtime_arg_schema`) are auto-included by the build system via `<kernel_includes.hpp>` before the kernel source. **Do not** `#include` either generated header from your kernel.
 
 **Example 1 — Named arguments only.**
 
@@ -751,7 +751,7 @@ For the op author, the practical implication is that **the schema and the values
 
 This is the largest design shift in Metal 2.0 — and the principle responsible for the bulk of the stylistic improvement Metal 2.0 offers.
 
-**Resources (tensors, DFBs, semaphores) bind by name.** Each resource is declared once on the `ProgramSpec` (as a `TensorParameter`, `DataflowBufferSpec`, or `SemaphoreSpec`), then bound to each kernel that uses it via a `TensorBinding` / `DFBBinding` / `SemaphoreBinding` on the `KernelSpec`. The kernel accesses the resource through an auto-generated handle (`ta::name`, `dfb::name`, `sem::name`) without needing to know its underlying ID, address, or layout.
+**Resources (tensors, DFBs, semaphores) bind by name.** Each resource is declared once on the `ProgramSpec` (as a `TensorParameter`, `DataflowBufferSpec`, or `SemaphoreSpec`), then bound to each kernel that uses it via a `TensorBinding` / `DFBBinding` / `SemaphoreBinding` on the `KernelSpec`. The kernel accesses the resource through an auto-generated handle (`tensor::name`, `dfb::name`, `sem::name`) without needing to know its underlying ID, address, or layout.
 
 Legacy `ProgramDescriptor` had no equivalent abstraction. Resources were referenced indirectly:
 
@@ -770,7 +770,7 @@ uint32_t addr = get_arg_val<uint32_t>(0);
 auto a = TensorAccessor(args, addr);
 
 // Metal 2.0: one line.
-auto a = TensorAccessor(ta::input);
+auto a = TensorAccessor(tensor::input);
 ```
 
 Neither `tensor.buffer()->address()` (host side) nor `TensorAccessorArgs<N>()` (device side) survives a faithful port.
@@ -1023,7 +1023,7 @@ KernelSpec reader{
     }},
     .tensor_bindings = {{
         .tensor_parameter_name = INPUT,
-        .accessor_name = "input",   // kernel accesses as `ta::input`
+        .accessor_name = "input",   // kernel accesses as `tensor::input`
     }},
     .hw_config = CreateReader1xxDataMovementConfig(),
 };
@@ -1040,7 +1040,7 @@ KernelSpec writer{
     }},
     .tensor_bindings = {{
         .tensor_parameter_name = OUTPUT,
-        .accessor_name = "output",  // kernel accesses as `ta::output`
+        .accessor_name = "output",  // kernel accesses as `tensor::output`
     }},
     .hw_config = CreateWriter1xxDataMovementConfig(),
 };
