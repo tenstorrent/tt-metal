@@ -131,7 +131,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        std::move(paged_cache_geometry));
+        paged_cache_geometry);
 }
 
 // Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
@@ -170,7 +170,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        std::move(paged_cache_geometry));
+        paged_cache_geometry);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(

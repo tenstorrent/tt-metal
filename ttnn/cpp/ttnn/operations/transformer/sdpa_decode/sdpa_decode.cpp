@@ -174,7 +174,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::move(paged_cache_geometry),
+        paged_cache_geometry,
         cache_position_modulo);
 }
 
