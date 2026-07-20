@@ -103,9 +103,13 @@ void set_config_vars() {
     // it manages fabric configuration which shouldn't
     // be running fabric routers during configuration
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
-    // Set env vars required by Control Plane when running on a multi-node cluster
-    setenv("TT_MESH_HOST_RANK", "0", 1);
-    setenv("TT_MESH_ID", "0", 1);
+
+    // The Control Plane derives each rank's mesh binding from TT_MESH_ID / TT_MESH_HOST_RANK.
+    // On a real multi-node cluster these are assigned per-rank by the launcher (tt-run / rankfile),
+    // so we must NOT overwrite them here. Use overwrite=0 to only provide defaults for the
+    // standalone single-host case where no launcher has set them.
+    setenv("TT_MESH_HOST_RANK", "0", 0);
+    setenv("TT_MESH_ID", "0", 0);
 }
 
 }  // namespace tt::scaleout_tools
