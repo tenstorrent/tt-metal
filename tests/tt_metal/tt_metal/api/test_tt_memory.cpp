@@ -37,9 +37,9 @@ protected:
     }
 };
 
-// Regression test for the DISCRETE double-indexing bug (issue #48262). An ncrisc-style binary
-// places its data segment at a LOWER address than text, so the address sort produces a
-// non-identity permutation. The spans must come out in ascending address order.
+// DISCRETE loading must emit spans in ascending address order even when the address sort is a
+// non-identity permutation. An ncrisc-style binary places its data segment at a LOWER address than
+// text, which produces exactly such a permutation, so it exercises that ordering.
 TEST_F(MemorySegmentOrderingTest, DiscreteEmitsSpansInAscendingAddressOrder) {
     // segments[0] is text (the loader treats the first segment as text), placed high in memory;
     // the data segment is placed lower -- the ncrisc layout that triggers a non-identity sort.
@@ -53,7 +53,7 @@ TEST_F(MemorySegmentOrderingTest, DiscreteEmitsSpansInAscendingAddressOrder) {
     const memory m = build(segments, memory::Loading::DISCRETE);
 
     // Ascending address order: data (0x1000) first, then text (0x2000).
-    // With the bug the order was reversed (text 0x2000 first), so this is the fail-without-fix check.
+    // Source/segment order would place text (0x2000) first, so this verifies the address sort is applied.
     const std::vector<std::pair<std::uint64_t, std::uint32_t>> expected = {{0x1000, 1}, {0x2000, 2}};
     EXPECT_EQ(span_order(m), expected);
 
