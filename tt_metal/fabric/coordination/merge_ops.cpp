@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/fabric/coordination/system_coordinator.hpp"
+#include <tt-metalium/experimental/fabric/system_coordinator.hpp>
 
 #include <algorithm>
 #include <utility>

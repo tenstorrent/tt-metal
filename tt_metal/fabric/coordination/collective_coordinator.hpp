@@ -22,8 +22,7 @@
 #include <memory>
 
 #include <tt-metalium/distributed_context.hpp>
-
-#include "tt_metal/fabric/coordination/system_coordinator.hpp"
+#include <tt-metalium/experimental/fabric/system_coordinator.hpp>
 
 namespace tt::tt_fabric::coordination {
 

@@ -30,7 +30,7 @@
 #include <memory>
 #include <string>
 
-#include "tt_metal/fabric/coordination/system_coordinator.hpp"
+#include <tt-metalium/experimental/fabric/system_coordinator.hpp>
 
 namespace tt::tt_fabric::coordination {
 

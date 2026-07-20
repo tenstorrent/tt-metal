@@ -41,6 +41,7 @@
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/system_coordinator.hpp>
 #include "hal_types.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -2563,7 +2564,34 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     }
 }
 
+void ControlPlane::set_system_coordinator(std::shared_ptr<coordination::SystemCoordinator> coordinator) {
+    coordinator_ = std::move(coordinator);
+}
+
 void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
+    // When a domain-level coordinator is injected, route this exchange through
+    // it (serialize -> reduce(RouterPortDirections) -> barrier) instead of the raw
+    // DistributedContext collectives below. The legacy path is preserved verbatim in the
+    // `else`/fall-through so the workload path is unchanged when no coordinator is set.
+    if (coordinator_) {
+        const auto scope = coordination::Scope::world();
+        if (!coordinator_->is_distributed() || coordinator_->participant_count(scope) <= 1) {
+            return;
+        }
+        RouterPortDirectionsData local_data;
+        local_data.local_mesh_id = local_mesh_binding_.mesh_ids[0];
+        local_data.local_host_rank_id = this->get_local_host_rank_id_binding();
+        local_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
+
+        auto local_bytes = tt::tt_fabric::serialize_router_port_directions_to_bytes(local_data);
+        auto merged_bytes = coordinator_->reduce(local_bytes, coordination::MergeOp::RouterPortDirections, scope);
+        auto merged = tt::tt_fabric::deserialize_router_port_directions_from_bytes(merged_bytes);
+        router_port_directions_to_physical_eth_chan_map_ = std::move(merged.router_port_directions_map);
+
+        coordinator_->barrier(scope);
+        return;
+    }
+
     const auto& distributed_context = this->distributed_context_.get();
     if (*distributed_context.size() == 1) {
         // No need to collect from other hosts when running a single process

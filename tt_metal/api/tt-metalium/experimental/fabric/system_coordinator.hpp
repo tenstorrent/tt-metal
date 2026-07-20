@@ -30,6 +30,13 @@
 // domain rather than at the MPI-verb level, so the service backend never has to
 // emulate tags, general point-to-point, or communicator splitting.
 //
+// This is a PUBLIC API header on purpose: it lets the concrete transport backend
+// (e.g. a gRPC ServiceCoordinator) be implemented ENTIRELY outside tt_metal -- in
+// the fabric-manager tool/service -- while tt_metal only depends on this
+// interface. An external backend implements only the transport methods
+// (bytes-in/bytes-out); the merge logic stays in tt_metal via apply_merge(),
+// which reduce() invokes agent-side. See ControlPlane::set_system_coordinator.
+//
 
 #include <cstdint>
 #include <optional>

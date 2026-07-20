@@ -28,10 +28,12 @@
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/mesh_graph.hpp>
+#include <experimental/fabric/system_coordinator.hpp>
 #include <distributed_context.hpp>
 #include <system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
+#include "fabric/coordination/collective_coordinator.hpp"
 
 namespace tt::tt_metal {
 
@@ -424,6 +426,21 @@ void MetalEnvImpl::initialize_control_plane_impl() {
     }
 }
 
+// Opt-in: when TT_FABRIC_USE_COORDINATOR is set, route the control
+// plane's cross-host fabric-coordination through a SystemCoordinator instead of the raw
+// DistributedContext collectives. Using CollectiveCoordinator here is behaviour-preserving
+// (it wraps the same DistributedContext), so it exercises the injection seam end-to-end under
+// MPI before the gRPC ServiceCoordinator exists. Default (unset) leaves the workload path
+// untouched.
+void MetalEnvImpl::maybe_inject_system_coordinator() {
+    if (control_plane_ == nullptr || std::getenv("TT_FABRIC_USE_COORDINATOR") == nullptr) {
+        return;
+    }
+    log_info(tt::LogDistributed, "TT_FABRIC_USE_COORDINATOR set: injecting CollectiveCoordinator into ControlPlane");
+    control_plane_->set_system_coordinator(
+        std::make_shared<tt::tt_fabric::coordination::CollectiveCoordinator>(distributed_context_));
+}
+
 void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
@@ -454,6 +471,7 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             this->fabric_router_config_,
             this->fabric_manager_);
     }
+    maybe_inject_system_coordinator();
 }
 
 void MetalEnvImpl::construct_control_plane() {
@@ -476,6 +494,7 @@ void MetalEnvImpl::construct_control_plane() {
         this->fabric_udm_mode_,
         this->fabric_router_config_,
         this->fabric_manager_);
+    maybe_inject_system_coordinator();
 }
 
 // ─── System mesh ──────────────────────────────────────────────────────────────

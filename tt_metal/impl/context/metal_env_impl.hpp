@@ -134,6 +134,9 @@ private:
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
+    // Opt-in (TT_FABRIC_USE_COORDINATOR) injection of a SystemCoordinator into the control
+    // plane; no-op by default. See metal_env.cpp (Option B2-i).
+    void maybe_inject_system_coordinator();
     void initialize_control_plane_impl();
 
     static std::mutex s_registry_mutex_;
