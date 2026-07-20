@@ -43,9 +43,9 @@ Status legend:
 |------|--------------------|
 | `.cursor/scripts/run_test.sh` | Multi-file `--test` support; trailing bare test paths; `--speed-of-light` flag threaded into compile/simulate/run; safer arg quoting / labels for multi-test runs. |
 | `.claude/scripts/run_test.sh` | Same `--speed-of-light` plumbing + timestamped test-id logging on simulate/run. |
-| `.cursor/skills/quasar-perf-suite-by-run-type/scripts/rename_perf_csvs.sh` | Renames combined CSVs under `perf_data/<test>/` to append `_<PerfRunType>` before `.csv` / `.post.csv`, so per-type suite passes do not clobber each other. |
-| `.cursor/skills/quasar-perf-suite-by-run-type/SKILL.md` | Documents the by-run-type workflow (order, suite map, rename step). |
-| `.cursor/skills/add-quasar-perf-test/SKILL.md` (and Claude twin) | Guidance for adding Quasar perf tests consistently with the new infra. |
+| `.cursor/skills/quasar-perf-test/SKILL.md` and `.claude/skills/quasar-perf-test/SKILL.md` | Unified guidance for creating perf tests and implementing or debugging all Quasar `PerfRunType` kernel paths. |
+| `.cursor/skills/quasar-perf-suite-by-run-type/SKILL.md` and `.claude/skills/quasar-perf-suite-by-run-type/SKILL.md` | Documents the by-run-type workflow (order, suite map, rename step). |
+| Each `quasar-perf-suite-by-run-type/scripts/rename_perf_csvs.sh` | Renames combined CSVs under `perf_data/<test>/` to append `_<PerfRunType>` before `.csv` / `.post.csv`, so per-type suite passes do not clobber each other. |
 
 ---
 
