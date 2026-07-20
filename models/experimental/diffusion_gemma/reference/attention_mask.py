@@ -27,6 +27,66 @@ def canvas_positions(prompt_len: int, canvas_len: int, *, device=None) -> torch.
     return prompt_len + torch.arange(canvas_len, device=device)
 
 
+def build_canvas_reveal_denoise_mask(
+    prompt_len: int,
+    canvas_len: int,
+    p_max: int,
+    *,
+    layer_type: str | None = None,
+    sliding_window: int | None = None,
+    enforce_sliding_window: bool = False,
+    neg_inf: float = float("-inf"),
+    dtype: torch.dtype = torch.float32,
+    device=None,
+) -> torch.Tensor:
+    """Fixed-shape ``[canvas_len, p_max + canvas_len]`` reveal mask (paged-prefix Phase 1).
+
+    Unlike :func:`build_canvas_denoise_mask`, the key axis prefix span is a CONSTANT
+    ``p_max`` (not the growing ``prompt_len``), so the mask — and therefore the traced
+    denoise attention graph — is shape-invariant across blocks (capture-once/replay-many,
+    see ``doc/optimize_perf/paged_prefix_denoise_design.md``). The growing committed prefix
+    is exposed purely through the mask CONTENT:
+
+    - Canvas queries are anchored at the TRUE committed ``prompt_len`` (``q_abs = prompt_len + i``),
+      NOT ``p_max`` — decoupling the read span from the reveal length is the whole point.
+    - Prefix key slot ``j`` in ``[0, p_max)`` maps to absolute position ``j`` and is revealed
+      iff ``j < prompt_len`` (committed). Uncommitted slots ``[prompt_len:p_max]`` are always
+      ``neg_inf`` — this is the explicit reveal predicate (do NOT rely on a window to hide them).
+    - Canvas key slot ``j'`` in ``[0, canvas_len)`` lives at key columns ``[p_max:p_max+canvas_len]``.
+
+    ``enforce_sliding_window=False`` (Phase 1) → committed keys are all-attend (matches today's
+    maskless production denoise path; the reveal is the ONLY masking). ``True`` (Phase 2) → also
+    apply HF's bidirectional window ``abs(q_abs - k_abs) <= sliding_window`` (a decision change vs
+    today → its own #48291 re-validation). ``layer_type='full_attention'`` ignores the window.
+    """
+    if p_max < prompt_len:
+        raise ValueError(f"p_max ({p_max}) must be >= prompt_len ({prompt_len})")
+    total_k = p_max + canvas_len
+    i = torch.arange(canvas_len, device=device).unsqueeze(1)  # [C, 1] canvas row index
+    q_abs = (prompt_len + i).to(torch.long)  # [C, 1] canvas absolute position
+    # Key absolute position: prefix slot j -> abs j; canvas slot j' -> abs prompt_len + j'.
+    prefix_abs = torch.arange(p_max, device=device)  # [p_max]
+    canvas_abs = prompt_len + torch.arange(canvas_len, device=device)  # [C]
+    k_abs = torch.cat([prefix_abs, canvas_abs]).unsqueeze(0).to(torch.long)  # [1, p_max+C]
+
+    # Committed predicate: prefix columns require j < prompt_len; canvas columns always committed.
+    committed = torch.zeros(total_k, dtype=torch.bool, device=device)
+    committed[:p_max] = prefix_abs < prompt_len
+    committed[p_max:] = True
+    allowed = committed.unsqueeze(0).expand(canvas_len, total_k).clone()  # [C, p_max+C]
+
+    if enforce_sliding_window and layer_type == "sliding_attention":
+        if sliding_window is None or sliding_window <= 0:
+            raise ValueError("sliding_window must be positive for sliding_attention")
+        allowed = allowed & ((q_abs - k_abs).abs() <= sliding_window)
+    elif layer_type not in (None, "full_attention", "sliding_attention"):
+        raise ValueError(f"unsupported layer_type {layer_type!r}")
+
+    return torch.where(
+        allowed, torch.zeros((), dtype=dtype, device=device), torch.full((), neg_inf, dtype=dtype, device=device)
+    )
+
+
 def build_canvas_denoise_mask(
     prompt_len: int,
     canvas_len: int,

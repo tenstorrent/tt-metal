@@ -112,6 +112,65 @@ def frozen_prefix_enabled() -> bool:
     return os.environ.get("DG_DENOISE_FROZEN_PREFIX", "0").lower() in ("1", "true", "yes", "on")
 
 
+def reveal_mask_enabled() -> bool:
+    """Capture-once / replay-many WITH multi-block correctness (``DG_DENOISE_REVEAL_MASK``, OFF).
+
+    Phase 1 of the paged-prefix plan: the prefix K/V is read at a CONSTANT ``p_max`` span so the
+    trace shape is invariant (no recapture), and the growing committed prefix is exposed via a
+    persistent reveal mask that hides the uncommitted tail. Unlike ``frozen_prefix`` this is
+    multi-block CORRECT (later blocks re-read the mutated cache + attend all committed KV).
+    See ``doc/optimize_perf/paged_prefix_denoise_design.md``.
+    """
+    return os.environ.get("DG_DENOISE_REVEAL_MASK", "0").lower() in ("1", "true", "yes", "on")
+
+
+def lazy_capture_enabled() -> bool:
+    """Capture denoise-window traces ON DEMAND instead of the full budget up front
+    (``DG_DENOISE_LAZY_CAPTURE``, default OFF).
+
+    The early-halt loop only replays up to the halt step (~7–15 of 48 on coherent prompts), yet
+    the default capture records ALL ceil(n_steps/g) windows at block 0 — so block-0 capture (ttft)
+    pays for windows that early-halt never runs. Lazy capture records window ``w`` the first time
+    any block reaches it (the capture itself executes the window, threading the persistent buffers),
+    so the one-time capture cost = the MAX halt step across the request, spread across blocks. Only
+    meaningful WITH capture-once (reveal-mask / frozen-prefix); requires shape-invariant traces.
+    """
+    return os.environ.get("DG_DENOISE_LAZY_CAPTURE", "0").lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_reveal_pmax(adapter) -> int:
+    """Fixed prefix read span for the reveal-mask path (tile-aligned).
+
+    ``DG_DENOISE_REVEAL_PMAX`` overrides; otherwise the whole allocated KV-cache seq length
+    (the simplest always-fixed span — Phase-1 reads [0:cache_len] and reveals the committed
+    head). O(p_max) masked compute is acceptable for bounded contexts; Phase-2 paged removes it.
+    """
+    override = os.environ.get("DG_DENOISE_REVEAL_PMAX", "").strip()
+    if override:
+        p = int(override)
+    else:
+        k_cache = adapter.tt_model.tt_kv_cache[0][0]
+        p = int(k_cache.shape[-2])
+    if p % ttnn.TILE_SIZE != 0:
+        p = ((p + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    return p
+
+
+def _prepare_reveal_if_enabled(adapter, *, canvas_len: int, start_pos: int) -> None:
+    """Set the fixed read span + preallocate the reveal mask BEFORE begin_trace_capture."""
+    if not reveal_mask_enabled():
+        return
+    p_max = _resolve_reveal_pmax(adapter)
+    reader = adapter.prompt_hidden_by_layer
+    setter = getattr(reader, "set_read_span", None)
+    if not callable(setter):
+        raise RuntimeError("DG_DENOISE_REVEAL_MASK requires a MutablePrefixKVReader prefix source")
+    setter(p_max)
+    prompt_len = int(getattr(adapter, "prompt_len", 0) or 0)
+    adapter.prepare_reveal_mask_buffers(canvas_len=canvas_len, p_max=p_max, prompt_len=prompt_len)
+    adapter.update_reveal_mask_buffer(prompt_len)
+
+
 def _trace_metric(event: str, **fields) -> None:
     """Emit a stable, machine-readable live-serving trace marker."""
     logger.info("DG_TRACE_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
@@ -367,6 +426,7 @@ class TracedDenoiseController:
         adapter.prepare_canvas_rope_buffers(canvas_len=canvas_len)
         adapter.update_canvas_rope_buffers(start_pos)
         adapter.use_canvas_rope = True
+        _prepare_reveal_if_enabled(adapter, canvas_len=canvas_len, start_pos=start_pos)
         # DG_TERMINAL_SHARDED context (None => replicated terminal). Prepared OUTSIDE capture by
         # the caller's adapter.prepare_sharded_terminal; constant across steps, so derive once.
         sharded_terminal = adapter.sharded_terminal_context()
@@ -453,10 +513,12 @@ class TracedDenoiseController:
         start_pos = getattr(adapter, "q_rope_offset", None)
         current_prefix_len = int(getattr(adapter, "prompt_len", 0))
         if self.captured and self.captured_prefix_len is not None and self.captured_prefix_len != current_prefix_len:
-            if frozen_prefix_enabled():
-                # Capture-once: reuse the block-0 trace (frozen prefix) — no recapture.
+            if frozen_prefix_enabled() or reveal_mask_enabled():
+                # Capture-once: reuse the block-0 trace — no recapture. frozen_prefix bakes the
+                # block-0 prefix (single-block-correct only); reveal_mask keeps the fixed p_max
+                # read + per-block-refreshed reveal mask, so later blocks stay MULTI-BLOCK CORRECT.
                 _trace_metric(
-                    "frozen_prefix_reuse",
+                    "reveal_mask_reuse" if reveal_mask_enabled() else "frozen_prefix_reuse",
                     captured_prefix_len=self.captured_prefix_len,
                     next_prefix_len=current_prefix_len,
                     **self.stats(),
@@ -484,6 +546,8 @@ class TracedDenoiseController:
             self._refresh_chunked_gumbel_seed_from(gumbel_noise_fn)
             self._validate_argmax_gumbel_from(gumbel_noise_fn)
             adapter.update_canvas_rope_buffers(start_pos)
+            if getattr(adapter, "use_reveal_mask", False):
+                adapter.update_reveal_mask_buffer(int(getattr(adapter, "prompt_len", 0) or 0))
 
         # Reset the threaded state from THIS block's fresh canvas init + zeroed signal, replay.
         ttnn.copy(init_canvas, self.canvas_buf)
@@ -672,6 +736,7 @@ class MultiStepTracedDenoiseController(TracedDenoiseController):
         adapter.prepare_canvas_rope_buffers(canvas_len=canvas_len)
         adapter.update_canvas_rope_buffers(start_pos)
         adapter.use_canvas_rope = True
+        _prepare_reveal_if_enabled(adapter, canvas_len=canvas_len, start_pos=start_pos)
         # DG_TERMINAL_SHARDED context (None => replicated terminal), constant across steps/windows.
         sharded_terminal = adapter.sharded_terminal_context()
         if self.consts is None:
@@ -852,6 +917,8 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
     def __init__(self, mesh_device, config: DiffusionConfig, consts=None, group_size: int | None = None):
         super().__init__(mesh_device, config, consts=consts, group_size=group_size)
         self.halt_bufs: HaltBuffers | None = None
+        # DG_TERMINAL_SHARDED context captured in _capture, reused for lazy on-demand window capture.
+        self._sharded_terminal = None
         # Per-window (w_end_step_count, mean_entropy, mismatch) for the LAST block replayed —
         # diagnostics for the verify harness and the realized halt-step distribution.
         self.last_halt_trace: list = []
@@ -891,6 +958,7 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
         adapter.prepare_canvas_rope_buffers(canvas_len=canvas_len)
         adapter.update_canvas_rope_buffers(start_pos)
         adapter.use_canvas_rope = True
+        _prepare_reveal_if_enabled(adapter, canvas_len=canvas_len, start_pos=start_pos)
         # DG_TERMINAL_SHARDED context (None => replicated terminal), constant across steps/windows.
         sharded_terminal = adapter.sharded_terminal_context()
         if self.consts is None:
@@ -937,47 +1005,64 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
         warm_canvas.deallocate(True)
         ttnn.synchronize_device(self.mesh)
 
-        # Capture one trace per G-step window. Each step writes the halt buffers (overwriting),
-        # so after a window trace they hold the window's LAST step's scalars (mean_entropy of
-        # the last step + argmax mismatch of the last step vs its predecessor). The canvas +
-        # committed argmax thread exactly as the multi-step base (window-end carry).
+        # Capture one trace per G-step window. EAGER (default): record all ceil(n_steps/g) windows
+        # now. LAZY (DG_DENOISE_LAZY_CAPTURE): record none now — denoise_block records window w the
+        # first time any block reaches it, so block-0 ttft only pays for windows early-halt runs.
+        # Each captured window writes the halt buffers (last step's scalars) + threads canvas /
+        # committed argmax through self.canvas_buf/self.committed_buf (window-end carry).
         adapter.reset_signal_buffer()
         self.traces = []
-        for w_start in range(0, n_steps, g):
-            w_end = min(w_start + g, n_steps)
-            with _trace_capture_guard(self.mesh, cq_id=0) as tid:
-                canvas = self.canvas_buf
-                committed = None
-                for step in range(w_start, w_end):
-                    temperature = temperature_at_step(step, n_steps, cfg.temperature_start, cfg.temperature_end)
-                    logits = adapter(canvas, step)
-                    next_canvas, argmax = denoise_step_next_canvas_and_halt(
-                        logits,
-                        temperature=temperature,
-                        entropy_budget=cfg.entropy_budget,
-                        gumbel_noise=self._gumbel_for_step(step),
-                        noise_tokens=self.noise_bufs[step],
-                        halt_bufs=self.halt_bufs,
-                        canvas_len=canvas_len,
-                        constants=self.consts,
-                        sharded_terminal=sharded_terminal,
-                    )
-                    _deallocate_logits_if_unowned(adapter, logits)
-                    if committed is not None:
-                        committed.deallocate(True)
-                    committed = argmax
-                    if canvas is not self.canvas_buf:
-                        canvas.deallocate(True)
-                    canvas = next_canvas
-                ttnn.copy(canvas, self.canvas_buf)
-                ttnn.copy(committed, self.committed_buf)
-                if canvas is not self.canvas_buf:
-                    canvas.deallocate(True)
-                committed.deallocate(True)
-            self.traces.append(tid)
+        self._sharded_terminal = sharded_terminal
+        if not lazy_capture_enabled():
+            for w_start in range(0, n_steps, g):
+                w_end = min(w_start + g, n_steps)
+                self.traces.append(self._capture_window(adapter, w_start, w_end))
         ttnn.synchronize_device(self.mesh)
         self.captured = True
         self.captured_prefix_len = int(getattr(adapter, "prompt_len", 0))
+
+    def _capture_window(self, adapter, w_start: int, w_end: int):
+        """Capture (and execute) one G-step denoise window into a Metal trace; return its id.
+
+        Reads/writes the persistent buffers (canvas / committed / halt) parameterized only by their
+        CONTENTS, so replaying this trace on any later block reproduces the window over THAT block's
+        refreshed buffers. The capture itself executes the window (threading self.canvas_buf), so an
+        on-demand capture during replay leaves the correct live result — no separate execute_trace.
+        """
+        cfg = self.config
+        canvas_len = cfg.canvas_length
+        n_steps = cfg.max_denoise_steps
+        with _trace_capture_guard(self.mesh, cq_id=0) as tid:
+            canvas = self.canvas_buf
+            committed = None
+            for step in range(w_start, w_end):
+                temperature = temperature_at_step(step, n_steps, cfg.temperature_start, cfg.temperature_end)
+                logits = adapter(canvas, step)
+                next_canvas, argmax = denoise_step_next_canvas_and_halt(
+                    logits,
+                    temperature=temperature,
+                    entropy_budget=cfg.entropy_budget,
+                    gumbel_noise=self._gumbel_for_step(step),
+                    noise_tokens=self.noise_bufs[step],
+                    halt_bufs=self.halt_bufs,
+                    canvas_len=canvas_len,
+                    constants=self.consts,
+                    sharded_terminal=self._sharded_terminal,
+                )
+                _deallocate_logits_if_unowned(adapter, logits)
+                if committed is not None:
+                    committed.deallocate(True)
+                committed = argmax
+                if canvas is not self.canvas_buf:
+                    canvas.deallocate(True)
+                canvas = next_canvas
+            ttnn.copy(canvas, self.canvas_buf)
+            ttnn.copy(committed, self.committed_buf)
+            if canvas is not self.canvas_buf:
+                canvas.deallocate(True)
+            committed.deallocate(True)
+        self.capture_events += 1
+        return tid
 
     def denoise_block(
         self, adapter, init_canvas, config: DiffusionConfig, *, gumbel_noise_fn=None, noise_tokens_fn=None
@@ -992,9 +1077,11 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
 
         current_prefix_len = int(getattr(adapter, "prompt_len", 0))
         if self.captured and self.captured_prefix_len is not None and self.captured_prefix_len != current_prefix_len:
-            if frozen_prefix_enabled():
+            if frozen_prefix_enabled() or reveal_mask_enabled():
+                # reveal_mask keeps multi-block correctness (fixed p_max read + refreshed mask);
+                # frozen_prefix reuses the baked block-0 prefix (single-block-correct only).
                 _trace_metric(
-                    "frozen_prefix_reuse",
+                    "reveal_mask_reuse" if reveal_mask_enabled() else "frozen_prefix_reuse",
                     captured_prefix_len=self.captured_prefix_len,
                     next_prefix_len=current_prefix_len,
                     **self.stats(),
@@ -1019,6 +1106,8 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
             self._refresh_chunked_gumbel_seed_from(gumbel_noise_fn)
             self._validate_argmax_gumbel_from(gumbel_noise_fn)
             adapter.update_canvas_rope_buffers(start_pos)
+            if getattr(adapter, "use_reveal_mask", False):
+                adapter.update_reveal_mask_buffer(int(getattr(adapter, "prompt_len", 0) or 0))
 
         # Reset threaded state from this block's fresh canvas init + zeroed self-cond signal.
         # halt_bufs.prev_argmax is intentionally NOT reset per block: step 0 (the only step that
@@ -1032,13 +1121,16 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
         adapter.reset_signal_buffer()
         ttnn.synchronize_device(self.mesh)
 
-        # Replay one window at a time; after each, read the tiny halt scalar and branch. The
+        # Advance one window at a time; after each, read the tiny halt scalar and branch. The
         # window's LAST step index (0-indexed) is w_end - 1; halting there means w_end steps ran.
+        # LAZY capture: window w is recorded the first time it is reached (the capture executes it,
+        # so no separate replay); already-recorded windows replay cheaply.
         g = self.group_size
+        n_windows = (n_steps + g - 1) // g
         self.last_halt_trace = []
         halted = False
         steps_run = 0
-        for w, tid in enumerate(self.traces):
+        for w in range(n_windows):
             w_end = min((w + 1) * g, n_steps)
             if self.gumbel_mode == "materialized":
                 step = w_end - 1
@@ -1048,7 +1140,12 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
                 step = w_end - 1
                 if not (captured_this_block and step == 0):
                     self._refresh_chunked_gumbel_seed_for_step(step)
-            ttnn.execute_trace(self.mesh, tid, blocking=False)
+            if w >= len(self.traces):
+                # Lazy: window w not recorded yet. begin_trace_capture is RECORD-ONLY (it does not
+                # run the programs), so record it here, then fall through to execute_trace it — the
+                # buffers advance exactly as a replay, identical to the eager-capture path.
+                self.traces.append(self._capture_window(adapter, w * g, w_end))
+            ttnn.execute_trace(self.mesh, self.traces[w], blocking=False)
             ttnn.synchronize_device(self.mesh)
             steps_run = w_end
             mean_entropy, mismatch = read_halt_scalars(self.halt_bufs)

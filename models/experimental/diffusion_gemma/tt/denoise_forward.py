@@ -18,7 +18,10 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
+from models.experimental.diffusion_gemma.reference.attention_mask import (
+    build_canvas_denoise_mask,
+    build_canvas_reveal_denoise_mask,
+)
 from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
 from models.experimental.diffusion_gemma.tt.expert_operations import (
     shared_mlp_forward,
@@ -85,6 +88,57 @@ def build_device_canvas_denoise_mask(
         neg_inf=NEG,
         dtype=torch.float32,
     ).view(1, 1, canvas_len, prompt_len + canvas_len)
+    return ttnn.from_torch(
+        mask,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        mesh_mapper=_replicate_mapper(mesh_device),
+    )
+
+
+def reveal_mask_enabled() -> bool:
+    """True when the fixed-max prefix + reveal-mask capture-once path is opted in.
+
+    ``DG_DENOISE_REVEAL_MASK`` (default OFF). This is Phase-1 of the paged-prefix plan
+    (``doc/optimize_perf/paged_prefix_denoise_design.md``): the denoise prefix K/V is read
+    at a CONSTANT ``p_max`` span so the traced graph is shape-invariant across blocks
+    (capture-once/replay-many), and the growing committed prefix is exposed purely through
+    a persistent reveal mask that hides the uncommitted tail ``[prompt_len:p_max]``. Unlike
+    ``DG_DENOISE_FROZEN_PREFIX`` it is multi-block CORRECT (later blocks re-read the mutated
+    cache and attend all earlier-committed KV).
+    """
+    return os.environ.get("DG_DENOISE_REVEAL_MASK", "0").lower() in ("1", "true", "yes", "on")
+
+
+def build_device_canvas_reveal_mask(
+    mesh_device,
+    *,
+    prompt_len: int,
+    canvas_len: int,
+    p_max: int,
+    layer_type: str | None = None,
+    sliding_window: int | None = None,
+    enforce_sliding_window: bool = False,
+    dtype=ttnn.bfloat16,
+):
+    """Build a constant-shape ``[1, 1, C, p_max + C]`` reveal mask on device (Phase 1).
+
+    Content reveals committed prefix ``[0:prompt_len]`` + all canvas, hides the uncommitted
+    tail ``[prompt_len:p_max]`` with ``NEG``. ``enforce_sliding_window=False`` matches today's
+    maskless all-attend production path (bit-exact to the recapture golden on the committed
+    span); ``True`` additionally applies HF's bidirectional window (Phase 2, decision change).
+    """
+    mask = build_canvas_reveal_denoise_mask(
+        prompt_len,
+        canvas_len,
+        p_max,
+        layer_type=layer_type,
+        sliding_window=sliding_window,
+        enforce_sliding_window=enforce_sliding_window,
+        neg_inf=NEG,
+        dtype=torch.float32,
+    ).view(1, 1, canvas_len, p_max + canvas_len)
     return ttnn.from_torch(
         mask,
         device=mesh_device,
@@ -500,6 +554,7 @@ def denoise_hidden_forward(
     use_explicit_sliding_mask: bool = False,
     mask_builder=build_device_canvas_denoise_mask,
     canvas_rope_provider=None,
+    reveal_mask_provider=None,
 ):
     """Run the DiffusionGemma denoise backbone to final hidden states.
 
@@ -522,14 +577,19 @@ def denoise_hidden_forward(
     hidden_states = canvas_hidden
     q_rope_offset = prompt_len if q_rope_offset is None else q_rope_offset
     for layer_idx in range(len(tt_model.layers)):
-        attn_mask = _build_denoise_attn_mask_for_layer(
-            tt_model,
-            layer_idx,
-            prompt_len=prompt_len,
-            canvas_len=hidden_states.shape[-2],
-            use_explicit_sliding_mask=use_explicit_sliding_mask,
-            mask_builder=mask_builder,
-        )
+        if reveal_mask_provider is not None:
+            # Paged-prefix Phase 1: persistent per-block reveal mask (hides the uncommitted
+            # tail of the fixed p_max prefix read). Owned by the adapter — NOT deallocated here.
+            attn_mask = reveal_mask_provider(layer_idx)
+        else:
+            attn_mask = _build_denoise_attn_mask_for_layer(
+                tt_model,
+                layer_idx,
+                prompt_len=prompt_len,
+                canvas_len=hidden_states.shape[-2],
+                use_explicit_sliding_mask=use_explicit_sliding_mask,
+                mask_builder=mask_builder,
+            )
         prompt_source = (
             prompt_source_fn(layer_idx) if prompt_source_fn is not None else prompt_hidden_by_layer[layer_idx]
         )
@@ -546,7 +606,8 @@ def denoise_hidden_forward(
         finally:
             if prompt_source_fn is not None:
                 _deallocate_prompt_source(prompt_source)
-            _deallocate_optional_tensor(attn_mask)
+            if reveal_mask_provider is None:
+                _deallocate_optional_tensor(attn_mask)
     final_hidden = _chunked_norm_forward(tt_model.norm, hidden_states)
     hidden_states.deallocate(True)
     return final_hidden
@@ -561,6 +622,7 @@ def denoise_logits_forward(
     prompt_len: int | None = None,
     use_explicit_sliding_mask: bool = False,
     canvas_rope_provider=None,
+    reveal_mask_provider=None,
     return_sharded: bool = False,
 ):
     """Run a short-prompt DiffusionGemma denoise logits forward.
@@ -579,6 +641,7 @@ def denoise_logits_forward(
         prompt_len=prompt_len,
         use_explicit_sliding_mask=use_explicit_sliding_mask,
         canvas_rope_provider=canvas_rope_provider,
+        reveal_mask_provider=reveal_mask_provider,
     )
     return tt_model._apply_lm_head(hidden_states, is_decode=False, return_sharded=return_sharded)
 
@@ -689,6 +752,13 @@ def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int 
     if seq_len_start % ttnn.TILE_SIZE != 0 or seq_len_end % ttnn.TILE_SIZE != 0:
         raise ValueError("KV cache slice bounds must be multiples of 32")
     k_cache, v_cache = kv_cache
+    # A slice spanning the ENTIRE cache seq dim (the reveal-mask fixed p_max == cache_len read)
+    # ALIASES the cache buffer, and denoise_attention deallocates the returned prefix K/V — which
+    # would free the model-owned cache ("Input Tensor is not allocated" on the next block). For the
+    # full-span read, clone the cache DIRECTLY into a caller-owned copy (never slice/deallocate the
+    # alias). Partial slices already produce an independent copy, so they take the cheap path.
+    if seq_len_start == 0 and seq_len_end == int(k_cache.shape[2]):
+        return (ttnn.clone(k_cache), ttnn.clone(v_cache))
     starts = [0, 0, seq_len_start, 0]
     k_ends = [k_cache.shape[0], k_cache.shape[1], seq_len_end, k_cache.shape[3]]
     v_ends = [v_cache.shape[0], v_cache.shape[1], seq_len_end, v_cache.shape[3]]
@@ -729,11 +799,25 @@ class MutablePrefixKVReader:
         self.prompt_len = int(prompt_len)
         self.seq_len_start = int(seq_len_start)
         self.read_fn = read_fn
+        # Paged-prefix Phase 1 (reveal-mask): a CONSTANT read span decouples the traced
+        # slice shape from the growing committed ``prompt_len``. When set, ``__call__`` always
+        # reads ``read_span`` rows (so the trace never invalidates on prefix growth), and the
+        # committed ``prompt_len`` only drives the reveal mask content + canvas RoPE anchor.
+        self.read_span = None
+
+    def set_read_span(self, p_max: int) -> None:
+        p_max = int(p_max)
+        if p_max % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"reveal-mask read span must be tile aligned, got {p_max}")
+        if p_max < self.prompt_len:
+            raise ValueError(f"read span {p_max} < committed prompt_len {self.prompt_len}")
+        self.read_span = p_max
 
     def __call__(self, layer_idx: int):
+        n = self.read_span if self.read_span is not None else self.prompt_len
         return self.read_fn(
             self.tt_model,
-            prompt_len=self.prompt_len,
+            prompt_len=n,
             seq_len_start=self.seq_len_start,
             layer_idx=layer_idx,
         )
@@ -744,6 +828,8 @@ class MutablePrefixKVReader:
             raise ValueError(f"frozen prefix cannot shrink: {self.prompt_len} -> {prompt_len}")
         if prompt_len % ttnn.TILE_SIZE != 0:
             raise ValueError(f"frozen prefix length must be tile aligned, got {prompt_len}")
+        if self.read_span is not None and prompt_len > self.read_span:
+            raise ValueError(f"committed prompt_len {prompt_len} exceeds reveal read span {self.read_span}")
         self.prompt_len = prompt_len
 
 
@@ -875,6 +961,13 @@ class DenoiseLogitsAdapter:
         # Cross-block-trace-reusable canvas RoPE (constant-shape per-layer-type buffers).
         self.use_canvas_rope = False
         self._canvas_rope_bufs = {}
+        # Paged-prefix Phase 1 reveal mask (constant-shape [1,1,C,p_max+C] written input,
+        # content refreshed per block OUTSIDE capture to reveal committed prefix / hide tail).
+        self.use_reveal_mask = False
+        self._reveal_mask_buf = None
+        self._reveal_p_max = None
+        self._reveal_canvas_len = None
+        self._reveal_enforce_window = False
         # TP-sharded denoise terminal (DG_TERMINAL_SHARDED). Persistent constants allocated OUTSIDE
         # any trace by ``prepare_sharded_terminal``: per-device vocab offset + vocab-row-sharded
         # tied embedding table. Default off keeps the full-vocab replicated terminal.
@@ -1030,6 +1123,61 @@ class DenoiseLogitsAdapter:
             self._canvas_rope_bufs = {}
             self.use_canvas_rope = False
 
+    # --- Paged-prefix Phase 1 reveal mask (constant-shape written input) ------------
+    # A single persistent [1,1,C,p_max+C] additive mask shared by all 30 layers, allocated
+    # BEFORE begin_trace_capture and refreshed per block OUTSIDE capture. Phase 1 reveals the
+    # committed prefix [0:prompt_len] + all canvas (all-attend, matching today's maskless path)
+    # and hides the uncommitted tail [prompt_len:p_max] with NEG. Paired with a fixed p_max
+    # prefix read (MutablePrefixKVReader.set_read_span) so the traced graph is shape-invariant
+    # → capture-once/replay-many. See doc/optimize_perf/paged_prefix_denoise_design.md §1a/§5.
+
+    def _build_reveal_mask_device(self, prompt_len: int):
+        return build_device_canvas_reveal_mask(
+            self.tt_model.mesh_device,
+            prompt_len=prompt_len,
+            canvas_len=self._reveal_canvas_len,
+            p_max=self._reveal_p_max,
+            layer_type="full_attention",
+            enforce_sliding_window=self._reveal_enforce_window,
+        )
+
+    def prepare_reveal_mask_buffers(
+        self, *, canvas_len: int, p_max: int, prompt_len: int, enforce_window: bool = False
+    ):
+        """Preallocate the persistent reveal mask OUTSIDE any trace (session-8 rule)."""
+        if p_max % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"reveal p_max must be tile aligned, got {p_max}")
+        self._reveal_canvas_len = int(canvas_len)
+        self._reveal_p_max = int(p_max)
+        self._reveal_enforce_window = bool(enforce_window)
+        if self._reveal_mask_buf is not None:
+            self._reveal_mask_buf.deallocate(True)
+        self._reveal_mask_buf = self._build_reveal_mask_device(int(prompt_len))
+        self.use_reveal_mask = True
+
+    def update_reveal_mask_buffer(self, prompt_len: int):
+        """Refresh reveal mask CONTENT for a block's committed ``prompt_len`` (OUTSIDE trace)."""
+        if not self.use_reveal_mask:
+            return
+        if prompt_len % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"reveal prompt_len must be a 32-tile multiple, got {prompt_len}")
+        fresh = self._build_reveal_mask_device(int(prompt_len))
+        ttnn.copy(fresh, self._reveal_mask_buf)
+        fresh.deallocate(True)
+
+    def _reveal_mask_provider(self, layer_idx):
+        return self._reveal_mask_buf
+
+    def release_reveal_mask_buffers(self):
+        try:
+            if self._reveal_mask_buf is not None:
+                self._reveal_mask_buf.deallocate(True)
+        except BaseException as cleanup_error:
+            logger.error(f"failed to release reveal mask: {cleanup_error}")
+        finally:
+            self._reveal_mask_buf = None
+            self.use_reveal_mask = False
+
     # --- TP-sharded denoise terminal (DG_TERMINAL_SHARDED) ---------------------------
     #
     # Preallocate the sharded-terminal constants BEFORE ``begin_trace_capture`` (session-8 rule):
@@ -1162,6 +1310,7 @@ class DenoiseLogitsAdapter:
             q_rope_offset=self.q_rope_offset,
             prompt_len=self.prompt_len,
             canvas_rope_provider=self._canvas_rope_provider if self.use_canvas_rope else None,
+            reveal_mask_provider=self._reveal_mask_provider if self.use_reveal_mask else None,
             return_sharded=return_sharded,
         )
         if conditioned is not canvas_hidden:
@@ -1225,6 +1374,11 @@ class DenoiseLogitsAdapter:
         setter(next_pos)
         self.prompt_len = int(next_pos)
         self.q_rope_offset = int(next_pos)
+        # Reveal-mask capture-once: the read span stays fixed at p_max; growth is exposed by
+        # revealing the newly committed prefix in the persistent mask (refreshed OUTSIDE any
+        # trace, before the next block's replay). The controller demotes its recapture guard.
+        if getattr(self, "use_reveal_mask", False):
+            self.update_reveal_mask_buffer(int(next_pos))
         return True
 
     def reset(self):
@@ -1243,6 +1397,7 @@ class DenoiseLogitsAdapter:
                     except BaseException as cleanup_error:
                         logger.error(f"failed to release trace self-conditioning {name}: {cleanup_error}")
             self.release_canvas_rope_buffers()
+            self.release_reveal_mask_buffers()
             self.release_sharded_terminal()
         finally:
             self.prev_logits = None
