@@ -7,17 +7,34 @@
 
 namespace compute_kernel_lib {
 
-template <BroadcastDim Dim, uint32_t Cb, InputLifecycle Policy, UnaryBcastReconfig Reconfig, Dst DstSlot>
-struct UnaryBcast : InputStream<Cb, detail::InputSpecConfig::encode(input(Policy, OperandKind::Block))>, UnaryBcastTag {
+template <BroadcastDim Dim, uint32_t Cb, InputSpec Input, Dst DstSlot>
+struct UnaryBcast : InputStream<Cb, detail::InputSpecConfig::encode(Input)>, UnaryBcastTag {
+    static constexpr InputLifecycle Policy = Input.lifecycle;
+    static constexpr OperandKind Index = Input.index;
+    static constexpr TileOffset Offset = Input.offset;
+    using Base = InputStream<Cb, detail::InputSpecConfig::encode(Input)>;
+    using Base::tile_base;
+
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
+    static_assert(
+        is_legal_kind_lifecycle(Index, Policy), "UnaryBcast: input lifecycle and operand kind are incompatible");
+    static_assert(
+        detail::valid_policy_mode_v<Policy, Index>,
+        "UnaryBcast: Row and Col operand kinds require a non-streaming lifecycle");
+    static_assert(
+        Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
+        "UnaryBcast: TileOffset::Set requires a Bulk-family or CallerManaged lifecycle");
 
     static constexpr uint32_t dfb_a_id() { return Cb; }
     static constexpr InputLifecycle a_policy() { return Policy; }
     static constexpr bool is_upfront =
         is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
 
-    static constexpr uint32_t reconfig_srca_dfb = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
-    static constexpr uint32_t reconfig_srcb_dfb = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srca_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srcb_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
+
+    constexpr UnaryBcast() noexcept = default;
+    constexpr explicit UnaryBcast(uint32_t base) noexcept : Base(base) {}
 
     static ALWI void init() {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
@@ -49,26 +66,18 @@ struct UnaryBcast : InputStream<Cb, detail::InputSpecConfig::encode(input(Policy
 #endif
     }
 
-    ALWI void exec(uint32_t, uint32_t, uint32_t, uint32_t slot_offset) const {
+    ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        ::unary_bcast<bt>(Cb, 0, to_u32(DstSlot) + slot_offset);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<Index>(i_flat, ht, wt);
+        ::unary_bcast<bt>(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
-
-    ALWI void wait_per_row() const {}
-    ALWI void pop_per_row() const {}
 };
 
-template <
-    BroadcastDim Dim,
-    uint32_t CbIn,
-    uint32_t CbOut,
-    InputLifecycle Lifecycle,
-    OutputSpec Output,
-    UnaryBcastReconfig Reconfig>
+template <BroadcastDim Dim, uint32_t CbIn, uint32_t CbOut, InputSpec Input, OutputSpec Output>
 ALWI void unary_bcast(EltwiseShape shape) {
-    eltwise_chain(shape, UnaryBcast<Dim, CbIn, Lifecycle, Reconfig>{}, PackTile<CbOut, Output>{});
+    eltwise_chain(shape, UnaryBcast<Dim, CbIn, Input>{}, PackTile<CbOut, Output>{});
 }
 
 }  // namespace compute_kernel_lib

@@ -779,7 +779,6 @@ struct InputStream {
     constexpr explicit InputStream(uint32_t base) noexcept : tile_base(base) {}
 
     // Upfront (Bulk-family) window count: the index-mode window plus the runtime base.
-    // (UnaryBcast uses IndexMode=Block + Offset=Unset, which yields exactly Ht*Wt.)
     ALWI uint32_t window_count(uint32_t Ht, uint32_t Wt) const {
         return detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base);
     }

@@ -36,8 +36,7 @@ void kernel_main() {
         cb_b,
         compute_kernel_lib::BinaryFpuOp::Add,
         compute_kernel_lib::BroadcastDim::None,
-        compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Enabled),
+        compute_kernel_lib::input(),
         compute_kernel_lib::input(
             compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>;
     using SrcBOnly = compute_kernel_lib::BinaryFpu<
@@ -47,8 +46,7 @@ void kernel_main() {
         compute_kernel_lib::BroadcastDim::None,
         compute_kernel_lib::input(
             compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
-        compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Enabled)>;
+        compute_kernel_lib::input()>;
     static_assert(
         SrcAOnly::reconfig_srca_dfb == cb_a && SrcAOnly::reconfig_srcb_dfb == compute_kernel_lib::NO_PREV_DFB);
     static_assert(
