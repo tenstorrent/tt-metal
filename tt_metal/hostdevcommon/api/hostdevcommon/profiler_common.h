@@ -13,6 +13,28 @@
 // full; residual read via DRAM_AND_L1.
 #define PROFILER_OPT_DO_ACCUMULATE (1 << 4)
 
+// Structural zone id + profiler marker-word bit layout. Single source of truth, shared by the device
+// (kernel_profiler.hpp), the JIT build (build.cpp), and the host parser (profiler.cpp).
+//
+// One profiler marker word is 32 bits:
+//   [ valid : 1 (bit 31) | timer_id : TIMER_ID_BITS | timestamp_hi : TIMESTAMP_HI_BITS ]
+//   timer_id = [ zone id : ZONE_ID_BITS | packet type : PACKET_TYPE_BITS ]
+//   zone id  = [ file id : (ZONE_ID_BITS - LOCAL_BITS) | local index : LOCAL_BITS ]
+//
+// Zone ids are structural, not hashed, so (file, local) pairs are unique by construction. The id is
+// 18 bits, widened from 16 by borrowing 2 bits from timestamp_hi (12 -> 10); with LOCAL_BITS=6 that
+// is 4096 file ids x 64 zones/TU. timestamp_hi is then 10 bits, so device timestamps wrap after
+// ~2^42 cycles (~54 min at 1.35 GHz / ~73 min at 1.0 GHz) -- ample for a profiling capture.
+#define KERNEL_PROFILER_ZONE_ID_BITS 18
+#define KERNEL_PROFILER_LOCAL_BITS 6
+#define KERNEL_PROFILER_PACKET_TYPE_BITS 3
+#define KERNEL_PROFILER_TIMER_ID_BITS (KERNEL_PROFILER_ZONE_ID_BITS + KERNEL_PROFILER_PACKET_TYPE_BITS)
+#define KERNEL_PROFILER_TIMESTAMP_HI_BITS (31 - KERNEL_PROFILER_TIMER_ID_BITS)
+#define KERNEL_PROFILER_ZONE_ID_MASK ((1u << KERNEL_PROFILER_ZONE_ID_BITS) - 1u)
+#define KERNEL_PROFILER_TIMER_ID_MASK ((1u << KERNEL_PROFILER_TIMER_ID_BITS) - 1u)
+#define KERNEL_PROFILER_TIMESTAMP_HI_MASK ((1u << KERNEL_PROFILER_TIMESTAMP_HI_BITS) - 1u)
+#define KERNEL_PROFILER_FILE_ID_COUNT (1u << (KERNEL_PROFILER_ZONE_ID_BITS - KERNEL_PROFILER_LOCAL_BITS))
+
 namespace kernel_profiler {
 
 static constexpr int SUM_COUNT = 2;

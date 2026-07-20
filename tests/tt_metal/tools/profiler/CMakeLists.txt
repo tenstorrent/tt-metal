@@ -1,6 +1,7 @@
 set(PROFILER_TEST_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/test_full_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_timestamped_events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_zone_id_budget.cpp
 )
 
 foreach(TEST_SRC ${PROFILER_TEST_SRCS})
@@ -9,6 +10,11 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PRIVATE tt_metal)
+
+    # Reuse the shared precompiled header (heavy Metalium/STL includes) to cut clean-build time.
+    if(TARGET TT::CommonPCH)
+        target_precompile_headers(${TEST_TARGET} REUSE_FROM TT::CommonPCH)
+    endif()
 
     target_include_directories(
         ${TEST_TARGET}

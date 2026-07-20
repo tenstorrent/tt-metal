@@ -17,6 +17,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <unordered_map>
+
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #include <iostream>
 #include <iterator>
 #include <mutex>
@@ -84,6 +89,86 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     if (ec) {
         std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
     }
+}
+
+// Persistent, process-shared registry mapping a stable per-translation-unit key to a dense integer
+// "file id" used to build collision-free KERNEL_PROFILER structural zone ids. Stability matters: a
+// cached kernel keeps the id baked into its binary, so a freshly compiled TU must never be handed a
+// file id already in use elsewhere. The registry lives next to the JIT cache and is guarded by an OS
+// file lock for the whole read-modify-write, so parallel builds -- even across processes sharing the
+// cache -- assign disjoint ids. Best-effort: on any I/O failure it falls back to partition 0.
+uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const std::string& key) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lk(mtx);
+
+    // RAII exclusive lock held (and fd closed) for the whole read-modify-write, so parallel builds --
+    // even across processes sharing the cache -- assign disjoint ids. I/O/lock failure is a hard build
+    // error, never a silent (possibly colliding) fallback id.
+    struct RegistryLock {
+        int fd;
+        explicit RegistryLock(const std::string& path) : fd(::open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
+            TT_FATAL(fd >= 0, "Failed to open profiler file-id registry '{}': {}", path, std::strerror(errno));
+            if (::flock(fd, LOCK_EX) != 0) {
+                int err = errno;
+                ::close(fd);
+                TT_THROW("Failed to lock profiler file-id registry '{}': {}", path, std::strerror(err));
+            }
+        }
+        ~RegistryLock() {
+            ::flock(fd, LOCK_UN);
+            ::close(fd);
+        }
+    } registry_lock(registry_path);
+
+    // zone id = (file_id << KERNEL_PROFILER_LOCAL_BITS) | local, so file_id has this many values.
+    constexpr uint32_t max_file_id = KERNEL_PROFILER_FILE_ID_COUNT;
+    std::vector<bool> reserved(max_file_id, false);  // ids owned by a still-present translation unit
+
+    std::ifstream in(registry_path);
+    std::string line;
+    while (std::getline(in, line)) {
+        auto tab = line.rfind('\t');
+        if (tab == std::string::npos) {
+            continue;
+        }
+        const std::string entry_key = line.substr(0, tab);
+        uint32_t entry_id = 0;
+        try {
+            entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+        } catch (const std::exception&) {
+            continue;  // ignore malformed lines
+        }
+        if (entry_id >= max_file_id) {
+            continue;
+        }
+        if (entry_key == key) {
+            // This TU already has a stable id and is being (re)built now, so reuse it.
+            return entry_id;
+        }
+        // Reserve the id only while the owning TU's build directory is still cached; once that dir is
+        // evicted the binary (and its baked id) is gone, so the id can be reclaimed without a live
+        // collision. This bounds the id space against stale build keys / kernels / failed builds.
+        if (std::filesystem::exists(std::filesystem::path(entry_key).parent_path())) {
+            reserved[entry_id] = true;
+        }
+    }
+
+    uint32_t id = 0;
+    while (id < max_file_id && reserved[id]) {
+        ++id;
+    }
+    TT_FATAL(
+        id < max_file_id,
+        "Profiler file-id space ({} ids) is exhausted by still-present translation units; clear the "
+        "profiler cache to reclaim ids. Registry: {}",
+        max_file_id,
+        registry_path);
+
+    std::ofstream out(registry_path, std::ios::app);
+    out << key << '\t' << id << '\n';
+    out.flush();
+    TT_FATAL(out.good(), "Failed to persist profiler file-id registry entry to '{}'", registry_path);
+    return id;
 }
 
 }  // namespace
@@ -519,6 +604,23 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
 
+    // Give this translation unit a stable, globally-unique file id so KERNEL_PROFILER zone ids are
+    // (file_id << LOCAL_BITS) | local -- collision-free by construction (see kernel_profiler.hpp).
+    // Key it on the kernel's source identity + processor, NOT the per-build output path: every compile
+    // variant of a source (different shapes/dtypes/compile-time args) has identical zone source
+    // locations, so they must share one id. Keying per output path instead assigns a fresh id to every
+    // variant, which exhausts the id space on machines whose kernel cache accumulates thousands of
+    // variants (e.g. CI running many models). Firmware TUs (settings == null) fall back to the
+    // config-stable output path, which is already built once per config.
+    if (env_.get_rtoptions().get_profiler_enabled()) {
+        const std::string registry_path = env_.get_out_root_path() + ".profiler_zone_file_ids";
+        const std::string key = (settings != nullptr)
+                                    ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
+                                    : out_dir + this->objs_[src_index];
+        const uint32_t file_id = get_or_assign_profiler_file_id(registry_path, key);
+        defines += fmt::format("-DKERNEL_PROFILER_FILE_ID={} ", file_id);
+    }
+
     if (env_.get_rtoptions().get_build_map_enabled()) {
         cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
@@ -727,9 +829,46 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
             tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
-        auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
-        tt::jit_build::utils::run_command(
-            cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, env_.get_rtoptions().get_dump_build_commands());
+        // Read the zone metadata straight out of the linked ELF's .tt_zone_meta section (populated by
+        // RecordZoneMeta in kernel_profiler.hpp) instead of grepping the compiler logs, which keeps build
+        // logs clean. The section is a sequence of packed records -- a little-endian uint16 zone id
+        // followed by a NUL-terminated "name,file,line,KERNEL_PROFILER" string -- and is not loaded to the
+        // device. Each record is written to the log as "<id>\t<string>" so the host uses the device's
+        // resolved id directly rather than recomputing anything.
+        const std::string elf_path = out_dir + this->target_name_ + ".elf";
+        if (!std::filesystem::exists(elf_path)) {
+            return;
+        }
+        try {
+            ll_api::ElfFile elf;
+            elf.ReadImage(elf_path);
+            uint64_t section_vaddr = 0;
+            auto zone_meta = elf.GetSectionContents(".tt_zone_meta", section_vaddr);
+            if (zone_meta.empty()) {
+                return;
+            }
+            std::ofstream zone_log(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, std::ios::app);
+            const auto* cursor = reinterpret_cast<const unsigned char*>(zone_meta.data());
+            const auto* end = cursor + zone_meta.size();
+            while (end - cursor >= 5) {  // at least a 4-byte id + 1 string byte
+                uint32_t id = static_cast<uint32_t>(cursor[0]) | (static_cast<uint32_t>(cursor[1]) << 8) |
+                              (static_cast<uint32_t>(cursor[2]) << 16) | (static_cast<uint32_t>(cursor[3]) << 24);
+                const char* str = reinterpret_cast<const char*>(cursor + 4);
+                size_t len = ::strnlen(str, static_cast<size_t>(end - (cursor + 4)));
+                if (len == 0) {
+                    break;  // trailing ALIGN padding (zero bytes)
+                }
+                zone_log << id << '\t';
+                zone_log.write(str, static_cast<std::streamsize>(len));
+                zone_log << '\n';
+                // Each record is emitted 4-byte aligned (see RecordZoneMeta's aligned(4)); round the
+                // id(4) + string + NUL length up to the next 4-byte boundary to reach the next record.
+                size_t record_bytes = (4 + len + 1 + 3) & ~static_cast<size_t>(3);
+                cursor += record_bytes;
+            }
+        } catch (const std::exception& e) {
+            log_warning(tt::LogBuildKernels, "Failed to read .tt_zone_meta from '{}': {}", elf_path, e.what());
+        }
     }
 }
 

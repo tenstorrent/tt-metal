@@ -98,7 +98,7 @@ private:
     std::filesystem::path device_logs_output_dir;
 
     // Hash to zone source locations
-    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
+    std::unordered_map<uint32_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
     // Device-Core tracy context
     std::unordered_map<std::pair<ChipId, CoreCoord>, TracyTTCtx, pair_hash<ChipId, CoreCoord>> device_tracy_contexts;
@@ -335,7 +335,7 @@ public:
     void destroyTracyContexts();
 
     // Get marker details for the marker corresponding to the given timer id
-    tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
+    tracy::MarkerDetails getMarkerDetails(uint32_t timer_id) const;
 
     // Mark the beginning of a trace recording
     void markTraceBegin(uint32_t trace_id);

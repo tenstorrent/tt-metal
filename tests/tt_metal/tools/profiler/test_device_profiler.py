@@ -321,6 +321,43 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@pytest.mark.skip_post_commit
+def test_zone_id_budget():
+    # The binary asserts (a) a 120-zone-per-TU kernel compiles and profiles, and (b) a >128-zone-per-TU
+    # kernel fails to compile via the TT_ZONE_META static_assert. A zero exit code means both held.
+    # Then verify the structural zone-id invariants directly from the zone-locations log.
+    run_device_profiler_test(testName="build/test/tt_metal/tools/profiler/test_zone_id_budget", noPostProcess=True)
+
+    LOCAL_BITS = 6  # keep in sync with KERNEL_PROFILER_LOCAL_BITS in profiler_common.h
+    zone_log = PROFILER_LOGS_DIR / "new_zone_src_locations.log"
+    assert zone_log.exists(), f"zone source-location log not found: {zone_log}"
+
+    id_to_strings = {}  # zone id -> set of distinct source strings
+    ids_per_file = {}  # file_id -> set of zone ids
+    with open(zone_log) as f:
+        for line in f:
+            if "\t" not in line:
+                continue
+            id_str, src = line.rstrip("\n").split("\t", 1)
+            zid = int(id_str)
+            id_to_strings.setdefault(zid, set()).add(src)
+            ids_per_file.setdefault(zid >> LOCAL_BITS, set()).add(zid)
+
+    # Collision-free by construction: no id may map to two different source locations.
+    collisions = {zid: s for zid, s in id_to_strings.items() if len(s) > 1}
+    assert not collisions, f"zone id collisions detected: {collisions}"
+
+    # Cross-TU: the run spans multiple translation units (per-RISC firmware + the kernel), each its own
+    # file_id partition -- exercises structural ids across distinct TUs. The floor of 6 (>=5 Tensix
+    # firmware TUs + the kernel TU) is guaranteed on any arch; real runs typically span more.
+    assert len(ids_per_file) >= 6, f"expected zones from several translation units, got {len(ids_per_file)}"
+
+    # One TU (the zone_budget kernel) holds ~40 zones -- confirms high per-TU counts really work,
+    # not just that the run did not crash.
+    max_zones_in_one_tu = max(len(ids) for ids in ids_per_file.values())
+    assert max_zones_in_one_tu >= 40, f"expected a TU with >=40 zones, got max {max_zones_in_one_tu}"
+
+
 def wildcard_match(pattern, words):
     if not pattern.endswith("*"):
         return [word for word in words if pattern == word]
