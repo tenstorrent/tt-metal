@@ -275,6 +275,10 @@ In the reader kernel, we specify the DRAM buffer address generators for the inpu
                     noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
                     noc_async_read_barrier();
                     noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+                    // Drain the loop-back read (which sources from cb_pad_align) before the next
+                    // stick's read-in writes into cb_pad_align, or that read-in can land while this
+                    // read is still sourcing from it (WAR on the shared scratch).
+                    noc_async_read_barrier();
                 } else {
                     noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
                 }
