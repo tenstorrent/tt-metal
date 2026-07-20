@@ -21,7 +21,7 @@ So any legacy op that produces an *offset* base pointer is a porting considerati
 | **3** | Offset **borrowed-memory CB** (`address_offset`) | No — Python ops, out of current scope | framework note |
 | **4** | In-place op **`MeshTensor` offset trick** (`narrow`) | **No action** — ports correctly | none |
 
-> How ops are detected (grep signatures per type) lives in the **audit recipe**: the [Offset base pointers](../ai/audit/metal2.md#offset-base-pointers) gate flags these at audit time, using this document's per-op tables as its checked-in triage (a lookup + staleness check against current code). This document is the findings + per-op tables the recipe references.
+> How ops are detected (grep signatures per type) lives in the **audit recipe**: the [Offset base pointers](../ai/audit/metal2_audit.md#offset-base-pointers) gate flags these at audit time, using this document's per-op tables as its checked-in triage (a lookup + staleness check against current code). This document is the findings + per-op tables the recipe references.
 
 *Factory paths in Types 1–2 and 4 are relative to `ttnn/cpp/ttnn/operations/`; Type 3 paths are relative to `models/demos/deepseek_v3_b1/`. Arguments are named by their receiving kernel + role rather than a numeric slot, since roles survive edits (indices and line numbers do not).*
 

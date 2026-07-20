@@ -2,7 +2,7 @@
 
 **Author:** Audrey and Claude
 
-**Purpose:** Give an auditing Claude the live, per-factory porting-readiness data — Diego's "Operations analysis" sheet — plus how to fetch a fresh copy and how to read it. The [audit recipe](../ai/audit/metal2.md) references this doc when it needs the data.
+**Purpose:** Give an auditing Claude the live, per-factory porting-readiness data — Diego's "Operations analysis" sheet — plus how to fetch a fresh copy and how to read it. The [audit recipe](../ai/audit/metal2_audit.md) references this doc when it needs the data.
 
 > **Fetch this data yourself, in your main session, every run.** It is deliberately **not** checked into the repo — the sheet is edited continuously, so a committed copy goes stale fast. Re-download it **even if a `.csv` is already sitting in this folder**; a stale local copy is worse than none.
 
@@ -57,7 +57,7 @@ One row per **(op, DeviceOperation, ProgramFactory variant)** — an op with sev
 - **`Pybind descriptor (…)`** — pybinds factory / device-op internals (`create_descriptor`)?
 - **`Smuggled pointer (…)`** — an un-annotated pointer argument (a PD-migration bug); feeds `Is safe to port?`.
 - **`Is safe to port?`** — Diego's correctness call (`yes` / `no` / `warning` / blank): did the prior PD migration introduce a bug?
-- **`Is able to port?`** — the derived Metal-2.0 **gate** verdict. Its derivation is documented in the [audit's TTNN factory concept prerequisite](../ai/audit/metal2.md#ttnn-factory-concept-prerequisite).
+- **`Is able to port?`** — the derived Metal-2.0 **gate** verdict. Its derivation is documented in the [audit's TTNN factory concept prerequisite](../ai/audit/metal2_audit.md#ttnn-factory-concept-prerequisite).
 - **`TensorParameter relaxation`** — proposed relaxation, if any (e.g. `dynamic_tensor_shape`, `match_padded_shape_only`, `none`).
 - **`Op-owned tensors?`** / **`Secretly SPMD Workload?`** — feed the target concept and the `WorkloadDescriptor` escape respectively.
 - **`Factory definition path`** / **`Declared in`** — the source files, for the cross-check.
