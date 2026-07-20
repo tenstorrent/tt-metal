@@ -93,6 +93,15 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
         ttml_grad_raw = ttml_grads[ttml_name].float()
         ttml_grad = ttml_grad_raw.squeeze()
 
+        # Fused KV: the ttml kv_proj grad is [2*kv_out, hidden] (K rows then V
+        # rows). Both the HF k_proj and v_proj entries map to this same ttml grad,
+        # so select the matching half BEFORE shape-matching/repermute. K then goes
+        # through the normal repermute_proj below; V is used as-is.
+        if hf_name in inv_transforms and inv_transforms[hf_name][0] == "split_kv":
+            _, which, kv_out, _num_kv_heads = inv_transforms[hf_name]
+            if ttml_grad.shape[0] >= 2 * kv_out:
+                ttml_grad = ttml_grad[:kv_out] if which == "k" else ttml_grad[kv_out : 2 * kv_out]
+
         if hf_grad.shape != ttml_grad.shape:
             if hf_grad.dim() == 2 and ttml_grad.dim() == 2:
                 r = min(hf_grad.shape[0], ttml_grad.shape[0])
@@ -118,6 +127,13 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
                 ttml_grad = repermute_proj_rows(ttml_grad, num_heads=tr[1])
             elif tr[0] == "repermute_norm":
                 ttml_grad = repermute_norm_weights(ttml_grad)
+            elif tr[0] == "split_kv":
+                # The K half was carved out above; it still carries the RoPE
+                # row-permute (like q_proj/k_proj), so repermute it back to HF
+                # layout. The V half is used as-is (never permuted).
+                _, which, _kv_out, num_kv_heads = tr
+                if which == "k":
+                    ttml_grad = repermute_proj_rows(ttml_grad, num_heads=num_kv_heads)
 
         hf_flat = hf_grad.flatten()
         ttml_flat = ttml_grad.flatten()

@@ -137,12 +137,18 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
             "unpermute_proj",
             config.num_attention_heads,
         )
-        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/k_proj/weight"
+        # Fused KV: the single ttml kv_proj weight is built from the two HF weights
+        # k_proj and v_proj. The mapping key is the K weight; the "combine_kv"
+        # transform pulls v_proj from the state-dict and concatenates
+        # [unpermute_proj(k) ; v] on the row axis (K rows first, then V rows) to
+        # match the [K | V] output layout grouped_heads_creation expects. v_proj is
+        # NOT permuted (only K carries the RoPE-permute, mirroring q_proj/k_proj).
+        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
         transforms[f"{hp}.self_attn.k_proj.weight"] = (
-            "unpermute_proj",
+            "combine_kv",
             config.num_key_value_heads,
+            f"{hp}.self_attn.v_proj.weight",
         )
-        mapping[f"{hp}.self_attn.v_proj.weight"] = f"{tp}/self_attn/v_proj/weight"
         mapping[f"{hp}.self_attn.o_proj.weight"] = f"{tp}/self_attn/o_proj/weight"
 
         if config.attention_bias:
@@ -151,12 +157,12 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
                 "unpermute_proj",
                 config.num_attention_heads,
             )
-            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/k_proj/bias"
+            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/kv_proj/bias"
             transforms[f"{hp}.self_attn.k_proj.bias"] = (
-                "unpermute_proj",
+                "combine_kv",
                 config.num_key_value_heads,
+                f"{hp}.self_attn.v_proj.bias",
             )
-            mapping[f"{hp}.self_attn.v_proj.bias"] = f"{tp}/self_attn/v_proj/bias"
             mapping[f"{hp}.self_attn.o_proj.bias"] = f"{tp}/self_attn/o_proj/bias"
 
         mapping[f"{hp}.self_attn.q_norm.weight"] = f"{tp}/self_attn/q_norm/weight"
@@ -306,6 +312,18 @@ def load_weights_from_hf(
                 weight = unpermute_proj_rows(weight, num_heads=tr[1])
             elif tr[0] == "unpermute_norm":
                 weight = unpermute_norm_weights(weight)
+            elif tr[0] == "combine_kv":
+                # tr = ("combine_kv", num_kv_heads, v_hf_name). Build the fused
+                # kv_proj weight: unpermute K (RoPE row-permute), leave V as-is,
+                # then concatenate [K ; V] on the row axis (dim 0) so the fused
+                # projection outputs K features first, then V. Matches Llama's
+                # try_combine_kv and grouped_heads_creation's midpoint split.
+                num_kv_heads, v_hf_name = tr[1], tr[2]
+                if v_hf_name not in hf_state_dict:
+                    return None
+                k_w = unpermute_proj_rows(weight, num_heads=num_kv_heads)
+                v_w = hf_state_dict[v_hf_name].float()
+                weight = torch.cat([k_w, v_w], dim=0)
 
         ttml_shape = ttml_shapes[ttml_name]
         if weight.dim() == 2:

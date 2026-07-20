@@ -117,25 +117,40 @@ def _build_grad_mapping_single(config, root_prefix, tie_word_embeddings):
     mapping = {}
     inv_transforms = {}
 
-    mapping["model.embed_tokens.weight"] = f"{root_prefix}/model/embed_tokens"
-    if not tie_word_embeddings:
-        mapping["lm_head.weight"] = f"{root_prefix}/lm_head_weight"
+    if tie_word_embeddings:
+        mapping["model.embed_tokens.weight"] = f"{root_prefix}/fc/weight"
+    else:
+        mapping["model.embed_tokens.weight"] = f"{root_prefix}/tok_emb/weight"
+        mapping["lm_head.weight"] = f"{root_prefix}/fc/weight"
 
     for i in range(config.num_hidden_layers):
         hp = f"model.layers.{i}"
-        tp = f"{root_prefix}/model/layers/{i}"
+        tp = f"{root_prefix}/blocks/{i}"
+
+        kv_out = config.num_key_value_heads * config.head_dim
 
         mapping[f"{hp}.self_attn.q_proj.weight"] = f"{tp}/self_attn/q_proj/weight"
         inv_transforms[f"{hp}.self_attn.q_proj.weight"] = (
             "repermute_proj",
             config.num_attention_heads,
         )
-        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/k_proj/weight"
+        # Fused KV: both HF k_proj and v_proj map to the single ttml kv_proj grad
+        # [2*kv_out, hidden] (K rows then V rows). split_kv selects the matching
+        # half; the K half is then re-permuted back to HF layout (V is not).
+        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
         inv_transforms[f"{hp}.self_attn.k_proj.weight"] = (
-            "repermute_proj",
+            "split_kv",
+            "k",
+            kv_out,
             config.num_key_value_heads,
         )
-        mapping[f"{hp}.self_attn.v_proj.weight"] = f"{tp}/self_attn/v_proj/weight"
+        mapping[f"{hp}.self_attn.v_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
+        inv_transforms[f"{hp}.self_attn.v_proj.weight"] = (
+            "split_kv",
+            "v",
+            kv_out,
+            config.num_key_value_heads,
+        )
         mapping[f"{hp}.self_attn.o_proj.weight"] = f"{tp}/self_attn/o_proj/weight"
 
         if config.attention_bias:
@@ -144,12 +159,20 @@ def _build_grad_mapping_single(config, root_prefix, tie_word_embeddings):
                 "repermute_proj",
                 config.num_attention_heads,
             )
-            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/k_proj/bias"
+            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/kv_proj/bias"
             inv_transforms[f"{hp}.self_attn.k_proj.bias"] = (
-                "repermute_proj",
+                "split_kv",
+                "k",
+                kv_out,
                 config.num_key_value_heads,
             )
-            mapping[f"{hp}.self_attn.v_proj.bias"] = f"{tp}/self_attn/v_proj/bias"
+            mapping[f"{hp}.self_attn.v_proj.bias"] = f"{tp}/self_attn/kv_proj/bias"
+            inv_transforms[f"{hp}.self_attn.v_proj.bias"] = (
+                "split_kv",
+                "v",
+                kv_out,
+                config.num_key_value_heads,
+            )
             mapping[f"{hp}.self_attn.o_proj.bias"] = f"{tp}/self_attn/o_proj/bias"
 
         mapping[f"{hp}.self_attn.q_norm.weight"] = f"{tp}/self_attn/q_norm/weight"
@@ -163,7 +186,7 @@ def _build_grad_mapping_single(config, root_prefix, tie_word_embeddings):
         mapping[f"{hp}.mlp.up_proj.weight"] = f"{tp}/mlp/up_proj/weight"
         mapping[f"{hp}.mlp.down_proj.weight"] = f"{tp}/mlp/down_proj/weight"
 
-    mapping["model.norm.weight"] = f"{root_prefix}/model/norm/weight"
+    mapping["model.norm.weight"] = f"{root_prefix}/ln_fc/weight"
     return mapping, inv_transforms, None
 
 
