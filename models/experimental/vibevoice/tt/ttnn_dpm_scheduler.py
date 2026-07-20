@@ -310,9 +310,16 @@ def sample_speech_latents(
     sample = initial_latent
     latent_shape = initial_latent.shape
 
+    # The CFG condition is step-INVARIANT (only the noisy latent + timestep change across the
+    # num_steps loop), so hoist the condition concat + its Linear projection OUT of the loop:
+    # computed once/frame instead of once/step.  Byte-identical (same ops on the same fixed inputs).
+    # Requires the head to expose project_condition/forward_pre_cond (TTDiffusionHead); a custom
+    # head_runner callable falls back to the original per-step full forward.
+    cond_combined = ttnn.concat([neg_condition_tt, condition_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    _use_precond = head_runner is diffusion_head and hasattr(diffusion_head, "forward_pre_cond")
+    cond_proj = diffusion_head.project_condition(cond_combined) if _use_precond else None
+
     for step_idx, t_val in enumerate(scheduler.timesteps):
-        # Batch condition for CFG: [2, 1, 1, hidden]
-        cond_combined = ttnn.concat([neg_condition_tt, condition_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Expand sample to CFG batch: [2, 1, 1, latent]
         sample_expanded = ttnn.concat([sample, sample], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -331,8 +338,11 @@ def sample_speech_latents(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Run diffusion head on CFG batch
-        eps_combined = head_runner(sample_expanded, t_tensor, cond_combined)
+        # Run diffusion head on CFG batch (hoisted cond_proj when using the TTDiffusionHead)
+        if _use_precond:
+            eps_combined = diffusion_head.forward_pre_cond(sample_expanded, t_tensor, cond_proj)
+        else:
+            eps_combined = head_runner(sample_expanded, t_tensor, cond_combined)
 
         # Split CFG outputs
         eps_uncond = ttnn.slice(eps_combined, [0, 0, 0, 0], [1, 1, 1, eps_combined.shape[-1]])

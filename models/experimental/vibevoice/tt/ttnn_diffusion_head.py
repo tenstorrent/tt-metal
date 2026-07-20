@@ -227,16 +227,17 @@ class TTDiffusionHead:
         )
         return out
 
-    def _head_layer(self, x: ttnn.Tensor, c: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
+    def _head_layer(self, x: ttnn.Tensor, sc: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
         """Single HeadLayer: adaLN + SwiGLU residual.
 
-        x: [B, T, 1, hidden]  or [B, 1, 1, hidden] for latent
-        c: [B, 1, 1, hidden]  conditioning
+        x:  [B, T, 1, hidden]  or [B, 1, 1, hidden] for latent
+        sc: [B, 1, 1, hidden]  = silu(conditioning), precomputed once per step (dedup) and shared
+            across all HeadLayers + FinalLayer (byte-identical to computing silu(c) per layer).
         """
         w = self.w
-        # adaLN_modulation(c) → [B, 1, 1, 3*hidden]
+        # adaLN_modulation(silu(c)) → [B, 1, 1, 3*hidden]
         modulation = ttnn.linear(
-            ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            sc,
             w.layer_adaLN_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -272,11 +273,13 @@ class TTDiffusionHead:
         out = ttnn.add(x, gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return out
 
-    def _final_layer(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
-        """FinalLayer: adaLN (shift/scale, no gate) + linear → latent_size."""
+    def _final_layer(self, x: ttnn.Tensor, sc: ttnn.Tensor) -> ttnn.Tensor:
+        """FinalLayer: adaLN (shift/scale, no gate) + linear → latent_size.
+
+        ``sc`` = silu(conditioning), shared with the HeadLayers (see _head_layer)."""
         w = self.w
         modulation = ttnn.linear(
-            ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            sc,
             w.final_adaLN_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -310,6 +313,59 @@ class TTDiffusionHead:
         )
         return out
 
+    def project_condition(self, condition: ttnn.Tensor) -> ttnn.Tensor:
+        """cond_proj = Linear(condition).  Split out of forward() so the DPM loop can hoist this
+        step-INVARIANT projection out of its per-step head calls (the condition is fixed for the
+        whole frame; only the noisy latent + timestep change per step).  Byte-identical: same op,
+        same input — computing it once vs per-step yields the identical tensor."""
+        return ttnn.linear(
+            condition,
+            self.w.cond_proj_w,
+            compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward_pre_cond(
+        self,
+        noisy_images: ttnn.Tensor,
+        timesteps: ttnn.Tensor,
+        cond_proj: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Head forward given the ALREADY-projected condition (cond_proj = project_condition(cond)).
+
+        Args:
+            noisy_images: [B, 1, 1, latent_size] bfloat16 TILE
+            timesteps:    [B, 1, 1, 1] bfloat16 scalar per batch
+            cond_proj:    [B, 1, 1, hidden_size]  = project_condition(condition)
+        """
+        w = self.w
+
+        # Project noisy latent to hidden_size
+        x = ttnn.linear(
+            noisy_images,
+            w.noisy_images_proj_w,
+            compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Timestep embedding
+        t_emb = self._timestep_embedder(timesteps)  # [B, 1, 1, hidden]
+
+        # Combine: c = cond_proj + t_emb
+        c = ttnn.add(cond_proj, t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # silu(c) is the adaLN input for every HeadLayer + FinalLayer — compute it ONCE per step and
+        # share (byte-identical to the per-layer silu, saves 4 redundant silus/step).
+        sc = ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # HeadLayers
+        num_layers = len(w.layer_adaLN_w)
+        for i in range(num_layers):
+            x = self._head_layer(x, sc, i)
+
+        # FinalLayer
+        x = self._final_layer(x, sc)
+        return x
+
     def forward(
         self,
         noisy_images: ttnn.Tensor,
@@ -325,38 +381,7 @@ class TTDiffusionHead:
         Returns:
             [B, 1, 1, latent_size]
         """
-        w = self.w
-
-        # Project noisy latent to hidden_size
-        x = ttnn.linear(
-            noisy_images,
-            w.noisy_images_proj_w,
-            compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Timestep embedding
-        t_emb = self._timestep_embedder(timesteps)  # [B, 1, 1, hidden]
-
-        # Project condition
-        cond_proj = ttnn.linear(
-            condition,
-            w.cond_proj_w,
-            compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Combine: c = cond_proj + t_emb
-        c = ttnn.add(cond_proj, t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # HeadLayers
-        num_layers = len(w.layer_adaLN_w)
-        for i in range(num_layers):
-            x = self._head_layer(x, c, i)
-
-        # FinalLayer
-        x = self._final_layer(x, c)
-        return x
+        return self.forward_pre_cond(noisy_images, timesteps, self.project_condition(condition))
 
     def __call__(
         self,
