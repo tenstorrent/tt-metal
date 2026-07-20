@@ -65,7 +65,7 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, work through the audit in eleven subjects. The three **prerequisite gates** run first — a failed gate means no port: **[Device 2.0 prerequisite](#device-20-prerequisite)**, **[Feature compatibility](#feature-compatibility)**, and **[TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite)**. The remaining subjects gather the porter's working detail: **[TTNN porting shape](#ttnn-porting-shape)**, **[TensorParameter relaxations](#tensorparameter-relaxations)**, **[TensorParameter analysis](#tensorparameter-analysis)**, **[TensorAccessor 3rd argument](#tensoraccessor-3rd-argument)**, **[CB endpoints](#cb-endpoints)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[RTA varargs](#rta-varargs)**, and **[Incidental anomalies](#incidental-anomalies)**. Each subject's checks have three possible outcomes:
+For the op in scope, work through the audit in twelve subjects. The three **prerequisite gates** run first — a failed gate means no port: **[Device 2.0 prerequisite](#device-20-prerequisite)**, **[Feature compatibility](#feature-compatibility)**, and **[TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite)**. The remaining subjects gather the porter's working detail (two of them — **Offset base pointers** and **TensorAccessor 3rd argument** — can also GATE): **[TTNN porting shape](#ttnn-porting-shape)**, **[TensorParameter relaxations](#tensorparameter-relaxations)**, **[Offset base pointers](#offset-base-pointers)**, **[TensorParameter analysis](#tensorparameter-analysis)**, **[TensorAccessor 3rd argument](#tensoraccessor-3rd-argument)**, **[CB endpoints](#cb-endpoints)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[RTA varargs](#rta-varargs)**, and **[Incidental anomalies](#incidental-anomalies)**. Each subject's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — a *near-pass*: the check would clear but for a small, well-defined prerequisite the porter must resolve **first** (today, only isolated Device 2.0 holdovers — see that subject). It does not block feasibility — the brief still issues and no re-audit is needed — but the prerequisite is flagged prominently as a must-clear-first blocker. Yellow is **not** a judgment call handed back to the user.
@@ -89,6 +89,7 @@ For the op in scope, work through the audit in eleven subjects. The three **prer
 | TTNN factory concept — op not on the supported whitelist | **GATE** | brief: cleared/blocked · team: detail → TTNN / PD-migration team |
 | TTNN porting shape (target factory concept) | **FYI-P** | brief (TTNN factory analysis section) + team |
 | TensorParameter relaxations (from the readiness sheet; auditor confirms) | **PORT WORK** | brief (Construct) + team |
+| Offset base pointer (host-folded offset — raw arg or accessor-fed) | **GATE** | brief: cleared/blocked · team: detail → the ops team (Type 1 routine · Type 2 design-discussion, flag early) |
 | TensorParameter analysis — Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge) | **PORT WORK** | brief (Construct) + team |
 | TensorAccessor 3rd argument — page-size arg (Class 1/2 drop) | **PORT WORK** | brief (Construct) + team |
 | TensorAccessor 3rd argument — wrong/inexpressible page size (Class 3/4/Special) | **GATE** | brief: cleared/blocked · team: detail → the ops team |
@@ -208,9 +209,55 @@ The sheet's `TensorParameter relaxation` column proposes, per factory, a relaxat
 
 **Finding role: PORT WORK** (with a mismatch flagged to the ops team); the relaxation-candidate note is **FYI-U**.
 
+### Offset base pointers
+
+Metal 2.0 hands a kernel only the **base address** of a bound memory object — via a `TensorBinding` (the base rides a CRTA; the kernel rebuilds addresses through a `TensorAccessor` whose args the framework auto-builds from that base) or a DFB `borrowed_from` a `TensorParameter` (base only). There is **no mechanism to deliver a non-base pointer** — an interior address, a `base + offset`, or a base the framework can't regenerate. So a legacy op that folds an offset into a device pointer *before* it enters a kernel arg hits a **porting wall**: binding the tensor recovers the base but loses the offset. Splitting that offset back out — passing base + offset as separate args and adding them in the kernel — is a **semantic change** (new arg, kernel-side arithmetic, a possible minor perf shift), off the porter's [kernel-side whitelist](../port/metal2.md#kernel-side-whitelist) (a pure syntax swap). So where a fold is present it **GATEs the port**, and the **ops team** clears it first, on their own track — never in the port diff. The affected ops are few.
+
+**Run this before [TensorParameter analysis](#tensorparameter-analysis): same scan, one question that comes first.** Both subjects inventory the op's `buffer()->address()` RTAs. TensorParameter analysis treats each as a clean base and classifies it Case 1 (fed to a `TensorAccessor`) or Case 2 (raw pointer) — both port work. This subject asks the question that has to precede that: is the address a clean base, or `base + offset`? An offset-bearing address is **this gate**, not a portable Case 1/2 — fork it out here, so TensorParameter analysis only ever sees clean bases. (Classify an offset base as Case 1/2 and the offset silently vanishes — the ported kernel mis-addresses, with nothing to flag it.)
+
+**The checked-in triage is a prior, not an authority — your own scan is the source of truth.** The triage doc [`../analyses/2026-07-19_offset_base_pointers.md`](../../analyses/2026-07-19_offset_base_pointers.md) carries op→type tables with each offending arg named by **kernel + role** (`reader RTA — src_bank_addr`), not line number — a shortcut layered on top of the recognition scan below, not a substitute for it. This is a **different contract from the [readiness sheet](#ttnn-factory-concept-prerequisite)**: the sheet is maintained and authoritative, so a disagreement means *the sheet is broken* (stop and escalate); this doc is **dated and not kept current**, so a disagreement means *the doc is stale* — trust your scan. Two things drift after a dated analysis, in opposite directions: the ops team may have **fixed** a catalogued op (→ now GREEN), and an op author may have **introduced a new fold the doc never saw** (→ yours to catch). So run the recognition scan on **every** address RTA, and use the doc to accelerate and cross-check it — a strong prior on the listed ops, a backstop that flags a fold you missed. **Never let "not in the tables" stand in for "scanned and clean."** The scan is nearly free here: you are already resolving every address RTA for [TensorParameter analysis](#tensorparameter-analysis); the only added question is whether an offset is folded in.
+
+**The four types.** Every non-base pointer falls into one of four types — two gate, one is covered elsewhere, one is a non-issue:
+
+| Type | Source | Disposition | Role |
+|---|---|---|---|
+| **1 — raw offset arg** | host folds `base + offset` into an RTA; kernel uses it **raw** as a NoC address | ops team splits it — pass base + offset as *separate* args, add in the kernel (mechanical, routine) | **GATE** → ops team |
+| **2 — accessor-fed offset arg** | same host fold, but the offset address is fed to a **`TensorAccessor`** as its base | ops team resolves it — **not mechanical**; needs design discussion (RM-path rejigger, or a tensor-view feature) | **GATE** → ops team **+ framework/Audrey, flag early** |
+| **3 — borrowed-CB `address_offset`** | a CB borrowed at a non-base offset (`address_offset`) | **already gated** by the [`address_offset` entry in Appendix A](#appendix-a-metal-20-feature-compatibility); DeepSeek-Python-only, out of C++ scope | (covered there — no separate gate) |
+| **4 — `narrow` MeshTensor trick** | `ttnn::narrow`'s interior-base sub-tensor view (`MeshBuffer::create(…, parent_base + offset)`) | **ports as-is** — interior base delivered verbatim, re-emitted each enqueue (cache-safe), size accounting narrowed; correct provided the narrowed `TensorSpec` matches, which `ValidateTensorArgs` enforces | **not a gate — do not flag** |
+
+**Recognition.** You are already scanning address RTAs for [TensorParameter analysis](#tensorparameter-analysis); the extra question here is whether an offset is folded into the base. Resolve each address RTA to its host computation (trace the RTA/CRTA back to the factory, following any local variable a few lines away):
+
+- **Type 1** — `…->address()` with host arithmetic folded in (`buffer()->address() + <offset expr>`), consumed on-device **directly** as a NoC address (the `.addr` of `noc_async_read`/`noc_async_write`), never through a `TensorAccessor`.
+- **Type 2** — the same `…->address() + <offset>` fold, but the offset address is fed to a `TensorAccessor` as its **base** (`TensorAccessor(args, that_addr, …)`). The offset *is* the accessor's base — **not** a relocatable trailing `+` — so the Type-1 fix doesn't apply, and Metal 2.0's implicitly-constructed accessor leaves no seam to hand it an offset base (why it gates — see Routing).
+- **Type 3** — `.address_offset` non-zero, `set_address_offset`, the 4-arg `UpdateDynamicCircularBufferAddress`, or `cb_descriptor_from_sharded_tensor(…, address_offset, …)`. Recognized and gated by [Appendix A](#appendix-a-metal-20-feature-compatibility); no C++ op in scope passes a non-zero offset.
+- **Type 4** — `ttnn::narrow`, or a `MeshBuffer::create(…, parent_base + offset)` interior-base view. **Not a gate** — see the table.
+
+In every catalogued Type-1/2 op the offset is deterministic from cache-miss inputs (shard / bank / head geometry), so the fold is a real addressing pattern, not a one-off constant.
+
+**Reconcile each RTA against the doc — four outcomes.** For every address RTA you resolved, cross the *fold?* answer with whether the op is in the tables:
+
+- **Fold present, op in the tables** → confirmed; gate per the table (Type 1/2).
+- **Fold present, op _not_ in the tables** → a fold introduced since the analysis; classify it by the recognition model above and gate it (Type 1 raw / Type 2 accessor-fed). **Do not wave it through for being unlisted** — this is the case a doc-anchored lookup would silently miss.
+- **No fold, op in the tables** → the doc is stale: the ops team split the offset out (a bare `->address()` base + a *separate* scalar offset arg, added in the kernel). **GREEN** — the op drops to ordinary [TensorParameter analysis](#tensorparameter-analysis) port work (Case 1/2 on the now-clean base). *(Not hypothetical: `roll`'s own DRAM_RM mode already passes base + offset separately, in the same file as its Type-1 DRAM_TILE mode.)*
+- **No fold, op not in the tables** → clean; hand the RTA to TensorParameter analysis.
+
+If you can't resolve whether an offset is folded in, **don't guess** — flag it (`file:line`) for the triage-doc owner and gate the site conservatively.
+
+**Routing.** A Type-1/2 gate routes to the **ops team** to refactor the op *before* the port — the fix is theirs, not the porter's:
+
+- **Type 1** → ops team, **mechanical** arg-split (routine). Record the op, the arg by kernel + role, and the offset expression.
+- **Type 2** → ops team **and** framework/Audrey, **flag early**. The difficulty is structural: in legacy the op assembles the `TensorAccessorArgs` and passes the base pointer explicitly, so it can hand over `base + offset` as the base; Metal 2.0 builds the accessor straight from the `tensor::name` binding, which rolls the (auto-built) args and the base-only address together implicitly — no seam for an offset base. The resolution needs design discussion (the affected variants are all row-major): the likely-but-unsettled shape is a normal `TensorAccessor` on the clean base plus kernel-side pointer manipulation (a base-binding + kernel-side offset, at a possible perf cost), weighed against a first-class tensor-view binding. Surface it prominently, not as a mechanical porter task.
+
+**Code-path scope — the gate is factory-scoped.** The wall is a **row-major-layout** phenomenon: the *tiled* variants of the same ops (`slice` / `padded_slice` / `slice_write`) pass a clean tile-index scalar and are unaffected. So a slice-family RED applies [Code-path scope](#output-the-two-documents) — RED the RM factory and name the tiled factories as a clean subset (`RED at op level; subset <tiled factories> is clear`).
+
+**Finding role: GATE** (Type 1, Type 2). On a clean scan — no offset fold, or every fold already split out — the porter brief carries a one-line "cleared." On a Type-1/2 hit there is no brief for the affected factory: record the op, the arg (kernel + role), the offset expression, and the route (ops team; Type 2 also framework/Audrey). Type 3 belongs to Appendix A; Type 4 ports as-is.
+
 ### TensorParameter analysis
 
 Every tensor a kernel reads must reach Metal 2.0 through the typed binding channel (`TensorParameter` / `TensorBinding`). This subject inventories, **per binding**, how the legacy op accesses each tensor and classifies the port work into one of two cases. Both cases are **PORT WORK** — the porter acts on them during the port; neither gates.
+
+**Clean bases only — offset-bearing addresses are gated upstream.** An address RTA with a host-folded offset (`buffer()->address() + <offset>`) is **not** a portable Case 1/2 — it is the [Offset base pointers](#offset-base-pointers) gate, resolved *before* this subject. Classify only **clean-base** address RTAs here; a Case-1/Case-2 verdict on an offset-bearing base would silently drop the offset.
 
 **Why this matters.** The legacy hazard is a tensor base address that reaches the kernel through an RTA/CRTA. Under TTNN's fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched — so a buffer address routed through an RTA stays at whatever value the cache-populating call wrote, and on later cache hits with new tensor storage of the same shape the kernel reads the *original* buffer. No assertion fires; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*); the fast-path change made it silently wrong. The port replaces that RTA-smuggled address with a typed `TensorParameter` binding (which *does* refresh) — regardless of what the kernel then does with the base pointer (the two cases below), and including kernels that use no `TensorAccessor` at all (older addr-gen idioms, hand-rolled NoC walks).
 
@@ -260,7 +307,7 @@ For each `TensorParameter`, cross-check: does the same buffer also appear in an 
 
 `TensorAccessor`'s constructor takes an **optional** third argument — an explicit page size (`TensorAccessor(args, base_addr, page_size)`). Most accessors omit it and only a handful of ops set it, so this subject fires rarely. When it *is* present, deciding what the port does with it is **not** the mechanical drop it looks like — a subtlety (below) tripped up the first pass through these ops.
 
-**Lean on the checked-in triage, the way you lean on the readiness sheet.** The per-op classification is already done and checked in — [`../analyses/2026-07-06_tensor_accessor_3rd_arg_triage.md`](../../analyses/2026-07-06_tensor_accessor_3rd_arg_triage.md) carries an op→class lookup table. As with the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite), this subject is a **lookup plus a lightweight staleness check, not a re-derivation**: find your op's row in that table, then confirm the classification still holds against the current code (the analysis is dated — ops get fixed or refactored after it). Do **not** re-derive from scratch. The model below is what you need to *read* the table, run the staleness check, and classify an accessor the table doesn't list (rare).
+**The checked-in triage is a prior, not an authority — your own read is the source of truth.** The triage doc [`../analyses/2026-07-06_tensor_accessor_3rd_arg_triage.md`](../../analyses/2026-07-06_tensor_accessor_3rd_arg_triage.md) carries an op→class lookup table — a shortcut layered on the classification model below, not a substitute for it. This is a **different contract from the [readiness sheet](#ttnn-factory-concept-prerequisite)**: the sheet is maintained and authoritative, so a disagreement means *the sheet is broken* (stop and escalate); this doc is **dated and not kept current**, so a disagreement means *the doc is stale* — trust your read. Two things drift after a dated analysis: the ops team may have **fixed** a catalogued site (value corrected or accessor refactored → the class changes), and an op author may have **added a new 3rd-arg site** the doc never saw. A new site can't hide from you — a 3rd argument is a syntactic signal you scan for regardless — but you must then **classify it yourself** (the two questions below are complete for that), not assume an unlisted site is benign. So scan every accessor that passes a 3rd arg, and use the doc to accelerate and cross-check: a strong prior on the listed ops, a backstop for a site you under-classified. **Never let "not in the table" stand in for "classified Class 2."**
 
 **The load-bearing subtlety: the 3rd arg means different things for sharded vs. interleaved.** The two `TensorAccessor` specializations interpret the page-size argument differently, so you **cannot judge the value until you know which specialization the accessor is**:
 
@@ -279,12 +326,12 @@ Metal 2.0 supplies the `aligned_page_size` implicitly and provides **no explicit
 | **4 — Live bug** | a **wrong-magnitude** (or sharded-verbatim-wrong) value that mis-addresses **in the default config** | — (blocked) | **GATE** — the ops team analyzes and fixes it first |
 | **S — Special** | a manual override the binding model **cannot express** — a sharded raw-pack page, or a sub-page base offset | stays on manual addressing | **GATE** — the ops team ports it by hand |
 
-**The staleness check** (also how to classify an accessor the table doesn't list): resolve the two questions the classification hinges on and confirm they still match the table's verdict.
+**The two questions that classify any site** (in the table or not): resolve these two and they place the accessor in the taxonomy above. For a listed op they confirm its row — or override it, when the op was fixed or refactored after the analysis; for an unlisted one they *are* the classification, no table needed.
 
 1. **Sharded or interleaved?** (`src_args.is_sharded`, or trace the tensor's memory config.) This decides whether realignment is in play at all.
 2. **Correct or wrong magnitude?** Resolve the expression to a host value (trace the CTA/RTA back to the factory) and compare to the true logical page (`buffer->page_size()`): `tt::tile_size` / `get_tile_size(cb)`, `buffer->page_size()`, and `aligned_page_size()` are correct magnitude; `element_size()*1024` (drops the block-float exponent — bf8 gives 1024, not 1088), a stale hardcoded constant, or a sub-page fragment are wrong magnitude. Evaluate alignment on **Blackhole/Quasar DRAM (64)** — the strictest, and this hardware's target.
 
-If your op isn't in the table, or the code no longer matches its row (the accessor changed sharding, the op was already fixed on `main`, the value moved), treat it like a broken readiness-sheet row: **don't guess** — flag it (`file:line`) for the triage-doc owner to re-vet, and gate the affected site if the mismatch could be a wrong-magnitude value.
+If your op isn't in the table, or the code no longer matches its row (the accessor changed sharding, the op was fixed on `main`, the value moved), **classify it yourself from the two questions above** — that's what they're for; the table's silence or staleness doesn't block you. Escalate only on genuine ambiguity: if you can't resolve sharding or magnitude, **don't guess** — flag it (`file:line`) for the triage-doc owner and gate the site conservatively (a possibly-wrong-magnitude value gates).
 
 Divergence from a clean drop is rare — across all current ops the triage found just one latent-bug op and a couple of Special cases — so the overwhelmingly common outcome is Class 2, a clean mechanical drop. But **do not port a divergent site silently**: Classes 3/4/S each block the port until the owning team acts.
 
@@ -423,7 +470,7 @@ If the command prints nothing, the docs aren't from a tracked doc-branch checkou
 
 **In chat, surface only the Result line plus the file path(s)** so the user can open the files when ready. Do not paste a full report inline — an audit of any non-trivial op runs to dozens or hundreds of lines, and chat-scrollback isn't the right home for it. Markdown formatting in the files is required, not optional: the headers, tables, and inline-`code` spans are what make a sizeable report skim-friendly.
 
-**Reassuring framing for the human reader.** A RED gates *this specific port attempt* but is **not** a permanent blocker — most REDs mean "Metal 2.0 hasn't implemented this yet," and the port becomes possible once the feature lands; a few (today: just `address_offset`) need a runtime-team consultation about a redesigned API. Surface the future path explicitly for every RED, so a colleague reads the path forward, not just the gate. In particular, a **TTNN-factory-concept RED is the expected outcome** for any op still on the legacy imperative API (its concept isn't `descriptor`) — not an alarm — and the port unblocks once that op's `ProgramDescriptor` migration lands.
+**Reassuring framing for the human reader.** A RED gates *this specific port attempt* but is **not** a permanent blocker — most REDs mean "Metal 2.0 hasn't implemented this yet," and the port becomes possible once the feature lands; a few need a different path — `address_offset` needs a runtime-team consultation about a redesigned API, and an **offset base pointer** (raw or accessor-fed) needs a small ops-team refactor to split the offset out of the base before porting. Surface the future path explicitly for every RED, so a colleague reads the path forward, not just the gate. In particular, a **TTNN-factory-concept RED is the expected outcome** for any op still on the legacy imperative API (its concept isn't `descriptor`) — not an alarm — and the port unblocks once that op's `ProgramDescriptor` migration lands.
 
 **Code-path scope.** Blockers are often confined to specific code paths (e.g. a single factory's `if (use_width_sharding)` branch). When so, identify clean vs. blocked paths explicitly and offer a scoped-subset port — "interleaved-only paths, omitting the sharded path." A partial port that delivers value now may beat waiting for the full gate to clear; reflect it in the Result (`RED at op level; subset <X> is clear`). **If no clean path exists — the blocking shape is unconditional/structural, not one branch among siblings — say so explicitly (`RED at op level; no portable subset`) rather than leaving it to be inferred from silence.**
 
@@ -467,6 +514,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 | *TTNN Readiness* — Pybind `create_descriptor` | No / Yes (gate): `<nanobind site>` |
 | *TTNN Readiness* — Op-owned tensors | No / Yes: `<factory + site>` |
 | *TTNN Readiness* — Target concept | `MetalV2FactoryConcept` (+ op-owned tensors, if any) |
+| *Port work* — Offset base pointer | none / **GATE** → ops team (Type 1 raw · Type 2 accessor-fed, flag early) |
 | *Port work* — Tensor bindings (per binding) | clean / Case 1 / Case 2 |
 | *Port work* — TensorParameter relaxation | none / `<relaxation>` |
 | *Port work* — TensorAccessor 3rd arg | drop (Class 1/2) / **flag → GATE** (Class 3/4/Special) |
@@ -497,7 +545,8 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
   | Variable-count compile-time arguments (CTA varargs) | RED / N/A | |
 
 - **CB endpoints (GATE-free):** <every CB is either legal (1 producer, 1 consumer) or carries a port-time disposition — **self-loop** (single-ended / sync-free, legal on Gen1 for compute *and* DM), **multi-binding advanced-option flag** (≥2 of one kind on a node; hidden-2nd-writer or multi-reader face) with its `(CB, config)` list, or **dead-CB drop** (zero endpoints) @ `file:line`. Nothing here blocks a Gen1 port. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
-- **TensorAccessor 3rd argument:** <GREEN — every site Class 1/2 (redundant → drop; Class 1 also sets `dynamic_tensor_shape`) — or — RED: Class 3/4 (wrong-magnitude page size @ `file:line` → the ops team fixes it first) / Special (an override the binding model can't express @ `file:line` → the ops team ports by hand). Defers to the 3rd-arg triage analysis.>
+- **Offset base pointers:** <GREEN — no address RTA folds a host-side offset into its base, or every fold has already been split out by the ops team (→ clean base, handled as ordinary tensor-binding port work) — or — RED: Type 1 (raw offset arg) / Type 2 (accessor-fed offset arg → flag early, ops team + framework) @ `file:line` by kernel + role. Factory-scoped: an RM slice-family RED names the tiled factories as a clean subset. Type 3 (`address_offset`) is the Appendix A entry; Type 4 (`narrow`) ports as-is. Cross-references the offset-base-pointer triage analysis (a dated prior).>
+- **TensorAccessor 3rd argument:** <GREEN — every site Class 1/2 (redundant → drop; Class 1 also sets `dynamic_tensor_shape`) — or — RED: Class 3/4 (wrong-magnitude page size @ `file:line` → the ops team fixes it first) / Special (an override the binding model can't express @ `file:line` → the ops team ports by hand). Cross-references the 3rd-arg triage analysis (a dated prior).>
 
 ## Port-work summary  *(mirrors the brief)*
 
@@ -544,7 +593,7 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued when 
 
 > Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
 
-**Gates cleared:** Device 2.0 ✓ *(or ▲ if holdovers — see Blocked-until)* · Features ✓ · TTNN factory concept ✓ · TensorAccessor 3rd arg ✓
+**Gates cleared:** Device 2.0 ✓ *(or ▲ if holdovers — see Blocked-until)* · Features ✓ · TTNN factory concept ✓ · Offset base pointers ✓ · TensorAccessor 3rd arg ✓
 
 **Recipe docs:** `<hash> <date> <subject>` *(carry this line into the port report's Provenance section)*
 
