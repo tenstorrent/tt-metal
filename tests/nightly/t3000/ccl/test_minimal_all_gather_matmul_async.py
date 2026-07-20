@@ -602,7 +602,7 @@ def test_all_gather_matmul_async_fp32_reload_precision(mesh_device, all_gather_t
 
 
 # The mcast_in1 path segfaults for this single-core non-gather 1D matmul routed through
-# all_gather_matmul, and reproduces on main. A segfault would kills the test process; so run=False
+# all_gather_matmul, and reproduces on main. A segfault would kill the test process; so run=False
 # keeps the case from executing while still recording it as an expected failure.
 @pytest.mark.parametrize(
     "matmul_1d_mcast_in0",
