@@ -63,6 +63,22 @@ _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 # program config.  Downstream ops that need interleaved input reshard automatically.
 _QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
+# B=2 variant of _QO_DECODE_PROGCFG for the CFG batch-2 fused decode (pos+neg rows folded
+# into M).  Identical in0_block_w / mcast / subblock; per_core_M=2 so it is valid for M=2.
+# Proven byte-identical per row to the per_core_M=1 B=1 config (cfg_batch2_byteident_probe.py:
+# row0 maxabsdiff==0), i.e. the K-reduction order is preserved — long-form-safe.
+_QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
 
 # ──────────────────────────────────────────────────────────────
 # Host-side weight preparation
@@ -952,6 +968,146 @@ class TTVibeVoiceLM:
         including RoPE-row selection, is driven by the device position tensor (llama pattern)."""
         cos_row, sin_row = self._rope_rows_from_pos(cur_pos)
         return self.forward_decode_traced_embeds(inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden)
+
+    # ── CFG batch-2 fused decode (pos row0 + neg row1 in one B=2 forward) ─────────
+    # The two CFG forwards (pos-LM, neg-LM) are weight-DRAM-bound at M=1, so batching
+    # their inputs into [2,1,1,H] reads each layer's weights ONCE for both rows.  Only
+    # the weight-bound MATMULS are batched (qkv/o/gate/up/down); attention (rope / KV
+    # write / sdpa) stays per-row on the two SEPARATE [1,..] caches, i.e. byte-identical
+    # to the current B=1 attention (no batched KV cache, no extra DRAM).  Every batched
+    # op is proven byte-identical per row (cfg_batch2_byteident_probe.py +
+    # cfg_batch2_sdpa_byteident_probe.py) → Tier-0.
+    def _attention_decode_traced_b2(
+        self,
+        x: ttnn.Tensor,  # [2,1,1,H]  row0=pos, row1=neg
+        layer_w: LayerWeights,
+        rope_rows,  # [(cos0,sin0),(cos1,sin1)]  per-row [1,1,1,hd]
+        cur_positions,  # [cur_pos0, cur_pos1]  per-row [1] int32
+        kv_caches,  # [kv0, kv1]  separate [1,..] caches
+        layer_idx: int,
+    ) -> ttnn.Tensor:
+        cfg = self.cfg
+        head_dim = cfg.head_dim
+        n_heads = cfg.num_attention_heads
+        n_kv = cfg.num_key_value_heads
+
+        # Batched weight-bound projections — read wq/wk/wv once for both rows.
+        q = ttnn.linear(
+            x,
+            layer_w.wq,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG_B2,
+            memory_config=_QO_DECODE_OUT_MEMCFG,
+        )
+        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.q_bias is not None:
+            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.k_bias is not None:
+            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.v_bias is not None:
+            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # [2,1,1,X] → [2, X_heads, 1, hd]; the reshape reshards the width-sharded q to DRAM.
+        q = ttnn.permute(_reshape_tt(q, [2, 1, n_heads, head_dim]), (0, 2, 1, 3))  # [2, n_heads, 1, hd]
+        k = ttnn.permute(_reshape_tt(k, [2, 1, n_kv, head_dim]), (0, 2, 1, 3))  # [2, n_kv, 1, hd]
+        v = ttnn.permute(_reshape_tt(v, [2, 1, n_kv, head_dim]), (0, 2, 1, 3))
+
+        # Per-row attention on the two separate caches — identical ops to the B=1 path.
+        attn_rows = []
+        for b in range(2):
+            cos_row, sin_row = rope_rows[b]
+            cur_pos = cur_positions[b]
+            kv_cache = kv_caches[b]
+            qb = ttnn.slice(q, [b, 0, 0, 0], [b + 1, n_heads, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kb = ttnn.slice(k, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            vb = ttnn.slice(v, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            qb = _apply_rope_ttnn(qb, cos_row, sin_row)
+            kb = _apply_rope_ttnn(kb, cos_row, sin_row)
+            k_1bkd = ttnn.to_memory_config(ttnn.permute(kb, (0, 2, 1, 3)), self._kv_update_shard_mc)
+            v_1bkd = ttnn.to_memory_config(ttnn.permute(vb, (0, 2, 1, 3)), self._kv_update_shard_mc)
+            ttnn.experimental.paged_update_cache(
+                kv_cache.keys[layer_idx], k_1bkd, update_idxs_tensor=cur_pos, page_table=None
+            )
+            ttnn.experimental.paged_update_cache(
+                kv_cache.values[layer_idx], v_1bkd, update_idxs_tensor=cur_pos, page_table=None
+            )
+            q_dec = ttnn.permute(qb, (0, 2, 1, 3))  # [1, 1, n_heads, hd]
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_dec,
+                kv_cache.keys[layer_idx],
+                kv_cache.values[layer_idx],
+                cur_pos_tensor=cur_pos,
+                scale=self.scale,
+                program_config=_SDPA_DECODE_CFG,
+                compute_kernel_config=_HIFI4,
+            )
+            attn_rows.append(_reshape_tt(attn, [1, 1, 1, n_heads * head_dim]))
+
+        attn = ttnn.concat(attn_rows, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [2,1,1,n_heads*hd]
+        out = ttnn.linear(
+            attn,
+            layer_w.wo,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG_B2,
+            memory_config=_QO_DECODE_OUT_MEMCFG,
+        )
+        return out  # [2,1,1,H]
+
+    def _transformer_layer_traced_b2(self, x, layer_idx, rope_rows, cur_positions, kv_caches) -> ttnn.Tensor:
+        lw = self.w.layers[layer_idx]
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.attn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_out = self._attention_decode_traced_b2(x_norm, lw, rope_rows, cur_positions, kv_caches, layer_idx)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.ffn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ffn_out = self._ffn_layer(x_norm, lw)  # batched [2,..] — auto matmuls, batch-independent
+        x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
+    def forward_decode_traced_embeds_b2(
+        self,
+        embeds_b2: ttnn.Tensor,  # [2,1,1,H]  row0=pos input, row1=neg input
+        rope_rows,  # [(cos0,sin0),(cos1,sin1)]
+        cur_positions,  # [cur_pos0, cur_pos1]
+        kv_caches,  # [kv0, kv1]
+        lm_head_w: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Fused batch-2 decode: row0 = pos-LM (input+pos+kv0), row1 = neg-LM (input+pos+kv1).
+
+        Returns (row0_logits, hidden_b2[2,1,1,H] fp32).  The lm_head is projected on ROW0 ONLY
+        (pos-LM produces the token; neg logits are discarded, exactly like the B=1 need_logits=False
+        neg forward).  hidden_b2[0] == the B=1 pos last_hidden, hidden_b2[1] == the B=1 neg
+        last_hidden, both byte-identical (per-row batch independence)."""
+        cfg = self.cfg
+        x = embeds_b2
+        if x.dtype == ttnn.float32:
+            x = ttnn.typecast(x, ttnn.bfloat16)
+        for layer_idx in range(cfg.num_hidden_layers):
+            x = self._transformer_layer_traced_b2(x, layer_idx, rope_rows, cur_positions, kv_caches)
+        x = ttnn.rms_norm(
+            x,
+            weight=self.w.norm_w,
+            epsilon=cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        hidden_b2 = ttnn.typecast(x, ttnn.float32)  # [2,1,1,H]
+        x0 = ttnn.slice(x, [0, 0, 0, 0], [1, 1, 1, cfg.hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        head_w = lm_head_w if lm_head_w is not None else self.w.lm_head_w
+        logits0 = ttnn.linear(x0, head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits0, hidden_b2
 
     def prefill(
         self,

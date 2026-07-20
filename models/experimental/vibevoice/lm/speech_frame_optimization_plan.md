@@ -115,6 +115,32 @@ Discovered during opt-A's full-length verification. The working branch **HEAD (`
   steady-frame cost) and re-rendering full 100-min to confirm baseline-level cleanliness returns. Opt A re-applies
   on top (byte-identical). All subsequent Tier-2 gating uses the fresh HEAD(−fuse) full render as the re-baseline.
 
+### Opt B — CFG batch-2 LM fusion — INTEGRATED, Tier-0 proven (Tier-2 confirm + commit pending)
+Fuse the two B=1 28-layer CFG forwards (neg-LM, pos-LM) into ONE **batch-2** decode forward that reads
+each layer's weights ONCE for both rows (weight-DRAM-bound at M=1).
+- **Byte-identity FIRST (the whole basis for Tier-0):**
+  - `cfg_batch2_byteident_probe.py` — every LM decode matmul row-0 `maxabsdiff==0` at B=2 vs B=1 (incl.
+    the width-sharded wq/wo upgraded to `per_core_M=2`: K-reduction order preserved).
+  - `cfg_batch2_sdpa_byteident_probe.py` (NEW) — rms_norm / paged_update_cache / sdpa_decode all
+    `maxabsdiff==0` for row-0 across 5 divergent position pairs (incl. different chunk counts).
+  - `tests/pcc/test_cfg_batch2_byteident.py` (NEW, real weights) — assembled 28-layer B=2 forward is
+    byte-identical to two B=1 forwards: pos hidden, neg hidden, pos logits all `maxabsdiff==0`.
+- **Design (lower-risk than the merged-cache plan):** batch ONLY the weight-bound matmuls
+  (qkv/o/gate/up/down) into `[2,1,1,H]`; keep attention (rope / KV write / sdpa) **per-row on the two
+  SEPARATE `[1,..]` caches** → NO merged KV cache, ZERO extra DRAM, NO prefill change, sdpa/kv run
+  bit-identically to B=1. `forward_decode_traced_embeds_b2` in `ttnn_vibevoice_lm.py`
+  (`_QO_DECODE_PROGCFG_B2`, `_attention_decode_traced_b2`, `_transformer_layer_traced_b2`). Software-
+  pipelined in the generator (`_run_segment_frame_cfg_b2`, `VV_CFG_BATCH2` default-on): each frame's
+  batched forward computes pos-LM(k) [row0 → cond_pos(k+1)] + neg-LM(k+1) [row1 → cond_neg(k+1)];
+  diffusion (`_dp2trace`) runs FIRST from the cond buffers the prior frame wrote; a once-per-segment
+  eager `_boot` seeds neg-LM(0). Two captured traces/frame (dp2 | lm2) replacing three (neg|dp|pos).
+- **Gate:** Tier-0 byte-identical to `stream_loopbreak.f32` at cap-400 (398f) AND cap-1600 (1590f,
+  multiple segment recaptures), `maxabsdiff=0.000000`. Tier-2 full render in progress.
+- **Perf:** LM compute ~1.77× (probe Test 3, ~9 ms device / ~20% of the traced frame). BUT deployed
+  STEADY replay wall only **12.4 → 12.7 tok/s (+2.4%, ~−1.9 ms/frame)** — the frame is HOST-bound
+  (D2H syncs + loopbreaker FFT), so the device win is largely hidden. ⇒ next bottleneck is HOST, not
+  device. Device win banked (safe, byte-identical) + unlocks future host-overlap gains.
+
 ## Deliverable accounting
 One commit per adopted opt (msg: device-µs before→after + safety tier). Rejections logged with the tier
 they failed. Final: re-run Tier-2 on the cumulative stack.
