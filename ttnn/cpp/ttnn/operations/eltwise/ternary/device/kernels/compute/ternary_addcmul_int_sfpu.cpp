@@ -7,7 +7,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillInt
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulIntBinary, AddIntBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_int.hpp"
 
 namespace ckl = compute_kernel_lib;
 

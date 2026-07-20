@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"                      // binary_op_init_common (BIG init)
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"        // BinaryFpu, DestReuseBinary, PackTile
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // AddBinary (DEST + DEST)
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 

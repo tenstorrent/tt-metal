@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -41,7 +42,9 @@ void kernel_main() {
                         cb_id_src,
                         ckl::InputLifecycle::Streaming,
                         ckl::UnaryBcastReconfig::None>{},  // Caller owns setup -> no chain reconfig
-                    ckl::PackTile<cb_id_dst, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+                    ckl::PackTile<
+                        cb_id_dst,
+                        ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
                 num_tiles_read += Wt - start_tw;
             }
         }

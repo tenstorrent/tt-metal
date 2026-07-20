@@ -31,7 +31,6 @@
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
 namespace compute_kernel_lib {
 
@@ -48,9 +47,7 @@ template <
     InputSpec AInput = input(),
     InputSpec BInput = input(),
     OutputSpec Output = output()>
-ALWI void add(EltwiseShape shape) {
-    eltwise_chain(shape, BinaryFpu<CbA, CbB, BinaryFpuOp::Add, Bcast, AInput, BInput>{}, PackTile<CbOut, Output>{});
-}
+ALWI void add(EltwiseShape shape);
 
 template <
     uint32_t CbA,
@@ -60,9 +57,7 @@ template <
     InputSpec AInput = input(),
     InputSpec BInput = input(),
     OutputSpec Output = output()>
-ALWI void sub(EltwiseShape shape) {
-    eltwise_chain(shape, BinaryFpu<CbA, CbB, BinaryFpuOp::Sub, Bcast, AInput, BInput>{}, PackTile<CbOut, Output>{});
-}
+ALWI void sub(EltwiseShape shape);
 
 template <
     uint32_t CbA,
@@ -72,9 +67,7 @@ template <
     InputSpec AInput = input(),
     InputSpec BInput = input(),
     OutputSpec Output = output()>
-ALWI void mul(EltwiseShape shape) {
-    eltwise_chain(shape, BinaryFpu<CbA, CbB, BinaryFpuOp::Mul, Bcast, AInput, BInput>{}, PackTile<CbOut, Output>{});
-}
+ALWI void mul(EltwiseShape shape);
 
 // ---------------------------------------------------------------------------
 // FPU square — x * x, via BinaryFpu reading the one input buffer for both operands
@@ -84,20 +77,14 @@ ALWI void mul(EltwiseShape shape) {
 // ---------------------------------------------------------------------------
 
 template <uint32_t CbIn, uint32_t CbOut, InputSpec Input = input(), OutputSpec Output = output()>
-ALWI void square(EltwiseShape shape) {
-    eltwise_chain(
-        shape, BinaryFpu<CbIn, CbIn, BinaryFpuOp::Mul, BroadcastDim::None, Input, Input>{}, PackTile<CbOut, Output>{});
-}
+ALWI void square(EltwiseShape shape);
 
 // ---------------------------------------------------------------------------
 // SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
 // ---------------------------------------------------------------------------
 
 template <class SfpuOp, uint32_t CbIn, uint32_t CbOut, InputSpec Input = input(), OutputSpec Output = output()>
-ALWI void unary(EltwiseShape shape) {
-    static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp, ...>: SfpuOp must be a DEST-only SFPU element");
-    eltwise_chain(shape, CopyTile<CbIn, Dst::D0, Input>{}, SfpuOp{}, PackTile<CbOut, Output>{});
-}
+ALWI void unary(EltwiseShape shape);
 
 // ---------------------------------------------------------------------------
 // SFPU binary — two CopyTile loads (D0, D1) -> SfpuBinOp -> PackTile(D0).
@@ -112,38 +99,15 @@ template <
     InputSpec AInput = input(),
     InputSpec BInput = input(),
     OutputSpec Output = output()>
-ALWI void binary_sfpu(EltwiseShape shape) {
-    static_assert(is_dest_only_op_v<SfpuBinOp>, "binary_sfpu<Op, ...>: Op must be a DEST-only SFPU binary element");
-    eltwise_chain(
-        shape,
-        CopyTile<CbA, Dst::D0, AInput>{},
-        CopyTile<CbB, Dst::D1, BInput>{},
-        SfpuBinOp{},
-        PackTile<CbOut, Output>{});
-}
+ALWI void binary_sfpu(EltwiseShape shape);
 
 // ---------------------------------------------------------------------------
 // Pure copy — CopyTile(D0) -> PackTile(D0).
 // ---------------------------------------------------------------------------
 
 template <uint32_t CbIn, uint32_t CbOut, InputSpec Input = input(), OutputSpec Output = output()>
-ALWI void copy(EltwiseShape shape) {
-    eltwise_chain(shape, CopyTile<CbIn, Dst::D0, Input>{}, PackTile<CbOut, Output>{});
-}
-
-// ---------------------------------------------------------------------------
-// Unary broadcast — UnaryBcast(D0) -> PackTile(D0). Row/Col/Scalar broadcast of one input.
-// ---------------------------------------------------------------------------
-
-template <
-    BroadcastDim Dim,
-    uint32_t CbIn,
-    uint32_t CbOut,
-    InputLifecycle Lifecycle = InputLifecycle::Streaming,
-    OutputSpec Output = output(),
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
-ALWI void unary_bcast(EltwiseShape shape) {
-    eltwise_chain(shape, UnaryBcast<Dim, CbIn, Lifecycle, Reconfig>{}, PackTile<CbOut, Output>{});
-}
+ALWI void copy(EltwiseShape shape);
 
 }  // namespace compute_kernel_lib
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.inl"

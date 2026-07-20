@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillScalar
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Square, CopyDest
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Tanh
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // AddBinary, SubBinary, MulBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */

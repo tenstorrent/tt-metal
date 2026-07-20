@@ -6,7 +6,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"       // Clamp, RsubUnary
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // DivBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 

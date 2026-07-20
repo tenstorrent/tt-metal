@@ -353,12 +353,6 @@ enum class DestReuseType : uint8_t {
     DEST_TO_SRCB,  // CB → srca, DEST → srcb
 };
 
-/// UnaryBcast reconfig.
-enum class UnaryBcastReconfig : uint8_t {
-    None,
-    Input,  // reconfig srca + srcb for the bcast input CB (no pack side — UnaryBcast never packs)
-};
-
 // =============================================================================
 // 5. Chain element declarations
 // =============================================================================
@@ -403,26 +397,8 @@ template <
     Dst DstOut = Dst::D0>
 struct DestReuseBinary;
 
-template <
-    BroadcastDim Dim,
-    uint32_t Cb,
-    InputLifecycle Policy = InputLifecycle::Streaming,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input,
-    Dst DstSlot = Dst::D0>
-struct UnaryBcast;
-
 template <uint32_t Cb, OutputSpec Output = output(), Dst DstSlot = Dst::D0>
 using PackTile = detail::PackTileImpl<Cb, detail::pack_tile_config_bits(Output, DstSlot)>;
-
-// Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.
-template <Dst DstSlot = Dst::D0>
-struct FillScalar;
-template <DataFormat DF, Dst DstSlot>
-struct FillInt;
-template <Dst DstSlot = Dst::D0>
-struct FillBitcast;
-template <Dst DstSlot = Dst::D0>
-struct RandTile;
 
 // (Chain-shape trait predicates, the EltwiseChain type-list wrapper, and the INVALID_DFB sentinel
 //  are implementation detail — declared in eltwise_chain.inl, not on this public surface.)

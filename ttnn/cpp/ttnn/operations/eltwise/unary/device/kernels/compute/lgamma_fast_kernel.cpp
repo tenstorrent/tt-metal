@@ -6,7 +6,8 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillScalar
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary, EqBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_extended.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp"      // Where, LgammaStirling, LgammaAdjusted
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp"         // Sin
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_rounding.hpp"     // Floor, Frac

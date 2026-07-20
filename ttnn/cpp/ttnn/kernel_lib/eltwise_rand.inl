@@ -23,7 +23,7 @@ namespace compute_kernel_lib {
 /// @code
 ///   eltwise_chain(EltwiseShape::tiles(num_tiles),
 ///       RandTile<Dst::D0>{from, scale, get_arg_val<uint32_t>(0)},
-///       PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+///       PackTile<cb_out, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
 /// @endcode
 template <Dst DstSlot>
 struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {
