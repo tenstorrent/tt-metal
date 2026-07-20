@@ -35,7 +35,7 @@ FINAL_LRELU_SLOPE = 0.01  # coqui's pre-conv_post activation uses F.leaky_relu d
 class TtResBlock1(LightweightModule):
     """HiFi-GAN ResBlock "1": 3 (dilated conv -> plain conv) residual pairs."""
 
-    def __init__(self, device, state_dict, prefix, kernel_size, dilation):
+    def __init__(self, device, state_dict, prefix, kernel_size, dilation, activations_dtype=ttnn.float32):
         super().__init__()
         # The leaky_relu that sits between convs1 and convs2 is fused onto the
         # convs1 output (post-bias) — convs1's output feeds only that activation, so
@@ -50,6 +50,7 @@ class TtResBlock1(LightweightModule):
                 padding=get_padding(kernel_size, d),
                 dilation=d,
                 activation=mid_act,
+                activations_dtype=activations_dtype,
             )
             for j, d in enumerate(dilation)
         ]
@@ -60,6 +61,7 @@ class TtResBlock1(LightweightModule):
                 state_dict[f"{prefix}convs2.{j}.bias"],
                 padding=get_padding(kernel_size, 1),
                 dilation=1,
+                activations_dtype=activations_dtype,
             )
             for j in range(len(dilation))
         ]
@@ -96,6 +98,17 @@ class TtHifiganGenerator(LightweightModule):
         self.num_upsamples = len(UPSAMPLE_RATES)  # 4
         self.inv_num_kernels = 1.0 / self.num_kernels
 
+        # Mixed precision: the last upsample stage runs its ups/conds/resblocks in
+        # bf16, the rest in fp32. The late stages carry the largest activations (most
+        # DRAM eltwise traffic) and the least remaining accumulation depth, so bf16
+        # there buys the most device time for the least PCC drift. Measured: stage 3
+        # alone holds PCC >=0.99 and cuts ~7.5% device time; adding stage 2 drops PCC
+        # to ~0.984 (below threshold).
+        bf16_stages = {self.num_upsamples - 1}
+
+        def act_dtype(i):
+            return ttnn.bfloat16 if i in bf16_stages else ttnn.float32
+
         self.conv_pre = TtConv1d(device, state_dict["conv_pre.weight"], state_dict["conv_pre.bias"], padding=3)
         self.cond_layer = TtConv1d(device, state_dict["cond_layer.weight"], state_dict["cond_layer.bias"])
 
@@ -105,18 +118,33 @@ class TtHifiganGenerator(LightweightModule):
                 state_dict[f"ups.{i}.weight"],
                 state_dict[f"ups.{i}.bias"],
                 stride=UPSAMPLE_RATES[i],
+                activations_dtype=act_dtype(i),
             )
             for i in range(self.num_upsamples)
         ]
         self.conds = [
-            TtConv1d(device, state_dict[f"conds.{i}.weight"], state_dict[f"conds.{i}.bias"])
+            TtConv1d(
+                device,
+                state_dict[f"conds.{i}.weight"],
+                state_dict[f"conds.{i}.bias"],
+                activations_dtype=act_dtype(i),
+            )
             for i in range(self.num_upsamples)
         ]
 
         self.resblocks = []
         for i in range(self.num_upsamples):
             for j, (k, d) in enumerate(zip(RESBLOCK_KERNEL_SIZES, RESBLOCK_DILATION_SIZES)):
-                self.resblocks.append(TtResBlock1(device, state_dict, f"resblocks.{i * self.num_kernels + j}.", k, d))
+                self.resblocks.append(
+                    TtResBlock1(
+                        device,
+                        state_dict,
+                        f"resblocks.{i * self.num_kernels + j}.",
+                        k,
+                        d,
+                        activations_dtype=act_dtype(i),
+                    )
+                )
 
         # conv_post has no bias in XTTS.
         self.conv_post = TtConv1d(device, state_dict["conv_post.weight"], None, padding=3)
