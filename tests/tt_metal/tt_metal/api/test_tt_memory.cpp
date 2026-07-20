@@ -67,7 +67,7 @@ TEST_F(MemorySegmentOrderingTest, DiscreteEmitsSpansInAscendingAddressOrder) {
 }
 
 // The identity-permutation paths (non-DISCRETE) coalesce contiguous segments into a single span.
-// This guards the refactor: the fix must not change non-DISCRETE behaviour.
+// This guards that non-DISCRETE behaviour: contiguous segments must still collapse to one span.
 TEST_F(MemorySegmentOrderingTest, ContiguousCoalescesIntoSingleSpan) {
     const std::vector<word_t> text_contents = {0x1111'1111, 0x2222'2222};  // lma 0x1000, 2 words
     const std::vector<word_t> data_contents = {0x3333'3333};               // lma 0x1008, 1 word
