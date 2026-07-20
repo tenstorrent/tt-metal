@@ -5,12 +5,9 @@
 
 The single home for the block-cyclic KV-cache PCC check and its golden-trace
 loaders, plus the slot->slot and multi-pair migration validators. There is ONE
-PCC entrypoint, ``kv_cache_pcc_check``, used by both paths:
-
-  * the runner's standalone bring-up loop, via ``TtPrefillRuntime.kv_cache_pcc_check``
-    (the runtime forwards here) — golden trace dir + per-rank ``first_layer_idx``;
-  * the migration validators here (``validate_after_prefill`` and friends) — golden
-    ``.pt`` or trace dir + ``real_len``.
+PCC entrypoint, ``kv_cache_pcc_check``, driven by the migration validators here
+(``validate_after_prefill`` and friends, via ``TtPrefillRuntime.kv_cache_pcc_check``
+which forwards here) — golden ``.pt`` or trace dir + ``real_len``.
 
 ``validate_after_prefill`` / ``validate_migration_kv`` / ``validate_migrations_pairwise``
 have NO in-repo caller: they are driven by tt-llm-engine (the prefill scheduler /

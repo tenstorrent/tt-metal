@@ -19,15 +19,15 @@
 # selected by the binding's PREFILL_MANIFEST) and live at
 # models/demos/common/prefill/runners/topology_configuration/. Pass your binding as $1.
 #
-# Examples:
+# Examples (drive each with prefill_producer.py on the launch host):
 #   # 2-galaxy D2D pipeline (connected MGD, FABRIC_2D):
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d.yaml bh-glx-d07u02:1,bh-glx-d07u08:1
+#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank.yaml bh-glx-d07u02:1,bh-glx-d07u08:1
 #
 #   # 4-galaxy D2D pipeline (ring-chain host order — see the 4-galaxy connected MGD):
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_4rank_d2d.yaml bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u08:1,bh-glx-d08u02:1
+#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_4rank.yaml bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u08:1,bh-glx-d08u02:1
 #
 #   # single-galaxy 1-rank full-model de-risk:
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_real_1galaxy_1rank.yaml bh-glx-d07u02:1
+#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml bh-glx-d07u02:1
 set -euo pipefail
 
 RANK_BINDING="${1:?usage: run_pipeline_prefill.sh <rank_binding.yaml> [host_list] [tcp_iface]}"

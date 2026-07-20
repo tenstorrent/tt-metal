@@ -6,7 +6,7 @@ each stricter and more expensive than the last.
 
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
-| **0 — standalone PCC** | prefill writes correct KV (precondition for everything) | tt-metal tree only |
+| **0 — KV PCC** | prefill writes correct KV (precondition for everything) | tt-metal tree only |
 | **1 — mock migration** | the KV-chunk **address table** is correct, read device-lessly | tt-metal tree only |
 | **2 — loopback migration** | the real DRAM→transport→DRAM copy + migrated-KV accuracy | + tt-llm-engine binaries |
 
@@ -34,14 +34,19 @@ Constraints: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (ea
 
 ---
 
-## Gate 0 — Standalone KV PCC (precondition; no migration)
+## Gate 0 — KV PCC (precondition; no migration)
 
-Confirms prefill writes correct KV vs the golden trace before migration means anything.
+Confirms prefill writes correct KV vs the golden trace before migration means anything. Request mode:
+the runner serves; the producer pushes the golden-trace chunks and PCC-checks the KV read back from
+device. Two terminals (both with the shared setup above):
 
 ```bash
-env PREFILL_STANDALONE=1 PREFILL_STANDALONE_PCC=1 \
-    PREFILL_STANDALONE_NCHUNKS=$NCHUNKS PREFILL_STANDALONE_CHUNKED_NCHUNKS=$NCHUNKS \
-    $RUN
+# terminal A — runner (serves; creates + exports the H2D service):
+$RUN
+
+# terminal B — producer (pushes $NCHUNKS chunks from the golden trace, PCC-checks KV):
+PREFILL_PRODUCER_CHUNKS=$NCHUNKS PREFILL_PRODUCER_CHECK_PCC=1 \
+    python -m models.demos.common.prefill.runners.prefill_producer
 ```
 
 **Expect:** `[kv-pcc] min PCC across <L> layers … (overall …)` ≥ `PREFILL_STANDALONE_CHUNKED_PCC`.
