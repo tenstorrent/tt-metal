@@ -2,7 +2,7 @@
 
 > **What this is.** A frozen copy of sections from
 > [`port_patterns.md`](../shared/port_patterns.md) that the Quasar audit
-> ([`cb_dfb_kernel_audit_helper.md`](cb_dfb_kernel_audit_helper.md)) links into.
+> ([`cb_dfb_quasar_audit_helper.md`](cb_dfb_quasar_audit_helper.md)) links into.
 > It exists only to keep those links pointing at stable content while the
 > porting recipe is refactored for the **CB→DFB Gen1-parity pivot** (under which
 > the live patterns doc has diverged — e.g. DM self-loops are now legal on Gen1).
@@ -12,7 +12,7 @@
 > [porting recipe](../port/metal2.md) and
 > [patterns catalog](../shared/port_patterns.md).
 >
-> **Delete this file** once `cb_dfb_kernel_audit_helper.md` is reworked to be
+> **Delete this file** once `cb_dfb_quasar_audit_helper.md` is reworked to be
 > self-contained (it will absorb the Quasar-uplift guidance it needs). Sections
 > are copied verbatim; only same-file anchor links were rewritten to point back
 > at `port_patterns.md`.
