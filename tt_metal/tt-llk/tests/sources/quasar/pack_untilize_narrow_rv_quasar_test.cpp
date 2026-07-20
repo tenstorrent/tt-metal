@@ -283,9 +283,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
 
-    for (std::uint32_t row = 0; row < 64; row++)
+    for (std::uint32_t row = 0; row < 48; row++)
     {
-        g0.f.input_addr = row; // DEST row to read
+        if (row == 16)
+        {
+            row += 16; // skip face 1
+        }
+        g0.f.input_addr = row;
 
         std::uint32_t lo5                = row & 0x1F;                       // low 5 bits
         std::uint32_t rol                = ((lo5 << 1) | (lo5 >> 4)) & 0x1F; // rotate those left by 1
