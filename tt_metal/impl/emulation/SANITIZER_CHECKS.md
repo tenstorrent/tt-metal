@@ -199,10 +199,10 @@ false-positives. The non-owning `deallocate()` removes the range under an
 exactly once.
 
 On each access the kernel first **normalizes the address
-to a buffer-relative offset** via `__emule_addr_to_offset`. Under the L1 offset
-model, sharded / CB / `l1_alloc` accesses already arrive as **0-based offsets**
-(not absolute bridge pointers), so this normalization is now an idempotent guard;
-the resulting offset is checked against the live extents. In none → abort.
+to a buffer-relative offset** via `__emule_addr_to_offset` — necessary because
+sharded / CB / `l1_alloc` accesses arrive as absolute bridge pointers, not
+offsets, and a raw absolute value would never match a relative range — then checks
+that offset against the live extents. In none → abort.
 *Diagnostic:* `Out-of-Bounds Write: Attempted to access address 0x… which is not part of any allocated tensor`.
 *Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM gap death tests +
 in-bounds L1 and DRAM positive controls).
