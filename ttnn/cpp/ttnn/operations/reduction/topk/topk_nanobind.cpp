@@ -58,7 +58,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT8, BFLOAT16
+                    * - BFLOAT8, BFLOAT16, FLOAT32
                       - TILE
 
                 .. list-table:: index_tensor
