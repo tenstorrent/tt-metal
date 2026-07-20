@@ -86,6 +86,67 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
+fs::path dependency_hash_path(const fs::path& path) {
+    fs::path hash_path = path;
+    hash_path += ".dephash";
+    return hash_path;
+}
+
+bool cache_entry_valid(const std::string& out_dir, const std::string& artifact) {
+    return fs::exists(fs::path(out_dir) / artifact) && jit_build::dependencies_up_to_date(out_dir, artifact);
+}
+
+void remove_artifact_and_hash(const fs::path& path) {
+    fs::remove(path);
+    fs::remove(dependency_hash_path(path));
+}
+
+void publish_artifact_and_hash(const fs::path& src_path, const fs::path& dst_path) {
+    fs::rename(src_path, dst_path);
+
+    fs::path src_hash_path = dependency_hash_path(src_path);
+    fs::path dst_hash_path = dependency_hash_path(dst_path);
+    if (fs::exists(src_hash_path)) {
+        fs::rename(src_hash_path, dst_hash_path);
+    } else {
+        fs::remove(dst_hash_path);
+    }
+}
+
+void publish_compiled_object(
+    const std::string& out_dir,
+    const std::string& obj,
+    const fs::path& src_path,
+    const fs::path& dst_path,
+    bool skip_if_current) {
+    if (skip_if_current && cache_entry_valid(out_dir, obj)) {
+        remove_artifact_and_hash(src_path);
+        return;
+    }
+    publish_artifact_and_hash(src_path, dst_path);
+}
+
+void publish_linked_elf(
+    const std::string& out_dir,
+    const std::string& elf_name,
+    const fs::path& temp_elf_path,
+    const fs::path& temp_hash_path,
+    bool skip_if_current) {
+    if (skip_if_current && cache_entry_valid(out_dir, elf_name)) {
+        fs::remove(temp_elf_path);
+        fs::remove(temp_hash_path);
+        return;
+    }
+
+    fs::rename(temp_elf_path, elf_name);
+    fs::path final_hash_path = dependency_hash_path(elf_name);
+    if (fs::exists(temp_hash_path)) {
+        fs::rename(temp_hash_path, final_hash_path);
+    } else {
+        fs::remove(final_hash_path);
+    }
+}
+
 }  // namespace
 
 std::string get_default_root_path() {
@@ -666,8 +727,8 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     cmd += this->extra_link_objs_;
     cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
-    jit_build::utils::FileRenamer elf_file(elf_name);
-    cmd += "-o " + elf_file.path();
+    std::string temp_elf_name = jit_build::utils::FileRenamer::generate_temp_path(elf_name);
+    cmd += "-o " + temp_elf_name;
     if (env_.get_rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
@@ -675,15 +736,19 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     fs::remove(log_file.path());
     bool result =
         tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands());
+    if (!result) {
+        fs::remove(temp_elf_name);
+    }
     report_result(this->target_name_, "link", cmd, log_file.path(), result);
-    jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
-    std::ofstream hash_file(dephash_file.path());
+    std::string temp_hash_name = jit_build::utils::FileRenamer::generate_temp_path(elf_name + ".dephash");
+    std::ofstream hash_file(temp_hash_name);
     jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        std::filesystem::remove(dephash_file.path());
+        std::filesystem::remove(temp_hash_name);
     }
+    publish_linked_elf(out_dir, elf_name, temp_elf_name, temp_hash_name, !env_.get_rtoptions().get_force_jit_compile());
 }
 
 // Given this elf (A) and a later elf (B):
@@ -804,10 +869,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             src_path.replace_filename(this->temp_objs_[i]);
             dst_path.replace_filename(this->objs_[i]);
             if (compiled.test(i)) {
-                fs::rename(src_path, dst_path);
-                src_path += ".dephash";
-                dst_path += ".dephash";
-                fs::rename(src_path, dst_path);
+                publish_compiled_object(
+                    out_dir, this->objs_[i], src_path, dst_path, !env_.get_rtoptions().get_force_jit_compile());
             } else {
                 fs::remove(src_path);
             }

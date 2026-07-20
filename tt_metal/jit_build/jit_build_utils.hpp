@@ -26,6 +26,19 @@ std::vector<std::string> tokenize_flags(const std::string& flags);
 
 void create_file(const std::string& file_path_str);
 
+class ScopedFileLock {
+public:
+    explicit ScopedFileLock(const std::filesystem::path& lock_path);
+    ScopedFileLock(const ScopedFileLock&) = delete;
+    ScopedFileLock& operator=(const ScopedFileLock&) = delete;
+    ScopedFileLock(ScopedFileLock&&) = delete;
+    ScopedFileLock& operator=(ScopedFileLock&&) = delete;
+    ~ScopedFileLock();
+
+private:
+    int fd_ = -1;
+};
+
 // Read the entire contents of a binary file into a byte vector.
 // Throws std::runtime_error if the file cannot be read or if the read is incomplete.
 std::vector<std::uint8_t> read_file_bytes(const std::string& path);

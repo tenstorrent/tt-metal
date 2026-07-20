@@ -15,12 +15,14 @@
 #include <iostream>
 #include <mutex>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
 
 #include <fcntl.h>
 #include <spawn.h>
+#include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -185,6 +187,42 @@ void create_file(const std::string& file_path_str) {
 
     std::ofstream ofs(file_path);
     ofs.close();
+}
+
+ScopedFileLock::ScopedFileLock(const std::filesystem::path& lock_path) {
+    namespace fs = std::filesystem;
+
+    const auto parent = lock_path.parent_path();
+    if (!parent.empty()) {
+        fs::create_directories(parent);
+    }
+
+    fd_ = open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+    if (fd_ < 0) {
+        throw std::runtime_error(fmt::format("Cannot open lock file {}: {}", lock_path.string(), std::strerror(errno)));
+    }
+
+    while (flock(fd_, LOCK_EX) < 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        const std::string error = std::strerror(errno);
+        close(fd_);
+        fd_ = -1;
+        throw std::runtime_error(fmt::format("Cannot lock file {}: {}", lock_path.string(), error));
+    }
+}
+
+ScopedFileLock::~ScopedFileLock() {
+    if (fd_ < 0) {
+        return;
+    }
+    if (flock(fd_, LOCK_UN) != 0) {
+        log_error(tt::LogBuildKernels, "Failed to unlock file: {}", std::strerror(errno));
+    }
+    if (close(fd_) != 0) {
+        log_error(tt::LogBuildKernels, "Failed to close lock file: {}", std::strerror(errno));
+    }
 }
 
 uint64_t FileRenamer::unique_id_ = []() {

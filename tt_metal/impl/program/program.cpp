@@ -100,6 +100,10 @@ namespace {
 
 using namespace tt::tt_metal;
 
+std::filesystem::path kernel_genfiles_lock_path(const JitBuildOptions& build_options) {
+    return std::filesystem::path(build_options.path) / ".jit_genfiles.lock";
+}
+
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
         return device->allocator_impl()->get_config().l1_unreserved_base -
@@ -226,6 +230,7 @@ std::string ensure_kernel_binaries(
 
     jit_build_once(kernel_hash, [&] {
         try {
+            tt::jit_build::utils::ScopedFileLock genfiles_lock(kernel_genfiles_lock_path(build_options));
             jit_build_genfiles_descriptors(build_env.build_env, build_options);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error& ex) {
@@ -2310,6 +2315,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 coordinator.submit(kernel_hash, [&]() {
+                    tt::jit_build::utils::ScopedFileLock genfiles_lock(kernel_genfiles_lock_path(build_options));
                     generate_kernel_source_files(device, build_options, kernel);
                     return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
                 });

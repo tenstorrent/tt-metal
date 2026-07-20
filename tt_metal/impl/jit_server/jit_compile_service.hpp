@@ -16,6 +16,7 @@
 
 #include <taskflow/taskflow.hpp>
 
+#include "common/host_threading.hpp"
 #include "impl/jit_server/in_flight_compile_deduper.hpp"
 #include "impl/jit_server/rpc.capnp.h"
 #include "impl/jit_server/types.hpp"
@@ -63,7 +64,7 @@ private:
     CompileCallback compile_callback_;
     UploadFirmwareCallback upload_fw_callback_;
     InFlightCompileDeduper<CompileResponse> compile_deduper_;
-    tf::Executor thread_pool_{std::max(1u, std::thread::hardware_concurrency())};
+    tf::Executor thread_pool_{tt::tt_metal::detail::get_host_worker_threads()};
 
     // total_compiles_, queued_, current_inflight_, peak_inflight_, total_bytes_in_, total_bytes_out_, and
     // dedup_hits_ all count incoming requests (dedup hits included). total_compile_time_ns_ measures only
