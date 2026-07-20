@@ -142,6 +142,12 @@ void kernel_main() {
     constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
+    // The compute down-matmul tail-skips the last block's padding K-tiles when
+    // the down-K padding is confined to that block (padding < in0_block_w_d);
+    // then that weight is never read, so the reader can skip zeroing it (below).
+    // Derived from the same constants as the compute's d_last_block_w, so the two
+    // always agree. When false the matmul reads those rows and the fill stays.
+    constexpr bool down_k_tail_skip = (K_down_tiles_padded - K_down_tiles) < in0_block_w_d;
 
     constexpr uint32_t x_accessor_offset = 31;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
@@ -692,9 +698,14 @@ void kernel_main() {
                             } else if (row >= K_down_tiles) {
                                 // K-OOB (reduction dim): the matmul may still read these, so keep
                                 // them zero — 0 * (stale/Inf weight) would NaN a valid output col.
-                                volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
-                                for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
+                                // Skipped when the compute tail-skips the last block's padding
+                                // (down_k_tail_skip) — then these tiles are never read.
+                                if constexpr (!down_k_tail_skip) {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                                    for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
                                 }
                             }
                             // N-OOB (col >= N_down_tiles_full): output column is dropped by the
@@ -705,9 +716,51 @@ void kernel_main() {
                 }
             }
 
-            // Step 3: activated L1 mcast (sender for this K-block = gx==kb).
-            // act_sender starts as soon as compute pushes cb_activated AND
-            // the ready acks are in (already done in step 1).
+            // Step 3: in1_down sender finishes — barrier on the DRAM reads it
+            // kicked off in step 2, then mcasts the down-weight block. Reordered
+            // BEFORE the activated mcast: the down weight has no compute
+            // dependency (DRAM-ready early), so sending it first clears NoC 1 for
+            // the compute-gated activated mcast below. Tradeoff: on the one core
+            // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
+            // longer hidden under the activated wait — measure before keeping.
+            if (is_in1_sender) {
+                noc_read.async_read_barrier();
+                // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
+                // core consumes the locally-read down weight directly.
+                if (in1_num_receivers > 0) {
+                    DeviceZoneScopedN("IN1-DOWN-MCAST");
+                    const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
+                    // linked=true so the in1_valid-sem multicast is ordered behind
+                    // the weight data on the same reserved path (see the activated
+                    // mcast below for the full rationale).
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(in1_block_start),
+                        MulticastEndpoint{},
+                        block_bytes,
+                        in1_num_receivers,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = in1_mcast_nx_start,
+                         .noc_y_start = in1_mcast_ny_start,
+                         .noc_x_end = in1_mcast_nx_end,
+                         .noc_y_end = in1_mcast_ny_end,
+                         .addr = in1_block_start},
+                        /*linked=*/true);
+                    noc.async_writes_flushed();
+
+                    in1_valid_sem.set(IN1_VALID);
+                    in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                        noc,
+                        in1_mcast_nx_start,
+                        in1_mcast_ny_start,
+                        in1_mcast_nx_end,
+                        in1_mcast_ny_end,
+                        in1_num_receivers);
+                }
+            }
+
+            // Step 4: activated L1 mcast (sender for this K-block = gx==kb). Runs
+            // after the in1_down mcast; starts as soon as compute pushes
+            // cb_activated AND the ready acks are in (already done in step 1).
             if (is_act_sender) {
                 cb_activated_obj.wait_front(d_in0_block_num_tiles);
                 act_ready_sem.wait(GRID_X_NOC - 1);
@@ -748,38 +801,6 @@ void kernel_main() {
                     noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
 
                 cb_activated_obj.pop_front(d_in0_block_num_tiles);
-            }
-
-            // Step 4: in1_down sender finishes — barrier on DRAM reads (NoC 0,
-            // in flight during step 3 activated mcast on NoC 1), then mcast.
-            if (is_in1_sender) {
-                noc_read.async_read_barrier();
-                // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
-                // core consumes the locally-read down weight directly.
-                if (in1_num_receivers > 0) {
-                    DeviceZoneScopedN("IN1-DOWN-MCAST");
-                    const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
-                    // linked=true so the in1_valid-sem multicast is ordered behind
-                    // the weight data on the same reserved path (see the activated
-                    // mcast above for the full rationale).
-                    noc.async_write_multicast(
-                        CoreLocalMem<uint32_t>(in1_block_start),
-                        MulticastEndpoint{},
-                        block_bytes,
-                        in1_num_receivers,
-                        {.offset_bytes = 0},
-                        {.noc_x_start = in1_mcast_nx_start,
-                         .noc_y_start = in1_mcast_ny_start,
-                         .noc_x_end = in1_mcast_nx_end,
-                         .noc_y_end = in1_mcast_ny_end,
-                         .addr = in1_block_start},
-                        /*linked=*/true);
-                    noc.async_writes_flushed();
-
-                    in1_valid_sem.set(IN1_VALID);
-                    in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
-                        noc, in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_num_receivers);
-                }
             }
 
             // Step 5: receivers wait for both valid sems and push.
