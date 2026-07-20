@@ -264,7 +264,7 @@ class HunyuanTtMoEParallel(LightweightModule):
         out = partial
         for axis in self.ep_reduce_axes:
             n = self.mesh_device.shape[axis]
-            gathered = self.ccl.all_gather(out, dim=0, mesh_axis=axis, use_hyperparams=False)  # [n*B,S,H]
+            gathered = self.ccl.all_gather(out, dim=0, mesh_axis=axis, use_hyperparams=True)  # [n*B,S,H]
             ttnn.deallocate(out)
             B = gathered.shape[0] // n
             S, H = gathered.shape[1], gathered.shape[2]
