@@ -52,7 +52,7 @@ bool can_exec_ops_on_device(DataType type) {
             // Tilize doesn't support uint16.
         case DataType::UINT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
-            return false;
+        case DataType::INT8: return false;
         default: return true;
     }
 };
@@ -308,6 +308,7 @@ Tensor create_tt_tensor_from_host_data(
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
+        case DataType::INT8: return create_tensor_from_host_buffer.operator()<int8_t>();
         case DataType::UINT16: return create_tensor_from_host_buffer.operator()<uint16_t>();
         case DataType::FLOAT32: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::BFLOAT16: return create_tensor_from_host_buffer.operator()<bfloat16>();
@@ -321,6 +322,7 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::FLOAT32: return DataType::FLOAT32;
             case ttnn::PyDType::BFLOAT16: return DataType::BFLOAT16;
             case ttnn::PyDType::INT32: return DataType::INT32;
+            case ttnn::PyDType::INT8: return DataType::INT8;
             case ttnn::PyDType::UINT32: return DataType::UINT32;
             case ttnn::PyDType::UINT8: return DataType::UINT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
@@ -330,7 +332,6 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::FLOAT16:
             case ttnn::PyDType::INT64:
             case ttnn::PyDType::INT16:
-            case ttnn::PyDType::INT8:
             default: return DataType::INVALID;
         }
         ttsl::unreachable();

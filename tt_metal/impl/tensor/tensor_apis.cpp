@@ -1366,6 +1366,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::UINT8: return with_src_and_dst.operator()<SrcType, uint8_t>();
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
+                case DataType::INT8: return with_src_and_dst.operator()<SrcType, int8_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
                 case DataType::FP8_E4M3: return with_src_and_dst.operator()<SrcType, float8_e4m3>();
                 case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
@@ -1381,6 +1382,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::UINT8: return with_src.operator()<uint8_t>();
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();
+            case DataType::INT8: return with_src.operator()<int8_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
             case DataType::FP8_E4M3: return with_src.operator()<float8_e4m3>();
             case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
@@ -1578,6 +1580,8 @@ void validate_datatype(DataType dtype) {
             dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {
         TT_FATAL(dtype == DataType::INT32, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, int8_t>) {
+        TT_FATAL(dtype == DataType::INT8, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, float>) {
         TT_FATAL(dtype == DataType::FLOAT32, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, bfloat16>) {
@@ -1645,6 +1649,7 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(float)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(int8_t)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 

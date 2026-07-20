@@ -69,6 +69,10 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
             ttsl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
+        case tt::tt_metal::DataType::INT8: {
+            ttsl::Span<int8_t> typed_span(reinterpret_cast<int8_t*>(data.data()), size_bytes / sizeof(int8_t));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
+        }
         case tt::tt_metal::DataType::FP8_E4M3:
             TT_THROW("Flatbuffer load for DataType::FP8_E4M3 is not supported during tensor deserialization.");
         case tt::tt_metal::DataType::UINT8: {

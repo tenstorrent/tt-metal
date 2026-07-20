@@ -68,6 +68,9 @@ ttnn::Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const 
                 ttsl::Span<int32_t>(reinterpret_cast<int32_t*>(raw), bytes.size() / sizeof(int32_t)),
                 shape,
                 MemoryPin{});
+        case DataType::INT8:
+            return Tensor::from_borrowed_data<int8_t>(
+                ttsl::Span<int8_t>(reinterpret_cast<int8_t*>(raw), bytes.size() / sizeof(int8_t)), shape, MemoryPin{});
         case DataType::UINT8:
             return ttnn::Tensor::from_borrowed_data<uint8_t>(
                 ttsl::Span<uint8_t>(reinterpret_cast<uint8_t*>(raw), bytes.size() / sizeof(uint8_t)),

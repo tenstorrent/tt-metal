@@ -234,6 +234,7 @@ from ttnn.types import (
     DataType,
     DumpTensorMode,
     uint8,
+    int8,
     uint16,
     int32,
     uint32,

@@ -52,6 +52,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype) 
         case tt::tt_metal::DataType::UINT16: os << "uint16"; break;
         case tt::tt_metal::DataType::UINT32: os << "uint32"; break;
         case tt::tt_metal::DataType::INT32: os << "int32"; break;
+        case tt::tt_metal::DataType::INT8: os << "int8"; break;
         case tt::tt_metal::DataType::FP8_E4M3: os << "fp8_e4m3"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
@@ -116,6 +117,11 @@ inline void print_datum(std::ostream& ss, bfloat16 datum, bool use_scientific) {
 template <>
 inline void print_datum(std::ostream& ss, uint8_t datum, bool use_scientific) {
     print_datum<uint32_t>(ss, datum, use_scientific);
+}
+
+template <>
+inline void print_datum(std::ostream& ss, int8_t datum, bool use_scientific) {
+    print_datum<int32_t>(ss, datum, use_scientific);
 }
 
 // Helper function to determine if scientific notation should be used
