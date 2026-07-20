@@ -5,6 +5,18 @@
 > self-conditioning logits-L1 section below and
 > `selfcond_logits_l1_e2e.json` (18.844 tokens/block/s at @48).
 
+## Authority matrix (2026-07-17)
+
+- **Pure prefill, 64K build:** use
+  `context_window_prefill_only_chunkedlong_20260713_msl65536.json` at `233b88276ab`
+  (16K 2950 tok/s, 32K 3022 tok/s, 64K 1842 tok/s). The artifact without `chunkedlong` is the
+  superseded dense-fallback control.
+- **Selected fixed-K=48 output-block throughput:** 18.844 tok/s from
+  `selfcond_logits_l1_e2e.json` at `0472860c40c`; it is warmed trace replay, not pure prefill or
+  first-request TTFT, and has not been rerun at current HEAD.
+- **Live vLLM:** use `doc/vllm_integration/README.md` and dated live artifacts. Do not substitute
+  raw frozen-prefix, early-halt, or standalone-session rows for current live-serving throughput.
+
 Optimization unit = **traced** denoise step over the 256 canvas + commit (dg-08 methodology).
 Config: Blackhole QB2 `(1×4)` TP, tuned true-sparse MoE (`DG_SPARSE_MOE_TUNED=1`, HiFi2).
 
@@ -428,6 +440,10 @@ canonical prompt, frozen-prefix capture-once so steady blocks are pure replay; `
 | frozen (baseline) | 49.63 t/s (block 5.158 s) | 104.41 t/s (block 2.452 s) | 304e8023.. / 7dd2e2d9.. |
 | frozen + FUSED2 | **50.76 t/s** (+2.3%) | **109.81 t/s** (+5.2%) | 304e8023.. / 7dd2e2d9.. (identical) |
 
+`@48` and `@12` in this table are maximum budgets, not realized fixed step counts: early halt was
+enabled and the `@48` runs completed after roughly nine denoise steps. These rows isolate the FUSED2
+A/B only; they are invalid as replacements for the fixed-K=48 18.844 tok/s selected headline.
+
 `committed_sha` matches exactly → `DG_MOE_DISPATCH_FUSED2` is bit-identical end-to-end (adds to the
 existing `verify_dispatch_fused.py` [0:EC] gate). It is denoise-only (`build_capacity_dispatch` is
 called only by `sparse_experts_forward`; the ragged prefill path does not use it) and DG runs a single
@@ -542,3 +558,74 @@ Performance of the exact mode:
 `DG_DENOISE_COMPACT_RAGGED=1` remains opt-in, but now defaults internally to
 the exact `dense_compat` combine.  `DG_COMPACT_COMBINE=fast_reduce` retains the
 decision-inexact +38.6% speed ceiling for kernel-development experiments only.
+
+## 2026-07-16 — native SDPA frequency + exact canvas-norm spike
+
+**Native SDPA is already the live path.** Per-layer fallback instrumentation and
+`probe_sdpa_fallback_frequency.py` measured:
+
+- short canonical prompt: **0/30 fallback layers**, all 30 native;
+- 2013-token logical / 2016-token cache prefix: **0/30 fallback layers**, all 30 native.
+
+The old "manual GQA fallback dominates" statement came from the June bring-up
+allocator state and is not actionable on the current branch. No SDPA fallback
+optimization was added.
+
+**Bit-exact canvas RMSNorm spike:** stock batch reshape is rejected because a
+width-sharded 256-row tensor requires shard height 256, and all tested
+full-canvas compute-fidelity configs remain non-identical. The experimental
+descriptor-fusion path can fuse four exact `slice + block_h=1 RMSNorm` phases;
+two four-phase programs reproduce the eight-chunk output byte-for-byte. An
+eight-phase program exceeds Blackhole's kernel-config buffer
+(121152 B requested vs 70656 B).
+
+That exact fusion is not shippable yet:
+
+- reusing a fused descriptor deadlocks in an inter-phase semaphore wait;
+- forcing a fresh descriptor/semaphore set is exact but costs ~90 ms/norm in
+  eager host construction;
+- creating the fresh semaphore/output state inside Metal trace fails with
+  `Writes are not supported during trace capture`.
+
+The experimental selector was removed rather than leaving a trace-crashing
+path. Capturing the ~41 ms/step norm prize now requires a DG-local static
+canvas-norm program with reset-safe barriers and preallocated trace outputs (or
+a fix to the experimental fusion runtime), not another stock TTNN config.
+
+A smaller exact fallback replaced eight `ttnn.slice` calls with one
+`ttnn.split`: the isolated norm improved **1.430→1.321 ms (-7.6%)** and was
+byte-identical, but full traced fixed-12 regressed **5.4344→5.5790 s/block**
+(47.107→45.886 tok/s, **-2.6%**). Trace overlap already hides the individual
+slice programs; the split selector was removed.
+
+## 2026-07-16 — two-stage vocabulary reduction spike: slower, removed
+
+A Diffulex-inspired DG-local generic-op candidate reduced each
+`[32 rows, 2048 vocab]` chunk to clean-argmax and entropy statistics
+`(max, Σexp, Σexp·shift)` while the logits were resident in L1, then merged the
+128 chunk records in a second device stage. Stage 1 was load-balanced over all
+110 available compute cores. The candidate read each logit tile from DRAM once,
+used fixed-shape buffers only, and captured/replayed successfully under Metal
+trace.
+
+The reduced traffic did not translate to lower Blackhole latency. On the real
+`[1,1,256,262144]` RUN-first terminal (`DG_DEDUP_ARGMAX=1`, 24 traced replays):
+
+- released full-width composition: **28.3808 ms/step**;
+- load-balanced two-stage, 1024-wide chunks: **35.1693 ms/step**;
+- load-balanced two-stage, 2048-wide chunks: **35.4838 ms/step**.
+
+The best two-stage row is **+6.79 ms / +23.9% slower**. TTNN's existing
+full-width reductions already spread each primitive efficiently over the
+device; the custom path replaces DRAM passes with repeated per-chunk
+reduce/SFPU setup plus a second statistics merge, and that extra compute/control
+cost dominates.
+
+Production-shape synthetic decision evidence was mixed: clean argmax was exact
+for all 256 positions and the budget-0.1 accept mask happened to match exactly
+(4 accepted positions), but entropy was not byte-identical
+(max absolute delta **0.203125**, mean **0.039354**) because chunk partial sums
+reassociate the BF16 reduction. Since the candidate is both slower and
+decision-inexact, no full-model run can make it selectable. The selector,
+Python wrapper, and six stage kernels were removed; the released terminal is
+unchanged.

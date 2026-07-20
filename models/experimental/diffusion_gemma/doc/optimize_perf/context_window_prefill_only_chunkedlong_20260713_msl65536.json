@@ -36,6 +36,8 @@
   },
   "environment": {
     "DG_PREFILL_MOE_TUNED": "1",
+    "DG_PREFILL_MOE_RAGGED": "<unset>",
+    "DG_PREFILL_RAGGED_LONG": "1",
     "DG_SPARSE_MOE": "<unset>",
     "DG_SPARSE_MOE_TUNED": "<unset>",
     "DG_SPARSE_MOE_CAPACITY": "<unset>",
@@ -54,6 +56,9 @@
   },
   "resolved_defaults": {
     "prefill_moe_tuned": true,
+    "prefill_moe_ragged": true,
+    "prefill_ragged_long": true,
+    "ragged_prefill_chunk": 4096,
     "sparse_moe_tuned": true,
     "batched_commit": true,
     "selfcond_prechunk": true,

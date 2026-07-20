@@ -1,6 +1,86 @@
 # DiffusionGemma — vLLM serving integration (#47466 / #47488)
 
-## Status (lead)
+> **CURRENT CONTRACT — 2026-07-17.** This section supersedes older “live”, trace-speed,
+> RUN-first-quality, and launch text below. Older sections remain reproducibility history.
+
+### Required launch and request semantics
+
+The adapter's safe defaults are intentionally not the fast path:
+
+```text
+DG_SPARSE_MOE defaults 0       -> dense 128-expert denoise
+DG_DEDUP_ARGMAX defaults 0     -> duplicate argmax work in argmax mode
+DG_VLLM_TRACE defaults off     -> eager Python/TTNN dispatch
+DG_VLLM_MAX_DENOISE_STEPS defaults 48
+DG_VLLM_GUMBEL_MODE defaults argmax
+```
+
+Always choose and record an explicit profile. A fast functional transport control is:
+
+```bash
+export DG_SPARSE_MOE=1
+export DG_SPARSE_MOE_TUNED=1
+export DG_DEDUP_ARGMAX=1
+export DG_VLLM_GUMBEL_MODE=argmax
+export DG_VLLM_MAX_DENOISE_STEPS=12   # reduced-K diagnostic, not production quality
+export DG_VLLM_TRACE=0                # lower first-request TTFT; trace is a separate benchmark
+```
+
+A production-sampler control uses `DG_VLLM_GUMBEL_MODE=chunked` and K=48. It is slower and must not
+be compared with reduced-K argmax as if they were the same workload.
+
+Server command requirements:
+
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model <checkpoint> \
+  --served-model-name diffusiongemma-26B-A4B-it \
+  --generation-config vllm \
+  --max-model-len <served-limit> \
+  --max-num-batched-tokens <at-least-largest-whole-prompt> \
+  --max-num-seqs 1 \
+  --block-size 64
+```
+
+- Without `--generation-config vllm`, the checkpoint overrides `max_tokens` to 256. A request for
+  1024 tokens emits block 0 only and never calls `decode_forward`.
+- The TT scheduler does not provide chunked-prefill admission. If a prompt exceeds
+  `--max-num-batched-tokens`, it can remain in `Waiting` without model execution.
+- Do not use `ignore_eos=true` for qualitative judgment. It deliberately surfaces the physical
+  256-token canvas tail after EOS.
+- Request `temperature`, `top_p`, `top_k`, and seed are currently ignored by the DG adapter.
+  Process-level DG sampling config is authoritative.
+
+### Current metric and performance interpretation
+
+- Report physical block metrics from `DG_VLLM_METRIC`: prefill, TTFT, denoise steps/latency, commit,
+  block latency, and `256 / block_latency`.
+- Model-side `DG_PREFILL_RAGGED_LONG` defaults on; prompts above 4096 use 4096-token ragged top-8
+  slices. The current pure-prefill 64K-build table is
+  `../optimize_perf/context_window_prefill_only_chunkedlong_20260713_msl65536.md`. It is not a
+  serving TTFT or scheduler-chunking result.
+- API `completion_tokens / wall_time` includes EOS trimming and queueing. With `max_num_seqs=1`, curl
+  wall time may contain a previous request and is not a device throughput measurement.
+- `DG_VLLM_TRACE=1` captures a fresh controller per request. Block 0 is capture-inclusive, and
+  growing contiguous-prefix shapes recapture on later blocks. July-10 18 tok/s same-ID rows used a
+  prompt-only prefix and are historical same-shape replay provenance.
+- The July-15 decision-fidelity control shows coherent TT output at the intrinsic bf16 diffusion
+  floor. Persistent garbage under `/v1/chat/completions` is not a blanket expected outcome; check
+  argmax-vs-chunked mode, K, EOS-tail exposure, prompt format, and adapter state.
+
+Known bad plain-launch signature observed 2026-07-17:
+
+```text
+session_create: denoise_path=env_dispatch, trace_enabled=false, gumbel_mode=argmax, K=48
+short-prompt block: prefill < 1 s, denoise ≈ 202 s, commit ≈ 4.4 s
+```
+
+That is dense eager denoise, not “slow prefill”. With `max_num_seqs=1`, a curl wall time of 353 s
+was ~146 s waiting behind another request plus ~207 s for its own block. The same launch omitted
+`--generation-config vllm`, so `max_tokens=1024` was capped at 256 and produced no `decode_forward`
+rows. Treat this signature as a configuration failure, not a current performance baseline.
+
+## Historical status and bring-up evidence (July 3–13)
 
 - **vLLM sampling status:** on-device canvas sampling (`sample_on_device_mode=all` equivalent):
   Gumbel-max → entropy-budget accept → renoise, entirely on device. No host argmax, no
@@ -130,11 +210,11 @@ plugin is an upstream fork (not vendored in tt-metal), so the exact edit is prov
 
 ## Served context & datatype (from `doc/context_contract.json`)
 
-- **max_model_len = 262144** (HF `text_config.max_position_embeddings`; 256 × 1024). No reduction
-  below the advertised context. Full-depth 256K weights+KV fit on QB2 (29.704 GiB/chip used,
-  2.163 GiB free); full-vocab Gumbel materialization OOMs at 256K, so serving uses the chunked /
-  argmax sampler (`DG_VLLM_GUMBEL_MODE=argmax|chunked`) which fits.
-- **Non-aligned prompt lengths:** any valid prompt length up to max_model_len is served. The
+- **HF-advertised max context = 262144** (`text_config.max_position_embeddings`; 256 × 1024).
+  Standalone model-owned 256K weights+KV allocation and eager chunked-Gumbel evidence exist, but
+  262144 is **not** a currently validated live-vLLM served ceiling. Record the exact tested
+  `--max-model-len`; do not convert standalone fit into a serving claim.
+- **Non-aligned prompt lengths:** any valid prompt length within the tested served limit is accepted. The
   256-token *output* block granularity is not an input constraint; prefill pads to a 32-tile
   multiple internally. The reduced-surface run uses a deliberately non-256-aligned prompt.
 - **Datatype policy:** bf16 weights + bf16 KV cache + bf16 CCL (self-conditioning softmax/
@@ -210,7 +290,7 @@ Both saved verbatim under this dir and re-appliable with `git apply` from the vl
   4. `_build_runner_output` (~:2839) — emit all N tokens per request in the `ModelRunnerOutput`
      token list vLLM's engine core appends + detokenizes.
 
-### Live server launch
+### Historical live server launch (reproduction only; use the current contract above)
 
 ```bash
 source /home/zni/venvs/tt-diffusion-gemma/bin/activate

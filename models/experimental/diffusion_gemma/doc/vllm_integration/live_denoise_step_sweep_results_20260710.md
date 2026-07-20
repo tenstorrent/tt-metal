@@ -1,5 +1,10 @@
 # DiffusionGemma live traced denoise-step speed sweep — QB2
 
+> **HISTORICAL PERFORMANCE PROVENANCE (2026-07-10).** This is an explicitly configured,
+> prompt-only-prefix, capture-once argmax trace sweep. It is not the plain vLLM default, not
+> first-request TTFT, and not current growing-prefix multi-block throughput. Use `plan.md` Part 0
+> for the current launch and metric contract.
+
 Date: 2026-07-10
 Compact evidence: `live_denoise_step_sweep_results_20260710.json`
 Validation record: `live_denoise_step_sweep_validation_20260710.md`

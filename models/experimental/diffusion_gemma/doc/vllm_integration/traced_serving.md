@@ -1,5 +1,11 @@
 # DiffusionGemma — traced serving decode + context/early-halt benchmarks (dg-09, #47466/#47465)
 
+> **CURRENT SCOPE — 2026-07-17.** Trace is opt-in (`DG_VLLM_TRACE` defaults off), block 0 is
+> capture-inclusive, and growing contiguous-prefix shapes recapture across blocks. July-09/10
+> same-ID multi-block numbers below used prompt-only prefix visibility and are historical
+> same-shape performance provenance. Use `README.md` and `plan.md` Part 0 for current launch and
+> metric semantics.
+
 Enables **Metal TRACE capture/replay in the serving decode path** (a perf feature — NOT Tracy/device
 profiling; no profiler was run against a live server, per the `optimize`/`vllm-integration` skills),
 then benchmarks output speed vs context and the realized early-halt steps. Companion to `README.md`

@@ -14,7 +14,30 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 - Roofline changes fundamentally: there is **no incremental single-token KV read**; each of the ≤48 steps re-reads weights and recomputes over the full 256 canvas against the frozen prefix. Reconcile measured device time against per-step-weight-traffic × steps.
 - Keep every captured trace **shape- and operation-static** (on-device cutoff mask, tensor-valued scatter indices, warmed program cache). The shipping default replays a fixed 48-step trace. The landed opt-in `DG_DENOISE_EARLY_HALT` path shortens execution by replaying a one-step/window trace and reading one halt scalar between replays; it does not branch inside a captured trace. Under #48291 it currently halts 0/5 prompts and adds ~2% no-halt overhead, so it remains default OFF. Token-feedback tests become **canvas-feedback tests**.
 - **NEVER edit `models/demos/gemma4/`**; validate with the shared-directory gate using the actual `DG_BASE_REF`, not a stale local `main`. Optimize DiffusionGemma-local code and drive the backbone through existing knobs. Evidence goes under `models/experimental/diffusion_gemma/doc/<stage>/`.
-- **Read the `DiffusionGemma denoise-step optimization playbook` below before tuning any knob.** The selected shipping default is true-sparse+tuned MoE plus self-conditioning embedding prechunks and the logits/denominator L1 chain at **18.844 t/s @48**; start with `models/experimental/diffusion_gemma/doc/optimize_perf/selfcond_logits_l1_e2e.json`, `selfcond_logits_l1.md`, `README.md`, and `perf_campaign_worklog.md`. The older full-canvas L1 study is historical/ineligible default evidence: `DG_NORM_FULLCANVAS=1` reached **20.68 t/s (+15.8%)** but remains OFF because it is not bit-identical, and `DG_MOE_L1` was a wash. `early_halt.md`, `norm_fullcanvas_flip_gate.md`, and `l1_residency.md` document those closed paths. `path_to_100tps.md` is a roadmap whose starting-line numbers predate several landed optimizations.
+- **Read the `DiffusionGemma denoise-step optimization playbook` below before tuning any knob.**
+  The July-10 **18.844 t/s @48** row is historical warmed same-shape argmax trace replay with a
+  prompt-only prefix; it is not current first-request vLLM TTFT or correct growing-prefix
+  multi-block throughput. Current serving benchmarks must record explicit flags and use the
+  `plan.md` Part-0 execution contract. Start with `README.md`, `perf_campaign_worklog.md`,
+  `traced_serving.md`, and the newest dated evidence rather than selecting a headline by value.
+  The older full-canvas L1 study is historical/ineligible default evidence:
+  `DG_NORM_FULLCANVAS=1` reached **20.68 t/s (+15.8%)** but remains OFF because it is not
+  bit-identical, and `DG_MOE_L1` was a wash.
+
+### Current benchmark guardrails (2026-07-17)
+
+- A plain vLLM launch is not optimized: `DG_SPARSE_MOE`, `DG_DEDUP_ARGMAX`, and
+  `DG_VLLM_TRACE` default off; K defaults to 48. Record all four settings plus Gumbel mode.
+- For vLLM, split queue time, pure prefill, denoise, commit, trace capture, and replay. API-visible
+  tokens/s is not the block rate.
+- Pure prefill and serving prefill are different measurements. The current 64K-build pure-prefill
+  artifact is `context_window_prefill_only_chunkedlong_20260713_msl65536.json`.
+- `DG_PREFILL_RAGGED_LONG` defaults on: every multi-token prefill uses ragged top-8 experts and
+  sequences above 4096 are processed in 4096-token slices. The 4K→16K dense-MoE cliff in the
+  similarly named artifact without `chunkedlong` is a superseded pre-fix control. Set the flag to
+  `0` only when intentionally reproducing that fallback.
+- The July-15 quality decision supersedes blanket “expected garbage” language. Compare any
+  serving garbage against prompt-correct fp32/HF and current TT controls.
 
 This skill assumes you have runnable TTNN code with passing correctness tests. If not, first use the appropriate bringup or debugging skill. This guide is written for autoregressive LLMs with prefill and decode phases. If the target model differs, map each requirement to the nearest equivalent path and record that mapping; do not drop correctness or performance evidence.
 

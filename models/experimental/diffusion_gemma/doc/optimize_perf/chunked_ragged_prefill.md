@@ -1,6 +1,7 @@
 # Chunked ragged prefill — killing the >4096 MoE cliff
 
 Date: 2026-07-13 · Device target: QB2 / P150x4 / 4× Blackhole / TP=4 · Model: `diffusiongemma-26B-A4B-it`
+Throughput artifact source: `233b88276ab` · Current HEAD has not rerun this sweep.
 
 ## The cliff
 
@@ -79,7 +80,7 @@ S=4096 footprint (~0.55 GiB peak, ~9.2e7 element volumes) — flat at any contex
   coupled router+prefill dispatch (S=128/4096 → ragged, 16384 → dense when OFF; all multi-token →
   chunked when ON), and the chunk-loop plumbing (correct chunk-aligned slice boundaries incl. a
   32-row tail, N-way concat on dim 2, single-chunk fast-path, dense-routing passthrough, parent
-  routing freed). All 68 tests pass.
+  routing freed). The host suite passed.
 - **Device (QB2, PASSED):** `doc/optimize_perf/verify_chunked_ragged_prefill.py` (30 layers, full
   `diffusiongemma-26B-A4B-it`) — chunked-ragged == dense, logits **and** full KV cache
   `max_abs == 0`, at every case (`chunked_ragged_prefill_bitident.json`):
@@ -142,6 +143,6 @@ long-context *attention* cost, a separate lever from this MoE fix.
 
 ## Status
 
-Implemented, host-verified (34/34), **QB2 device bit-identical (`max_abs == 0`) and throughput-verified,
+Implemented, host-verified, **QB2 device bit-identical (`max_abs == 0`) and throughput-verified,
 default ON**. Set `DG_PREFILL_RAGGED_LONG=0` to force the shared dense fallback. The remaining 64K
 gap is attention (chunked SDPA at >32768), not MoE.

@@ -54,7 +54,7 @@
   },
   "decision": "Do not add or enable DG_SELFCOND_SPLIT_LOGITS. Keep sequential logits slices.",
   "limitations": [
-    "The trace harness uses RUN-first argmax because traced_denoise.py rejects real Gumbel noise.",
+    "Historical scope: this July-10 trace harness used RUN-first argmax because production Gumbel tracing had not landed yet. Current traced_denoise supports materialized/chunked Gumbel; do not treat this artifact as a current capability statement.",
     "The candidate was removed after measurement, so no separate diffusion-decision campaign was needed beyond the identical three-block commit digest."
   ]
 }

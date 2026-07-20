@@ -1,7 +1,7 @@
 {
   "date": "2026-07-09",
   "gate": "self-conditioning prechunk full-generation traced E2E",
-  "sampling_scope": "RUN-first argmax (gumbel_noise=None); traced_denoise.py rejects real Gumbel noise",
+  "sampling_scope": "Historical July-09 RUN-first argmax trace. Production Gumbel tracing had not landed at this artifact revision; current traced_denoise supports materialized/chunked Gumbel.",
   "production_sampler_evidence": {
     "decision_gate": "selfcond_prechunk_gumbel_decisions.json",
     "full_depth_256k": "selfcond_prechunk_256k_chunked.json",

@@ -1060,7 +1060,7 @@ the sweep was stopped after the decisive `gate_up` result to free the device.
 geometry inside it is optimal. The task's expected "@48 18 → low-20s from matmul geometry" is **not
 available** — the OPT-004 work that would have delivered it is already landed and in the 17.92 number.
 
-## Current selected default (2026-07-10) — self-conditioning logits L1 chain
+## Historical selected default (2026-07-10) — self-conditioning logits L1 chain
 
 The historical sessions above are superseded by two precision-preserving self-conditioning
 storage/placement batches. Persistent embedding prechunks removed 32 static weight slices. The

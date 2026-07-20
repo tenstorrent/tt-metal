@@ -7,7 +7,23 @@
     "tokens_per_block_per_s_at48": 18.844,
     "derived_warmed_traced_step_ms": 257.575,
     "full_generation_three_blocks_s": 153.9791,
-    "sampling_scope": "traced RUN-first argmax ranking; production chunked-Gumbel decisions and 256K capacity pass separately"
+    "sampling_scope": "traced RUN-first argmax ranking; production chunked-Gumbel decisions and 256K capacity pass separately",
+    "metric_scope": "warmed 256-token output-block throughput at K=48; not pure prefill or first-request TTFT",
+    "artifact_source_head": "0472860c40c3c100466cea407a506d7b4d1bb443",
+    "current_head_revalidated": false
+  },
+  "pure_prefill_current": {
+    "artifact": "context_window_prefill_only_chunkedlong_20260713_msl65536.json",
+    "artifact_source_head": "233b88276abf8a8383c9d1a8afeffb1d27a9c934",
+    "contract": "full 30-layer model, one max_seq_len=65536 build, prefill only, synchronized first execution per shape, DG_PREFILL_RAGGED_LONG=1",
+    "rows_tokens_per_s": {
+      "1024": 1309.3833,
+      "4096": 2986.5794,
+      "8192": 1972.5848,
+      "16384": 2950.1832,
+      "32768": 3021.5252,
+      "65536": 1841.8443
+    }
   },
   "device": "QB2 / bh-qbge-06 / P150x4, mesh [1,4], TP=4, fabric FABRIC_1D",
   "baseline_sha": "aff8f2105d3",

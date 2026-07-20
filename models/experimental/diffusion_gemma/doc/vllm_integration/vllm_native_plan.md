@@ -1,5 +1,10 @@
 # DiffusionGemma → vLLM-native serving: technical plan (#47466)
 
+> **DESIGN DOCUMENT, not current launch/performance status.** Produced 2026-07-07; file:line
+> references and intermediate capability statements may be stale. The keystone (vLLM-owned paged
+> KV plus non-zero-position write and paged denoise read) remains open. Use `README.md` and
+> `plan.md` Part 0 for the 2026-07-17 execution contract.
+
 Make DG's serving features **vLLM-native** (engage the framework's APC / chunked-prefill /
 continuous-batching / speculative-decode) instead of the current model-side prototypes, on the
 tenstorrent/vllm TT plugin. Grounded in the real code (file:line); load-bearing claims independently

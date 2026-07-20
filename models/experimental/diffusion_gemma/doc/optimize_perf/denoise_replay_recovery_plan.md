@@ -1,5 +1,12 @@
 # Plan: recover traced-denoise replay via a paged prefix (high-level)
 
+> **SUPERSEDED 2026-07-19 — see `paged_prefix_denoise_design.md`.** The §7 "fixed-max prefix +
+> reveal-mask" recovery is now IMPLEMENTED and **bit-exact on the full 30-layer 26B model** on QB2
+> (`DG_DENOISE_REVEAL_MASK`, capture-once, 0 recapture, 1.68× faster; reveal==recapture==eager
+> committed_sha256). The §1–6 true-paged read (this doc) is now **Phase 2** (T8, 128K/256K endgame)
+> whose primitives (`return_lse` SDPA kernel + `merge_attention_partials`) are also device-verified.
+> This doc is retained as the recon record.
+
 Status: PLAN ONLY (no implementation). Approach chosen: **paged prefix read**.
 
 ## 0. Goal

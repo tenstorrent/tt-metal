@@ -31,6 +31,27 @@ Do not advertise async decode or vLLM APC until their block-granular contracts
 are implemented and tested. The local `DG_PREFIX_CACHE` prototype is not vLLM
 APC.
 
+## Current launch contract (2026-07-17)
+
+Never benchmark or judge quality from an implicit launch:
+
+- Set `DG_SPARSE_MOE=1`; it defaults off and otherwise denoise computes the dense 128-expert path.
+- Set `DG_DEDUP_ARGMAX=1` for argmax controls; it defaults off.
+- Set `DG_VLLM_MAX_DENOISE_STEPS` explicitly; unset means K=48.
+- Set `DG_VLLM_GUMBEL_MODE` explicitly (`argmax` is a fast/RUN control; `chunked` is the
+  production sampler).
+- Set `DG_VLLM_TRACE` explicitly. Unset is eager. Trace block 0 is capture-inclusive and current
+  growing contiguous-prefix shapes recapture across blocks.
+- Pass `--generation-config vllm`; otherwise checkpoint config caps output at one 256-token block.
+- Pass `--max-num-batched-tokens >= largest whole prompt`; TT chunked prefill is not scheduler
+  admission and oversized prompts otherwise remain waiting.
+- Model-side `DG_PREFILL_RAGGED_LONG` defaults on and slices prompts above 4096 through the ragged
+  top-8 MoE path. For pure-prefill numbers, use
+  `context_window_prefill_only_chunkedlong_20260713_msl65536.json`; the artifact without
+  `chunkedlong` is the superseded dense-fallback control.
+- Do not use `ignore_eos=true` for qualitative judgment; it exposes the post-EOS physical canvas.
+- HTTP temperature/top-p/top-k/seed are not wired into the denoise loop.
+
 ## Block contract
 
 - `prefill_forward` writes prompt KV, creates the stateful denoise adapter, and
@@ -109,7 +130,10 @@ For a real server, use the project-matching tenstorrent/vllm environment and:
 python -m vllm.entrypoints.openai.api_server \
   --model <checkpoint> \
   --served-model-name diffusiongemma-26B-A4B-it \
-  --max-model-len 262144 \
+  --generation-config vllm \
+  --max-model-len <validated-served-limit> \
+  --max-num-batched-tokens <largest-whole-prompt> \
+  --block-size 64 \
   --max-num-seqs 1
 ```
 
@@ -126,9 +150,11 @@ skill.
   `prompt_len → +256 → +512`.
 - Verify EOS/length trimming without corrupting physical whole-block commit.
 - Compare served output with the same full-model RUN-path control.
-- Use `qualitative-check`; RUN-first coherent-or-degenerate behavior must be
-  classified against #48291 rather than mistaken for an adapter regression.
-- Preserve non-aligned prompt lengths and the 262144 context contract.
+- Use `qualitative-check`. The July-15 control demonstrates coherent TT output at the intrinsic
+  bf16 diffusion floor, so persistent garbage is required work unless the same prompt/config
+  control reproduces it. Check EOS-tail exposure, argmax-vs-chunked mode, K, and prompt formatting.
+- Preserve non-aligned prompt lengths and the HF 262144 prompt+generated contract, but distinguish
+  standalone allocation evidence from the exact live-vLLM `--max-model-len` actually validated.
 
 ## Trace and performance
 
@@ -151,6 +177,10 @@ Do not derive a headline from vLLM per-token TPOT/ITL or
 `1000 / mean_tpot_ms`; the scheduler emits blocks. If generic vLLM JSON reports
 those fields, retain them only as raw transport diagnostics and label them
 non-semantic for DiffusionGemma.
+
+Also do not use API-visible `completion_tokens / wall_time` as a device rate: EOS trimming changes
+the numerator and `max_num_seqs=1` queueing changes the denominator. Use `DG_VLLM_METRIC` block
+latency and `256 / block_latency`.
 
 Do not run Tracy, `tt-perf-report`, or live-server device profiling in this
 stage. Use same-harness before/after serving metrics and earlier non-serving

@@ -4,6 +4,28 @@
   "hf_model_type": "diffusion_gemma",
   "tt_vllm_architecture": "TTDiffusionGemmaForBlockDiffusion",
   "tt_vllm_adapter": "models.experimental.diffusion_gemma.tt.generator_vllm:DiffusionGemmaForCausalLM",
+  "current_execution_contract_20260717": {
+    "authoritative_status": "plan.md Part 0 current execution contract",
+    "plain_vllm_defaults": {
+      "DG_SPARSE_MOE": "off",
+      "DG_DEDUP_ARGMAX": "off",
+      "DG_VLLM_TRACE": "off",
+      "DG_VLLM_MAX_DENOISE_STEPS": 48,
+      "DG_VLLM_GUMBEL_MODE": "argmax"
+    },
+    "required_server_flags": [
+      "--generation-config vllm",
+      "--max-num-batched-tokens >= largest whole prompt",
+      "--max-num-seqs 1",
+      "--block-size 64"
+    ],
+    "request_sampling": "HTTP temperature/top_p/top_k/seed are not consumed by the DG denoise loop; use explicit process-level DG settings.",
+    "eos": "ignore_eos=true is a transport stress control that exposes the physical post-EOS canvas tail; never use it for a quality verdict.",
+    "metrics": "Use DG_VLLM_METRIC prefill/denoise/commit/block fields and 256/block_latency. API completion_tokens/wall_time includes EOS trimming and queueing.",
+    "prefill": "DG_PREFILL_RAGGED_LONG defaults on and processes prompts above 4096 in 4096-token ragged top-8 slices. Current pure-prefill evidence is doc/optimize_perf/context_window_prefill_only_chunkedlong_20260713_msl65536.json at 233b88276ab; the artifact without chunkedlong is the superseded dense-fallback control.",
+    "trace": "Growing contiguous-prefix shapes recapture across blocks. July-10 same-ID rows used prompt-only prefix visibility and are historical.",
+    "served_context": "HF advertises 262144. Standalone model-owned 256K fit evidence exists, but current live vLLM serving is not validated end-to-end at 262144; do not advertise a live served ceiling from allocation evidence alone."
+  },
   "max_model_len": 262144,
   "hf_advertised_context": 262144,
   "max_model_len_provenance": "HF config text_config.max_position_embeddings = 262144 (256K). Equals canvas_length(256) * max_blocks(1024). This is the capacity limit for prompt + generated, NOT a requirement that prompts be 262144 tokens (HF DiffusionGemmaGenerationMixin.generate computes max_length = input_len + max_new_tokens).",
@@ -11,7 +33,7 @@
     "device": "QB2 / bh-qbge-06 / P150x4 (2 Blackhole PCIe cards, 4 Tensix, TP=4, (1,4) mesh)",
     "fit": "Full 30-layer 26B-A4B build + 256K KV caches allocate on the (1,4) mesh: post-build DRAM 29.704 GiB/chip used, 2.163 GiB/chip free (plan.md 2026-07-02 full-depth 256K probe).",
     "sampler_constraint": "Full-vocab (262144) on-device Gumbel/noise materialization OOMs in the fragmented DRAM remaining after 256K-KV allocation (ttnn.rand asks for ~1 GiB; largest free block ~101 MiB/bank). The chunked/no-materialize Gumbel sampler (tt/sampling.py::gumbel_max_with_chunked_noise, --chunked-gumbel-sampling) fits full-depth 256K + canvas_length=256: DG_TEXT_DEMO_SUCCESS at 29.704 GiB/chip used.",
-    "verdict": "262144 is the advertised and servable context. No reduction below the HF-advertised context. Serving must use the chunked-Gumbel sampler (or argmax RUN-first sampler) at full 256K to stay within DRAM."
+    "verdict": "262144 is the HF-advertised prompt+generated capacity and has standalone model-owned fit evidence. It is not a currently validated live-vLLM served ceiling. Live serving must state the tested max_model_len separately; full 256K requires the memory-bounded chunked-Gumbel sampler and additional vLLM admission/memory validation."
   },
   "output_block_granularity": {
     "canvas_length": 256,

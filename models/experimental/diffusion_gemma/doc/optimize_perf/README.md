@@ -1,9 +1,32 @@
 # DiffusionGemma — optimize-perf stage (#47465)
 
+> **CURRENT READING ORDER — 2026-07-17.** Use `plan.md` Part 0 for launch/metric defaults,
+> then the newest entries in `perf_campaign_worklog.md`. Every July-10 headline below is dated
+> evidence, not an implicit current serving configuration.
+
+Current guardrails:
+
+- `DG_SPARSE_MOE`, `DG_DEDUP_ARGMAX`, and `DG_VLLM_TRACE` default off; K defaults to 48. A plain
+  server is dense eager K=48, not the tuned trace benchmark.
+- The historical 18.844 t/s row is warmed same-shape argmax trace replay with prompt-only prefix
+  visibility. Do not use it as first-request TTFT or growing-prefix multi-block throughput.
+- Pure prefill, serving prefill, and prefill+block-0 TTFT are different metrics.
+- `DG_PREFILL_RAGGED_LONG` defaults on. Every multi-token prefill uses the ragged top-8 path;
+  sequences above 4096 are processed in 4096-token slices. Setting it to `0` is a diagnostic
+  control that reproduces the historical dense all-128-expert fallback and 4K→16K cliff.
+- The current pure full-depth 64K-build artifact is
+  `context_window_prefill_only_chunkedlong_20260713_msl65536.{json,md}`:
+  1K 0.78 s, 4K 1.37 s, 8K 4.15 s, 16K 5.55 s, 32K 10.84 s, 64K 35.58 s.
+  These are synchronized first executions per shape and include shape-specific first-use
+  compilation. The similarly named artifact without `chunkedlong` is the superseded dense-fallback
+  control, not the current default.
+- The July-15 fidelity control shows coherent TT output at the intrinsic bf16 floor. Persistent
+  serving garbage is not an accepted performance tradeoff.
+
 > **Historical dg-08 snapshot.** The 4175.7 ms/step, 137.55 ms/layer, and
 > sequential-commit numbers below predate true-sparse MoE, OPT-004, batched
 > commit, traced denoise, and the L1-residency pass. Do not quote them as the
-> current model. The 2026-07-10 final unset-default reproduction is
+> model current at that revision. The 2026-07-10 final unset-default reproduction is
 > **18.844 t/s @48**; the
 > `DG_NORM_FULLCANVAS=1` measured 20.68 t/s historically but failed its
 > decision-fidelity flip gate and is ineligible as the selected default. Start with
@@ -22,7 +45,7 @@ prechunk and logits-L1 batches change storage/copy placement only. No
 See `work_log.md` for the full topology audit, per-op tables, candidate tables, and roofline; this
 README is the summary + artifact index.
 
-## Current selected default (2026-07-10)
+## Historical selected default (2026-07-10)
 
 The self-conditioning soft embedding still uses the exact existing sequence of 32 ordered
 8192-vocabulary BF16 matmuls and additions, but its tied embedding table is now stored as 32
@@ -45,8 +68,9 @@ the established `a9f0d18709b07d1e` three-block commit digest. Every persisted fu
 clean argmax, sampled token, entropy, accept mask, renoised next-canvas, and explicit clean commit
 candidate hash is also exact under identical initial canvas, Gumbel descriptors, and injected
 renoise tokens. The production chunked-Gumbel path passes the same 48-step gate and a full-budget
-256K capability smoke. Traced throughput remains explicitly RUN-first argmax because
-`traced_denoise.py` rejects real Gumbel noise. Full evidence, commands, 256K capacity
+256K capability smoke. At the time of this July-10 artifact traced throughput was RUN-first argmax
+only; production Gumbel tracing landed later and is documented in
+`doc/vllm_integration/traced_chunked_gumbel_20260713.json`. Full evidence, commands, 256K capacity
 accounting, watcher results, cross-process variance, the lack of a complete-generation win, and
 final-default policy are in
 `selfcond_logits_l1.md` and `selfcond_logits_l1_e2e.json`. The underlying prechunk batch remains
@@ -130,7 +154,7 @@ eager, device canvas feedback).
   control versus selected default.
 - `selfcond_prechunk_256k_chunked.json` / `selfcond_prechunk_watcher_summary.json` — full-budget
   production-sampler 256K capability and complete four-device watcher attach/detach evidence.
-- `selfcond_logits_l1.md` / `selfcond_logits_l1_e2e.json` — current selected-default L1 placement,
+- `selfcond_logits_l1.md` / `selfcond_logits_l1_e2e.json` — July-10 selected-default L1 placement,
   independent-process A/B, synchronized component evidence, and required unset-default reproduction.
 - `selfcond_logits_l1_decisions.json` / `selfcond_logits_l1_gumbel_decisions.json` — exact @48
   diffusion-decision gates for RUN-first argmax and production chunked-Gumbel.
@@ -140,9 +164,23 @@ eager, device canvas feedback).
   experiment; targeted component unchanged and canonical warmed @48 throughput -0.12%, so removed.
 - `selfcond_vocab_chunk_rejection.md` / `.json` — larger online-softmax grouping reached
   +0.95% warmed @48 but changed the canonical clean-commit digest, so the selector was removed.
+- `context_window_prefill_only_chunkedlong_20260713_msl65536.{json,md}` — current pure-prefill
+  64K-build table with long-context chunked-ragged prefill enabled.
+- `chunked_ragged_prefill.md` / `chunked_ragged_prefill_bitident.json` /
+  `verify_chunked_ragged_prefill.py` — root cause, implementation, exactness, and throughput evidence
+  for removing the historical >4096 dense-MoE fallback.
 - `artifacts/*.log` — raw run logs; `tracy/` — tt-perf-report CSV/tables.
 
-## Exact causal-prefill MoE geometry (2026-07-10)
+## Current pure prefill — chunked ragged long (2026-07-13)
+
+The default `tt/prefill_moe.py` dispatcher keeps routing and expert execution on the ragged top-8
+path for every multi-token sequence. Above `RAGGED_PREFILL_CHUNK=4096`, it slices the token axis and
+reuses the validated ragged program. The 64K-build pure-prefill sweep at `233b88276ab` measured
+**2950 tok/s at 16K**, **3022 tok/s at 32K**, and **1842 tok/s at 64K**. The 64K decline is the
+separate long-context attention-chunking cost, not a return to dense MoE. See
+`context_window_prefill_only_chunkedlong_20260713_msl65536.md`.
+
+## Historical exact causal-prefill MoE geometry evidence (2026-07-10)
 
 The stock Gemma4 expert prefill runs the dense all-128-expert `sparse_matmul` in 32-token
 chunks with `in0_block_w=1` and an N-divisor-limited core grid. DiffusionGemma now keeps
@@ -172,7 +210,8 @@ measured Blackhole TP=4 program geometry locally (`tt/prefill_moe.py`). Gate/up 
   `TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1`; all four devices attached/detached,
   the error scan had zero matches, and exact logits/KV/non-aligned gates passed. See
   `prefill_moe_watcher.json` and `prefill_moe_watcher_summary.json`.
-- Full-depth context rerun (30 layers, QB2, synchronized wall time) measured **239.7–362.9
+- The pre-chunked-long full-depth session context rerun (30 layers, QB2, synchronized wall time)
+  measured **239.7–362.9
   prefill tok/s through 32K**, 275.5 tok/s at 65,024 tokens, and 218.4 tok/s at 130,560
   tokens. Relative to the 2026-07-08 issue table, prefill improved **4.05–6.78x**:
   32K fell 562.4 -> 99.4 s, 65K fell 1146.1 -> 236.0 s, and 130K fell

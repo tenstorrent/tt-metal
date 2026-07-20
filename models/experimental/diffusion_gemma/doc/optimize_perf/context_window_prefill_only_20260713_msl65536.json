@@ -1,7 +1,9 @@
 {
   "schema_version": 1,
   "status": "passed",
-  "label": "current-64k-build-prefill-only",
+  "label": "historical-pre-chunked-long-64k-build-prefill-only",
+  "evidence_scope": "historical pre-fix control with the >4096 dense-MoE fallback; not current default performance",
+  "superseded_by": "context_window_prefill_only_chunkedlong_20260713_msl65536.json",
   "tt_metal_head": "ec5b64b4891d8babfa3829a886d53068c5b2d889",
   "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
   "hardware": {

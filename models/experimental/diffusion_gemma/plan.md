@@ -10,7 +10,9 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 > **TL;DR.** The text backbone is identical to the in-repo **Gemma-4 26B-A4B MoE** (`models/demos/gemma4/`). The real work is the **generation procedure**, not the backbone: a block-autoregressive multi-canvas *text-diffusion* loop with **bidirectional canvas attention**, a **three-phase KV-cache state machine**, **entropy-budget acceptance sampling**, and **self-conditioning**. Bring up text-first on QB2.
 
 **How this document is organized:**
-- **Part 0 — Current status & roadmap** — where we are, the two gaps, the **RUN-first critical path** (get the loop emitting text; correctness deferred), the phased roadmap, and current biggest risks. **Read first.**
+- **Part 0 — Current execution contract + dated status history** — the 2026-07-17 launch,
+  metric, quality, and prefill contract is authoritative; older RUN-first/two-gap narratives are
+  retained below as history. **Read first.**
 - **Part I — The plan** — goals, model summary, reuse-vs-build, milestones, the issue-level dependency graph, per-issue workstreams, validation strategy, the risk register, serving notes, and references.
 - **Part II — Device execution spec** — the `/loop` protocol, env/run recipe, ground rules, the decision-fidelity bar, and the W1–W4 device workstream specs + acceptance.
 - **Part III — Implementation status** — environment constraints, the per-workstream status table, session notes, the 2026-06-26 / 06-29 / 06-30 code reviews + fix verification, and build order.
@@ -21,6 +23,64 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 ---
 
 ## Part 0 — Current status & roadmap
+### Current execution contract (2026-07-17 — authoritative)
+
+Read this section before using any older status table or benchmark below. Dated July-02/10/13
+sections are retained as history and do not define the current serving launch or performance
+baseline.
+
+**vLLM launch requirements**
+
+- The TT adapter defaults are conservative, not performant: `DG_SPARSE_MOE` defaults OFF,
+  `DG_DEDUP_ARGMAX` defaults OFF, `DG_VLLM_TRACE` defaults OFF, and
+  `DG_VLLM_MAX_DENOISE_STEPS` defaults to the released K=48 budget. A server that does not set
+  these explicitly runs dense-128 eager denoise.
+- Always pass `--generation-config vllm` for requests beyond one 256-token canvas. Without it,
+  checkpoint `generation_config.json` overrides `max_tokens` to 256; `max_tokens=1024` still emits
+  block 0 only and no `decode_forward` rows.
+- Set `--max-num-batched-tokens` at least as large as the largest whole prompt scheduled by the TT
+  backend. Chunked prefill is not a scheduler feature on this path; otherwise long requests can sit
+  in `Waiting` without entering the model.
+- `ignore_eos=true` is a transport stress control only. It exposes all physical canvas tokens,
+  including the tail after the first EOS; do not use that tail for a quality verdict.
+- HTTP `temperature`, `top_p`, `top_k`, and per-request seed are not currently consumed by the
+  DiffusionGemma denoise loop. Sampling mode/step budget are process-level DG settings.
+
+**Use an explicit profile**
+
+- Correctness / production-sampler control: `DG_SPARSE_MOE=1`,
+  `DG_SPARSE_MOE_TUNED=1`, `DG_VLLM_GUMBEL_MODE=chunked`, K=48. Keep normal EOS handling.
+- Fast functional/transport control: `DG_SPARSE_MOE=1`, `DG_SPARSE_MOE_TUNED=1`,
+  `DG_DEDUP_ARGMAX=1`, `DG_VLLM_GUMBEL_MODE=argmax`, and an explicitly labeled reduced K such as
+  12. This is not the production-sampler quality gate.
+- Trace benchmark only: additionally set `DG_VLLM_TRACE=1` and a validated
+  `DG_TRACE_REGION_SIZE`. Report capture-inclusive block 0 separately. Growing contiguous-prefix
+  shapes still require recapture; historical same-ID cross-block rows used a prompt-only prefix.
+
+**Metric contract**
+
+- One model step emits a physical 256-token block. Report `prefill_s`, prefill+block-0 TTFT,
+  `denoise_steps`, denoise/commit/block latency, and `256 / block_latency` output tok/s.
+- API-visible `completion_tokens / wall_time` depends on EOS trimming and queueing and is not a
+  device throughput metric. With `max_num_seqs=1`, curl wall time may include another request.
+- The July-10 18 tok/s tables are historical warmed same-shape trace replay, not first-request TTFT
+  and not current growing-prefix multi-block throughput.
+
+**Current qualitative interpretation**
+
+- The July-15 fp32/bf16 control shows TT can produce coherent prompt-correct output at the intrinsic
+  bf16 diffusion floor. Persistent garbage from a server launch is therefore a configuration or
+  serving regression to investigate, not an expected blanket consequence of #48291.
+
+**Prefill measurement contract**
+
+- Distinguish pure `prefill_prompt_tokens` timing from serving TTFT and from
+  `BlockDiffusionServingSession.prefill`, which also constructs generation state.
+- `tt/prefill_moe.py` defaults `DG_PREFILL_RAGGED_LONG=1`: every multi-token prefill uses ragged
+  top-8 expert execution, and sequences above 4096 are processed in 4096-token slices. The
+  4K→16K dense-MoE cliff belongs to the pre-fix `ec5b64b4891` control only. Current pure-prefill
+  evidence is `context_window_prefill_only_chunkedlong_20260713_msl65536.json` at `233b88276ab`.
+
 > **Priority (2026-07-02): RUN-first — get the loop emitting text end-to-end on hardware; `#48291` correctness is explicitly deferred.** The near-term goal is a prompt→text device run at small scale, *accepting degenerate output* (EOS-heavy / garbage): the bf16/MoE backbone only ~50% argmax-agrees with HF and diffusion commits the clean argmax, so text quality is *known* to be poor until fidelity work happens — that is acceptable for the RUN milestone. *(The "~50% argmax → poor/degenerate output" premise is superseded 2026-07-15: see the Status addendum above — the real full-trajectory output is coherent and TT is at/above the intrinsic bf16 floor.)* Everything fidelity-shaped (#48291, R0.5/R0.6 replay, the staged-GQA PCC test, the shared-gemma4 decode gate-vs-rebaseline) is moved to the **Deferred — correctness track** below and is **not** on the RUN critical path.
 >
 > The original four device workstreams (W1–W4, Part II) are now mostly done or blocked. This roadmap is authoritative for "what to do next"; W1–W4 in Part II are the detailed specs for the pieces they cover.
@@ -109,10 +169,13 @@ sign-off).**
 **One-line status on the serving/perf issues (2026-07-15, all on
 `diffusion-gemma-function`; no shared-gemma4 edits in this work):**
 
-- **#47466 (chunked/vLLM prefill):** live TTFT **20-25x faster** on the real
-  `tenstorrent/vllm` path (prefill 1024 15.07→0.60 s, 16384 ~270→13.5 s); the >4096 MoE
-  prefill cliff is gone via default-on chunked ragged prefill (bit-identical, `233b88276ab`);
-  the 32K serving stall is root-caused + fixed (`FullAttentionSpec` for sliding layers,
+- **#47466 (chunked/vLLM prefill):** live TTFT **20-25x faster** on the explicitly exercised
+  `tenstorrent/vllm` chunked/ragged path (prefill 1024 15.07→0.60 s, 16384 ~270→13.5 s);
+  that path removes the >4096 MoE cliff (bit-identical, `233b88276ab`). The direct
+  `prefill_prompt_tokens` path now uses the same default-on 4096-token chunked-ragged dispatcher:
+  current 64K-build pure-prefill evidence measures 16K **5.55 s**, 32K **10.84 s**, and 64K
+  **35.58 s**. The 32K serving
+  stall is root-caused + fixed (`FullAttentionSpec` for sliding layers,
   QB2-verified 32768 prefill 11.96 s, `210a60f0ac1`). Open: traced-denoise replay recovery,
   256K KV-memory-bound (~128K bf16 ceiling), upstream #47488, single-sequence cache.
 - **#49526 (traced denoise):** production chunked-Gumbel tracing + growing-prefix
@@ -124,9 +187,10 @@ sign-off).**
   tt-metal (`FullAttentionSpec`, `210a60f0ac1`, QB2 32768 prefill 11.96 s); the runner/
   scheduler N-token contract remains fork patches with no upstream PR; paged-cache
   ownership is unimplemented so `--max-num-seqs 1` stays mandatory (#47557).
-- **#47465 (decode/denoise perf):** throughput vs denoise-step `K` measured (`K=48`
-  model-faithful ~18 tok/s; device-proven traced sparse-MoE @16 = 78.3, @6 = 155.9 tok/s,
-  bit-identical, `6edc78938f4`); step time is MoE-machinery-dominated; the fused MoE
+- **#47465 (decode/denoise perf):** historical prompt-only-prefix throughput vs denoise-step `K`
+  measured (`K=48` ~18 tok/s; device-proven traced sparse-MoE @16 = 78.3, @6 = 155.9 tok/s,
+  bit-identical, `6edc78938f4`). These are explicit tuned trace rows, not plain-server defaults or
+  growing-prefix serving throughput. Step time is MoE-machinery-dominated; the fused MoE
   dispatch kernel landed (`DG_MOE_DISPATCH_FUSED2`, default off); decode opts
   (`DG_SPARSE_MOE`/`DG_DENOISE_TRACED`) stay opt-in pending PCC + t/s validation.
 

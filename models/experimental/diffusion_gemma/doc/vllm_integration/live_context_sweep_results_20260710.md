@@ -1,5 +1,11 @@
 # DiffusionGemma live traced speed by context — QB2
 
+> **HISTORICAL PERFORMANCE PROVENANCE (2026-07-10).** These rows used explicit sparse/tuned
+> argmax trace settings and replayed a prompt-only frozen-prefix shape across output blocks.
+> They are not current default-server TTFT, not growing-prefix multi-block throughput, and not
+> evidence for an implicit vLLM launch. Use `plan.md` Part 0 and `doc/vllm_integration/README.md`
+> for the current execution contract.
+
 Date: 2026-07-10
 Evidence: `live_context_sweep_results_20260710.json`
 

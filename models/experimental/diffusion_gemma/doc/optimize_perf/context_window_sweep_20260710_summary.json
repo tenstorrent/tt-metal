@@ -2,10 +2,13 @@
   "schema_version": 1,
   "date_utc": "2026-07-10",
   "status": "passed",
+  "evidence_scope": "historical mixed prefill + two output-block sweep; not the current pure-prefill table and not an implicit vLLM launch",
+  "current_pure_prefill_artifact": "context_window_prefill_only_chunkedlong_20260713_msl65536.json",
   "title": "Prefill + output speed vs context after exact prefill-MoE geometry tuning",
   "hardware": "QB2 P150x4, Blackhole, mesh (1,4), TP=4",
   "tt_metal_head": "76b1810ea2a42ef992ac3bacb8a0ca5a20fc138b",
   "contract": {
+    "mode": "session_prefill_plus_two_output_blocks",
     "model": "google/diffusiongemma-26B-A4B-it",
     "num_layers": 30,
     "expert_weight_dtype": "bfloat16",
