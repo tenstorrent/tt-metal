@@ -240,7 +240,7 @@ jobs:
   # Blackhole - Multi-card unit tests
   generate-bh-matrix:
     if: ${{ inputs.run-bh-multi-card-unit-tests }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       runner-matrix: ${{ steps.set-runner-matrix.outputs.matrix }}
     steps:

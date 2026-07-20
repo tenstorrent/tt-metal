@@ -38,7 +38,7 @@ permissions:
 jobs:
   parse-comment:
     if: github.event_name == 'issue_comment' && github.event.issue.pull_request
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       should-run: ${{ steps.parse.outputs.should-run }}
       branch: ${{ steps.parse.outputs.branch }}
@@ -248,7 +248,7 @@ jobs:
   find-pr:
     needs: [parse-comment]
     if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && needs.parse-comment.outputs.should-run == 'true'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       pr-number: ${{ steps.find-pr.outputs.pr-number }}
       pr-exists: ${{ steps.find-pr.outputs.pr-exists }}
@@ -296,7 +296,7 @@ jobs:
   bypass-approval:
     needs: [parse-comment, find-pr]
     if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'true' && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Approve PR
         run: |
@@ -445,7 +445,7 @@ jobs:
   bypass-unauthorized:
     needs: [parse-comment, find-pr]
     if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'false' && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Post unauthorized message
         run: |
@@ -477,7 +477,7 @@ jobs:
   get-reviews:
     needs: [find-pr]
     if: always() && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       approved-reviewers: ${{ steps.get-reviews.outputs.approved-reviewers }}
     steps:
@@ -560,7 +560,7 @@ jobs:
   analyze-codeowners:
     needs: [find-pr, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       codeowners-groups: ${{ steps.analyze.outputs.codeowners-groups }}
       codeowners-teams: ${{ steps.analyze.outputs.codeowners-teams }}
@@ -923,7 +923,7 @@ jobs:
   post-comment:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Generate comment data
         id: generate-comment

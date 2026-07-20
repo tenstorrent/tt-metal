@@ -7,6 +7,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 
+# Tag each line with [hostname], adding [HH:MM:SS] only when the line has no
+# timestamp of its own so tool logs aren't stamped twice. Ranks prepend a bare
+# "[host] " prefix at the source; this keeps that host, adds the time, and passes
+# already fully-tagged lines through unchanged (idempotent under a second pass).
+tag_stream() {
+    local line host rest
+    local esc=$'\x1b'
+    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '   # already [host][time]
+    local rank_re='^\[([^][]*)\] (.*)$'                                # rank's bare [host] prefix
+    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"  # leading timestamp, ANSI-tolerant
+    local self="${HOSTNAME:-$(hostname)}"
+    while IFS= read -r line; do
+        if [[ "$line" =~ $done_re ]]; then
+            printf '%s\n' "$line"
+            continue
+        fi
+        if [[ "$line" =~ $rank_re ]]; then
+            host="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+        else
+            host="$self"
+            rest="$line"
+        fi
+        if [[ "$rest" =~ $ts_re ]]; then
+            printf '[%s] %s\n' "$host" "$rest"
+        else
+            printf '[%s][%(%H:%M:%S)T] %s\n' "$host" -1 "$rest"
+        fi
+    done
+}
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -311,8 +342,8 @@ mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
 
-# Redirect all output: terminal sees colors, log file gets ANSI/CR stripped
-exec > >(tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
+# Tag all output; terminal keeps colors, log file gets ANSI/CR stripped.
+exec > >(tag_stream | tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
 echo "Logging to: $LOG_FILE"
 
 # --check: dry run to verify MPI can reach all hosts, then exit
@@ -390,8 +421,8 @@ echo ""
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
-    # Host-tag every reset line for attribution. tt-smi writes key progress to the tty (not stdout) so
-    # run under `script`; the tr/sed/awk pipeline collapses its animated \r/spinner output, keeps colors.
+    # tt-smi writes progress to the tty (not stdout), so run under `script`; the
+    # tr/sed/awk pipeline collapses its animated \r/spinner output and keeps colors.
     read -r -d '' RESET_CMD <<'RESET_CMD' || true
 set -o pipefail
 h=$(hostname)
@@ -407,13 +438,13 @@ script -qefc "tt-smi -glx_reset" /dev/null |
     }
     END { if (seen) print buf }' |
     while IFS= read -r line; do
-        printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line"
+        printf '[%s] %s\n' "$h" "$line"
     done
 ec=${PIPESTATUS[0]}
 if [[ $ec -eq 0 ]]; then
-    printf '[%s][%(%H:%M:%S)T] Reset completed successfully\n' "$h" -1
+    printf '[%s] Reset completed successfully\n' "$h"
 else
-    printf '[%s][%(%H:%M:%S)T] Reset failed | Exit code: %s\n' "$h" -1 "$ec"
+    printf '[%s] Reset failed | Exit code: %s\n' "$h" "$ec"
 fi
 RESET_CMD
     mpirun --host "$HOSTS" \
@@ -443,8 +474,10 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
 
     run_cluster_validation() {
         if [[ -n "$DOCKER_IMAGE" ]]; then
+            # --tag-host makes mpi-docker prefix each rank with [hostname]; tag_stream adds the time.
             ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
                 --empty-entrypoint \
+                --tag-host \
                 --mpi-interface "$MPI_IF" \
                 --volume /data/scaleout_configs \
                 "${MPI_EXTRA_ARGS[@]}" \
@@ -452,12 +485,14 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
                 ./build/tools/scaleout/run_cluster_validation \
                 "${VALIDATION_ARGS[@]}"
         else
+            # Bare [host] tag on the rank (only the rank knows its hostname); tag_stream
+            # adds the time. pipefail keeps run_cluster_validation's real exit code.
+            local _bin_cmd
+            _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation "${VALIDATION_ARGS[@]}")
             mpirun --host "$HOSTS" \
                 --mca btl_tcp_if_include "$MPI_IF" \
                 "${MPI_EXTRA_ARGS[@]}" \
-                --tag-output \
-                ./build/tools/scaleout/run_cluster_validation \
-                "${VALIDATION_ARGS[@]}"
+                bash -c "set -o pipefail; h=\$(hostname); $_bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
         fi
     }
 
