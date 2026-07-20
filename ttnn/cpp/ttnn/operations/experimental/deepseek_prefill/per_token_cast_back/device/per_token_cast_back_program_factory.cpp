@@ -75,6 +75,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     // pages, and the reader fills the [tile_h x 128] block as one contiguous run.
     constexpr uint32_t block_w = fp8::BLOCK_W;  // BlockW: 128 elements
 
+    const uint32_t TILE_BYTES = tile_h * tile_w * sizeof(float);
     const uint32_t block_wt = block_w / tile_w;  // BlockWt: tiles across the 128-wide block
     constexpr uint32_t block_ht = 1;             // BlockHt: one tile-height batch
     const uint32_t tiles_per_block = block_ht * block_wt;
@@ -103,9 +104,6 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const DataFormat fp8_df = DataFormat::Fp8_e4m3;
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
-    // The scale is fp32: decode E4M3 -> fp32, then tilize / bcast-multiply / untilize in fp32 (HiFi4).
-    const DataFormat compute_df = fp32_df;
-    const uint32_t compute_tile_bytes = tile_h * tile_w * 4u;
 
     constexpr uint32_t cb_input_e4m3_idx = CBIndex::c_0;
     constexpr uint32_t cb_in_rm_idx = CBIndex::c_1;
@@ -115,9 +113,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     constexpr uint32_t cb_scale_scratch_idx = CBIndex::c_6;
     constexpr uint32_t cb_out_idx = CBIndex::c_16;
 
-    auto make_compute_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
-        CircularBufferConfig cfg = CircularBufferConfig(num_tiles * compute_tile_bytes, {{cb_idx, compute_df}})
-                                       .set_page_size(cb_idx, compute_tile_bytes);
+    auto make_fp32_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
+        CircularBufferConfig cfg =
+            CircularBufferConfig(num_tiles * TILE_BYTES, {{cb_idx, fp32_df}}).set_page_size(cb_idx, TILE_BYTES);
         CreateCircularBuffer(program, all_cores, cfg);
     };
 
@@ -130,10 +128,10 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
     // Double-buffered so the reader/compute/writer (and the compute UNPACK/MATH/PACK sub-threads) can
     // run one block ahead of each other without stalling.
-    make_compute_tile_cb(cb_in_rm_idx, 2 * tiles_per_block);     // input_e4m3 -> compute_df RM
-    make_compute_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);   // tilized input (compute_df)
-    make_compute_tile_cb(cb_scale_bcast_idx, 2 * block_ht);      // col0 = scale, compute_df (matches SrcA)
-    make_compute_tile_cb(cb_out_tile_idx, 2 * tiles_per_block);  // multiplied tiles -> untilize
+    make_fp32_tile_cb(cb_in_rm_idx, 2 * tiles_per_block);     // input_e4m3 -> fp32 RM
+    make_fp32_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);   // tilized fp32 input
+    make_fp32_tile_cb(cb_scale_bcast_idx, 2 * block_ht);      // col0 = scale
+    make_fp32_tile_cb(cb_out_tile_idx, 2 * tiles_per_block);  // multiplied tiles -> untilize
 
     // cb_out: row-major output (bf16/fp32), one tile per page; tiles_per_block pages = one block,
     // double-buffered.
@@ -192,9 +190,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         cb_out_idx,
         tile_h,
         tile_w};
-    const MathFidelity math_fidelity = MathFidelity::HiFi4;
-    // The fp8 input CB forces a 32-bit DEST (fp32_dest_acc_en). Unpack the e4m3 input straight to a
-    // 32-bit DEST so the fp32 datapath decodes/accumulates correctly (mirrors typecast's fp8 path).
+    // fp32_dest_acc_en=True required (input_e4m3 CB on core); HiFi4 (the ComputeConfig default) keeps the
+    // broadcast multiply precise. Unpacking the fp8 input straight to the 32-bit DEST bypasses the narrow
+    // SrcA register, so the e4m3 decode keeps full fp32 precision instead of being truncated on the way in.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     unpack_to_dest_mode[cb_input_e4m3_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
@@ -204,10 +202,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         "compute_per_token_cast_back.cpp",
         all_cores,
         ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = true,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_ct_args});
+            .fp32_dest_acc_en = true, .unpack_to_dest_mode = unpack_to_dest_mode, .compile_args = compute_ct_args});
 
     // Each core's rows form a flat stream of 128-element scale blocks read/written in tile_h-block batches.
     const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128

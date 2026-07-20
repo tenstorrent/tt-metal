@@ -127,7 +127,6 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
     constexpr uint32_t cb_in_tile_idx = CBIndex::c_2;
     constexpr uint32_t cb_control_idx = CBIndex::c_3;
     constexpr uint32_t cb_scale_bcast_idx = CBIndex::c_4;
-    constexpr uint32_t cb_out_tile_idx = CBIndex::c_5;
     constexpr uint32_t cb_scale_scratch_idx = CBIndex::c_6;
     constexpr uint32_t cb_region_scratch_r_idx = CBIndex::c_7;
     constexpr uint32_t cb_counts_scratch_r_idx = CBIndex::c_8;
@@ -159,9 +158,8 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
 
     // All streaming CBs are double-buffered so the reader/compute/writer kernels (and the compute
     // UNPACK/MATH/PACK sub-threads) can run one block ahead of each other without stalling.
-    make_compute_tile_cb(cb_in_rm_idx, 2 * tiles_per_block);     // input_e4m3 -> compute_df RM
-    make_compute_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);   // tilized input (compute_df)
-    make_compute_tile_cb(cb_out_tile_idx, 2 * tiles_per_block);  // multiplied tiles -> untilize
+    make_compute_tile_cb(cb_in_rm_idx, 2 * tiles_per_block);    // input_e4m3 -> compute_df RM
+    make_compute_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);  // tilized input (compute_df)
 
     // cb_scale_bcast: col0 = raw fp32 scale. In the fp32 datapath the multiply consumes it directly; in the
     // bf16 datapath the packer narrows it into cb_scale_bcast_bf16 first.
@@ -265,7 +263,6 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
         cb_in_rm_idx,
         cb_in_tile_idx,
         cb_scale_bcast_idx,
-        cb_out_tile_idx,
         cb_out_idx,
         tile_h,
         tile_w,

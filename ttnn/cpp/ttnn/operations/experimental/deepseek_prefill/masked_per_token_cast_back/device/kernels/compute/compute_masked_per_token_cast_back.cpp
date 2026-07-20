@@ -33,23 +33,21 @@ void kernel_main() {
     CircularBuffer cb_in_tile(cb_in_tile_id);
     constexpr uint32_t cb_scale_bcast_id = get_compile_time_arg_val(3);
     CircularBuffer cb_scale_bcast(cb_scale_bcast_id);
-    constexpr uint32_t cb_out_tile_id = get_compile_time_arg_val(4);
-    CircularBuffer cb_out_tile(cb_out_tile_id);
-    constexpr uint32_t cb_out_fp32_id = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_out_fp32_id = get_compile_time_arg_val(4);
     CircularBuffer cb_out_fp32(cb_out_fp32_id);
     // Tile dims from the tensor's tile spec.
-    constexpr uint32_t tile_h = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_w = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_control_id = get_compile_time_arg_val(8);
+    constexpr uint32_t tile_h = get_compile_time_arg_val(5);
+    constexpr uint32_t tile_w = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_control_id = get_compile_time_arg_val(7);
     CircularBuffer cb_control(cb_control_id);
     // 1 when the compute datapath is bf16 (compute_df != Float32). Only then can tilize decode e4m3
     // directly: llk_unpack_tilize's Float32-dest "lossless" mode mishandles an 8-bit source, so an fp32
     // compute datapath must decode e4m3 via a separate copy first.
-    constexpr uint32_t compute_is_bf16 = get_compile_time_arg_val(9);
+    constexpr uint32_t compute_is_bf16 = get_compile_time_arg_val(8);
     // 1 => the fp32 scale must be narrowed to bf16 on-device: the packer converts it (into
     // cb_scale_bcast_bf16) before the bcast multiply. 0 => the scale is consumed directly from cb_scale_bcast.
-    constexpr uint32_t convert_scale = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_scale_bcast_bf16_id = get_compile_time_arg_val(11);
+    constexpr uint32_t convert_scale = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_scale_bcast_bf16_id = get_compile_time_arg_val(10);
     CircularBuffer cb_scale_bcast_bf16(cb_scale_bcast_bf16_id);
     constexpr uint32_t cb_scale_mul_id = convert_scale ? cb_scale_bcast_bf16_id : cb_scale_bcast_id;
     constexpr uint32_t block_w = 128;                // BlockW
@@ -132,9 +130,9 @@ void kernel_main() {
 
             // ----- Phase 2c+3: broadcast multiply, then untilize straight from DEST -----
             // The mul writes all tiles_per_block(=4) tiles into DEST (indices 0..3); pack_untilize_dest then
-            // untilizes them to the row-major output in the packer. This removes the separate cb_out_tile
-            // round-trip and the standalone untilize datacopy pass. In 32-bit DEST (fp32_dest_acc), the
-            // half-sync pack-untilize block cap is 4 tiles, which is exactly one 128-wide block.
+            // untilizes them to the row-major output in the packer, so there is no intermediate output-tile
+            // CB or standalone untilize datacopy pass. In 32-bit DEST (fp32_dest_acc), the half-sync
+            // pack-untilize block cap is 4 tiles, which is exactly one 128-wide block.
             reconfig_data_format(cb_in_tile_id, cb_scale_mul_id);
             mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_mul_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_fp32_id);

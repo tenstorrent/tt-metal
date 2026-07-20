@@ -12,10 +12,8 @@
 // column selection lives in the reader's data layout, not a shift here.
 //
 // Per block = tile_h rows x 128 cols = 4 tiles for default 32-wide tiles:
-//   Phase 1 : input_e4m3 RM -> fp32 RM      (copy_tile, index 0)
-//   Phase 2a: tilize fp32 RM input -> tile  (cb_in_tile)
-//   Phase 2c: cb_out_tile = cb_in_tile * bcast(scale)
-//   Phase 3 : untilize cb_out_tile -> row-major output
+//   Phase 1: decode e4m3 -> fp32 and tilize
+//   Phase 2: multiply by broadcast scale and untilize to output
 
 #include <cstdint>
 
@@ -57,7 +55,7 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
-            // ----- Phase 1 (fp32): decode e4m3 -> fp32 row-major, then tilize fp32 -> tile -----
+            // ----- Phase 1: decode e4m3 -> fp32 and tilize -----
             // tilize cannot decode e4m3 into a Float32 dest, so decode first via copy_tile.
             reconfig_data_format_srca(cb_input_e4m3_id);
             pack_reconfig_data_format(cb_in_rm_id);
@@ -85,11 +83,10 @@ void kernel_main() {
             cb_in_rm.pop_front(tiles_per_block);
             tilize_uninit(cb_in_rm_id, cb_in_tile_id);
 
-            // ----- Phase 2c+3: broadcast multiply, then untilize straight from DEST -----
-            // The mul writes all tiles_per_block(=4) tiles into DEST (indices 0..3); pack_untilize_dest then
-            // untilizes them to the row-major output in the packer. This removes the separate cb_out_tile
-            // round-trip and the standalone untilize datacopy pass. In 32-bit DEST (fp32_dest_acc), the
-            // half-sync pack-untilize block cap is 4 tiles, which is exactly one 128-wide block.
+            // ----- Phase 2: multiply by broadcast scale and untilize to output -----
+            // mul writes all tiles_per_block(=4) tiles into DEST, and pack_untilize_dest untilizes them
+            // to the row-major output in the packer, avoiding a separate cb_out_tile round-trip. In 32-bit
+            // DEST (fp32_dest_acc), the half-sync pack-untilize block cap is 4 tiles = one 128-wide block.
             reconfig_data_format(cb_in_tile_id, cb_scale_bcast_id);
             mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_bcast_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_fp32_id);
