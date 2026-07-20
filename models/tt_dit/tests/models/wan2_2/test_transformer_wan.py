@@ -339,8 +339,6 @@ def test_wan_workload_power(
     
     end = time.time()
     logger.info(f"Completed test after: {end - start} seconds")
-    
-
 
 
 @pytest.mark.parametrize(

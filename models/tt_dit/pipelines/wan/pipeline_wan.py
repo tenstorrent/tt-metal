@@ -700,13 +700,10 @@ class WanPipeline(PipelineAPIMixin):
         latents = ts.model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=latents_sequence_length
         )
-        
+
         if profiler:
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
-
-        self._current_timestep = None
-
 
         on_event(SectionEnd("denoising"))
 

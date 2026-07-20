@@ -60,9 +60,6 @@ class T5TokenizerEncoderPair:
     def load_torch_model(self, checkpoint: str) -> T5EncoderModel:
         return T5EncoderModel.from_pretrained(checkpoint)
 
-    def load_torch_model(self, checkpoint: str) -> T5EncoderModel:
-        return T5EncoderModel.from_pretrained(checkpoint)
-
     def _load_encoder(self, checkpoint: str, *, use_torch: bool) -> T5Encoder | T5EncoderModel:
         torch_model = self.load_torch_model(checkpoint)
 

@@ -462,7 +462,6 @@ class WanTransformer3DModel(Module):
         Given inputs, execute the combined timestep and text embedding.
         Return tensors on device.
         """
-
         tt_temb_11BD, tt_timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
         tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states)
 
