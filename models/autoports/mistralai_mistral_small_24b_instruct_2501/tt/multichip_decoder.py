@@ -1253,6 +1253,7 @@ class MultichipDecoder(OptimizedDecoder):
         current_pos: int | None = None,
         page_table=None,
         current_pos_tensor=None,
+        rotary_pos_tensor=None,
         stacked_layout: bool = False,
     ):
         if stacked_layout:
@@ -1326,10 +1327,21 @@ class MultichipDecoder(OptimizedDecoder):
                 f"got {current_pos_tensor.dtype} {tuple(current_pos_tensor.shape)}"
             )
 
-        # One mutable per-user position tensor drives RoPE, cache writes, and
-        # SDPA.  All lookup work stays on device and is safe to capture/replay.
-        rotary_positions = ttnn.typecast(current_pos_tensor, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        rotary_positions = ttnn.reshape(rotary_positions, [1, self.batch])
+        # Cache/SDPA positions stay signed so -1 can represent an inactive
+        # fixed slot.  RoPE uses a separate clamped UINT32 tensor in that mode;
+        # the full-model trace advances both tensors on device without a host
+        # position rebuild.  Existing scalar and mutable-position callers keep
+        # the original one-tensor behavior.
+        if rotary_pos_tensor is None:
+            rotary_positions = ttnn.typecast(current_pos_tensor, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rotary_positions = ttnn.reshape(rotary_positions, [1, self.batch])
+        else:
+            if tuple(rotary_pos_tensor.shape) != (1, self.batch) or rotary_pos_tensor.dtype != ttnn.uint32:
+                raise ValueError(
+                    f"rotary_pos_tensor must be UINT32 with local shape (1, {self.batch}), "
+                    f"got {rotary_pos_tensor.dtype} {tuple(rotary_pos_tensor.shape)}"
+                )
+            rotary_positions = rotary_pos_tensor
         cos = ttnn.embedding(
             rotary_positions,
             self.decode_rotary_cos,
@@ -1437,6 +1449,14 @@ class MultichipDecoder(OptimizedDecoder):
         )
         attention = self._all_reduce_hidden(attention, mode="decode")
         attention = ttnn.to_memory_config(attention, self.decode_norm_mem_config)
+        if self.batch != 1 and int(attention.shape[-2]) != self.batch:
+            attention = ttnn.slice(
+                attention,
+                [0, 0, 0, 0],
+                [1, 1, self.batch, self.hidden_size],
+                [1, 1, 1, 1],
+                memory_config=self.decode_norm_mem_config,
+            )
         hidden_states = ttnn.add(residual, attention, dtype=ttnn.bfloat16, memory_config=self.decode_norm_mem_config)
 
         residual = hidden_states
@@ -1450,6 +1470,14 @@ class MultichipDecoder(OptimizedDecoder):
         hidden_states = self._mlp_forward(hidden_states)
         hidden_states = self._all_reduce_hidden(hidden_states, mode="decode")
         hidden_states = ttnn.to_memory_config(hidden_states, self.decode_norm_mem_config)
+        if self.batch != 1 and int(hidden_states.shape[-2]) != self.batch:
+            hidden_states = ttnn.slice(
+                hidden_states,
+                [0, 0, 0, 0],
+                [1, 1, self.batch, self.hidden_size],
+                [1, 1, 1, 1],
+                memory_config=self.decode_norm_mem_config,
+            )
         hidden_states = ttnn.add(
             residual, hidden_states, dtype=ttnn.bfloat16, memory_config=self.decode_norm_mem_config
         )
@@ -1474,6 +1502,7 @@ class MultichipDecoder(OptimizedDecoder):
         current_pos: int | None = None,
         page_table=None,
         current_pos_tensor=None,
+        rotary_pos_tensor=None,
     ):
         """Decode one layer while preserving the L1 residual contract for the next layer."""
 
@@ -1484,6 +1513,7 @@ class MultichipDecoder(OptimizedDecoder):
             current_pos=current_pos,
             page_table=page_table,
             current_pos_tensor=current_pos_tensor,
+            rotary_pos_tensor=rotary_pos_tensor,
             stacked_layout=True,
         )
 
@@ -1497,6 +1527,7 @@ class MultichipDecoder(OptimizedDecoder):
         current_pos: int | None = None,
         page_table=None,
         current_pos_tensor=None,
+        rotary_pos_tensor=None,
         logical_seq_len: int | None = None,
     ):
         if mode == "prefill":
@@ -1511,6 +1542,7 @@ class MultichipDecoder(OptimizedDecoder):
                 current_pos=current_pos,
                 page_table=page_table,
                 current_pos_tensor=current_pos_tensor,
+                rotary_pos_tensor=rotary_pos_tensor,
             )
         if mode == "decode_stack":
             return self.decode_forward_stacked(
@@ -1520,6 +1552,7 @@ class MultichipDecoder(OptimizedDecoder):
                 current_pos=current_pos,
                 page_table=page_table,
                 current_pos_tensor=current_pos_tensor,
+                rotary_pos_tensor=rotary_pos_tensor,
             )
         if mode == "prefill_stack":
             if logical_seq_len is None:

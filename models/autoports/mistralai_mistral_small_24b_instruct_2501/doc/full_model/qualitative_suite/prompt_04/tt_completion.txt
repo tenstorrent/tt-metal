@@ -1,0 +1,5 @@
+The three laws of thermodynamics are fundamental principles that describe how energy moves and changes form within a system. Here they are:
+
+1. **Zeroth Law of Thermodynamics**: If two systems are each in thermal equilibrium with a third system, they are in thermal equilibrium with each other. This law helps define the concept of temperature.
+
+2. **First Law of Thermodynamics**: Energy cannot be created or destroyed, only transferred or transformed. This is also known as the law of conservation of energy. Mathematically, it is expressed as ΔU = Q - W, where ΔU is the change in internal energy of a system, Q

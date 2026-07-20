@@ -1,0 +1,60 @@
+Full-model runtime boundary audit
+Date: 2026-07-20 UTC
+Scope: tt/model.py, tt/generator.py, tt/multichip_decoder.py
+
+Optimized model runtime
+- Embedding, all 40 decoder layers, final RMS norm, TP4 vocabulary head,
+  local-top-k selection, global candidate exchange, and token writeback execute
+  as TTNN device operations.
+- Decode retains the accepted TP4 1x4 decoder, BFP4/LoFi dense policy,
+  BF16 residual/activation policy, BFP8 paged KV cache, persistent BFP8
+  asynchronous all-reduce decode output, BF16 prefill all-reduce output, and
+  the accepted inter-layer stacked residual layout.
+- There is no PyTorch operation, host tensor conversion, host argmax, or
+  full-logits readback in MistralSmall24BFullModel.prefill_forward,
+  decode_forward, sample_split, or the split sampling traces.
+- PyTorch use in model.py is confined to checkpoint loading, validation, and
+  one-time device-weight construction.
+
+Generator cache and request state
+- Caller-owned and generator-owned cache paths use the same direct per-rank
+  paged K/V tensors. There is no replicated or host KV-cache fallback.
+- Explicit fixed-slot page tables are normalized once at the request boundary.
+  The persistent trace page-table buffer is copied only when its value changes.
+- Signed current-position and unsigned rotary-position tensors are persistent,
+  device-resident trace inputs. Both are incremented inside the model trace;
+  inactive signed rows remain -1.
+- Reset zeroes device caches in place and retains weights, persistent buffers,
+  and compiled traces. A prior request's traces are released only immediately
+  before a shape-dependent new prefill; trace-bound addresses are never reused
+  while active.
+
+Sampling boundaries
+- Optimized sampling_mode="device" uses Sampling1D local top-k split sampling.
+  With k=1, p=0, temperature=1 it is semantically greedy. The sampled token is
+  written directly into the persistent next-token tensor consumed by the next
+  model-trace replay. There is no host token feedback copy.
+- One sampled-token readback per step is solely the public returned-token
+  observation boundary. It is not used to feed the next device step.
+- sampling_mode="host" is an explicit compatibility path. Only this path reads
+  full logits and calls torch.argmax; it is not used for optimized token-out
+  correctness or performance claims.
+- Teacher forcing retains split model/sampler traces, but explicitly copies the
+  reference token after observing each model prediction, as required by the
+  readiness callback contract.
+
+Long-prompt boundary
+- Public prefill owns non-aligned padding, logical prompt lengths, output
+  slicing, position selection, cache fill, and inactive rows. A 576-token
+  optimized prefill window is followed by device decoder cache-fill steps for
+  longer prompts. Host loop construction occurs during prompt ingestion only,
+  not in measured autoregressive token feedback.
+
+Rejected fallbacks
+- Single-chip execution: rejected; the constructor requires a 1x4 TP mesh.
+- Replicated decoder weights or KV cache: rejected; rank-local TP weights and
+  rank-local paged KV heads remain mandatory.
+- Host-side decoder/language head: rejected.
+- Full-logits greedy decode: retained only as named host compatibility mode.
+- Common force-argmax sampler: comparison-only; rejected for the optimized path
+  after the on-device semantic and latency comparison.

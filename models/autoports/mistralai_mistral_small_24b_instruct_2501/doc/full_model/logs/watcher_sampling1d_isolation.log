@@ -1,0 +1,151 @@
+2026-07-20 07:41:23.378 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_reduced_real_full_terminal_trace_profile[blackhole-mesh_device0-device_params0] 2026-07-20 07:41:24.968 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-20 07:41:24.968 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-20 07:41:24.968 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-20 07:41:24.968 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-20 07:41:24.970 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-20 07:41:24.970 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-20 07:41:24.974 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-20 07:41:25.199 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-20 07:41:25.199 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-20 07:41:25.199 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-20 07:41:25.199 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-20 07:41:25.201 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-20 07:41:25.422 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-20 07:41:25.554 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-20 07:41:25.554 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-20 07:41:25.554 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-20 07:41:25.554 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-20 07:41:25.554 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.554 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.554 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.554 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.554 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.555 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.555 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.555 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 07:41:25.555 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-20 07:41:25.555 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-20 07:41:25.610 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-20 07:41:25.610 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-20 07:41:25.610 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-20 07:41:25.610 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-20 07:41:25.610 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-20 07:41:25.610 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-20 07:41:25.610 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:25.614 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:25.616 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-20 07:41:25.621 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:25.626 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:25.647 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-20 07:41:25.648 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-20 07:41:25.648 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-20 07:41:25.649 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-20 07:41:25.649 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-20 07:41:25.649 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed stale shm '/tt_d2h_2403419_2789542471_0' (shm_resource_tracker.cpp:265)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed stale shm '/tt_d2h_2403419_2789542471_1' (shm_resource_tracker.cpp:265)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed stale shm '/tt_d2h_2403419_2789542471_2' (shm_resource_tracker.cpp:265)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed stale shm '/tt_d2h_2403419_2789542471_3' (shm_resource_tracker.cpp:265)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed stale manifest '/dev/shm/tt_socket_manifest_2403419' (shm_resource_tracker.cpp:275)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 07:41:25.792 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 07:41:26.371 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=81134101498 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 07:41:26.371 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=81137796692 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 07:41:26.371 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=81074404824 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 07:41:26.372 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349995 GHz, device_time_at_sync=81087688962 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 07:41:26.400 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-20 07:41:35.696 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:35.700 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:35.705 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:35.709 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:45.720 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:45.724 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:45.728 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:45.733 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:55.745 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-20 07:41:55.745 | warning  |           Metal | Watcher stopped the device due to tripped assert, see watcher log for more details (watcher_device_reader.cpp:805)
+2026-07-20 07:41:55.745 | warning  |           Metal | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2): BRISC tripped an assert on line 119. Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file. Current kernel: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp. (watcher_device_reader.cpp:806)
+2026-07-20 07:41:55.745 | info     |           Metal | Last waypoint:    K,   W,   W,   W,   W (watcher_device_reader.cpp:1091)
+2026-07-20 07:41:55.745 | info     |           Metal | While running kernels: (watcher_device_reader.cpp:1307)
+2026-07-20 07:41:55.745 | info     |           Metal |  BRISC: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp (watcher_device_reader.cpp:1309)
+2026-07-20 07:41:55.745 | info     |           Metal |  NCRISC: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_reader.cpp (watcher_device_reader.cpp:1309)
+2026-07-20 07:41:55.745 | info     |           Metal |  TRISC0: blank (watcher_device_reader.cpp:1309)
+2026-07-20 07:41:55.745 | info     |           Metal |  TRISC1: blank (watcher_device_reader.cpp:1309)
+2026-07-20 07:41:55.745 | info     |           Metal |  TRISC2: blank (watcher_device_reader.cpp:1309)
+2026-07-20 07:41:55.745 | critical |          Always | TT_THROW: Watcher detected tripped assert and stopped device. (assert.hpp:104)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/debug/watcher_device_reader.cpp:811: tt::exception
+info:
+Watcher detected tripped assert and stopped device.
+backtrace:
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4ef2) [0x743e78dc4ef2]
+ --- tt::tt_metal::WatcherDeviceReader::Core::DumpAssertStatus() const
+ --- tt::tt_metal::WatcherDeviceReader::Core::Dump() const
+ --- tt::tt_metal::WatcherDeviceReader::Dump(_IO_FILE*)
+ --- tt::tt_metal::WatcherServer::Impl::dump(_IO_FILE*)
+ --- tt::tt_metal::WatcherServer::Impl::poll_watcher_data()
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x743ebc881c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x743ebf33daa4]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x743ebf3caa64]
+
+Fatal Python error: Aborted
+
+Thread 0x0000743ebf29e740 (most recent call first):
+  File "/home/mvasiljevic/tt-metal/ttnn/ttnn/decorators.py", line 473 in __call__
+  File "/home/mvasiljevic/tt-metal/models/common/modules/sampling/sampling_1d.py", line 516 in _perform_all_gather
+  File "/home/mvasiljevic/tt-metal/models/common/modules/sampling/sampling_1d.py", line 483 in _topk_multi_device
+  File "/home/mvasiljevic/tt-metal/models/common/modules/sampling/sampling_1d.py", line 357 in _sample_topk
+  File "/home/mvasiljevic/tt-metal/models/common/modules/sampling/sampling_1d.py", line 251 in decode_forward
+  File "/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py", line 525 in sample_split
+  File "/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py", line 700 in _prefill_device_sample
+  File "/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py", line 804 in generate
+  File "/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py", line 537 in test_reduced_real_full_terminal_trace_profile
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/python.py", line 166 in pytest_pyfunc_call
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/python.py", line 1720 in runtest
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/runner.py", line 179 in pytest_runtest_call
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/runner.py", line 245 in <lambda>
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/runner.py", line 353 in from_call
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/runner.py", line 244 in call_and_report
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/runner.py", line 137 in runtestprotocol
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/main.py", line 396 in pytest_runtestloop
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/main.py", line 372 in _main
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/main.py", line 318 in wrap_session
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/main.py", line 365 in pytest_cmdline_main
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/config/__init__.py", line 199 in main
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/_pytest/config/__init__.py", line 223 in console_main
+  File "/home/mvasiljevic/tt-metal/python_env/bin/pytest", line 12 in <module>
+
+Extension modules: markupsafe._speedups, zmq.backend.cython._zmq, tornado.speedups, msgpack._cmsgpack, psutil._psutil_linux, _brotli, backports.zstd._zstd, charset_normalizer.md, charset_normalizer.cd, simplejson._speedups, requests.packages.charset_normalizer.md, requests.packages.chardet.md, requests.packages.charset_normalizer.cd, requests.packages.chardet.cd, numpy.core._multiarray_umath, numpy.core._multiarray_tests, numpy.linalg._umath_linalg, numpy.fft._pocketfft_internal, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._mt19937, numpy.random.mtrand, numpy.random._philox, numpy.random._pcg64, numpy.random._sfc64, numpy.random._generator, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, yaml._yaml, pyarrow.lib, pandas._libs.tslibs.ccalendar, pandas._libs.tslibs.np_datetime, pandas._libs.tslibs.dtypes, pandas._libs.tslibs.base, pandas._libs.tslibs.nattype, pandas._libs.tslibs.timezones, pandas._libs.tslibs.fields, pandas._libs.tslibs.timedeltas, pandas._libs.tslibs.tzconversion, pandas._libs.tslibs.timestamps, pandas._libs.properties, pandas._libs.tslibs.offsets, pandas._libs.tslibs.strptime, pandas._libs.tslibs.parsing, pandas._libs.tslibs.conversion, pandas._libs.tslibs.period, pandas._libs.tslibs.vectorized, pandas._libs.ops_dispatch, pandas._libs.missing, pandas._libs.hashtable, pandas._libs.algos, pandas._libs.interval, pandas._libs.lib, pyarrow._compute, pandas._libs.ops, pandas._libs.hashing, pandas._libs.arrays, pandas._libs.tslib, pandas._libs.sparse, pandas._libs.internals, pandas._libs.indexing, pandas._libs.index, pandas._libs.writers, pandas._libs.join, pandas._libs.window.aggregations, pandas._libs.window.indexers, pandas._libs.reshape, pandas._libs.groupby, pandas._libs.json, pandas._libs.parsers, pandas._libs.testing, PIL._imaging, kiwisolver._cext, _cyutility, scipy._cyutility, scipy._lib._ccallback_c, scipy.sparse._sparsetools, _csparsetools, scipy.sparse._csparsetools, scipy.spatial._ckdtree, scipy._lib.messagestream, scipy.linalg._fblas, scipy.linalg._flapack, scipy.linalg.cython_lapack, scipy.linalg._cythonized_array_utils, scipy.linalg._solve_toeplitz, scipy.linalg._batched_linalg, scipy.linalg._decomp_lu_cython, scipy.linalg._matfuncs_schur_sqrtm, scipy.linalg._matfuncs_expm, scipy.linalg._linalg_pythran, scipy.linalg.cython_blas, scipy.linalg._decomp_update, scipy.spatial._qhull, scipy.spatial._voronoi, scipy.special._ufuncs_cxx, scipy.special._ellip_harm_2, scipy.special._special_ufuncs, scipy.special._gufuncs, scipy.special._ufuncs, scipy.special._specfun, scipy.special._comb, scipy.spatial._hausdorff, scipy.spatial._distance_wrap, scipy.spatial.transform._rotation_cy, scipy.spatial.transform._rigid_transform_cy, scipy.sparse.linalg._dsolve._superlu, scipy.sparse.linalg._eigen.arpack._arpacklib, scipy.sparse.linalg._propack, scipy.optimize._group_columns, scipy.optimize._trlib._trlib, scipy.optimize._lbfgsb, _moduleTNC, scipy.optimize._moduleTNC, scipy.optimize._slsqplib, scipy.optimize._minpack, scipy.optimize._lsq.givens_elimination, scipy.optimize._zeros, scipy._lib._uarray._uarray, scipy.linalg._decomp_interpolative, scipy.optimize._bglu_dense, scipy.optimize._lsap, scipy.optimize._direct, scipy.integrate._odepack, scipy.integrate._quadpack, scipy.integrate._vode, scipy.integrate._dop, scipy.interpolate._fitpack, scipy.interpolate._dfitpack, scipy.interpolate._dierckx, scipy.interpolate._ppoly, scipy.interpolate._interpnd, scipy.interpolate._rbfinterp_pythran, scipy.interpolate._rgi_cython, scipy.special.cython_special, scipy.stats._stats, scipy.stats._biasedurn, scipy.stats._stats_pythran, scipy.stats._levy_stable.levyst, scipy.stats._ansari_swilk_statistics, scipy.sparse.csgraph._tools, scipy.sparse.csgraph._shortest_path, scipy.sparse.csgraph._traversal, scipy.sparse.csgraph._min_spanning_tree, scipy.sparse.csgraph._flow, scipy.sparse.csgraph._matching, scipy.sparse.csgraph._reordering, scipy.stats._sobol, scipy.stats._qmc_cy, scipy.stats._rcont.rcont, scipy.stats._qmvnt_cy, scipy.ndimage._nd_image, scipy.ndimage._rank_filter_1d, _ni_label, scipy.ndimage._ni_label, scipy.cluster._vq, scipy.cluster._hierarchy, scipy.cluster._optimal_leaf_ordering, PIL._imagingft, regex._regex, sklearn.__check_build._check_build, sklearn._cyutility, sklearn.utils._isfinite, sklearn.utils.sparsefuncs_fast, sklearn.utils.murmurhash, sklearn.utils._openmp_helpers, sklearn.metrics.cluster._expected_mutual_info_fast, sklearn.metrics._dist_metrics, sklearn.metrics._pairwise_distances_reduction._datasets_pair, sklearn.utils._cython_blas, sklearn.metrics._pairwise_distances_reduction._base, sklearn.metrics._pairwise_distances_reduction._middle_term_computer, sklearn.utils._heap, sklearn.utils._sorting, sklearn.metrics._pairwise_distances_reduction._argkmin, sklearn.metrics._pairwise_distances_reduction._argkmin_classmode, sklearn.utils._vector_sentinel, sklearn.metrics._pairwise_distances_reduction._radius_neighbors, sklearn.metrics._pairwise_distances_reduction._radius_neighbors_classmode, sklearn.metrics._pairwise_fast, sklearn.preprocessing._csr_polynomial_expansion, sklearn.preprocessing._target_encoder_fast, _cffi_backend, sentencepiece._sentencepiece (total: 194)
+timeout: the monitored command dumped core

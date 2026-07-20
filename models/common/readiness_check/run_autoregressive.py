@@ -40,6 +40,7 @@ from models.common.readiness_check.contract import (
     BuildGeneratorFn,
     Generator,
 )
+from models.common.readiness_check.generate import _chat_or_plain_prompt_tokens
 from models.common.readiness_check.mesh_device import (
     add_mesh_device_args,
     close_readiness_mesh_device,
@@ -81,6 +82,7 @@ def _hf_generate_greedy(
     prompt_token_ids: List[int],
     max_new_tokens: int,
     device: torch.device,
+    fix_mistral_regex: bool = False,
 ) -> List[int]:
     """
     Greedy autoregressive decode via HF. Returns only the generated tokens
@@ -88,16 +90,21 @@ def _hf_generate_greedy(
     (e.g. Llama 3.1's eos_token_id list) automatically.
     """
     model = AutoModelForCausalLM.from_pretrained(hf_model_id, trust_remote_code=True).eval().to(device)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
+    tokenizer_kwargs = {"trust_remote_code": True}
+    if fix_mistral_regex:
+        tokenizer_kwargs["fix_mistral_regex"] = True
+    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, **tokenizer_kwargs)
     pad_id = tokenizer.pad_token_id
     if pad_id is None:
         eos = tokenizer.eos_token_id
         pad_id = eos[0] if isinstance(eos, (list, tuple)) else eos
 
     input_ids = torch.tensor([prompt_token_ids], dtype=torch.long, device=device)
+    attention_mask = torch.ones_like(input_ids)
     with torch.no_grad():
         out = model.generate(
             input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
             do_sample=False,
             num_beams=1,
@@ -122,6 +129,8 @@ def run_autoregressive(
     output_dir: Path,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     build_kwargs: Optional[Dict[str, Any]] = None,
+    chat_template: bool = False,
+    fix_mistral_regex: bool = False,
 ) -> Dict[str, Path]:
     """
     Programmatic entry point. Generates a completion from HF and from the TT
@@ -133,8 +142,11 @@ def run_autoregressive(
     if not prompt_text:
         raise ValueError(f"Prompt file {prompt_file} is empty")
 
-    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
-    prompt_token_ids: List[int] = tokenizer.encode(prompt_text, add_special_tokens=True)
+    tokenizer_kwargs = {"trust_remote_code": True}
+    if fix_mistral_regex:
+        tokenizer_kwargs["fix_mistral_regex"] = True
+    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, **tokenizer_kwargs)
+    prompt_token_ids = _chat_or_plain_prompt_tokens(tokenizer, prompt_text, chat_template=chat_template)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Prompt ({len(prompt_token_ids)} tokens):\n{prompt_text}\n")
@@ -147,6 +159,7 @@ def run_autoregressive(
         prompt_token_ids=prompt_token_ids,
         max_new_tokens=max_new_tokens,
         device=hf_device,
+        fix_mistral_regex=fix_mistral_regex,
     )
     hf_text = tokenizer.decode(hf_tokens, skip_special_tokens=False)
     print(f"HF produced {len(hf_tokens)} tokens.")
@@ -161,13 +174,17 @@ def run_autoregressive(
             prompt_token_ids=prompt_token_ids,
             max_new_tokens=max_new_tokens,
             next_input=None,
+            stop_on_eos=True,
         )
+        tt_generate_stats = getattr(generator, "last_generate_stats", None)
     finally:
         teardown = getattr(generator, "teardown", None)
         if callable(teardown):
             teardown()
     tt_text = tokenizer.decode(tt_tokens, skip_special_tokens=False)
     print(f"TT produced {len(tt_tokens)} tokens.")
+    if tt_generate_stats:
+        print(f"TT generation stats: {tt_generate_stats}")
 
     hf_path = output_dir / "hf_completion.txt"
     tt_path = output_dir / "tt_completion.txt"
@@ -182,9 +199,12 @@ def run_autoregressive(
                 "prompt_file": str(prompt_file),
                 "prompt_text": prompt_text,
                 "prompt_token_ids": prompt_token_ids,
+                "chat_template": chat_template,
+                "fix_mistral_regex": fix_mistral_regex,
                 "max_new_tokens": max_new_tokens,
                 "hf": {"token_ids": list(hf_tokens), "num_tokens": len(hf_tokens)},
                 "tt": {"token_ids": list(tt_tokens), "num_tokens": len(tt_tokens)},
+                "tt_generate_stats": tt_generate_stats,
             },
             indent=2,
         ),
@@ -212,6 +232,16 @@ def _main() -> None:
         default=DEFAULT_PROMPT_FILE,
         help=f"Path to the prompt file. Default: {DEFAULT_PROMPT_FILE}",
     )
+    parser.add_argument(
+        "--chat-template",
+        action="store_true",
+        help="Render the prompt as a single user turn with tokenizer.apply_chat_template.",
+    )
+    parser.add_argument(
+        "--fix-mistral-regex",
+        action="store_true",
+        help="Use the corrected Mistral tokenizer regex.",
+    )
     add_mesh_device_args(parser)
     parser.add_argument(
         "--output-dir",
@@ -230,7 +260,7 @@ def _main() -> None:
 
     output_dir = args.output_dir or (args.model_dir / "readiness_autoregressive")
 
-    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
+    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config, args.trace_region_size)
     try:
         run_autoregressive(
             model_dir=args.model_dir.resolve(),
@@ -239,6 +269,8 @@ def _main() -> None:
             mesh_device=mesh_device,
             output_dir=output_dir.resolve(),
             max_new_tokens=args.max_new_tokens,
+            chat_template=args.chat_template,
+            fix_mistral_regex=args.fix_mistral_regex,
         )
     finally:
         close_readiness_mesh_device(mesh_device, args.fabric_config)

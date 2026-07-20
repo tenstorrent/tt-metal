@@ -1,0 +1,26 @@
+Artifact: aime24_chat_100.refpt
+Generated: 2026-07-20 UTC
+HF snapshot: /home/mvasiljevic/hf-cache/hub/models--mistralai--Mistral-Small-24B-Instruct-2501/snapshots/9527884be6e5616bdd54de542f9ae13384489724
+Tokenizer: AutoTokenizer, local exact snapshot, fix_mistral_regex=True
+Prompt source: AIME24 index 0
+Prompt rendering: tokenizer.apply_chat_template(add_generation_prompt=True, tokenize=True)
+Prompt tokens: 327
+Continuation tokens: 100 deterministic greedy HF tokens
+Captured K: 100
+Reference shapes: prompt [1,327], continuation [1,100], top-k [100,100]
+Token IDs: BOS=1, EOS=2, PAD=2
+SHA256: e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9
+
+Decoded HF continuation (100 tokens):
+1. **Determine the walking time at speed $s$:**
+   - Aya walks $9$ kilometers at a speed of $s$ kilometers per hour for $4$ hours, including $t$ minutes in the coffee shop.
+   - The walking time is $4 - \frac{t}{60}$ hours.
+   - The distance equation is:
+     \[
+     s \left(4 - \frac{t}{60}\right) = 9
+     \]
+
+2
+
+The completion ends at exactly the requested 100-token boundary; truncation at
+the start of step 2 is expected and is not an early EOS.

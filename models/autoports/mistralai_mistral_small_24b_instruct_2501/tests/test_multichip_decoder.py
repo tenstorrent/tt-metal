@@ -1176,7 +1176,7 @@ def test_multichip_two_layer_stacked_prefill_trace_perf(mesh_device):
     )
 
 
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
 def test_multichip_full_context_paged_cache_capacity(mesh_device):
     if os.environ.get(CAPACITY_ENV) != "1":
@@ -1191,17 +1191,7 @@ def test_multichip_full_context_paged_cache_capacity(mesh_device):
         mesh_device=mesh_device,
         max_cache_len=max_cache_len,
     )
-    decoder.release_prefill_weights()
-    assert decoder.prefill_weights_released
-    assert all(
-        getattr(decoder, name) is None
-        for name in (
-            "prefill_qkv_weight",
-            "prefill_output_weight",
-            "prefill_gate_up_weight",
-            "prefill_down_weight",
-        )
-    )
+    assert not decoder.prefill_weights_released
     shared_decoder = MultichipDecoder.from_state_dict(
         state,
         hf_config=config,
@@ -1215,7 +1205,7 @@ def test_multichip_full_context_paged_cache_capacity(mesh_device):
     assert shared_decoder.decode_rotary_cos is decoder.decode_rotary_cos
     assert shared_decoder.collective_workspace is decoder.collective_workspace
     assert shared_decoder.collective_semaphore is decoder.collective_semaphore
-    shared_decoder.release_prefill_weights()
+    assert not shared_decoder.prefill_weights_released
 
     # Keep the complete 40-layer decode matrix/norm lifetime resident. Layer 0
     # is the real decoder above; the remaining 39 use the same physical local
@@ -1235,9 +1225,26 @@ def test_multichip_full_context_paged_cache_capacity(mesh_device):
             decoder.post_attention_norm.memory_config(),
         ),
     )
+    prefill_weight_shapes = tuple(
+        (
+            tuple(getattr(decoder, name).shape),
+            getattr(decoder, name).dtype,
+            getattr(decoder, name).memory_config(),
+        )
+        for name in (
+            "prefill_qkv_weight",
+            "prefill_output_weight",
+            "prefill_gate_up_weight",
+            "prefill_down_weight",
+        )
+    )
     stack_constants = []
     for _ in range(38):
         for shape, dtype, memory_config in decode_weight_shapes:
+            stack_constants.append(
+                ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, mesh_device, memory_config)
+            )
+        for shape, dtype, memory_config in prefill_weight_shapes:
             stack_constants.append(
                 ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, mesh_device, memory_config)
             )
@@ -1300,9 +1307,17 @@ def test_multichip_full_context_paged_cache_capacity(mesh_device):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
     )
+    rotary_positions = _mesh_input(
+        torch.full((1, EMITTED_BATCH), max_cache_len - 1, dtype=torch.int32),
+        mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+    )
 
-    # Physically reserve 4 GiB/rank for runtime activations, traces, programs,
-    # and collective scratch after all steady-state constants and caches exist.
+    # Physically reserve 1.5 GiB/rank for runtime activations, programs, and
+    # collective scratch after all steady-state constants, both optimized
+    # decode and prefill matrix representations, full caches, and the fixture's
+    # separate 200 MB-per-DRAM-bank (1.6 GB/device) trace region exist.
     runtime_reserve = [
         ttnn.allocate_tensor_on_device(
             ttnn.Shape([8192, 32768]),
@@ -1311,8 +1326,21 @@ def test_multichip_full_context_paged_cache_capacity(mesh_device):
             mesh_device,
             ttnn.DRAM_MEMORY_CONFIG,
         )
-        for _ in range(8)
+        for _ in range(3)
     ]
+
+    # Exercise the retained public prefill matrices while every full-context
+    # cache and all 40 layers' physical weight representations are resident.
+    prefill_hidden = torch.zeros((1, EMITTED_BATCH, block_size, config.hidden_size), dtype=torch.bfloat16)
+    prefill_output = decoder.prefill_forward(
+        _mesh_input(prefill_hidden, mesh_device),
+        key_cache,
+        value_cache,
+        page_table=page_table,
+    )
+    ttnn.synchronize_device(mesh_device)
+    assert tuple(_replicated_host(prefill_output).shape) == tuple(prefill_hidden.shape)
+
     hidden = torch.zeros((1, EMITTED_BATCH, 1, config.hidden_size), dtype=torch.bfloat16)
     current_pos = max_cache_len - 1
     output = decoder.decode_forward(
@@ -1320,6 +1348,7 @@ def test_multichip_full_context_paged_cache_capacity(mesh_device):
         key_cache,
         value_cache,
         current_pos_tensor=current_positions,
+        rotary_pos_tensor=rotary_positions,
         page_table=page_table,
     )
     ttnn.synchronize_device(mesh_device)
@@ -1327,7 +1356,8 @@ def test_multichip_full_context_paged_cache_capacity(mesh_device):
     print(
         f"MULTICHIP_CAPACITY_PASS layers=40 batch={EMITTED_BATCH} max_cache_len={max_cache_len} "
         f"local_cache_shape={tuple(local_shape)} current_pos={current_pos} "
-        f"runtime_reserve_bytes={8 * 8192 * 32768 * 2}"
+        "prefill_weights_resident=true prefill_tokens_per_user=32 "
+        f"runtime_reserve_bytes={3 * 8192 * 32768 * 2}"
     )
 
 

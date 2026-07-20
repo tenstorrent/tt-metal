@@ -1,0 +1,61 @@
+{
+  "prompt_ids": [
+    "shared_01",
+    "shared_02",
+    "shared_03",
+    "shared_04",
+    "shared_05",
+    "shared_06"
+  ],
+  "hf_output_lengths": [
+    16,
+    128,
+    128,
+    128,
+    62,
+    128
+  ],
+  "tt_output_lengths": [
+    18,
+    128,
+    128,
+    128,
+    62,
+    128
+  ],
+  "greedy_prompt_1_repeat_deterministic": true,
+  "primary_128_128": {
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "tt_generate_stats": {
+      "sampling_mode": "device_split_trace",
+      "teacher_forcing": false,
+      "token_feedback": "device",
+      "requested_tokens": 128,
+      "emitted_tokens": 128,
+      "ttft_ms": 5812.149370089173,
+      "trace_setup_ms": 132.69514497369528,
+      "traced_decode_tokens": 127,
+      "traced_decode_elapsed_s": 2.3089976580813527,
+      "traced_decode_t/s/u": 55.00222122595389,
+      "final_device_positions": [
+        255
+      ],
+      "sampled_token_is_feedback_buffer": true,
+      "trace_stat_delta": {
+        "captures": 1,
+        "model_replays": 127,
+        "sampling_replays": 127,
+        "releases": 1,
+        "decode_warmups": 1,
+        "token_host_copies": 3,
+        "position_host_copies": 6,
+        "page_table_host_copies": 0,
+        "sampling_param_host_copies": 0,
+        "caller_token_readbacks": 128,
+        "full_logit_readbacks": 0,
+        "explicit_synchronizations": 5
+      }
+    }
+  }
+}

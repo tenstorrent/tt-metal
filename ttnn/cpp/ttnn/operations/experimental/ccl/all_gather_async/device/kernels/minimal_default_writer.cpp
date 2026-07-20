@@ -213,8 +213,14 @@ void kernel_main() {
 #else
     fabric_connection.open();
 
-    auto* fabric_direction_connection =
-        direction ? &fabric_connection.get_backward_connection() : &fabric_connection.get_forward_connection();
+    tt::tt_fabric::WorkerToFabricEdmSender* fabric_direction_connection = nullptr;
+    if (detail::valid_targets(direction)) {
+        // Linear topology edge workers can have no neighbor in their outward direction. Avoid fetching a fabric
+        // connection for directions that this worker never sends to, because debug watcher asserts that the
+        // connection exists.
+        fabric_direction_connection =
+            direction ? &fabric_connection.get_backward_connection() : &fabric_connection.get_forward_connection();
+    }
 #endif
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();

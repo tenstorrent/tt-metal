@@ -1,0 +1,97 @@
+2026-07-20 06:35:57.971 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-20 06:35:58.006 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-20 06:35:58.006 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-20 06:35:58.006 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-20 06:35:58.006 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-20 06:35:58.007 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-20 06:35:58.007 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-20 06:35:58.011 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-20 06:35:58.231 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-20 06:35:58.231 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-20 06:35:58.231 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-20 06:35:58.231 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-20 06:35:58.233 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-20 06:35:58.401 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-20 06:35:58.528 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-20 06:35:58.528 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:35:58.528 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-20 06:35:58.528 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-20 06:35:58.529 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-20 06:35:58.529 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-20 06:35:58.535 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:35:58.535 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:35:58.535 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:35:58.535 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:35:58.569 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-20 06:35:58.589 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-20 06:35:58.594 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-20 06:35:58.596 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-20 06:35:58.597 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-20 06:35:58.597 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-20 06:35:58.597 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-20 06:35:58.637 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:35:58.637 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:35:58.637 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:35:58.637 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:35:59.216 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=36095730655982 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 06:35:59.217 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=36067152995202 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 06:35:59.217 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=36081043645814 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 06:35:59.217 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=36055793718631 cycles (realtime_profiler_manager.cpp:1127)
+Prompt (238 tokens):
+Once upon a time, in a small village nestled between two great mountains, there lived a curious young girl named Elena. Every morning, she would climb to the top of the eastern hill and watch the sunrise paint the valley gold. One day, while sitting beneath her favorite oak tree, she noticed
+
+Running HF reference on cpu...
+Loading weights:   0%|          | 0/363 [00:00<?, ?it/s]Loading weights: 100%|██████████| 363/363 [00:00<00:00, 33945.70it/s]
+HF produced 58 tokens.
+Building TT generator...
+Running TT autoregressive generation...
+TT produced 54 tokens.
+TT generation stats: {'sampling_mode': 'device_split_trace', 'teacher_forcing': False, 'token_feedback': 'device', 'requested_tokens': 100, 'emitted_tokens': 54, 'ttft_ms': 6057.4707528576255, 'trace_setup_ms': 197.2229196690023, 'traced_decode_tokens': 53, 'traced_decode_elapsed_s': 0.9475053031928837, 'traced_decode_t/s/u': 55.93636238383226, 'final_device_positions': [291], 'sampled_token_is_feedback_buffer': True, 'trace_stat_delta': {'captures': 1, 'model_replays': 53, 'sampling_replays': 53, 'releases': 0, 'decode_warmups': 1, 'token_host_copies': 3, 'position_host_copies': 6, 'page_table_host_copies': 1, 'sampling_param_host_copies': 0, 'caller_token_readbacks': 54, 'full_logit_readbacks': 0, 'explicit_synchronizations': 5}}
+
+Saved HF completion → /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/autoregressive/hf_completion.txt
+Saved TT completion → /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/autoregressive/tt_completion.txt
+Saved metadata     → /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/autoregressive/autoregressive_meta.json
+nanobind: leaked 2 instances!
+ - leaked instance 0x71bf7c83f438 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x71bf7c72f318 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 38 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 321 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "compute_output_specs"
+ - leaked function "__hash__"
+ - leaked function ""
+ - leaked function "id"
+ - leaked function "__repr__"
+ - leaked function "load_sub_device_manager"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-20 06:44:56.072 | info     |    BuildKernels | JIT cache stats: 353/413 hits (85.5%) [353 cached, 123 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-20 06:44:56.072 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-20 06:44:56.088 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-20 06:44:56.088 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-20 06:44:56.649 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-20 06:44:56.649 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-20 06:44:56.649 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

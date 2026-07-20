@@ -1,0 +1,6 @@
+<frozen runpy>:128: RuntimeWarning: 'models.common.readiness_check.generate' found in sys.modules after import of package 'models.common.readiness_check', but prior to execution of 'models.common.readiness_check.generate'; this may result in unpredictable behaviour
+Loading model /home/mvasiljevic/hf-cache/hub/models--mistralai--Mistral-Small-24B-Instruct-2501/snapshots/9527884be6e5616bdd54de542f9ae13384489724 on cpu...
+Loading weights:   0%|          | 0/363 [00:00<?, ?it/s]Loading weights: 100%|██████████| 363/363 [00:00<00:00, 32002.11it/s]
+Using aime24 prompt with 327 tokens after chat-template tokenization
+Generated 100 continuation tokens
+Reference saved to: models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt

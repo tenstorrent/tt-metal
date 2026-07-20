@@ -1,0 +1,104 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/autoregressive/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 47,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0638
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/autoregressive/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 25,
+      "compared_tokens": 54
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_01/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 11,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2727
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_01/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 12,
+      "compared_tokens": 16
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_02/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 92,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0652
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_02/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 17,
+      "compared_tokens": 128
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_03/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 107,
+      "adjacent_duplication": 0.0094,
+      "trigram_loop_fraction": 0.028
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_03/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 10,
+      "compared_tokens": 128
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_04/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 101,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0594
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_04/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 19,
+      "compared_tokens": 128
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_05/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 36,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1667
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_05/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 42,
+      "compared_tokens": 62
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_06/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 86,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1744
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/qualitative_suite/prompt_06/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 76,
+      "compared_tokens": 128
+    }
+  ],
+  "exit_code": 0
+}
