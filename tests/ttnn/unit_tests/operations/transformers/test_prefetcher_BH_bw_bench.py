@@ -338,7 +338,7 @@ def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
         device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
     )
 
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
     )
@@ -430,7 +430,7 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
         f"pages_per_layer={pages_per_layer} gcb_size={gcb_size} trace_repeats={trace_repeats}"
     )
 
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     # Identity rotation (rotation[r] = r) = natural topology ring order (reproduces old streaming=True).
     ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, num_receivers, list(range(num_receivers)))] * num_prefetch_layers, global_cb=gcb

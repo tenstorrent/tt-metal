@@ -56,7 +56,7 @@ Optional:
                                         (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
-                                        (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml)
+                                        (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
@@ -115,9 +115,10 @@ TEST_CONFIG_EXPLICIT=false
 # with an inter-mesh Z fabric (its Linear/Ring/Torus setups trip the tensix
 # datamover buffer-index assert), so it must not be the default here.
 TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
-# 4x8wh uses the Wormhole neighbor-exchange sanity config by default (single 8x4
-# torus mesh), unless the user explicitly passes --test-config.
-TEST_CONFIG_4x8wh="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml"
+# 4x8wh uses the neighbor-exchange sanity config by default (single 8x4
+# torus mesh), unless the user explicitly passes --test-config. The config uses
+# num_links: all, which resolves to the platform's max usable links at runtime.
+TEST_CONFIG_4x8wh="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml"
 FILTER=""
 NUM_PACKETS=""
 MPI_IF=""
