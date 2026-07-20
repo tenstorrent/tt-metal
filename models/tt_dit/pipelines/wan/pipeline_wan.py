@@ -687,7 +687,7 @@ class WanPipeline(PipelineAPIMixin):
                 )
 
                 progress_bar.update()
-                on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=float(t)))
+                on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=float(self._scheduler.sigmas[i])))
 
         self._current_timestep = None
 
