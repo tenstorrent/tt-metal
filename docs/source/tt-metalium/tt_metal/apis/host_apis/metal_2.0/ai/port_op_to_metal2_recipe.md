@@ -509,11 +509,11 @@ DFBBinding{
 
 — **not** the `ProducerOf(...)` / `ConsumerOf(...)` / `StridedConsumerOf(...)` / `AllConsumerOf(...)` convenience factories. Those factories exist to trim boilerplate in unit tests, but inside a block of designated-initializer specs a call expression reads as an outlier, and it hides the `endpoint_type` and `access_pattern` that the full form states inline. Keep the spec uniform and the roles explicit.
 
-**`Table`s are maps, not vectors.** Several spec fields that look list-like — `compile_time_args`, `runtime_arg_values` / `common_runtime_arg_values`, `unpack_to_dest_mode`, `defines`, `tensor_args` — are `Table` (a hash-friendly map type), *not* `std::vector`. `Table` has **no `push_back` and no iterator-pair constructor**; building one the way you'd build a vector won't compile. Use brace-init `{{key, value}, …}`, `insert` / `emplace`, `operator[]`, or the single-argument range constructor `Table(existing_map)` (e.g. to convert a legacy `std::map` of defines). When a `Table` must be built conditionally, declare it and `insert`/`emplace` into it — don't reach for `push_back`.
+**`Table`s are maps, not vectors.** Several spec fields that look list-like — `compile_time_args`, `runtime_arg_values` / `common_runtime_arg_values`, `unpack_modes`, `defines`, `tensor_args` — are `Table` (a hash-friendly map type), *not* `std::vector`. `Table` has **no `push_back` and no iterator-pair constructor**; building one the way you'd build a vector won't compile. Use brace-init `{{key, value}, …}`, `insert` / `emplace`, `operator[]`, or the single-argument range constructor `Table(existing_map)` (e.g. to convert a legacy `std::map` of defines). When a `Table` must be built conditionally, declare it and `insert`/`emplace` into it — don't reach for `push_back`.
 
 For each resource type, construct the spec entry and its run-args entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
-- **`KernelSpec` ↔ `KernelRunArgs`.** For each planned `KernelSpec`, build the schema (`compile_time_args`, `runtime_arg_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `hw_config`); alongside, build the corresponding `KernelRunArgs` entry (`runtime_arg_values` and `common_runtime_arg_values`). If the kernel has no RTAs, the run-args entry may be omitted entirely.
+- **`KernelSpec` ↔ `KernelRunArgs`.** For each planned `KernelSpec`, build the schema (`compile_time_args`, `runtime_arg_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `hw_config` — the last has its own subsection, [Hardware configuration](#hardware-configuration), because it is the easiest field to break silently); alongside, build the corresponding `KernelRunArgs` entry (`runtime_arg_values` and `common_runtime_arg_values`). If the kernel has no RTAs, the run-args entry may be omitted entirely.
 
   `runtime_arg_values` is keyed **name-first, then node** (`name → node → value`). Legacy factories almost always set RTAs **node-first** (a loop over cores, values assigned per core). To bridge that without hand-inverting the loop, use `AddRuntimeArgsForNode` (from `program_run_args.hpp`) — keep the legacy per-node loop as-is and let the helper transpose into the name-first table:
 
@@ -568,11 +568,6 @@ For each resource type, construct the spec entry and its run-args entry as a pai
 
 After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return them wrapped as `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)}` from the factory's `create_program_artifacts` method — see the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md#the-metal-20-factory-concept) for the method signature and the cache lifecycle the framework wraps around it. When the op has op-owned tensors, also `std::move` them into the artifact's `op_owned_tensors` field (built and bound during construction, per the op-owned step above); omit the field otherwise — it defaults empty.
 
-**Hardware-config shortcuts.** Two helpers worth knowing for the `hw_config` field on `KernelSpec`:
-
-- *DM kernels*: prefer `DataMovementRoleHint::READER` or `DataMovementRoleHint::WRITER` over manual `gen1_config` setup. (`DataMovementRoleHint` is the namespace-level alias of `DataMovementHardwareConfig::RoleHint`; prefer it over the scoped form.) The RoleHint auto-infers the Gen1 processor/NOC pair (and the Gen2 default config), so the construction is one line: `.hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER}`. `UNSPECIFIED` permits a power-user override via explicit `gen1_config`.
-- *Compute kernels*: if the ported op carries a TTNN `ComputeKernelConfig`, use the converter helper `to_compute_hardware_config(const ComputeKernelConfig&)` (declared in `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`) to translate it to `ComputeHardwareConfig` rather than rebuilding field-by-field. The helper maps `math_fidelity`, `math_approx_mode`, `fp32_dest_acc_en`, `dst_full_sync_en` 1:1. **`unpack_to_dest_mode` is not part of the helper** — the factory must configure it separately when needed (e.g., for FP32 DFB consumers under `fp32_dest_acc_en`). Each `unpack_to_dest_mode` entry is keyed by a DFB the kernel binds, so a *conditionally*-bound DFB's entry must be gated on the **same condition as its binding**: the spec validator rejects an `unpack_to_dest_mode` key naming a DFB the kernel doesn't bind. (A legacy CB-id-indexed array could carry the entry unconditionally; Metal 2.0 cannot.)
-
 **Stop signals**: any urge to —
 
 - Demote a CTA to a runtime arg to make a single `KernelSpec` work where the legacy had multiple. ([Anti-pattern](metal2_port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta).)
@@ -586,6 +581,94 @@ After all resources are built, assemble the `ProgramSpec` (collecting `kernels`,
 If any of these appear in your draft, **stop and report**. The likely cause is a structural decision during planning that should be revisited.
 
 **Exception — Case 2 (raw pointer) bindings.** If the audit classified a `TensorParameter` as **Case 2** (the kernel uses a raw base pointer), the binding still flows through the typed channel; only the *base pointer* is extracted kernel-side via the sanctioned `get_bank_base_address` bridge (see [kernel-side whitelist rule 5](#kernel-side-whitelist)), never threaded through an RTA. This is the **one** carve-out from the "buffer address through an RTA" stop signal above, and it is **data-movement only**: a **compute** kernel cannot bind a `TensorAccessor`, so a Case 2 binding there has no bridge and **blocks the port** (rule 5) rather than falling back to an RTA.
+
+### Hardware configuration
+
+`KernelSpec::hw_config` is a `std::variant<DataMovementHardwareConfig, ComputeHardwareConfig>`, and each of those is itself a variant over a Gen1 (WH/BH) and a Gen2 (Quasar) config. **Everything here is a pure performance / precision setting.** A wrong value almost never fails the build, and usually slips past the op's tests too; it silently shifts the op's perf/precision tradeoff and surfaces much later as a model-level regression that is miserable to trace back to this line. This is the one field where the "syntax-only swap, no semantic change" promise is easy to break by accident, with no safety net but your own attention. So the discipline throughout is: **read the legacy op's *resolved* settings, port them to their exact equivalents, and diff before against after.** The field *names* were deliberately renamed for clarity — carry over the *values*, not the names.
+
+The port targets Gen1. **Build only the Gen1 config, and add no `if (arch == QUASAR)` branch of your own** — the reasons are in [Gen2 is out of scope](#gen2-is-out-of-scope) below.
+
+#### Data movement kernels
+
+Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *values*, not the constructor spelling. Legacy code reaches the same config three ways: `ReaderDataMovementConfig{}` / `WriterDataMovementConfig{}` (which default the triple), a raw `DataMovementConfig{.processor = …, .noc = …}` that happens to equal a default, or a genuinely custom triple. Decide on the resolved values:
+
+- **Matches the reader or writer default** → use the arch-agnostic TTNN helper (from `ttnn/cpp/ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp`). It selects the generation internally and supplies the Gen2 branch for free, so default-case host code needs no arch branch:
+
+  ```cpp
+  .hw_config = create_reader_datamovement_config(device->arch()),   // or create_writer_datamovement_config
+  ```
+
+  Match on the *values*, not the role name: a kernel whose resolved triple is the reader default takes the *reader* helper even if the op calls it a writer — on Gen1 the helper reproduces that triple byte-for-byte. The two defaults are value-distinct:
+
+  | | processor | noc | noc_mode |
+  |---|---|---|---|
+  | reader | `RISCV_1` | `NOC_0` | `DM_DEDICATED_NOC` |
+  | writer | `RISCV_0` | `NOC_1` | `DM_DEDICATED_NOC` |
+
+  (The Metal 2.0 [migration guide](../metal2_migration_guide.md) uses the Metal-layer `CreateReader1xxDataMovementConfig()` / `CreateWriter1xxDataMovementConfig()` for these same defaults — identical on Gen1. The TTNN helper here wraps those and adds generation selection; prefer it for a TTNN port, since it also supplies the Gen2 branch the Gen1-only Metal helpers lack.)
+
+- **Custom** (any field differs from both defaults) → replicate it *exactly* with a Gen1 config, every field copied verbatim from the legacy config:
+
+  ```cpp
+  .hw_config = DataMovementGen1Config{.processor = …, .noc = …, .noc_mode = …},
+  ```
+
+  Do **not** reach for a helper that is "close." A single flipped NOC is precisely the silent regression this section exists to prevent.
+
+**`noc_mode` is a paired, per-node setting.** A custom `DM_DYNAMIC_NOC` (typically chosen to free a NOC for fabric/CCL traffic) configures shared per-node hardware and must be set *identically on both DM kernels on the node* — it is not a per-kernel property. Port it on both kernels together.
+
+*Where the framework catches you — and where it doesn't.* The spec validator enforces the Gen1 node invariants: the two DM kernels on a node must use **distinct RISC cores**, must **agree on `noc_mode`**, and under `DM_DEDICATED_NOC` must use **distinct NOCs** (two dedicated kernels sharing a NOC hang the device). So a core or NOC *collision* is a loud `TT_FATAL`, not a silent hang. But the validator does not compare your values against the legacy op's — swapping a reader's and writer's NOCs (still distinct) passes validation and regresses silently. That comparison is yours to make.
+
+*One rare trap.* The legacy dedicated-NOC distinctness check had a bug (it ran before the second DM kernel registered), so it did not reliably fire for the common reader+writer pair. If you faithfully replicate a legacy op that pinned **two dedicated-NOC DM kernels to the same NOC**, the Metal 2.0 validator will correctly reject what legacy silently tolerated. That op was genuinely misconfigured — **stop and report** per [§When the discipline doesn't fit](#when-the-discipline-doesnt-fit); do not invent a NOC assignment to get past it (that would change its behavior).
+
+#### Compute kernels
+
+The compute config has **two sources, and you must consult both** — the second is the one the "did the helper cover everything?" instinct misses.
+
+1. **The TTNN `ComputeKernelConfig`** — the op-level knobs. Most ops carry one; translate it with `to_compute_hardware_config(device->arch(), config)` (from `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`). Like the DM helper, it selects the generation and returns the matching variant. It covers four knobs, two of them with a representation change baked in:
+
+   | legacy `ComputeConfig` | Metal 2.0 (`ComputeGen1Config`) | transform |
+   |---|---|---|
+   | `math_fidelity` | `fpu_math_fidelity` | 1:1 |
+   | `math_approx_mode` (bool) | `sfpu_precision_mode` (`Precision`) | `true` → `Approximate`, `false` → `Precise` |
+   | `fp32_dest_acc_en` | `enable_32_bit_dest` | 1:1 |
+   | `dst_full_sync_en` | `double_buffer_dest` | **inverted**: `double_buffer_dest = !dst_full_sync_en` |
+
+2. **The legacy metal `ComputeConfig` at the compute kernel's creation site** — two fields the TTNN config never carried, so the helper *structurally cannot* set them. Sweep the legacy `ComputeConfig{}` and set each by hand on the returned Gen1 config (via `std::get<ComputeGen1Config>(compute_hw).<field> = …`):
+
+   - **`bfp_pack_precision_mode`** (legacy `bfp8_pack_precise`). Rare; a clean bool→enum. Gen1-only — Gen2 replaces BFP with MXFP and has no such field:
+
+     | legacy `bfp8_pack_precise` | Metal 2.0 `bfp_pack_precision_mode` |
+     |---|---|
+     | `false` (default) | `Precision::Approximate` (default) |
+     | `true` | `Precision::Precise` |
+
+     If the legacy op left it default, do nothing — the defaults coincide.
+
+   - **`unpack_modes`** (legacy `unpack_to_dest_mode`) — **the dangerous one.** Three things change at once:
+
+     1. **Reindexing.** Legacy is a `vector<UnpackToDestMode>` *indexed by CB id*; Metal 2.0 is a `Table<DFBSpecName, UnpackMode>` *keyed by DFB name*. Map each legacy entry's CB id to its DFB name. (The legacy vector is usually a computed local, not a literal — trace what it resolves to per CB.)
+     2. **Value translation — and it flips silently.** `UnpackToDestFp32` → `UnpackMode::UnpackToDest`; `Default` → `UnpackMode::UnpackToSrc`, which you normally express by *omitting* the entry. Reverse the mapping and you have flipped the precision/perf tradeoff with no compile or test signal.
+     3. **A newly-required explicit entry.** The Metal 2.0 validator is stricter than legacy: when a compute kernel **consumes a Float32 DFB with `enable_32_bit_dest = true`**, an explicit `unpack_modes` entry is *required* where legacy silently defaulted. Add one — and derive its value from the legacy vector (`Default` → `UnpackToSrc`, `UnpackToDestFp32` → `UnpackToDest`); do not guess. This is **Float32-only for now**; Int32/UInt32 are deliberately not required yet (issue #49936), so don't preemptively add entries there.
+
+     ```cpp
+     std::get<ComputeGen1Config>(compute_hw).unpack_modes = {
+         {INPUT_A, UnpackMode::UnpackToDest},   // legacy CB entry was UnpackToDestFp32
+     };
+     ```
+
+   *Where the framework catches you.* Unlike the DM side, several `unpack_modes` mistakes are loud: the validator rejects an entry naming a DFB the kernel doesn't bind, rejects a `UnpackToDest` that can't fit its DFB's format (a 32-bit format into a 16-bit Dest — rejected on every generation; a ≤16-bit format with `UnpackToDest` — rejected on Gen1 as a pure perf loss), and enforces the required-entry rule above. But a *wrong-but-legal* entry, or a wrongly-omitted one that no rule forces, is silent. The loud checks are a partial backstop, not a substitute for the before/after diff.
+
+   (A conditionally-bound DFB's `unpack_modes` entry must be gated on the *same condition as its binding* — the validator rejects a key naming a DFB the kernel doesn't bind. See [Pattern: Conditional / optional DFB bindings](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings).)
+
+#### Gen2 is out of scope
+
+Build only the Gen1 config; do not populate a `Gen2Config` or add your own `if (arch == QUASAR)` branch. Two reasons:
+
+- **A custom DM config has no mechanical Gen1→Gen2 mapping.** Gen2 has no processor/NOC concept, so its config isn't derivable from the Gen1 one — authoring it means Quasar-specific judgment (e.g. whether to set `disable_dfb_implicit_sync_for_all`) that you cannot validate on a Gen1 bench.
+- **The Gen2-only compute fields are temporary.** `enable_2x_src_register` and `unpack_to_dest_en` are explicitly interim LLK hacks (issue #49445).
+
+In the *default* DM and compute cases the arch-agnostic helpers already emit a correct Gen2 branch for free; anything beyond that is a separate, later Quasar-uplift pass carried out with the right expertise.
 
 ---
 
@@ -647,6 +730,7 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 - [ ] **No CTA→RTA demotion in compute kernels.** If a per-group dimension was moved from CTA to RTA in the port, the structural decision is wrong; revisit planning.
 - [ ] **All CTAs are named.** Search the factory for positional `compile_time_args = {...}`; should be `compile_time_args = {{name, value}, ...}` only.
 - [ ] **No new varargs unless the kernel reads them in a loop.** Check `num_runtime_varargs` use; if the kernel reads `get_vararg(0)`, `get_vararg(1)`, ..., the named form is the right answer.
+- [ ] **Every `hw_config` reproduces the legacy op's resolved values.** For each kernel, diff the ported config against the legacy one: DM `(processor, noc, noc_mode)`, and the compute knobs — *including* the two fields the helper does not cover, `bfp_pack_precision_mode` and `unpack_modes`, swept from the legacy `ComputeConfig`. These are silent perf/precision settings with no test net; see [Hardware configuration](#hardware-configuration).
 
 If any checklist item fails, return to planning / construction to fix. Do not paper over with kernel-side modifications.
 
