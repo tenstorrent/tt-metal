@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--noc-id=<id>] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
+    triage [--noc-id=<id>] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--print-elf-cache-stats] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -24,6 +24,7 @@ Options:
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
     --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
+    --print-elf-cache-stats          Print ELF cache statistics at the end of the run. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
     --llm-output                     Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
     --llm-output-path=<path>         Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
@@ -1032,9 +1033,10 @@ def main():
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
 
-    from elfs_cache import run as get_elfs_cache
+    if args["--print-elf-cache-stats"]:
+        from elfs_cache import run as get_elfs_cache
 
-    get_elfs_cache(args, context).log_stats()
+        get_elfs_cache(args, context).log_stats()
 
     get_output_serializer().close()
 
