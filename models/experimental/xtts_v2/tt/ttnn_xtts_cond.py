@@ -6,9 +6,12 @@ TTNN implementation of the XTTS-v2 conditioning branch (Block 1).
 
 Reference: models/experimental/xtts_v2/reference/xtts_cond_ref.py
 
-This file currently implements the **Perceiver resampler** (the tail of the conditioning
-branch). The conditioning encoder (Conv1d + 6x GroupNorm attention over T) is TODO — its
-GroupNorm pools over the time axis (T=505, not tile-aligned), the known hard part.
+Implements the full conditioning branch (mel -> gpt_cond_latent), validated end-to-end at
+PCC 0.99999 vs coqui:
+  - `TTNNConditioningEncoder` — Conv1d(80->1024,k1) + 6x GroupNorm-attention over T. The
+    GroupNorm pools over the time axis (T=505, not tile-aligned) — handled with a masked
+    manual group-norm (see `_group_norm`), avoiding native ttnn.group_norm's tile limit.
+  - `TTNNPerceiver` — the Perceiver resampler (tail), 32 latents.
 
 PerceiverResampler (dim=1024, depth=2, 32 latents, 8 heads x 64):
   latents [1,32,1024]; per layer:
