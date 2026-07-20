@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import pathlib
 import re
 from datetime import datetime, timedelta
 from functools import partial
@@ -19,6 +20,9 @@ timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
 
 def search_for_tt_smi_version_in_log_file_(log_file):
+    # Defense-in-depth: resolve and confirm this is a real file before opening.
+    log_file = pathlib.Path(log_file).resolve()
+    assert log_file.is_file(), f"Not a readable log file: {log_file}"
     with open(log_file, "r") as log_f:
         for line in log_f:
             regex_match = smi_pattern.match(line)
@@ -28,6 +32,9 @@ def search_for_tt_smi_version_in_log_file_(log_file):
 
 
 def search_for_tt_smi_reset_in_log_file_(log_file):
+    # Defense-in-depth: resolve and confirm this is a real file before opening.
+    log_file = pathlib.Path(log_file).resolve()
+    assert log_file.is_file(), f"Not a readable log file: {log_file}"
     ts_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\s*")
     # Strip GitHub Actions annotation prefixes like ##[error], ##[warning]
     gh_annotation_pattern = re.compile(r"^##\[[a-z]+\]", re.IGNORECASE)
