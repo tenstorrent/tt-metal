@@ -630,94 +630,79 @@ class TtAceStepAttentionSDPA:
         self._rotary = rotary_embedding
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
+        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)  # replicate (None on BH 2×2)
+
+        # TP: attention is head-parallel — Q/K/V column-parallel by head, output proj row-parallel.
+        # OFF path is byte-identical (deg==1 makes _interleave the identity of the old concat order,
+        # and col/row mappers fall back to the legacy replicate mapper).
+        from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import resolve_tp_config, tp_weight_mesh_mapper
+
+        self._tp = resolve_tp_config(mesh_device)
+        deg = self._tp.degree
+        tp_on = self._tp.enabled and deg > 1
+        if tp_on and (self.n_heads % deg != 0 or self.n_kv % deg != 0):
+            raise ValueError(f"TP degree {deg} must divide n_heads {self.n_heads} and n_kv {self.n_kv}")
+        self._n_heads_local = self.n_heads // deg if tp_on else self.n_heads
+        self._n_kv_local = self.n_kv // deg if tp_on else self.n_kv
+        self._d_model_local = self._n_heads_local * self.d_head
+        self._fused_kv_dim_local = int(self._n_kv_local * self.d_head) * 2
 
         w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
         qo_dtype = ace_step_attn_qo_weight_dtype(ttnn, self.dtype)
+        col_mapper = tp_weight_mesh_mapper(mesh_device, shard_dim=0, cfg=self._tp) if tp_on else mapper
+        row_mapper = tp_weight_mesh_mapper(mesh_device, shard_dim=1, cfg=self._tp) if tp_on else mapper
 
-        def as_w(suffix: str, *, dtype: Any | None = None):
+        def _interleave(mats: list):
+            """Per-chip head-contiguous interleave along dim 0: [m0_d0,m1_d0,..,m0_d1,m1_d1,..].
+            With deg==1 this is exactly ``np.concatenate(mats, axis=0)`` (legacy layout)."""
+            splits = [np.split(m, deg, axis=0) for m in mats]
+            return np.concatenate([splits[j][d] for d in range(deg) for j in range(len(mats))], axis=0)
+
+        def _as(host, *, dtype, mapper_):
             return ttnn.as_tensor(
-                _maybe_get(state_dict, f"{base_address}.{suffix}.weight"),
-                device=mesh_device,
-                dtype=dtype if dtype is not None else w_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
+                host, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem, mesh_mapper=mapper_
             )
 
-        def as_b(suffix: str):
-            # Biases are optional (AceStepConfig.attention_bias defaults to False).
-            key = f"{base_address}.{suffix}.bias"
-            b = state_dict.get(key, None)
-            if b is None:
-                return None
-            return ttnn.as_tensor(
-                b.reshape(1, 1, 1, -1),
-                device=mesh_device,
-                dtype=w_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
-            )
+        def _b_raw(suffix: str):
+            b = state_dict.get(f"{base_address}.{suffix}.bias", None)
+            return None if b is None else _to_numpy_host_array(b).reshape(-1)
 
         wq_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.q_proj.weight"))
-        self.wq, self.bq = as_w("q_proj", dtype=qo_dtype), as_b("q_proj")
-        # Fused KV projection: identical K/V sequence length + one DRAM read of activations.
         wk_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.k_proj.weight"))
         wv_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.v_proj.weight"))
-        wkv_host = np.concatenate([wk_host, wv_host], axis=0)
-        self.wkv = ttnn.as_tensor(
-            wkv_host,
-            device=mesh_device,
-            dtype=w_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
-            mesh_mapper=mapper,
-        )
-        # Self-attn: fuse Q+WKV into one matmul (cross-attn keeps separate Q / WKV inputs).
-        w_qwkv_host = np.concatenate([wq_host, wkv_host], axis=0)
-        self.w_qwkv = ttnn.as_tensor(
-            w_qwkv_host,
-            device=mesh_device,
-            dtype=w_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
-            mesh_mapper=mapper,
-        )
 
-        bk_host = state_dict.get(f"{base_address}.k_proj.bias", None)
-        bv_host = state_dict.get(f"{base_address}.v_proj.bias", None)
-        bq_host = state_dict.get(f"{base_address}.q_proj.bias", None)
-        if bk_host is not None and bv_host is not None:
-            bk_np = _to_numpy_host_array(bk_host)
-            bv_np = _to_numpy_host_array(bv_host)
-            bkv_host = np.concatenate([bk_np, bv_np], axis=0).reshape(1, 1, 1, -1)
-            self.bkv = ttnn.as_tensor(
-                bkv_host,
-                device=mesh_device,
-                dtype=w_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
-            )
+        # Q: heads already contiguous → plain dim-0 shard (column-parallel).
+        self.wq = _as(_interleave([wq_host]), dtype=qo_dtype, mapper_=col_mapper)
+        # Fused KV: interleave [k_d, v_d] per chip so a dim-0 shard gives each chip its k+v heads.
+        self.wkv = _as(_interleave([wk_host, wv_host]), dtype=w_dtype, mapper_=col_mapper)
+        # Self-attn fused QKV: interleave [q_d, k_d, v_d] per chip.
+        self.w_qwkv = _as(_interleave([wq_host, wk_host, wv_host]), dtype=w_dtype, mapper_=col_mapper)
+
+        bq_np = _b_raw("q_proj")
+        bk_np = _b_raw("k_proj")
+        bv_np = _b_raw("v_proj")
+        self.bq = (
+            _as(_interleave([bq_np]).reshape(1, 1, 1, -1), dtype=w_dtype, mapper_=col_mapper)
+            if bq_np is not None
+            else None
+        )
+        if bk_np is not None and bv_np is not None:
+            self.bkv = _as(_interleave([bk_np, bv_np]).reshape(1, 1, 1, -1), dtype=w_dtype, mapper_=col_mapper)
         else:
             self.bkv = None
-        if bq_host is not None and self.bkv is not None:
-            bq_np = _to_numpy_host_array(bq_host).reshape(-1)
-            bkv_flat = _to_numpy_host_array(bkv_host).reshape(-1)
-            b_qwkv_host = np.concatenate([bq_np, bkv_flat], axis=0).reshape(1, 1, 1, -1)
-            self.b_qwkv = ttnn.as_tensor(
-                b_qwkv_host,
-                device=mesh_device,
-                dtype=w_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
+        if bq_np is not None and bk_np is not None and bv_np is not None:
+            self.b_qwkv = _as(
+                _interleave([bq_np, bk_np, bv_np]).reshape(1, 1, 1, -1), dtype=w_dtype, mapper_=col_mapper
             )
         else:
             self.b_qwkv = None
 
-        self.wo, self.bo = as_w("o_proj", dtype=qo_dtype), as_b("o_proj")
+        # Output proj: row-parallel — shard input (q_dim, head-contiguous) across TP; all-reduce output.
+        wo_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.o_proj.weight"))
+        self.wo = _as(wo_host, dtype=qo_dtype, mapper_=row_mapper)
+        bo_np = _b_raw("o_proj")
+        # bo is added to the FULL output; under TP add it once AFTER all-reduce (not per shard).
+        self.bo = _as(bo_np.reshape(1, 1, 1, -1), dtype=w_dtype, mapper_=mapper) if bo_np is not None else None
 
         # Per-head RMSNorm weights (shape [Dh]).
         qn = _maybe_get(state_dict, f"{base_address}.q_norm.weight")
@@ -946,8 +931,8 @@ class TtAceStepAttentionSDPA:
             lin_qwkv = self._qwkv_linear_kwargs(batch_size=b_x, seq_len=s_q, in_dim=d_in)
             x_qwkv = ace_step_matmul_activation(ttnn, x, lin_qwkv, l1_fn=self._l1_activation, dram_mc=_dram_mc)
             qwkv = ttnn.linear(x_qwkv, self.w_qwkv, bias=self.b_qwkv, transpose_b=True, **lin_qwkv)
-            d_q = int(self.d_model)
-            kv_end = d_q + int(self._fused_kv_dim)
+            d_q = int(self._d_model_local)
+            kv_end = d_q + int(self._fused_kv_dim_local)
             s_lin = int(qwkv.shape[2])
             q = ttnn.slice(qwkv, (0, 0, 0, 0), (b_x, 1, s_lin, d_q))
             kv = ttnn.slice(qwkv, (0, 0, 0, d_q), (b_x, 1, s_lin, kv_end))
@@ -973,7 +958,7 @@ class TtAceStepAttentionSDPA:
 
         B = int(q.shape[0])
         S = int(q.shape[2])
-        H = self.n_heads
+        H = self._n_heads_local  # local heads under TP (== n_heads when off)
         Dh = self.d_head
         if _trace:
             print(
@@ -1042,7 +1027,7 @@ class TtAceStepAttentionSDPA:
             q,
             kv,
             num_heads=H,
-            num_kv_heads=self.n_kv,
+            num_kv_heads=self._n_kv_local,
             l1_mc=_head_mc,
         )
 
@@ -1055,7 +1040,7 @@ class TtAceStepAttentionSDPA:
             v = _pad_seq_dim2_bh_sd(v, target)
 
         S_k = int(k.shape[2])
-        kv_h = self.n_kv
+        kv_h = self._n_kv_local
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_reshape_BHSD", q, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
@@ -1297,7 +1282,16 @@ class TtAceStepAttentionSDPA:
             out_dim=self.d_model,
         )
         ctx_o = ace_step_matmul_activation(ttnn, ctx, lin_o, l1_fn=self._l1_activation, dram_mc=_dram_mc)
-        out = ttnn.linear(ctx_o, self.wo, bias=self.bo, transpose_b=True, **lin_o)
+        _tp_on = self._tp.enabled and self._tp.degree > 1
+        # Row-parallel o_proj: under TP each chip holds a q_dim shard → partial output. Defer the
+        # bias (it applies to the full sum) and all-reduce across the TP axis to rebuild hidden.
+        out = ttnn.linear(ctx_o, self.wo, bias=(None if _tp_on else self.bo), transpose_b=True, **lin_o)
+        if _tp_on:
+            from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import tp_all_reduce
+
+            out = tp_all_reduce(out, self.mesh_device, cfg=self._tp)
+            if self.bo is not None:
+                out = ttnn.add(out, self.bo)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}attn_out_B1SD", out, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
@@ -1330,31 +1324,49 @@ class TtQwen3MLP:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        # Replicate mapper (None on BH 2×2 — avoids large-upload stalls); unchanged when TP off.
         mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
         w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
 
-        def as_w(name: str):
-            return ttnn.as_tensor(
-                _maybe_get(state_dict, f"{base_address}.{name}.weight"),
-                device=mesh_device,
-                dtype=w_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
-            )
+        # TP: shard the gated MLP across the mesh (column-parallel gate/up, row-parallel down).
+        # OFF path is byte-identical to before (mapper stays the legacy replicate mapper).
+        from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import resolve_tp_config, tp_weight_mesh_mapper
+
+        self._tp = resolve_tp_config(mesh_device)
+        tp_deg = self._tp.degree
+        self._local_intermediate = int(intermediate_size) // tp_deg if self._tp.enabled else int(intermediate_size)
 
         w_gate_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.gate_proj.weight"))
         w_up_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.up_proj.weight"))
-        w_gate_up_host = np.concatenate([w_gate_host, w_up_host], axis=0)
+        if self._tp.enabled and tp_deg > 1:
+            # Fused gate/up column-parallel: a contiguous dim-0 shard must give each chip its slice
+            # of BOTH gate and up, so interleave per-chip chunks [g0,u0,g1,u1,...] before sharding.
+            g_chunks = np.split(w_gate_host, tp_deg, axis=0)
+            u_chunks = np.split(w_up_host, tp_deg, axis=0)
+            w_gate_up_host = np.concatenate([c for pair in zip(g_chunks, u_chunks) for c in pair], axis=0)
+            gate_up_mapper = tp_weight_mesh_mapper(mesh_device, shard_dim=0, cfg=self._tp)  # shard output
+            down_mapper = tp_weight_mesh_mapper(mesh_device, shard_dim=1, cfg=self._tp)  # shard input (intermediate)
+        else:
+            w_gate_up_host = np.concatenate([w_gate_host, w_up_host], axis=0)
+            gate_up_mapper = mapper
+            down_mapper = mapper
+
         self.w_gate_up = ttnn.as_tensor(
             w_gate_up_host,
             device=mesh_device,
             dtype=w_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
-            mesh_mapper=mapper,
+            mesh_mapper=gate_up_mapper,
         )
-        self.w_down = as_w("down_proj")
+        self.w_down = ttnn.as_tensor(
+            _maybe_get(state_dict, f"{base_address}.down_proj.weight"),
+            device=mesh_device,
+            dtype=w_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=down_mapper,
+        )
 
         self.hidden_size = int(hidden_size)
         self.intermediate_size = int(intermediate_size)
@@ -1382,7 +1394,7 @@ class TtQwen3MLP:
                 self.mesh_device,
                 seq_len=int(seq_len),
                 hidden_size=self.hidden_size,
-                intermediate_size=self.intermediate_size,
+                intermediate_size=self._local_intermediate,
                 batch_size=int(batch_size),
             )
             if pc is not None:
@@ -1404,7 +1416,7 @@ class TtQwen3MLP:
             pc = ace_step_dit_mlp_down_proj_linear_program_config(
                 self.mesh_device,
                 seq_len=int(seq_len),
-                intermediate_size=self.intermediate_size,
+                intermediate_size=self._local_intermediate,
                 hidden_size=self.hidden_size,
                 batch_size=int(batch_size),
             )
@@ -1444,7 +1456,8 @@ class TtQwen3MLP:
             _elt_mc = self._act_l1 if _use_l1 else _dram_mc
         x_lin = ace_step_matmul_activation(ttnn, x, lin_gu, l1_fn=self._l1_activation, dram_mc=_dram_mc)
         gate_up = ttnn.linear(x_lin, self.w_gate_up, bias=None, transpose_b=True, **lin_gu)
-        i_sz = int(self.intermediate_size)
+        # Local intermediate under TP (== full when off): gate/up are the per-chip halves.
+        i_sz = int(self._local_intermediate)
         gate = ttnn.slice(gate_up, (0, 0, 0, 0), (b_x, 1, s, i_sz))
         up = ttnn.slice(gate_up, (0, 0, 0, i_sz), (b_x, 1, s, 2 * i_sz))
         ace_step_safe_deallocate(ttnn, gate_up)
@@ -1467,6 +1480,12 @@ class TtQwen3MLP:
             h = _act_fn(h)
         h_lin = ace_step_matmul_activation(ttnn, h, lin_down, l1_fn=self._l1_activation, dram_mc=_dram_mc)
         out = ttnn.linear(h_lin, self.w_down, bias=None, transpose_b=True, **lin_down)
+        # Row-parallel down_proj: each chip produced a partial sum over its intermediate shard;
+        # all-reduce across the TP axis to reconstruct the full hidden output on every chip.
+        if self._tp.enabled and self._tp.degree > 1:
+            from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import tp_all_reduce
+
+            out = tp_all_reduce(out, self.mesh_device, cfg=self._tp)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}mlp_raw_out"] = out
         return out

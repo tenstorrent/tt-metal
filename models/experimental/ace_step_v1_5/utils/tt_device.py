@@ -590,6 +590,15 @@ def open_dit_device(
             )
         mesh_kw = {k: v for k, v in open_kw.items()}
         dit_mgd = _dit_mesh_graph_descriptor_path(mesh_sku)
+        # TP: CCL collectives require the fabric context up BEFORE the mesh opens. Gated on the
+        # ACE_STEP_TP env so the legacy replicate path (fabric off) is unchanged.
+        _tp_fabric = False
+        from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import ace_step_tp_env_requested
+
+        if ace_step_tp_env_requested() and hasattr(ttnn_mod, "set_fabric_config") and hasattr(ttnn_mod, "FabricConfig"):
+            ttnn_mod.set_fabric_config(ttnn_mod.FabricConfig.FABRIC_1D)
+            _tp_fabric = True
+            print("[ace_step_v1_5] TP: enabled FABRIC_1D for DiT mesh CCL", flush=True)
         try:
             dev = ttnn_mod.open_mesh_device(ttnn_mod.MeshShape(int(rows), int(cols)), **mesh_kw)
         except Exception as exc:
@@ -600,6 +609,11 @@ def open_dit_device(
                 mgd_path=dit_mgd,
             )
             raise RuntimeError(f"{exc}{hint}") from exc
+        if _tp_fabric:
+            try:
+                setattr(dev, "_ace_tp_fabric_enabled", True)
+            except Exception:
+                pass
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
     return dev
@@ -642,6 +656,7 @@ def close_ace_step_device(ttnn_mod: Any, device: Any, *, restore_cluster_env: bo
     except Exception:
         pass
     visible_saved = getattr(device, _ACE_STEP_VISIBLE_DEVICES_SAVED_ATTR, None)
+    tp_fabric = bool(getattr(device, "_ace_tp_fabric_enabled", False))
     try:
         if isinstance(device, ttnn_mod.MeshDevice):
             ttnn_mod.close_mesh_device(device)
@@ -650,6 +665,12 @@ def close_ace_step_device(ttnn_mod: Any, device: Any, *, restore_cluster_env: bo
     except Exception:
         # Stale/remote-only meshes can abort pytest teardown (SubDeviceManagerTracker).
         pass
+    if tp_fabric and hasattr(ttnn_mod, "set_fabric_config") and hasattr(ttnn_mod, "FabricConfig"):
+        # Reset fabric so a subsequent (non-TP) open on this process starts clean.
+        try:
+            ttnn_mod.set_fabric_config(ttnn_mod.FabricConfig.DISABLED)
+        except Exception:
+            pass
     if restore_cluster_env and visible_saved is not None:
         _restore_cluster_visibility(visible_saved)
 
@@ -967,14 +988,30 @@ def ace_step_ttnn_to_torch(
     Uses ``to_torch_auto_compose`` so **replicated** activations (ACE-Step DiT/VAE on
     BH 2×2) are not concatenated across chips. Blind ``ConcatMesh2dToTensor`` on every
     tensor duplicates/garbles data and produces noisy audio.
+
+    Under **TP** every host readback is replicated (DiT/VAE outputs), but a tensor that
+    passed through a CCL all-reduce carries topology metadata that makes
+    ``to_torch_auto_compose`` assert (``dims must be unique``). Read device-0's shard
+    directly in that case — it holds the full (replicated) answer.
     """
     from models.common.auto_compose import to_torch_auto_compose
 
     torch_dtype = dtype if dtype is not None else torch.float32
-    out = to_torch_auto_compose(tensor, device=mesh_device)
-    if out.dtype != torch_dtype:
-        out = out.to(torch_dtype)
-    return out.contiguous()
+
+    def _finish(out: torch.Tensor) -> torch.Tensor:
+        if out.dtype != torch_dtype:
+            out = out.to(torch_dtype)
+        return out.contiguous()
+
+    from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import ace_step_tp_enabled
+
+    if ace_step_tp_enabled(mesh_device):
+        return _finish(ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]))
+    try:
+        return _finish(to_torch_auto_compose(tensor, device=mesh_device))
+    except Exception:
+        # Fallback: a replicated tensor whose post-CCL topology confuses auto_compose.
+        return _finish(ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]))
 
 
 def slice_batch_dim0(t: ttnn.Tensor, b0: int, b1_exc: int) -> ttnn.Tensor:
