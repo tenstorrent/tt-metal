@@ -158,39 +158,52 @@ inline __attribute__((always_inline)) uint32_t get_id(uint32_t id, PacketTypes t
 // a real Hash16_CT zone id in practice, and the host special-cases it to the name "X280-STALL".
 constexpr uint32_t PROFILER_STALL_ZONE_ID = 0x7FFF;
 
-// 4-word (16B) SPSC marker, self-describing so the X280 drain needs NO collect hart and NO sticky
-// context packet (identity is in every marker; the host reads core/risc straight from it):
-//   word0 = valid(bit31) | core_x(6, bits 12-17) | core_y(6, bits 6-11) | risc(6, bits 0-5)
-//   word1 = (timer_id & 0x7FFFF)<<12 | time_hi(12)   -- bit31 FREE (reserved for a future packet type)
-//   word2 = time_lo(32)
-//   word3 = 0 (pad -> 16B tiles the 64B D2H page exactly, 4 markers/page)
-// SPSC_MARKER_WORDS drives the ring room-checks + writes here (the shared PROFILER_L1_MARKER_UINT32_SIZE
-// stays 2 so the L1 buffer SIZE -- part of the L1-size-bounded mailboxes_t -- is unchanged; the ring
-// then holds 128 4-word markers). NOTE: this branch drops DRAM-profiler marker-format parity.
-static constexpr uint32_t SPSC_MARKER_WORDS = 4;
-// Cached per-RISC identity word. Coords come from profiler_control_buffer[NOC_X/NOC_Y] (BRISC stamps
-// them in init_profiler, before any RISC emits markers) -- my_x/my_y are only linked on BRISC/DM, not
-// TRISC, so reading the control buffer is the all-RISC-safe source. bit31 is always set, so a 0 cache
-// means "not computed yet"; the value is constant per core so we compute it once.
-[[maybe_unused]] static uint32_t g_spsc_ident = 0;
-// NOT inlined: computed once per RISC and called from the (also out-of-line) marker paths, so the
-// identity code isn't duplicated at every zone scope (NCRISC's code region is tiny -- inlining the
-// 4-word marker everywhere overflowed it).
-__attribute__((noinline)) uint32_t spsc_marker_ident() {
-    if (g_spsc_ident == 0) {
-        g_spsc_ident = 0x80000000u | ((profiler_control_buffer[NOC_X] & 0x3Fu) << 12) |
-                       ((profiler_control_buffer[NOC_Y] & 0x3Fu) << 6) | (myRiscID & 0x3Fu);
+// ---- X280 compact wire format (2-word / 8B packets) ------------------------
+// This backend emits the compact per-lane packet format the X280 drain pipeline expects:
+//   word0: [31:27] type(5)  [26:0] low27       word1: [31:0] payload32
+// A MARKER (ZONE_START/END/TOTAL/TS_*) carries: low27 = 16-bit zone srcloc hash (room to grow to 27),
+// payload32 = timer_low. Identity is NOT in the marker anymore -- it is reconstructed on the host from
+// three "sticky" packets that persist until updated:
+//   STICKY_PROG  (type 8): payload32 = runtime host-id. Emitted at BRISC FW start (set_host_counter).
+//   STICKY_TIMER (type 9): low27 = timer_hi. Emitted by any RISC when its wall-clock high half ticks.
+//   STICKY_SRC   (type 7): (core,risc) lane -- injected by the X280 READER, never by the producer.
+// So a producing RISC writes ONLY markers + (rarely) a TIMER sticky; the reader knows which ring it is
+// draining, so it stamps the SRC identity. This drops the per-marker identity word (4->2 words) and the
+// need for the X280 to reshape.
+//
+// MUST stay in sync with tools/x280_bm/include/prof_packet.h. Inlined here (not #included) because the
+// kernel JIT build does not carry the tools/x280_bm/include path -- same pattern as producer_common.h.
+struct ppfmt {
+    static constexpr uint32_t TYPE_SHIFT = 27;
+    static constexpr uint32_t TYPE_MASK = 0x1Fu;
+    static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
+    static constexpr uint32_t HASH16_MASK = 0xFFFFu;
+    static constexpr uint32_t T_STICKY_PROG = 8u;   // PP_STICKY_PROG
+    static constexpr uint32_t T_STICKY_TIMER = 9u;  // PP_STICKY_TIMER
+    static inline uint32_t w0(uint32_t type, uint32_t low27) {
+        return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
     }
-    return g_spsc_ident;
-}
+    // marker word0 from a get_const_id/get_id timer_id: type in bits 16-18 -> the 5-bit type field,
+    // 16-bit hash -> low27 (host later widens to the full 27 bits for a bigger id space).
+    static inline uint32_t marker_w0(uint32_t timer_id) { return w0((timer_id >> 16) & 0x7u, timer_id & HASH16_MASK); }
+};
+
+// SPSC marker is now 2 words. The shared PROFILER_L1_MARKER_UINT32_SIZE stays 2 (L1 buffer SIZE
+// unchanged), so the ring holds 256 2-word markers.
+static constexpr uint32_t SPSC_MARKER_WORDS = 2;
+
+// Last wall-clock high half this RISC emitted in a STICKY_TIMER. Init to ~0 (never a real hi) so the
+// first marker forces a TIMER sticky (the "kernel start" high anchor). Static (not extern) so the
+// backend definition file needn't change; constant-folds to a per-RISC .bss word.
+[[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 
 // Slow path of ring_ensure_room (out-of-line: ONE copy, not inlined at every zone scope). The ring is
 // FULL -> record when the stall begins, block until there's room for the caller's marker AND the
-// 2-marker stall zone, then emit the {START,END} back-pressure zone (two 4-word self-describing markers)
-// so the stall nests inside the caller's elongated zone.
+// 2-marker stall zone, then emit the {START,END} back-pressure zone (two 2-word markers) so the stall
+// nests inside the caller's elongated zone. timer_hi is taken from the lane's last STICKY_TIMER on the
+// host (a stall rarely spans a wall-clock high tick), so only timer_low is carried here.
 __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    const uint32_t stall_start_hi = p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF;
     const uint32_t stall_start_lo = p_reg[WALL_CLOCK_LOW_INDEX];
     const uint32_t need = nwords + 2 * SPSC_MARKER_WORDS;  // caller marker + {START,END} stall zone
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_CAPACITY - need)) {
@@ -199,19 +212,11 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
             return;  // teardown: drop the marker + skip the stall zone rather than stall on a dead ring
         }
     }
-    const uint32_t stall_end_hi = p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF;
     const uint32_t stall_end_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    const uint32_t ident = spsc_marker_ident();
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ident;  // START (4 words)
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] =
-        ((get_const_id(PROFILER_STALL_ZONE_ID, ZONE_START) & 0x7FFFF) << 12) | stall_start_hi;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ZONE_START, PROFILER_STALL_ZONE_ID);
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = stall_start_lo;
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = 0;
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ident;  // END (4 words)
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] =
-        ((get_const_id(PROFILER_STALL_ZONE_ID, ZONE_END) & 0x7FFFF) << 12) | stall_end_hi;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ZONE_END, PROFILER_STALL_ZONE_ID);
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = stall_end_lo;
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = 0;
 }
 
 // Fast path stays inline (just the room check); the full-ring path is out-of-line above.
@@ -242,14 +247,37 @@ inline __attribute__((always_inline)) void publish_tail() {
     }
 }
 
-// Append one 2-word timing marker (timer_id + wall clock), blocking if full.
-inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
-    ring_ensure_room(SPSC_MARKER_WORDS);
+// Tear-free 64-bit wall-clock read: HIGH and LOW are separate registers, so a tick between them would
+// pair an old high with a new (wrapped-small) low -> a timestamp ~2^32 too small = a backwards jump. Re-read
+// HIGH after LOW and retry if it moved, so (hi, lo) is always one consistent snapshot.
+inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    ring_write_word(spsc_marker_ident());  // word0: valid | core_x | core_y | risc
-    ring_write_word(((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF));  // word1 (bit31 free)
-    ring_write_word(p_reg[WALL_CLOCK_LOW_INDEX]);                                            // word2: time_lo
-    ring_write_word(0);                                                                      // word3: pad (reserved)
+    do {
+        hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+        lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    } while (hi != p_reg[WALL_CLOCK_HIGH_INDEX]);
+}
+
+// Append one 2-word timing marker (type|srcloc-hash , timer_low), preceded by a STICKY_TIMER when the
+// wall-clock high half ticks. Blocks if the ring is full. Identity is injected by the X280 reader.
+//
+// CRITICAL ordering: reserve ring room (which may BLOCK on a full ring and emit the X280-STALL zone) BEFORE
+// reading the clock. If we timestamped first, a marker delayed by a stall would carry a pre-stall time yet be
+// written into the ring AFTER the (later-timestamped) stall zone -> a backwards time jump on that lane. Reading
+// the clock after the room is secured makes the marker's time reflect when it is actually written (>= the stall
+// end), keeping every lane's stream monotonic. Reserve worst case (a TIMER sticky + the marker) so the room
+// check -- and any stall -- happens once, up front, not between the two writes.
+inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
+    ring_ensure_room(2 * SPSC_MARKER_WORDS);
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    if (hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: word0 = type | timer_hi
+        ring_write_word(0);
+        g_prev_timer_hi = hi;
+    }
+    ring_write_word(ppfmt::marker_w0(timer_id));  // word0: type | zone srcloc (16-bit hash)
+    ring_write_word(lo);                          // word1: timer_low
     publish_tail();
 }
 
@@ -264,18 +292,17 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
 // later). init_profiler() has already zeroed the rings this launch. For sibling rings the sticky lands
 // first; only BRISC's own ring has its FW ZONE_START ahead of the sticky (fine -- FW zone carries no ID).
 inline __attribute__((always_inline)) void mark_sticky_meta() {
-    // Retired: identity (core_x, core_y, risc) is now stamped into EVERY marker's word0
-    // (spsc_marker_ident), so the host reads it directly and needs no sticky context packet /
-    // forward-fill. Kept as a no-op so the set_host_counter call site still compiles.
+    // Retired: the combined (identity+id) context packet is gone. Identity is injected by the X280
+    // reader (STICKY_SRC); the runtime host-id is emitted as STICKY_PROG from set_host_counter. Kept
+    // as a no-op in case anything still references it.
     return;
 }
 
-// Fixed-index write retained only for the trace-only build mode (writes directly
-// into the ring storage region; not used by the default SPSC path).
+// Fixed-index write retained only for the trace-only build mode (writes directly into the ring storage
+// region; not used by the default SPSC path). 2-word marker: word0 = type|hash, word1 = timer_low.
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    profiler_data_buffer[myRiscID].data[index] =
-        0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
+    profiler_data_buffer[myRiscID].data[index] = ppfmt::marker_w0(timer_id);
     profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
 }
 
@@ -292,15 +319,17 @@ inline __attribute__((always_inline)) bool get_dropped_timestamps(uint32_t index
 }
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
-    // Assign-ID hook (DeviceZoneSetCounter): the SPSC backend used to write this counter into the fixed
-    // ID_LL slot, but the whole buffer is the X280-drained ring, so that corrupted a live marker word.
-    // Instead, emit it in-band as the STICKY_META context packet carrying (core, risc, host_id); the host
-    // forward-fills that identity onto the following raw markers (no per-marker reshape on the X280). This
-    // is the "state/context packet" the old TODO described. Emitted here, at the ID-assign call, rather
-    // than the main zone scope because the ID is only known now -- it lands just after the FW ZONE_START,
-    // which is fine (the FW zone carries no assigned ID). TODO: rename DeviceZoneSetCounter accordingly.
+    // Assign-ID hook (DeviceZoneSetCounter): emit the runtime host-id in-band as a STICKY_PROG packet.
+    // counterValue is the per-program-global runtime_id (the same id ttnn assigns and the DRAM profiler
+    // stamps into ID_LL). The host forward-fills it onto every following marker of this launch until the
+    // next STICKY_PROG. Emitted at the ID-assign call (BRISC FW start) -- it lands just after the FW
+    // ZONE_START, which carries no assigned id. Held unpublished until DeviceValidateProfiler commits the
+    // launch (an idle core rewinds it), matching the FW zone's validity gate.
     hostZoneId = counterValue;
-    mark_sticky_meta();
+    ring_ensure_room(SPSC_MARKER_WORDS);
+    ring_write_word(ppfmt::w0(ppfmt::T_STICKY_PROG, 0));  // word0: type | (low27 unused)
+    ring_write_word(counterValue);                        // word1: runtime host-id
+    publish_tail();
 }
 
 inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
@@ -346,6 +375,10 @@ __attribute__((noinline)) void init_profiler(
     // Resume this RISC's monotonic tail from L1 (rings persist across launches).
     wIndex = profiler_control_buffer[TAIL_INDEX];
 
+    // Re-anchor the wall-clock high half so this launch's first marker emits a fresh STICKY_TIMER.
+    // Guards the idle-launch rewind case (a discarded sticky must not leave the host with a stale hi).
+    g_prev_timer_hi = 0xFFFFFFFFu;
+
     // On validator RISCs, defer publishing this launch until DeviceValidateProfiler() resolves it.
     // The FW zone's ZONE_START (emitted right after this returns) is written into the ring but not
     // made visible until set_profiler_zone_valid(true) commits it — or discarded if the launch is
@@ -360,10 +393,8 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
             ring_ensure_room(SPSC_MARKER_WORDS);
-            ring_write_word(spsc_marker_ident());                              // word0: identity
-            ring_write_word((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);  // word1: ZONE_TOTAL id
-            ring_write_word(sums[i]);                                          // word2: accumulated sum
-            ring_write_word(0);                                                // word3: pad
+            ring_write_word(ppfmt::marker_w0(get_id(sumIDs[i], ZONE_TOTAL)));  // word0: ZONE_TOTAL | hash
+            ring_write_word(sums[i]);  // word1: accumulated sum (host reads-as-sum by type, not a timer)
         }
     }
     publish_tail();
@@ -468,13 +499,19 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
         expected_size == 0 || total_data_count == expected_size,
         "Number of arguments does not match expected size for this PacketType");
 
-    // 1 timing marker (2 words) + 2 words per 64-bit datum.
-    ring_ensure_room(SPSC_MARKER_WORDS + 2 * total_data_count);
-
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    // Reserve worst case (a TIMER sticky + the timing marker + 2 words/datum) BEFORE reading the clock, so a
+    // full-ring stall does not backdate the marker (see mark_time's ordering note).
+    ring_ensure_room(2 * SPSC_MARKER_WORDS + 2 * total_data_count);
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    if (hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: word0 = type | timer_hi
+        ring_write_word(0);
+        g_prev_timer_hi = hi;
+    }
     uint32_t marker_id = get_const_id(data_id, packet_type);
-    ring_write_word(0x80000000 | ((marker_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF));
-    ring_write_word(p_reg[WALL_CLOCK_LOW_INDEX]);
+    ring_write_word(ppfmt::marker_w0(marker_id));  // word0: packet_type | hash
+    ring_write_word(lo);                           // word1: timer_low
 
     ring_write_word(data >> 32);
     ring_write_word((data << 32) >> 32);

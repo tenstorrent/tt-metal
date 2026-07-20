@@ -33,6 +33,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_d2hbw)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profrelay)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profcons)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profsplit)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_realprof)
 
 add_custom_target(
     profiler_examples
@@ -55,4 +56,5 @@ add_custom_target(
         test_x280_profrelay
         test_x280_profcons
         test_x280_profsplit
+        test_x280_realprof
 )

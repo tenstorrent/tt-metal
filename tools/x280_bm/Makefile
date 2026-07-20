@@ -257,7 +257,9 @@ $(BUILD)/profsock.bin: $(BUILD)/profsock.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "profsock.bin: $$(wc -c < $@) bytes"
 
-$(BUILD)/profzone.o: src/profzone.c include/noc.h | $(BUILD) toolchain
+# profzone: PRODUCTION drainer -- an exact copy of profstream's linearized pipeline, kept separate so
+# profstream stays frozen as the benchmark reference while profzone takes real-marker/production changes.
+$(BUILD)/profzone.o: src/profzone.c include/noc.h include/x280_boot.h | $(BUILD) toolchain
 	$(CC) $(VEC_CFLAGS) -c -o $@ $<
 
 $(BUILD)/profzone.elf: $(BUILD)/entry.o $(BUILD)/profzone.o $(LD_SCRIPT) | toolchain
