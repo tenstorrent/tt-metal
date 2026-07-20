@@ -26,7 +26,11 @@ from models.tt_dit.utils.ltx import (
     print_ltx_timing_table,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import (
+    line_params_req_exact_devices,
+    ring_params_req_exact_devices,
+    skip_if_unsupported_num_links,
+)
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
@@ -34,8 +38,8 @@ from models.tt_dit.utils.vbench import assert_vbench_quality
 # l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
 # whose sharding/config tensors allocate from the dedicated L1_SMALL pool; it defaults to 0, which
 # OOMs the vocoder. 32 KB matches the audio component tests.
-ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
-line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+ring_trace_params = {**ring_params_req_exact_devices, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+line_trace_params = {**line_params_req_exact_devices, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
@@ -52,27 +56,47 @@ line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True],
         # BH on 2x4. l1_small_size: the audio vocoder's conv2d needs an L1_SMALL scratch pool
         # (default 0 → OOM in decode).
-        [(2, 4), (2, 4), 1, 0, 2, True, {**line_params, "l1_small_size": 32768}, ttnn.Topology.Linear, False],
+        [
+            (2, 4),
+            (2, 4),
+            1,
+            0,
+            2,
+            True,
+            {**line_params_req_exact_devices, "l1_small_size": 32768},
+            ttnn.Topology.Linear,
+            False,
+        ],
         # WH (ring) on 4x8. Requires increased worker_l1_size to avoid code-size error in RingAttention.
-        [(4, 8), (4, 8), 1, 0, 4, True, {"worker_l1_size": 1344544, **ring_params}, ttnn.Topology.Ring, True],
+        [
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            4,
+            True,
+            {"worker_l1_size": 1344544, **ring_params_req_exact_devices},
+            ttnn.Topology.Ring,
+            True,
+        ],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False],
         # BH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False],
     ],
     ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0_linear",
-        "bh_4x8sp1tp0_ring",
-        "bh_4x32sp1tp0",
+        "2x2sp0tp1nl2_line_is_fsdp1",
+        "2x4sp0tp1nl1_line_is_fsdp1",
+        "2x4sp1tp0nl2_line_is_fsdp0",
+        "4x8sp1tp0nl4_ring_is_fsdp1",
+        "4x8sp1tp0nl2_line_is_fsdp0",
+        "4x8sp1tp0nl2_ring_is_fsdp0",
+        "4x32sp1tp0nl2_ring_is_fsdp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -88,6 +112,7 @@ def test_pipeline_distilled(
     no_prompt,
 ):
     """LTX-2.3 distilled 2-stage AV pipeline."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
     gemma = default_ltx_gemma()
 
@@ -370,11 +395,9 @@ def _temporal_seam_score(path):
         # 4x8 Galaxy (ring): the full-res 1088x1920 latent shards unevenly on the 4x8 mesh
         # (s1 cond latent 17x30, full 34x60), so the VAE encoder fold + even-shard padding must
         # handle non-mesh-aligned dims here. The 2x4 loudbox shards evenly and never hits this.
-        # The id stays out of the bh_*/wh_* namespace so a bare `-k bh_4x8sp1tp0_ring` (run_ltx's
-        # canonical t2v/i2v launcher) never collides into this gated test.
         [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
     ],
-    ids=["bh_2x4sp1tp0", "i2v_4x8sp1tp0_ring"],
+    ids=["2x4sp1tp0nl2_line_is_fsdp0", "i2v_4x8sp1tp0nl2_ring_is_fsdp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled_i2v(
@@ -389,6 +412,8 @@ def test_pipeline_distilled_i2v(
     import subprocess
 
     from PIL import Image
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
     parent_mesh = mesh_device
@@ -555,7 +580,7 @@ def test_pipeline_distilled_i2v(
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
     ],
-    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
+    ids=["2x4sp1tp0nl2_line_is_fsdp0", "4x8sp1tp0nl2_line_is_fsdp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
@@ -564,6 +589,8 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     encodes prompts). Profiles cold (weight load + compile) vs warm (steady-state per-gen)
     decode wall. LTX_TRACED=1 traces the main vocoder (cold/warm timing only — the eager
     torch-oracle quality block is skipped under trace; run LTX_TRACED=0 for the stats)."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 

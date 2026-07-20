@@ -24,7 +24,9 @@ from models.tt_dit.utils.ltx import (
     default_ltx_gemma,
     print_ltx_timing_table,
 )
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
+
+from .ltx_mesh_params import LTX_PIPELINE_MESH_PARAMS
 
 
 def test_euler_step():
@@ -56,30 +58,10 @@ def test_euler_step():
     "no_prompt",
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
+@pytest.mark.parametrize("dynamic_load", [False])
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-        # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
-        # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
-        # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0_linear",
-        "bh_4x8sp1tp0_ring",
-        "bh_4x32sp1tp0",
-    ],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    LTX_PIPELINE_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -93,7 +75,6 @@ def test_euler_step():
 )
 def test_pipeline_one_stage(
     mesh_device,
-    mesh_shape,
     sp_axis,
     tp_axis,
     num_links,
@@ -104,12 +85,14 @@ def test_pipeline_one_stage(
     is_fsdp,
     no_prompt,
 ):
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-dev.safetensors")
     gemma = default_ltx_gemma()
     # ckpt / gemma always resolve (env var → local → HF repo string fallback). The pipeline's
     # resolver downloads from HF if needed.
 
     parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))

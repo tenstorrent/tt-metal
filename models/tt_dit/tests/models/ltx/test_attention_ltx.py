@@ -15,7 +15,9 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
+
+from .ltx_mesh_params import LTX_ATTENTION_MESH_PARAMS
 
 
 def _diffusers_qk_to_split(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
@@ -43,19 +45,9 @@ def _convert_diffusers_attn_state(state: dict, num_heads: int, head_dim: int) ->
     return out
 
 
-# Wan ``test_wan_attention`` grid + LTX single-device row (empty device_params).
-_LTX_ATTENTION_MESH_PARAMS = [
-    pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
-    pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-    pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
-    pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-    pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
-]
-
-
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_ATTENTION_MESH_PARAMS,
+    LTX_ATTENTION_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 def test_ltx_self_attention(
@@ -70,6 +62,8 @@ def test_ltx_self_attention(
     Test LTX-2 self-attention: compare TT LTXAttention vs PyTorch Attention.
     """
     from diffusers.models.transformers.transformer_ltx2 import LTX2Attention, LTX2AudioVideoRotaryPosEmbed
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     dim = 4096
     num_heads = 32
@@ -176,7 +170,7 @@ def test_ltx_self_attention(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_ATTENTION_MESH_PARAMS,
+    LTX_ATTENTION_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 def test_ltx_cross_attention(
@@ -191,6 +185,8 @@ def test_ltx_cross_attention(
     Test LTX-2 cross-attention: compare TT LTXAttention vs PyTorch Attention.
     """
     from diffusers.models.transformers.transformer_ltx2 import LTX2Attention
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     dim = 4096
     context_dim = 4096

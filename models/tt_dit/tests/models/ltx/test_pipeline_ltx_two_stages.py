@@ -16,7 +16,9 @@ from models.tt_dit.utils.ltx import (
     default_ltx_gemma,
     print_ltx_timing_table,
 )
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
+
+from .ltx_mesh_params import LTX_PIPELINE_MESH_PARAMS, _2x4sp1tp0nl2_line_is_fsdp0
 
 
 def _default_distilled_lora() -> str:
@@ -39,35 +41,14 @@ def _default_distilled_lora() -> str:
     "no_prompt",
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
+@pytest.mark.parametrize("dynamic_load", [False])
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-        # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
-        # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
-        # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0_linear",
-        "bh_4x8sp1tp0_ring",
-        "bh_4x32sp1tp0",
-    ],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    LTX_PIPELINE_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_two_stages(
     mesh_device,
-    mesh_shape,
     sp_axis,
     tp_axis,
     num_links,
@@ -77,11 +58,13 @@ def test_pipeline_two_stages(
     no_prompt,
 ):
     """LTX-2.3 22B 2-stage AV pipeline: full-guidance s1 + distilled-LoRA s2 refine."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-dev.safetensors")
     distilled_lora = _default_distilled_lora()
     gemma = default_ltx_gemma()
 
     parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
@@ -157,17 +140,14 @@ def test_pipeline_two_stages(
 # ---------------------------------------------------------------------------
 # I2V smoke test (image + text -> video)
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("dynamic_load", [True])
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-    ],
-    ids=["bh_2x4sp1tp0"],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    [_2x4sp1tp0nl2_line_is_fsdp0],
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_two_stages_i2v_smoke(
     mesh_device,
-    mesh_shape,
     sp_axis,
     tp_axis,
     num_links,
@@ -185,11 +165,14 @@ def test_pipeline_two_stages_i2v_smoke(
     if not image_path or not os.path.exists(image_path):
         pytest.skip("set LTX_I2V_IMAGE to a conditioning image path to run the I2V smoke test")
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-dev.safetensors")
     distilled_lora = _default_distilled_lora()
     gemma = default_ltx_gemma()
 
     parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     num_frames = int(os.environ.get("NUM_FRAMES", "25"))

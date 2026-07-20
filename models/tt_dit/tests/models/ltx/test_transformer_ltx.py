@@ -33,7 +33,9 @@ from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params_req_exact_devices, skip_if_unsupported_num_links
+
+from .ltx_mesh_params import LTX_TRANSFORMER_MESH_PARAMS
 
 # ---------------------------------------------------------------------------
 # LTX-2.3-22B distilled transformer configuration
@@ -102,19 +104,6 @@ _RUN_PCC_DEFAULT = {"1": False, "0": True}.get(os.environ.get("LTX_SKIP_PCC"), T
 # ---------------------------------------------------------------------------
 # Parametrize lists
 # ---------------------------------------------------------------------------
-_LTX_TRANSFORMER_MESH_PARAMS = [
-    # No 1x1 (sp=1) config: real-grid shapes require SP padding, and video self-attention only
-    # masks padded keys via ring SDPA's logical_n (sp>1). Plain SDPA (sp=1) would attend padded
-    # keys and corrupt real outputs. Production never runs sp=1.
-    # 2x4sp0tp1 keeps is_fsdp=True for FSDP-path coverage on a 2D mesh.
-    pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-    # 2x4sp1tp0 mirrors production BH 2x4: is_fsdp=False (production loads via dynamic_load, not
-    # per-layer FSDP gathers) or the profile shows phantom weight-gather collectives.
-    pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0"),
-    pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-    pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
-    pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
-]
 
 # 1080p fast-pipeline real latent grids (F, H_lat, W_lat) — the exact (latent_frames, h//32,
 # w//32) production feeds RoPE. These are NOT tile/SP-aligned, so the test SP-pads the sequence
@@ -673,7 +662,7 @@ def _scale_init_(module: torch.nn.Module, seed: int = WEIGHT_SEED) -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_TRANSFORMER_MESH_PARAMS,
+    LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
@@ -697,6 +686,7 @@ def test_ltx_transformer_block(
 ) -> None:
     """Test LTXTransformerBlock: TT forward, with optional PCC vs the diffusers LTX-2 block."""
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
+    skip_if_unsupported_num_links(mesh_device, num_links)
     if not has_audio and checkpoint_variant != "fast":
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
     checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
@@ -920,6 +910,7 @@ def _run_inner_step(
     use_forward_alias: bool,
 ):
     """Shared body for the model forward tests; use_forward_alias picks tt_model(...) vs .forward(...)."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
     if not has_audio and checkpoint_variant != "fast":
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
@@ -1095,7 +1086,7 @@ def _run_inner_step(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_TRANSFORMER_MESH_PARAMS,
+    LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
@@ -1137,7 +1128,7 @@ def test_ltx_transformer_model(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_TRANSFORMER_MESH_PARAMS,
+    LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
@@ -1182,7 +1173,7 @@ def test_ltx_transformer_inner_step(
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
+    [pytest.param((2, 4), 1, 0, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1")])
@@ -1205,6 +1196,7 @@ def test_ltx_per_token_timestep_equivalence(
     ``image_conditioning=False`` scalar path (T2V/AV stays bit-similar). The frame-0 pinning
     behaviour itself is covered end-to-end by the pipeline; here we isolate the DiT plumbing.
     """
+    skip_if_unsupported_num_links(mesh_device, num_links)
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     video_N_real = F * H * W
     video_N = _sp_pad_len(video_N_real, sp_factor)
@@ -1283,7 +1275,7 @@ def test_ltx_per_token_timestep_equivalence(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
+    [pytest.param((2, 4), 1, 0, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1")])
@@ -1306,6 +1298,7 @@ def test_ltx_per_token_timestep_nonuniform(
     not reach the fused attn/FFN epilogues, non-frame-0 tokens get the wrong (frame-0) gate and
     the output diverges from the oracle — the DiT-level signature of "frame 0 ok, rest collapses".
     """
+    skip_if_unsupported_num_links(mesh_device, num_links)
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     video_N_real = F * H * W
     video_N = _sp_pad_len(video_N_real, sp_factor)

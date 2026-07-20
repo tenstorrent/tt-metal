@@ -2,12 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC tests for ``LTXLatentUpsampler`` vs the ``ltx_core`` reference.
+"""PCC tests for ``LTXLatentUpsampler`` vs the diffusers ``LTX2LatentUpsamplerModel`` reference.
 
 All shapes match the production LTX-2 Fast pipeline (mid_channels=1024, num_frames=19,
 2x4 BH mesh, half-res latent 17x30 / 18x32)."""
-
-import sys
 
 import pytest
 import torch
@@ -20,20 +18,20 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import ConvDims, conv_pad_height, conv_pad_width
 from models.tt_dit.utils.tensor import fast_device_to_host, typed_tensor_2dshard
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
-sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-
-
-_MESH_2x4 = ((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 23887872})
+from .ltx_mesh_params import LTX_UPSAMPLER_MESH_PARAMS
 
 
-def _parallel_kwargs(mesh_device: ttnn.MeshDevice) -> dict:
+def _parallel_kwargs(
+    mesh_device: ttnn.MeshDevice, h_axis: int, w_axis: int, num_links: int, topology: ttnn.Topology
+) -> dict:
     mesh_shape = tuple(mesh_device.shape)
     parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=mesh_shape[0], mesh_axis=0),
-        width_parallel=ParallelFactor(factor=mesh_shape[1], mesh_axis=1),
+        height_parallel=ParallelFactor(factor=mesh_shape[h_axis], mesh_axis=h_axis),
+        width_parallel=ParallelFactor(factor=mesh_shape[w_axis], mesh_axis=w_axis),
     )
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, num_links=num_links, topology=topology)
     return {"parallel_config": parallel_config, "ccl_manager": ccl_manager}
 
 
@@ -43,20 +41,22 @@ def _parallel_kwargs(mesh_device: ttnn.MeshDevice) -> dict:
     ids=["nondiv_17x30", "div_18x32"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [_MESH_2x4],
-    ids=["2x4"],
+    ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
+    LTX_UPSAMPLER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
-def test_ltx_upsampler_resblock(mesh_device: ttnn.MeshDevice, H: int, W: int):
+def test_ltx_upsampler_resblock(
+    mesh_device: ttnn.MeshDevice, h_axis: int, w_axis: int, num_links: int, topology: ttnn.Topology, H: int, W: int
+):
     """Single LTXUpsamplerResBlock at the production shape (channels=1024, 2x4 sharded,
     T=19). ``nondiv_17x30`` exercises the sharded pad/mask/crop path; ``div_18x32`` is
     the no-mask control."""
-    from ltx_core.model.upsampler.res_block import ResBlock as TorchResBlock
+    from diffusers.pipelines.ltx2.latent_upsampler import ResBlock as TorchResBlock
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     channels, T, B = 1024, 19, 1
     torch.manual_seed(0xABBA)
-    pk = _parallel_kwargs(mesh_device)
+    pk = _parallel_kwargs(mesh_device, h_axis, w_axis, num_links, topology)
     pc = pk["parallel_config"]
     hf, wf = pc.height_parallel.factor, pc.width_parallel.factor
     padded_h = ((H + hf - 1) // hf) * hf
@@ -108,16 +108,18 @@ def test_ltx_upsampler_resblock(mesh_device: ttnn.MeshDevice, H: int, W: int):
     ids=["nondiv_17x30", "div_18x32"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [_MESH_2x4],
-    ids=["2x4"],
+    ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
+    LTX_UPSAMPLER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
-def test_ltx_latent_upsampler(mesh_device: ttnn.MeshDevice, H: int, W: int):
+def test_ltx_latent_upsampler(
+    mesh_device: ttnn.MeshDevice, h_axis: int, w_axis: int, num_links: int, topology: ttnn.Topology, H: int, W: int
+):
     """Full ``LTXLatentUpsampler`` PCC vs reference, random weights at production shape
     (in=128, mid=1024, T=19, 2x4). No HF checkpoint required."""
     from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     in_c, mid_c, T, B = 128, 1024, 19, 1
     torch.manual_seed(0xC0FFEE)
 
@@ -144,7 +146,7 @@ def test_ltx_latent_upsampler(mesh_device: ttnn.MeshDevice, H: int, W: int):
         rational_resampler=False,
         mesh_device=mesh_device,
         num_frames=T,
-        **_parallel_kwargs(mesh_device),
+        **_parallel_kwargs(mesh_device, h_axis, w_axis, num_links, topology),
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
@@ -177,21 +179,30 @@ def _resolve_upsampler_checkpoint() -> str | None:
     ids=["nondiv_17x30", "div_18x32"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [_MESH_2x4],
-    ids=["2x4"],
+    ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
+    LTX_UPSAMPLER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
-def test_ltx_latent_upsampler_real_checkpoint(mesh_device: ttnn.MeshDevice, T: int, H: int, W: int):
+def test_ltx_latent_upsampler_real_checkpoint(
+    mesh_device: ttnn.MeshDevice,
+    h_axis: int,
+    w_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    T: int,
+    H: int,
+    W: int,
+):
     """PCC vs reference with the real ``ltx-2.3-spatial-upscaler-x2`` weights (mid_channels=1024)
     on the production 2x4 mesh. Input is a smooth, per-channel-scaled latent: white noise
     is unrepresentative and lower-bounds bf16 conv PCC through the 8-block residual chain."""
     import json
 
-    from ltx_core.model.upsampler.model import LatentUpsampler as TorchLatentUpsampler
+    from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
     from safetensors import safe_open
     from safetensors.torch import load_file
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = _resolve_upsampler_checkpoint()
     if ckpt is None:
         pytest.skip("real upsampler checkpoint not in local HF cache")
@@ -203,15 +214,15 @@ def test_ltx_latent_upsampler_real_checkpoint(mesh_device: ttnn.MeshDevice, T: i
     B = 1
     torch.manual_seed(0xC0FFEE)
 
-    torch_model = TorchLatentUpsampler(
+    torch_model = LTX2LatentUpsamplerModel(
         in_channels=in_c,
         mid_channels=mid_c,
         num_blocks_per_stage=n_blocks,
         dims=3,
         spatial_upsample=True,
         temporal_upsample=False,
-        spatial_scale=2.0,
-        rational_resampler=False,
+        rational_spatial_scale=2.0,
+        use_rational_resampler=False,
     )
     torch_model.load_state_dict(load_file(ckpt))
     torch_model.eval()
@@ -227,7 +238,7 @@ def test_ltx_latent_upsampler_real_checkpoint(mesh_device: ttnn.MeshDevice, T: i
         rational_resampler=False,
         mesh_device=mesh_device,
         num_frames=T,
-        **_parallel_kwargs(mesh_device),
+        **_parallel_kwargs(mesh_device, h_axis, w_axis, num_links, topology),
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 

@@ -38,7 +38,7 @@ from models.tt_dit.parallel.config import AudioTCParallelConfig, DiTParallelConf
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
 from models.tt_dit.utils.video import Audio
 
 _WARM_ITERS = 3
@@ -51,18 +51,32 @@ def _with_audio_dev_l1(base: dict) -> dict:
     return {**base, "l1_small_size": 32768}
 
 
-_line_params = _with_audio_dev_l1(line_params)
-_ring_params = _with_audio_dev_l1(ring_params)
+_line_params = _with_audio_dev_l1(line_params_req_exact_devices)
+_ring_params = _with_audio_dev_l1(ring_params_req_exact_devices)
 _ring_trace_params = {**_ring_params, "trace_region_size": 300_000_000}
 
 _AUDIO_FAST_AV_MESH_PARAMS_FULL = [
-    pytest.param((2, 2), (2, 2), 0, 1, 2, False, _line_params, ttnn.Topology.Linear, True, id="2x2sp0tp1"),
-    pytest.param((2, 4), (2, 4), 0, 1, 1, True, _line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-    pytest.param((2, 4), (2, 4), 1, 0, 2, True, _line_params, ttnn.Topology.Linear, False, id="bh_2x4sp1tp0"),
-    pytest.param((4, 8), (4, 8), 1, 0, 4, False, _ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-    pytest.param((4, 8), (4, 8), 1, 0, 2, False, _line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0_linear"),
-    pytest.param((4, 8), (4, 8), 1, 0, 2, False, _ring_trace_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0_ring"),
-    pytest.param((4, 32), (4, 32), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
+    pytest.param(
+        (2, 2), (2, 2), 0, 1, 2, False, _line_params, ttnn.Topology.Linear, True, id="2x2sp0tp1nl2_line_is_fsdp1"
+    ),
+    pytest.param(
+        (2, 4), (2, 4), 0, 1, 1, True, _line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1nl1_line_is_fsdp1"
+    ),
+    pytest.param(
+        (2, 4), (2, 4), 1, 0, 2, True, _line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0nl2_line_is_fsdp0"
+    ),
+    pytest.param(
+        (4, 8), (4, 8), 1, 0, 4, False, _ring_params, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1"
+    ),
+    pytest.param(
+        (4, 8), (4, 8), 1, 0, 2, False, _line_params, ttnn.Topology.Linear, False, id="4x8sp1tp0nl2_line_is_fsdp0"
+    ),
+    pytest.param(
+        (4, 8), (4, 8), 1, 0, 2, False, _ring_trace_params, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
+    ),
+    pytest.param(
+        (4, 32), (4, 32), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False, id="4x32sp1tp0nl2_ring_is_fsdp0"
+    ),
 ]
 
 
