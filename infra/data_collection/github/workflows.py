@@ -212,6 +212,33 @@ def parse_github_log_timestamp(line):
     return datetime.fromisoformat(timestamp_str[:26])
 
 
+def _resolve_within(base_dir, *parts):
+    """Resolve base_dir / *parts, returning the path only if it stays within base_dir.
+
+    Guards against path traversal from dynamic path components: returns None if the
+    resolved path escapes base_dir (e.g. a component containing "..").
+    """
+    base = base_dir.resolve()
+    candidate = base.joinpath(*parts).resolve()
+    return candidate if candidate.is_relative_to(base) else None
+
+
+def _safe_logs_dir(workflow_outputs_dir, workflow_run_id):
+    """Resolved <workflow_outputs_dir>/<run_id>/logs, or None if run_id is not a plain
+    integer or the path escapes workflow_outputs_dir."""
+    if not str(workflow_run_id).isdigit():
+        return None
+    return _resolve_within(workflow_outputs_dir, str(workflow_run_id), "logs")
+
+
+def _safe_job_log_file(workflow_outputs_dir, workflow_run_id, github_job_id):
+    """Resolved <workflow_outputs_dir>/<run_id>/logs/<job_id>.log, or None if either id is
+    not a plain integer or the path escapes workflow_outputs_dir."""
+    if not (str(workflow_run_id).isdigit() and str(github_job_id).isdigit()):
+        return None
+    return _resolve_within(workflow_outputs_dir, str(workflow_run_id), "logs", f"{github_job_id}.log")
+
+
 def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_run_id: int, workflow_job_id: int):
     """
     Read the job output log to determine if a job is hanging or genuinely timed out.
@@ -227,19 +254,11 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
 
     ** Threshold may be reduced in the future
     """
-    log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
-    assert str(workflow_job_id).isdigit()
-    matching_logs = list(log_dir.glob(f"{workflow_job_id}.log"))
-
-    if not matching_logs:
-        logger.warning(f"Unable to find github job log file for job: {workflow_job_id}")
-        return False
-
-    log_file = matching_logs[0]
+    log_file = _safe_job_log_file(workflow_outputs_dir, workflow_run_id, workflow_job_id)
     max_time_delta_seconds = 300
 
-    if not log_file.exists():
-        logger.warning(f"Unable to find github job log file: {log_file}")
+    if log_file is None or not log_file.is_file():
+        logger.warning(f"Unable to find github job log file for job: {workflow_job_id}")
         return False
 
     log_lines = []
@@ -425,16 +444,14 @@ def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_ru
 
     Returns (node_name, serial), each None if not found (CPU-only runners have no serial).
     """
-    log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
-    assert str(github_job_id).isdigit()
-    matching_logs = list(log_dir.glob(f"{github_job_id}.log"))
-    if not matching_logs or not matching_logs[0].exists():
+    log_file = _safe_job_log_file(workflow_outputs_dir, workflow_run_id, github_job_id)
+    if log_file is None or not log_file.is_file():
         logger.warning(f"Unable to find github job log file for job: {github_job_id}")
         return None, None
 
     ansi_pattern = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
     node_name, serial = None, None
-    with open(matching_logs[0], "r", encoding="utf-8-sig") as log_f:
+    with open(log_file, "r", encoding="utf-8-sig") as log_f:
         for line in log_f:
             line = ansi_pattern.sub("", line)
             if node_name is None and _CIV2_NODE_NAME_LOG_MARKER in line:
@@ -448,8 +465,12 @@ def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_ru
 
 
 def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
-    # Read <job_id>_annotations.json inside the logs dir
-    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    # Read <job_id>_annotations.json inside the (sanitized) logs dir.
+    logs_dir = _safe_logs_dir(workflow_outputs_dir, workflow_run_id)
+    if logs_dir is None or not logs_dir.is_dir():
+        logger.warning(f"Annotations logs dir not found for run: {workflow_run_id}")
+        return {}
+
     annot_json_files = logs_dir.glob("*_annotations.json")
 
     github_job_ids_to_annotation_jsons = {}
