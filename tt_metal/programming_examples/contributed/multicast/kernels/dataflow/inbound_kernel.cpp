@@ -6,19 +6,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ckernel.h"  // ckernel::load_blocking
 
-// Helper function to copy a tile from one CB to another CB (eg. input CB to output CB) via L1.
-//
-// The copy is *blocking*: it does not return until the tile has been committed to L1. This is
-// required because the caller follows this with cb_push_back(), which writes a credit to a STREAM
-// register in a different memory region. Per MemoryOrdering.md, a store then a store to a *different*
-// region has no processing-order guarantee, so that credit could become visible to the consuming
-// RISC before these L1 tile stores land — letting it NoC-read stale L1.
-//
-// To close that window we ckernel::load_blocking() the LAST written word: every store above targets
-// one L1 region, and same-region stores are "processed in order", so once the last word's store is
-// processed all earlier ones already are. load_blocking issues a same-address load and stalls the
-// pipeline (dependent instruction + memory clobber) until the read-response arrives — so cb_push_back
-// cannot emit its credit store until the whole tile is committed to L1.
+// Copy a tile from one CB to another via L1, blocking until the tile has landed in L1.
+// The caller's cb_push_back() writes a credit to a STREAM register (a different memory region, so no
+// store-ordering guarantee vs these L1 stores); without the drain the consumer could see that credit
+// and NoC-read stale L1. load_blocking on the last written word stalls until it lands, and since
+// same-region stores are processed in order, draining the last drains all.
 inline void copy_tile_between_cb(uint32_t src_addr, uint32_t dst_addr, uint32_t bytes) {
     volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
     volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
