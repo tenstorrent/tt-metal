@@ -419,9 +419,6 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Add1: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # cast_fp32_to_fp16a: rounds to fp16. Span past the fp16 max (65504) so the
-    # overflow-to-inf path (and the format-aware NaN substitution for A-exponent dest)
-    # is exercised, not just the in-range rounding.
     MathOperation.CastFp32ToFp16a: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-100000.0, high=100000.0

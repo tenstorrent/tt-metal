@@ -23,8 +23,10 @@ namespace sfpu {
 // under two-phase lookup WITHOUT pulling the op headers into every TRISC_MATH translation unit via
 // compute_kernel_hw_startup. Each op's definition is in scope at its <op>_tile_init instantiation site.
 void abs_init();
+template <bool is_fp32_dest_acc_en>
 void acos_init();
 void alt_complex_rotate90_init();
+template <bool is_fp32_dest_acc_en>
 void asin_init();
 void bitwise_and_init();
 void bitwise_not_init();
@@ -108,7 +110,9 @@ inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 }  // namespace sfpu
 
 // Bare init entry point: delegates per SFPU op to its self-contained sfpu::<op>_init().
-template <SfpuType sfpu_op>
+// is_fp32_dest_acc_en is threaded to the (few) ops whose init depends on the dest-acc mode
+// (asin/acos prime the endpoint-sqrt constants only in fp32 dest); it is ignored by the rest.
+template <SfpuType sfpu_op, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_unary_sfpu_init() {
     // Per-op common SFPU init (config reg + invariant ADDR_MOD_7), formerly hoisted once-per-kernel via
     // llk_math_sfpu_init_once(). Consolidated back per-op (#50381) so each init is fully self-contained and
@@ -118,11 +122,11 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     if constexpr (sfpu_op == SfpuType::abs) {
         sfpu::abs_init();
     } else if constexpr (sfpu_op == SfpuType::acos) {
-        sfpu::acos_init();
+        sfpu::acos_init<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::alt_complex_rotate90) {
         sfpu::alt_complex_rotate90_init();
     } else if constexpr (sfpu_op == SfpuType::asin) {
-        sfpu::asin_init();
+        sfpu::asin_init<is_fp32_dest_acc_en>();
     } else if constexpr (sfpu_op == SfpuType::bitwise_and) {
         sfpu::bitwise_and_init();
     } else if constexpr (sfpu_op == SfpuType::bitwise_not) {
