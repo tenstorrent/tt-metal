@@ -5,11 +5,67 @@
 #include "tt-metalium/program_descriptors.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <algorithm>
+#include <tuple>
 
 namespace ttnn::operations::my_matmul {
 
 using namespace tt;
 using namespace tt::tt_metal;
+
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_sub_block_sizes(
+    uint32_t m, uint32_t k, uint32_t n, uint32_t usable_l1_bytes, uint32_t tile_bytes) {
+    // Returns 6 values:
+    // (sub_block_m, sub_block_k, sub_block_n, num_blocks_m, num_blocks_k, num_blocks_n)
+    // m = per_core_Mt, n = per_core_Nt, k = Kt  (all in tiles).
+
+    // --- 1) Output subblock (h x w): the largest DST-fitting tile that divides the ---
+    // per-core output block. DST holds up to 16 bf16 tiles (8 when double-buffered).
+    // We are assuming bfloat16 here, but generally should parametrize per dtype.
+    constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> known_blocks = {{
+        {4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2}, {2, 3}, {6, 1}, {1, 6},
+        {5, 1}, {1, 5}, {2, 2}, {4, 1}, {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1},
+    }};
+    uint32_t sub_block_m = 1;
+    uint32_t sub_block_n = 1;
+    for (const auto& [h, w] : known_blocks) {
+        if (m % h == 0 && n % w == 0) {
+            sub_block_m = h;
+            sub_block_n = w;
+            break;
+        }
+    }
+
+    // --- 2) K-chunk width (sub_block_k): the largest divisor of k whose input CBs fit L1. ---
+    // L1 footprint for the K-outer / within-core-reuse design:
+    //   fixed  : the per-core output accumulator stays resident across the whole K loop
+    //              acc = m * n tiles
+    //   scales : the two input slices, double-buffered, per unit of sub_block_k
+    //              cb_in0 = 2 * m           * sub_block_k tiles
+    //              cb_in1 = 2 * sub_block_k * n           tiles
+    //            => 2 * (m + n) * sub_block_k tiles
+    const uint64_t acc_bytes = static_cast<uint64_t>(m) * n * tile_bytes;
+    const uint64_t bytes_per_kt = static_cast<uint64_t>(2) * (m + n) * tile_bytes;
+
+    uint32_t sub_block_k = 1;  // safe fallback (also the value if nothing bigger fits)
+    if (usable_l1_bytes > acc_bytes) {
+        const uint64_t input_budget = usable_l1_bytes - acc_bytes;
+        uint32_t max_kt = static_cast<uint32_t>(input_budget / bytes_per_kt);
+        max_kt = std::min(max_kt, k);
+        // Largest divisor of k that is <= max_kt (k % 1 == 0 guarantees termination at 1).
+        for (uint32_t c = max_kt; c >= 1; c--) {
+            if (k % c == 0) {
+                sub_block_k = c;
+                break;
+            }
+        }
+    }
+    const uint32_t num_blocks_k = k / sub_block_k;
+
+    return std::make_tuple(sub_block_m, sub_block_k, sub_block_n, m / sub_block_m, num_blocks_k, n / sub_block_n);
+}
 
 ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
     const operation_attributes_t& /*operation_attributes*/,
@@ -48,11 +104,22 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
     CoreRangeSet used_cores{CoreRange{top_left, bot_right}};
     std::cout << "used_cores: " << top_left.str() << ", " << bot_right.str() << std::endl;
 
+    // Usable L1 per core = total L1 minus the region the allocator reserves (firmware, kernel args, etc.).
+    auto* device = a.device();
+    const uint32_t usable_l1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+    auto [sub_block_m, sub_block_k, sub_block_n, num_blocks_m, num_blocks_k, num_blocks_n] =
+        calculate_sub_block_sizes(per_core_Mt, Kt, per_core_Nt, usable_l1, single_tile_size);
+    std::cout << "sub_block (m,k,n): (" << sub_block_m << ", " << sub_block_k << ", " << sub_block_n << ")  "
+              << "num_blocks (m,k,n): (" << num_blocks_m << ", " << num_blocks_k << ", " << num_blocks_n << ")"
+              << std::endl;
+
     ProgramDescriptor desc;
 
     // Circular buffers
     constexpr uint32_t in0_cb_index = CBIndex::c_0;
-    const uint32_t in0_cb_tiles = 2 * per_core_Mt * Kt;
+    const uint32_t in0_cb_tiles = 2 * num_blocks_m * sub_block_m * sub_block_k;
     desc.cbs.push_back(CBDescriptor{
         .total_size = in0_cb_tiles * single_tile_size,
         .core_ranges = used_cores,
@@ -64,7 +131,7 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
     });
 
     constexpr uint32_t in1_cb_index = CBIndex::c_1;
-    const uint32_t in1_cb_tiles = 2 * Kt * per_core_Nt;
+    const uint32_t in1_cb_tiles = 2 * sub_block_k * num_blocks_n * sub_block_n;
     desc.cbs.push_back(CBDescriptor{
         .total_size = in1_cb_tiles * single_tile_size,
         .core_ranges = used_cores,
@@ -76,9 +143,10 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
     });
 
     constexpr uint32_t out_cb_index = CBIndex::c_16;
-    constexpr uint32_t num_output_tiles = 2;
+    const uint32_t out_cb_tiles =
+        num_blocks_m * sub_block_m * num_blocks_n * sub_block_n;  // per_core_Mt * per_core_Nt (depth 1)
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * single_tile_size,
+        .total_size = out_cb_tiles * single_tile_size,
         .core_ranges = used_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = out_cb_index,
@@ -134,10 +202,29 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
             uint32_t block_size_A = (bot - top) * Kt;
             uint32_t block_size_B = Kt * (right - left);
 
+            // sub_block_* / num_blocks_* are computed once above (identical for every core) and reused here.
+            uint32_t dst_size = sub_block_m * sub_block_n;
+
+            uint32_t k_block_A = num_blocks_m * sub_block_m * sub_block_k;  // Mt * sub_block_k
+            uint32_t k_block_B = sub_block_k * num_blocks_n * sub_block_n;  // sub_block_k * Nt
+
             reader_desc.emplace_runtime_args(
                 core, {src0_buffer, src1_buffer, Mt, Kt, Nt, top, left, bot, right, block_size_A, block_size_B});
+
+            // compute_desc.emplace_runtime_args(core, {top, left, bot, right, k_block_A, k_block_B});
+            compute_desc.emplace_runtime_args(
+                core,
+                {num_blocks_m,
+                 num_blocks_k,
+                 num_blocks_n,
+                 sub_block_m,
+                 sub_block_k,
+                 sub_block_n,
+                 dst_size,
+                 k_block_A,
+                 k_block_B});
+
             writer_desc.emplace_runtime_args(core, {dst_buffer, Mt, Nt, top, left, bot, right});
-            compute_desc.emplace_runtime_args(core, {top, left, bot, right, block_size_A, block_size_B});
         }
     }
 
