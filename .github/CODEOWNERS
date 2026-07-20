@@ -236,14 +236,14 @@ tests/tt_metal/tt_metal/api/tensor/ @akerteszTT @riverwuTT @aliaksei-sala @tenst
 tests/tt_metal/tt_metal/api/emule/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/llk/ @tenstorrent/low-level-team-wh-bh @tenstorrent/low-level-team-quasar @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/llk/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT @SeanNijjar @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_fabric/test_infra/ @ubcheema @aagarwalTT @SeanNijjar @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT @SeanNijjar @nnyamagoudar-TT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/sfpi/**/CMakeLists.txt @nathan-TT @kstevensTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_fabric/physical_discovery/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_fabric/test_infra/ @ubcheema @aagarwalTT @SeanNijjar @nnyamagoudar-TT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/metalium-developers-infra
 tests/tt_metal/multihost/ @tenstorrent/metalium-developers-metal-distributed @tenstorrent/codeowner-bypass
 tests/tt_metal/multihost/**/CMakeLists.txt @tenstorrent/metalium-developers-metal-distributed @tenstorrent/metalium-developers-infra
