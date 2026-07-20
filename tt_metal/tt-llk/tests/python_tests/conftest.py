@@ -34,10 +34,6 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
-# TEMPORARY
-_worker_suffix = f"_{os.environ['PYTEST_XDIST_WORKER']}" if _IS_XDIST_WORKER else ""
-os.environ.setdefault("TT_LOGGER_LEVEL", "debug")
-os.environ["TT_LOGGER_FILE"] = f"test_run{_worker_suffix}_umd.log"
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
@@ -50,11 +46,6 @@ from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
-from ttexalens import util as _exalens_util
-
-# TEMPORARY
-_exalens_util.Verbosity.set(_exalens_util.Verbosity.DEBUG)
-
 from ttexalens.tt_exalens_lib import get_tensix_state
 
 _exalens_server: Optional[ExalensServer] = None
