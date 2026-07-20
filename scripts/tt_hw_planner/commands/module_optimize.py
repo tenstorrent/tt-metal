@@ -137,6 +137,17 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         return 1
 
     reverify = bool(getattr(args, "reverify", False))
+    if reverify:
+        import tempfile
+
+        for _m in mods:
+            try:
+                (
+                    Path(tempfile.gettempdir())
+                    / ("perf_mcp_orig_baseline_%s_%s.json" % (Path(demo_dir).name, _m))
+                ).unlink()
+            except OSError:
+                pass
     if not reverify:
         done = _load_optimized(demo_dir)
         skip = [m for m in mods if m in done]

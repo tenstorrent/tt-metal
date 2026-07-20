@@ -153,6 +153,9 @@ def render_summary(
     before_ms: float | None = None,
     after_ms: float | None = None,
     baseline_profile: dict | None = None,
+    finalized: bool = True,
+    original_baseline_ms: float | None = None,
+    final_override_ms: float | None = None,
 ) -> str:
     """Return a markdown summary. Degrades gracefully when data is partial."""
     attempts = _read_json(kernel_log_path) or []
@@ -185,18 +188,21 @@ def render_summary(
         for a in attempts
         if isinstance(a, dict) and a.get("beat_baseline") and a.get("measured_ms") is not None
     ]
-    final_ms = min(win_ms) if win_ms else baseline_ms
+    final_ms = final_override_ms if final_override_ms is not None else (min(win_ms) if win_ms else baseline_ms)
+    hdr_base = original_baseline_ms if original_baseline_ms is not None else baseline_ms
 
     lines = []
     title = f"Optimization summary — {model or 'model'} · {task} ({metric})"
     lines.append(title)
     lines.append("=" * len(title))
-    if baseline_ms and final_ms and baseline_ms > 0:
-        pct = (baseline_ms - final_ms) / baseline_ms * 100.0
-        spd = baseline_ms / final_ms if final_ms > 0 else 1.0
-        lines.append(f"baseline {baseline_ms:.2f} ms  ->  final {final_ms:.2f} ms   ({pct:+.1f}%, {spd:.2f}x)")
-    elif baseline_ms:
-        lines.append(f"baseline {baseline_ms:.2f} ms  ->  (no measured win recorded)")
+    if not finalized:
+        lines.append("optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)")
+    elif hdr_base and final_ms and hdr_base > 0:
+        pct = (hdr_base - final_ms) / hdr_base * 100.0
+        spd = hdr_base / final_ms if final_ms > 0 else 1.0
+        lines.append(f"baseline {hdr_base:.2f} ms  ->  final {final_ms:.2f} ms   ({pct:+.1f}%, {spd:.2f}x)")
+    elif hdr_base:
+        lines.append(f"baseline {hdr_base:.2f} ms  ->  (no measured win recorded)")
     else:
         lines.append("baseline/final ms unavailable (no baseline profile found)")
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"

@@ -1418,6 +1418,19 @@ def _baseline_ms() -> float | None:
         return None
 
 
+def _original_baseline_ms(model_name: str, task: str) -> float | None:
+    try:
+        import tempfile
+
+        p = Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (model_name, task))
+        if p.is_file():
+            d = json.loads(p.read_text())
+            return float(d["device_ms"]) if d.get("device_ms") is not None else None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _prune_legacy_reports(demo_dir: Path) -> None:
     for legacy in ("E2E_REPORT.md", "summary.md"):
         try:
@@ -1492,9 +1505,10 @@ def _emit_summary(
         render_kernel = _cum
     except Exception:
         render_kernel = kernel_log
+    _cur_ms = _baseline_ms()
     text = mod.render_summary(
         render_kernel,
-        _baseline_ms(),
+        _cur_ms,
         model=model_name,
         task=task,
         metric=metric,
@@ -1510,6 +1524,9 @@ def _emit_summary(
             if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
             else None
         ),
+        finalized=True,
+        original_baseline_ms=_original_baseline_ms(model_name, task),
+        final_override_ms=_cur_ms,
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)

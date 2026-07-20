@@ -330,6 +330,22 @@ def _read_baseline_profile():
     return None
 
 
+def _original_baseline_path():
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (model, task))
+
+
+def _report_original_baseline_ms():
+    try:
+        p = _original_baseline_path()
+        if p.exists():
+            return round(float(json.loads(p.read_text()).get("device_ms", 0.0)), 4)
+    except Exception:  # noqa: BLE001
+        pass
+    return _report_baseline_ms()
+
+
 def _merge_cumulative(cum_path, attempts) -> list:
     try:
         prior = json.loads(cum_path.read_text())
@@ -380,6 +396,7 @@ def _rebuild_optimize_report(model_root=None) -> None:
             metric=os.environ.get("PERF_MCP_METRIC", "device_ms"),
             perf_test=perf_test,
             baseline_profile=_read_baseline_profile(),
+            finalized=False,
         )
         when = (
             f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {n_attempts} lever attempt(s) so far — "
@@ -821,6 +838,12 @@ def profile_model() -> dict:
             ),
         }
     _BASELINE_PATH.write_text(json.dumps(prof))
+    _orig = _original_baseline_path()
+    if not _orig.exists():
+        try:
+            _orig.write_text(json.dumps(prof))
+        except Exception:  # noqa: BLE001
+            pass
     dev = round(float(prof.get("device_ms", 0.0)), 4)
     target, at_floor, residual_gap, open_ops = None, None, None, []
     try:
