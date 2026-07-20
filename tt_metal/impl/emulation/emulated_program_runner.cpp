@@ -786,6 +786,7 @@ static void preprocess_tu_recursive(
     const std::string& src_path,
     const std::string& out_path,
     const std::string& out_dir,
+    const std::vector<std::string>& include_dirs,
     std::set<std::string>& done) {
     std::ifstream in(src_path);
     if (!in) {
@@ -813,12 +814,31 @@ static void preprocess_tu_recursive(
         const std::smatch& m = *it;
         const std::string inc_name = m[1].str();
         std::error_code ec;
-        const std::filesystem::path candidate = src_dir / inc_name;  // absolute inc_name → itself
+        std::filesystem::path candidate = src_dir / inc_name;  // absolute inc_name → itself
+        bool via_search_dir = false;
         if (!std::filesystem::exists(candidate, ec)) {
-            // Resolved via a -I path (emule api/, system headers, repo-rooted kernel-common). Not ours
-            // to patch — pointer-truncation idioms there are handled by -fms-extensions (see the JIT
-            // compile flags), which downgrades pointer→uint32 casts to warnings.
-            continue;
+            // Not found relative to the includer. Before giving up, resolve inc_name
+            // against the kernel's -I search dirs. blaze's generated kernel .cpp pulls
+            // its op header in as a repo-rooted `blaze/ops/.../op.hpp` that only
+            // resolves via `-I BLAZE_ROOT`, and that header carries persistent-L1
+            // address derefs (`reinterpret_cast<tt_l1_ptr T*>(dm::..._addr)` from a
+            // tensor buffer_address()) that MUST be routed through
+            // __emule_local_l1_to_ptr or they deref an unmapped raw offset → SIGSEGV.
+            // A resolved header goes through the mirror+repoint (escapes) path below so
+            // its casts get rewritten; a genuine -I/system header with no translatable
+            // cast is left alone (its pointer-truncation idioms are handled by
+            // -fms-extensions — see the JIT compile flags).
+            for (const auto& idir : include_dirs) {
+                std::filesystem::path c2 = std::filesystem::path(idir) / inc_name;
+                if (std::filesystem::exists(c2, ec)) {
+                    candidate = c2;
+                    via_search_dir = true;
+                    break;
+                }
+            }
+            if (!via_search_dir) {
+                continue;
+            }
         }
         const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
         if (canon.empty()) {
@@ -830,7 +850,11 @@ static void preprocess_tu_recursive(
         const std::string& out_dir_str = out_dir_canon.string();
         // Path-boundary-aware containment: a bare string-prefix compare would treat
         // /tmp/dir2/x as under /tmp/dir, so require the match to end on a separator.
-        const bool under_out_dir = out_inc_str.size() > out_dir_str.size() &&
+        // A -I-resolved header (via_search_dir) is NOT reachable through the
+        // relative-to-includer shadow copy — the original still wins on the -I path —
+        // so it must take the mirror+repoint (escapes) branch to override the
+        // directive. Only genuinely includer-relative headers use the shadow branch.
+        const bool under_out_dir = !via_search_dir && out_inc_str.size() > out_dir_str.size() &&
                                    out_inc_str.compare(0, out_dir_str.size(), out_dir_str) == 0 &&
                                    out_inc_str[out_dir_str.size()] == '/';
         if (under_out_dir) {
@@ -841,7 +865,7 @@ static void preprocess_tu_recursive(
                 continue;  // cycle / already patched
             }
             std::filesystem::create_directories(out_inc.parent_path(), ec);
-            preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
+            preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, include_dirs, done);
         } else {
             // ESCAPES out_dir — an absolute include (kernel codegen can emit
             // `#include "/abs/.../op.hpp"`) or a ".." path. The compiler resolves the
@@ -888,7 +912,7 @@ static void preprocess_tu_recursive(
                 continue;  // already patched via another includer; directive repointed above
             }
             std::filesystem::create_directories(mirror.parent_path(), ec);
-            preprocess_tu_recursive(canon, mirror_str, out_dir, done);
+            preprocess_tu_recursive(canon, mirror_str, out_dir, include_dirs, done);
         }
     }
     for (auto rit = directive_rewrites.rbegin(); rit != directive_rewrites.rend(); ++rit) {
@@ -908,10 +932,24 @@ static void preprocess_tu_recursive(
     out << src;
 }
 
-static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
+static void preprocess_kernel_source_for_x86(
+    const std::string& src_path, const std::string& out_path, const std::vector<std::string>& include_dirs = {}) {
     const std::string out_dir = std::filesystem::path(out_path).parent_path().string();
     std::set<std::string> done;
-    preprocess_tu_recursive(src_path, out_path, out_dir, done);
+    preprocess_tu_recursive(src_path, out_path, out_dir, include_dirs, done);
+}
+
+// Extract the directories from a `-I"dir"` / `-Idir` flag string (the JIT compile's
+// include search path) so the source preprocessor can resolve -I-relative includes
+// (e.g. blaze's repo-rooted `blaze/ops/.../op.hpp`) and patch their L1 derefs.
+static std::vector<std::string> parse_include_dirs(const std::string& include_flags) {
+    std::vector<std::string> dirs;
+    static const std::regex inc_flag_re(R"RE(-I\s*"([^"]+)"|-I\s*(\S+))RE");
+    for (std::sregex_iterator it(include_flags.begin(), include_flags.end(), inc_flag_re), end; it != end; ++it) {
+        const std::smatch& m = *it;
+        dirs.push_back(m[1].matched ? m[1].str() : m[2].str());
+    }
+    return dirs;
 }
 
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
@@ -1090,7 +1128,15 @@ static std::function<void()> jit_compile_kernel(
           << "#include \"api/dataflow/dataflow_api.h\"\n"
           << "void kernel_main() {}\n";
     } else {
-        preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
+        // Include search path the JIT compile will use, so the preprocessor can
+        // resolve (and patch the L1 derefs in) -I-relative op headers like blaze's
+        // repo-rooted `blaze/ops/.../op.hpp`. Mirrors the -I flags assembled below.
+        std::vector<std::string> include_dirs = {
+            jit_inc, parent_inc, std::filesystem::path(abs_kernel).parent_path().string()};
+        for (auto& d : parse_include_dirs(extra_include_flags)) {
+            include_dirs.push_back(std::move(d));
+        }
+        preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path, include_dirs);
     }
 
     // 2c. Emit named_args_generated.h with the kernel's ct_args:: namespaces
