@@ -119,9 +119,10 @@ RegimeAMatmulParams fields change only the cache KEY, never the compiled program
 ## 4. Unsupported combinations / planner constraints
 - activation + addcmul together: rejected (matches minimal_matmul / dit addcmul).
 - addcmul residual must be BFLOAT16 (shares in1's bf16 tile format / CB c_5); gate may be BF16 or FLOAT32.
-- Full [M,N] gate vs [1,N] broadcast is detected by the gate's padded tile-row count (==1 => broadcast),
-  matching minimal_matmul; a full gate with M<=32 is treated as broadcast — use M>=64 for a true per-row
-  full gate.
+- Full [M,N] gate vs [1,N] broadcast is decided from the gate's LOGICAL M (==1 => broadcast, else full),
+  matching validate(). (Fix: previously decided by padded tile-row count, which silently broadcast a
+  genuine per-row gate whenever M<=32 padded to a single tile row — see test_regime_a_fused_addcmul_full_gate
+  M=32.) Any M>=1 per-row gate now applies correctly.
 - NO planner/picker constraint added and Pk was NOT forced: every fusion coexists with the picker's chosen
   Pk/Ns/Sm/kb/nsb (Pk=1 & Pk>1, Ns>1, Sm>1, W=1 & W>1 all validated). Picker NOT retuned on fused timings.
 - Chunking composes with all fusions; requires N%chunks==0 + N/chunks tile-aligned, dim=-1 only.
