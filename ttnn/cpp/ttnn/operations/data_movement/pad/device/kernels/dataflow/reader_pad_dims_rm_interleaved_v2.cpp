@@ -18,7 +18,7 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     DataflowBuffer dfb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
-    for (uint32_t i = 0; i < num_bytes / 2; ++i) {
+    for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); ++i) {
         ptr[i] = val;
     }
 }
@@ -104,7 +104,7 @@ void kernel_main() {
     // load + memory clobber) to force the fill to be processed before the first loop-back read is issued.
     // One-time cost, outside the per-stick loop.
     (void)ckernel::load_blocking(
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + (stick_size_padded / 2) - 1);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + (stick_size_padded / sizeof(uint32_t)) - 1);
 
     uint32_t i_page = start_page_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
