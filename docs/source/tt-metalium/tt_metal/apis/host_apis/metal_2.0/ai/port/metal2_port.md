@@ -102,9 +102,36 @@ All four are committed alongside the port.
 Before starting, confirm you have the following. If any is missing or unclear, ask the invoker before proceeding — the invoker can answer in seconds; you will burn substantial time guessing.
 
 - **Legacy op source path** — the directory containing the op's legacy program-factory `.cpp`/`.hpp` files and kernel sources.
-- **Tests directory** — the path under `tests/ttnn/unit_tests/operations/<op-family-slug>/` where the op's pytests live. Note that the directory uses the **op-family slug**, not always the literal op name (e.g., reduction's tests live at `tests/ttnn/unit_tests/operations/reduce/`, not `reduction/`). If the invoker didn't supply this, discover it with `find tests/ttnn -path '*operations*' -name 'test_*.py' | grep -i <op>`.
+- **Tests** — *not* invoker-supplied. You locate the op's tests yourself and confirm the set with the invoker before relying on it; see [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests) below.
 - **`METAL2_PORT_BRIEF.md`** (with the team-facing **`METAL2_PREPORT_AUDIT.md`** alongside it) — present in the op directory; the brief is issued only when the audit cleared (precondition above). The brief is your actionable input: its **TTNN factory analysis** section records the Metal 2.0 factory concept the port targets, inherited not re-derived. See the [TTNN integration doc](../shared/ttnn_factory.md) for the concept and the device-op-class edits the port forces.
 - **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker. The first worked end-to-end `create_program_artifacts` port is **accumulation** (cumsum/cumprod) on branch `akertesz/porting-experiment-accumulation-jun10` — a small single-program op exercising tensor bindings, a self-loop DFB, work-split multiplicity, and the custom-hash deletion. A good shape reference when no closer op exists. It lives on that sibling branch, **not** your port branch — read it with `git show akertesz/porting-experiment-accumulation-jun10:<path>` rather than expecting it in your working tree.
+
+### Locate and confirm the op's tests
+
+The invoker does **not** supply a test path — you discover the op's tests and **confirm the set with the invoker before relying on it.** These tests are the port's no-regression baseline (the entire point of verification is *no behavior change*), so a **missed** test is a silent false-GREEN — the failure mode to avoid. The confirmation checkpoint is what replaces the old invoker-supplied path.
+
+**Do not assume a single mirror path.** TTNN's test layout is *not* systematically derivable from the op path — three ways the naive `tests/ttnn/unit_tests/operations/<op>/test_<op>.py` guess breaks:
+- **Family slug ≠ source family.** `reduction` → `reduce`, `transformer` → `transformers`; some source families (e.g. `normalization`) have no test subdir at all.
+- **Test stem ≠ op-dir name.** `data_movement/reshape_on_device` → `test_reshape.py` / `test_tm_reshape.py` (the `tm_` prefix is unguessable).
+- **Primary coverage can live outside `unit_tests/operations/` entirely.** `transpose` has no `test_transpose.py` there — its coverage is in `tt_eager/.../misc/` and `base_functionality/`.
+
+So **search broadly by op name across every test tree**, then filter to *this* op:
+
+```bash
+find tests -iname '*<op>*' -name '*.py'    # broad sweep across all test trees
+```
+
+An op's coverage is usually split across several trees — check each:
+- `tests/ttnn/unit_tests/operations/<family>/` — primary pytests
+- `tests/ttnn/nightly/unit_tests/operations/<family>/` — nightly variants
+- `tests/ttnn/unit_tests/base_functionality/` — regression tests
+- `tests/sweep_framework/sweeps/<family>/<op>/` — sweeps
+- `tests/tt_eager/python_api_testing/.../misc/` — legacy coverage
+- C++ gtests: `./build/test/ttnn/unit_tests_ttnn --gtest_filter='*<Op>*'` (+ sibling binaries such as `unit_tests_ttnn_udm`)
+
+**Filter false positives.** A substring match is not necessarily your op — for `concat`, `nlp_concat_heads` / `concatenate_heads` / `concat_bw` are *different* ops; exclude them. Keep only tests that exercise the op you are porting.
+
+**Then confirm.** Present the found set to the invoker grouped by tree, and ask them to confirm it is complete and which files are the no-regression baseline, *before* you rely on it. Cheap for them (a glance); it turns a silently-incomplete test run into an explicit sign-off.
 
 ### Workspace bootstrap
 
@@ -702,14 +729,14 @@ The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
 ### Run tests
 
-Run the op's correctness tests via the helper. Use the **tests directory the invoker supplied** in [Before you begin](#before-you-begin). Two layers:
+Run the op's correctness tests via the helper — the **confirmed test set** from [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests). Two layers:
 
 ```bash
 # C++ gtests — fast, fails fast on a broken port
 ./build/test/ttnn/unit_tests_ttnn --gtest_filter='*<Op>*'
 
 # Python pytests — broader coverage (dtype/layout sweeps, program-cache behavior)
-pytest <invoker-supplied-tests-dir> -x -v
+pytest <confirmed-tests-dir> -x -v
 ```
 
 Recommended order: gtests first (faster, exercises the C++ op directly), then pytests once gtests are green. If the op has a UDM/specialized variant, its gtests live in a sibling binary (`unit_tests_ttnn_udm`, etc.) — the recipe's worked example in [`workspace_setup.md`](../shared/workspace_setup.md) shows the pattern.
