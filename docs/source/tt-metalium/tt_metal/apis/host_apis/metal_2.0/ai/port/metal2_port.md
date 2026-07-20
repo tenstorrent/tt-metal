@@ -71,7 +71,7 @@ If you nonetheless hit one of these mid-port — a multi-reader borrowed CB, an 
 **Generated docs in the op directory.** Four `METAL2_*.md` files live in the op's directory alongside the program factory `.cpp` files — two written by the audit (your inputs), two you write during the port:
 
 - `METAL2_PORT_BRIEF.md` — **the porter-facing audit brief: your actionable input** (the inherited factory concept, tensor-binding cases, and watch-fors). Written by the [audit doc](../audit/metal2_audit.md), not this one; present as input.
-- `METAL2_PREPORT_AUDIT.md` — the team-facing full audit record, present alongside the brief. The brief mirrors its porter-relevant items; consult the team doc only for detail the brief doesn't carry (e.g. the complete legacy factory / kernel inventory).
+- `METAL2_PREPORT_AUDIT.md` — the team-facing full audit record, present alongside the brief. The brief mirrors its porter-relevant items; consult the team doc only for detail the brief doesn't carry (e.g. its identifying section's full factory / kernel file listing — the starting point for your own inventory — plus the complete gate detail).
 - `METAL2_PORT_PLAN.md` — the port plan (this recipe's load-bearing artifact). Externalizes structural decisions before mechanical translation begins. Read by you during construction and verification, by human reviewers during PR review, and by future debuggers. See [Appendix A](#appendix-a--metal2_port_planmd-template) for the template.
 - `METAL2_PORT_REPORT.md` — the post-port report. Records handoff points, successes, friction, and open items observed during the port. Written at the end of the port; feeds doc evolution and informs the kernel-lib / API teams. See [Capture the port report](#capture-the-port-report) for the structure.
 
