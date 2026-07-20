@@ -61,7 +61,7 @@ Some benefits of Metal 2.0:
 
 > **Argument naming.** Metal 2.0 is designed around named arguments. Compile-time arguments must be named — positional CTAs are no longer part of the API. Runtime and common runtime arguments may be named (the typical case) or positional (varargs, intended for kernels with a genuinely dynamic argument count consumed in a loop — e.g., an N-dimensional shape where N is a CTA). When porting from a legacy kernel, individually-known RTAs translate naturally to named RTAs; reach for varargs only when the kernel actually loops over the arguments.
 
-Many additional improvements are planned, but are not yet available in the experimental APIs.
+Many additional refinements are planned as the experimental APIs mature.
 
 ---
 
