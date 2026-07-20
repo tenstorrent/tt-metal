@@ -136,11 +136,8 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
     _in1preserve = (1 << 22) | (1 << 25)  # in1-delivery A/B diagnostics (correctness-preserving)
-    _chunk = (1 << 26, 1 << 27, 1 << 28)  # in0-ring chunk streaming C=4/2/1 (correctness-preserving)
-    checked = (
-        mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576, 2097152)
-        or mask in _chunk
-        or (mask != 0 and (mask & ~_in1preserve) == 0)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576, 2097152) or (
+        mask != 0 and (mask & ~_in1preserve) == 0
     )
     return {
         "cfg": list(cfg),
@@ -910,86 +907,6 @@ def in1exp(relaunches=3):
     print("IN1EXP DONE", flush=True)
 
 
-# in0-ring CHUNK streaming: C=W(0) vs C=4/2/1 on the picker configs. W derived from the config (not hardcoded).
-CHUNK_MASKS = [("CW", 0), ("C4", 1 << 26), ("C2", 1 << 27), ("C1", 1 << 28)]
-CHUNK_SHAPES = [
-    ("W5", 256, 15360, 768),
-    ("W5", 256, 15360, 1536),
-    ("W5", 128, 15360, 768),
-    ("W5", 128, 15360, 1536),
-    ("W5_bwctl", 32, 15360, 768),  # bandwidth-bound negative control
-    ("W3", 256, 2304, 6144),
-    ("W3", 32, 6144, 2304),
-    ("W3", 64, 4608, 6144),
-    ("W2", 32, 6144, 768),
-    ("W1ctl", 256, 2048, 512),
-    ("W1ctl", 32, 2048, 512),  # K=2048 tiny (W1: chunk = no-op)
-    ("W1ctl", 256, 6144, 4608),
-    ("W1ctl", 128, 6144, 4608),  # K=6144 W1 controls
-]
-
-
-def _shard_W(M, K, N, cfg):
-    Ns, Pk, Sm, kb, nsb = cfg
-    Kt = cdiv(K, 32)
-    Ktl = ((cdiv(Kt, Pk) + kb * 8 - 1) // (kb * 8)) * (kb * 8)  # rup(cdiv(Kt,Pk), kb*8)
-    return Ktl // (8 * kb)
-
-
-def chunkexp(relaunches=3):
-    # For each shape: C=W (mask 0) vs C=4/2/1, INTERLEAVED relaunches. Report median wall, delta vs C=W,
-    # per-RISC spans + core spread, eff-BW, and the per-shard chunk/write/signal/barrier counts. C1<=W handled
-    # by min; W=1 shapes are no-op controls. Raw: regime_a_chunkexp.json.
-    out = []
-    for grp, M, K, N in CHUNK_SHAPES:
-        cfg = tuple(rb.auto_config(M, K, N))
-        W = _shard_W(M, K, N, cfg)
-        idl = ideal_us(M, K, N)
-        runs = {n: [] for n, _ in CHUNK_MASKS}
-        for _r in range(relaunches):
-            for n, mask in CHUNK_MASKS:
-                runs[n].append(run_one(M, K, N, cfg, mask))
-        per = {}
-        for n, mask in CHUNK_MASKS:
-            oks = [x for x in runs[n] if x.get("ok") and x["wall_us"]]
-            walls = sorted(x["wall_us"] for x in oks)
-            med = statistics.median(walls) if walls else None
-            C = W if n == "CW" else int(n[1:])
-            Cw = min(C, W)
-            chunks = (W + Cw - 1) // Cw
-            per[n] = {
-                "mask": mask,
-                "walls": walls,
-                "med_us": med,
-                "n_ok": len(oks),
-                "C": C,
-                "chunks_per_shard": chunks,
-                "writes_per_core": chunks * 7,
-                "signals_per_core": chunks * 7,  # G-1=7 forward steps
-                "read_barriers_step0": chunks,
-                "eff_gbps": (rb.logical_bytes(M, K, N) / (med / 1e6) / 1e9 if med else None),
-                "util512_pct": (idl / med * 100 if med else None),
-                "risc": (oks[0]["risc"] if oks else None),
-                "core_spread": None,
-                "max_rel_err": max(
-                    (x.get("max_rel_err") for x in runs[n] if x.get("max_rel_err") is not None), default=None
-                ),
-            }
-        cw = per["CW"]["med_us"]
-        for n, _ in CHUNK_MASKS:
-            m = per[n]["med_us"]
-            per[n]["vs_cw_pct"] = ((m / cw - 1) * 100) if (cw and m) else None
-        rec = {"group": grp, "M": M, "K": K, "N": N, "cfg": list(cfg), "W": W, "ideal_us": idl, "per": per}
-        out.append(rec)
-        json.dump(out, open(f"{HERE}/regime_a_chunkexp.json", "w"), indent=2)
-        summ = " ".join(
-            f"{n}={per[n]['med_us'] and round(per[n]['med_us'],1)}({per[n]['vs_cw_pct'] and round(per[n]['vs_cw_pct'],1)}%)"
-            for n, _ in CHUNK_MASKS
-        )
-        print(f"[chunk/{grp}] {M}x{K}x{N} W={W} cfg={list(cfg)}: {summ}", flush=True)
-    print("CHUNKEXP DONE", flush=True)
-
-
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     {
@@ -1004,5 +921,4 @@ if __name__ == "__main__":
         "placement": placement,
         "pickerresweep": pickerresweep,
         "in1exp": in1exp,
-        "chunkexp": chunkexp,
     }[mode]()
