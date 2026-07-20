@@ -233,8 +233,14 @@ class _TextEncoder:
         wh, wl, bt = self._emul[key]
         xh, xl = self._limbs(x)
         ck = self._ck()
-        y = ttnn.linear(xh, wh, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck)
-        y = ttnn.add(y, ttnn.linear(xl, wh, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck))
+        # hi·hi and lo·hi both contract against the SAME weight `wh` -- stack xh/xl
+        # along the token (M) axis and do ONE matmul against wh instead of two, so
+        # `wh`'s [3584,3584] DRAM read (the memory-bound cost at this M<<K,N shape)
+        # happens once instead of twice. Concat+slice is exact (no precision change).
+        s = xh.shape[-2]
+        x_stack = ttnn.concat([xh, xl], dim=-2)
+        y_stack = ttnn.linear(x_stack, wh, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck)
+        y = ttnn.add(y_stack[..., :s, :], y_stack[..., s : 2 * s, :])
         y = ttnn.add(y, ttnn.linear(xh, wl, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck))
         return ttnn.add(y, bt) if bt is not None else y
 
