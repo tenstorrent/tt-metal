@@ -8,6 +8,7 @@ overall old->new runtime with the percentage speedup. Pure stdlib; additive (tou
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 _LEVEL_COLS = ("grid", "dtype", "tt-lang", "cpp", "host")
@@ -194,14 +195,15 @@ def render_summary(
         lines.append(f"baseline {baseline_ms:.2f} ms  ->  (no measured win recorded)")
     else:
         lines.append("baseline/final ms unavailable (no baseline profile found)")
+    _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
     if before_ms and after_ms:
         _d = (before_ms - after_ms) / before_ms * 100.0 if before_ms else 0.0
         lines.append(
-            f"trace+2CQ full-pipeline e2e:  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
+            f"trace+2CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
             f"   ({_d:+.1f}% {'faster' if _d >= 0 else 'SLOWER'})"
         )
     elif before_ms:
-        lines.append(f"trace+2CQ full-pipeline e2e:  before {before_ms:.2f} ms  ->  (after not measured)")
+        lines.append(f"trace+2CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  (after not measured)")
     lines.append("")
 
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
