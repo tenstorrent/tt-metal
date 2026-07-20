@@ -40,16 +40,13 @@ void kernel_main() {
                     BinaryFpuOp::Add,
                     BroadcastDim::None,
                     input(InputLifecycle::Bulk, OperandKind::Block),
-                    input(InputLifecycle::Bulk, OperandKind::Block),
-                    Dst::D0>{},
+                    input(InputLifecycle::Bulk, OperandKind::Block)>{},
                 Exp<>{},
                 DestReuseBinary<
                     cb_c,
                     BinaryFpuOp::Mul,
                     DestReuseType::DEST_TO_SRCA,
-                    input(InputLifecycle::Bulk, OperandKind::Block),
-                    Dst::D0,
-                    Dst::D0>{},
+                    input(InputLifecycle::Bulk, OperandKind::Block)>{},
                 PackTile<cb_out, output(OutputLifecycle::Bulk)>{});
         }
     } else {  // Chunked: single call over all N, bounded CB via per-chunk wait/pop
@@ -61,16 +58,13 @@ void kernel_main() {
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
                 input(InputLifecycle::Chunked, OperandKind::Block),
-                input(InputLifecycle::Chunked, OperandKind::Block),
-                Dst::D0>{},
+                input(InputLifecycle::Chunked, OperandKind::Block)>{},
             Exp<>{},
             DestReuseBinary<
                 cb_c,
                 BinaryFpuOp::Mul,
                 DestReuseType::DEST_TO_SRCA,
-                input(InputLifecycle::Chunked, OperandKind::Block),
-                Dst::D0,
-                Dst::D0>{},
+                input(InputLifecycle::Chunked, OperandKind::Block)>{},
             PackTile<cb_out, output(OutputLifecycle::Chunked)>{});
     }
 }

@@ -33,8 +33,7 @@ void kernel_main() {
             cb_b,
             ckl::BinaryFpuOp::Add,
             ckl::BroadcastDim::None,
-            ckl::input(ckl::InputLifecycle::Streaming, ckl::OperandKind::Scalar, ckl::DataFormatReconfig::Disabled),
-            ckl::input(ckl::InputLifecycle::OuterStream, ckl::OperandKind::Scalar, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::input(ckl::InputLifecycle::OuterStream, ckl::DataFormatReconfig::Disabled)>{},
         ckl::PackTile<cb_out>{});
 }

@@ -254,33 +254,31 @@ enum class DataFormatReconfig : bool { Disabled = false, Enabled = true };
 struct InputSpec {
     InputLifecycle lifecycle;
     OperandKind index;
-    TileOffset offset;
     DataFormatReconfig reconfig;
+    TileOffset offset;
 };
 
 struct OutputSpec {
     OutputLifecycle lifecycle;
-    TileOffset offset;
     DataFormatReconfig reconfig;
+    TileOffset offset;
 };
 
 /// Group one input operand's configuration.
-/// Defaults: Streaming lifecycle, Scalar indexing, no tile offset, and reconfig enabled.
+/// Defaults: Streaming lifecycle, Scalar indexing, reconfig enabled, and no tile offset.
 constexpr InputSpec input(
     InputLifecycle lifecycle = InputLifecycle::Streaming,
     OperandKind index = OperandKind::Scalar,
-    TileOffset offset = TileOffset::Unset,
-    DataFormatReconfig reconfig = DataFormatReconfig::Enabled) noexcept;
+    DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    TileOffset offset = TileOffset::Unset) noexcept;
 constexpr InputSpec input(InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept;
-constexpr InputSpec input(InputLifecycle lifecycle, OperandKind index, DataFormatReconfig reconfig) noexcept;
 
 /// Group one output operand's configuration.
-/// Defaults: Streaming lifecycle, no tile offset, and reconfig enabled.
+/// Defaults: Streaming lifecycle, reconfig enabled, and no tile offset.
 constexpr OutputSpec output(
     OutputLifecycle lifecycle = OutputLifecycle::Streaming,
-    TileOffset offset = TileOffset::Unset,
-    DataFormatReconfig reconfig = DataFormatReconfig::Enabled) noexcept;
-constexpr OutputSpec output(OutputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept;
+    DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    TileOffset offset = TileOffset::Unset) noexcept;
 
 // =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity

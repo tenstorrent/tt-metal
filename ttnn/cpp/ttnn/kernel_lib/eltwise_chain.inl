@@ -206,40 +206,31 @@ constexpr InputSpec InputSpecConfig::decode(uint16_t storage) noexcept {
     return {
         {WaitField::decode(storage), PopField::decode(storage)},
         IndexField::decode(storage),
-        OffsetField::decode(storage),
-        ReconfigField::decode(storage)};
+        ReconfigField::decode(storage),
+        OffsetField::decode(storage)};
 }
 
 constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage) noexcept {
     return {
         {ReserveField::decode(storage), PushField::decode(storage)},
-        OffsetField::decode(storage),
-        ReconfigField::decode(storage)};
+        ReconfigField::decode(storage),
+        OffsetField::decode(storage)};
 }
 
 }  // namespace detail
 
 constexpr InputSpec input(
-    InputLifecycle lifecycle, OperandKind index, TileOffset offset, DataFormatReconfig reconfig) noexcept {
-    return {lifecycle, index, offset, reconfig};
+    InputLifecycle lifecycle, OperandKind index, DataFormatReconfig reconfig, TileOffset offset) noexcept {
+    return {lifecycle, index, reconfig, offset};
 }
 
 constexpr InputSpec input(InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept {
-    return input(lifecycle, OperandKind::Scalar, TileOffset::Unset, reconfig);
-}
-
-constexpr InputSpec input(
-    InputLifecycle lifecycle, OperandKind index, DataFormatReconfig reconfig) noexcept {
-    return input(lifecycle, index, TileOffset::Unset, reconfig);
+    return input(lifecycle, OperandKind::Scalar, reconfig, TileOffset::Unset);
 }
 
 constexpr OutputSpec output(
-    OutputLifecycle lifecycle, TileOffset offset, DataFormatReconfig reconfig) noexcept {
-    return {lifecycle, offset, reconfig};
-}
-
-constexpr OutputSpec output(OutputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept {
-    return output(lifecycle, TileOffset::Unset, reconfig);
+    OutputLifecycle lifecycle, DataFormatReconfig reconfig, TileOffset offset) noexcept {
+    return {lifecycle, reconfig, offset};
 }
 
 namespace detail {
