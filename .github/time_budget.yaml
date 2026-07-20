@@ -138,7 +138,7 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 20
+    wh_n150_civ2: 30
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
