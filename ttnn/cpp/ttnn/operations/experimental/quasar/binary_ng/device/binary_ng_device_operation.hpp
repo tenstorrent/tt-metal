@@ -72,9 +72,12 @@ struct BinaryNgDeviceOperation {
             "input_layout_a",
             "input_layout_b",
             "output_layout",
-            "equal_nan");
+            "equal_nan",
+            "scalar",
+            "rtol",
+            "atol");
         auto attribute_values() const {
-            return std::forward_as_tuple(
+            return std::make_tuple(
                 binary_op_type,
                 lhs_activations,
                 rhs_activations,
@@ -90,7 +93,10 @@ struct BinaryNgDeviceOperation {
                 input_layout_a,
                 input_layout_b,
                 output_layout,
-                equal_nan);
+                equal_nan,
+                scalar,
+                rtol,
+                atol);
         }
         DataType get_dtype() const;
     };
