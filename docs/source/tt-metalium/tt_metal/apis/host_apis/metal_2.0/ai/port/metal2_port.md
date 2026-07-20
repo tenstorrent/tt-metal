@@ -18,7 +18,7 @@ For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSp
 
 **Precondition — non-negotiable**: You may only invoke this document if:
 
-1. The audit in [`audit/metal2_audit.md`](../audit/metal2_audit.md) was performed for this op and produced an **overall GREEN** result (or a YELLOW with all questions resolved by the user in favor of proceeding).
+1. The audit in [`audit/metal2_audit.md`](../audit/metal2_audit.md) was performed for this op and produced an **overall GREEN** result.
 2. The user has **explicitly asked you to proceed** with the port. A green audit alone is not sufficient — the user must have read the audit and given an unambiguous go-ahead.
 
 If either condition is unmet, stop. Return to the audit document. Do not improvise.
@@ -193,7 +193,7 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 - The [migration guide — Design Principles](../shared/migration_guide.md#design-principles), especially Principle 2 (named bindings) which drives the "Dropped Plumbing" section below.
 - The [TTNN integration doc](../shared/ttnn_factory.md#the-metal-20-factory-concept) for the factory concept the ported op will satisfy and the entry point that returns the spec.
 - The [patterns catalog](../shared/port_patterns.md).
-- Any yellow-tier items flagged in the brief — its **Watch for** notable constructs and the **Blocked-until** Device 2.0 holdover notice (apply per the catalog's override guidance for each).
+- The brief's **Watch for** notable constructs.
 
 **Output**: extend `METAL2_PORT_PLAN.md` with the following sections (see [Appendix A](#appendix-a--metal2_port_planmd-template) for the template). Each section may say "none" with a one-line justification when no items apply.
 
@@ -255,9 +255,8 @@ For each non-trivial pattern from the [catalog](../shared/port_patterns.md) invo
 
 ### Deferred / Flagged
 
-Any items the audit flagged as YELLOW that affect this port, plus any new findings the planning step uncovered:
+Any new findings the planning step uncovered:
 
-- Yellow audit items, with the relevant [catalog](../shared/port_patterns.md) override guidance entry referenced.
 - New findings: anything the audit missed that surfaced during structural planning.
 
 **Stop signal**: if planning uncovers a structural issue the audit didn't catch — e.g., a kernel that genuinely cannot be expressed without one of the legacy workarounds, or a feature gate that the audit's Appendix A doesn't cover — **stop and report**. Don't paper it over by demoting CTAs, packing varargs, or hand-rolling primitives. The audit's gate set improves with what later steps discover.
@@ -778,7 +777,7 @@ Includes (not exhaustive):
 
 - **Boundary-rule assumption violations.** A call site outside the op directory that required `sem::name` or `tensor::name` (per the [scope boundary](#read-this-first)). Cite the file:line, the callee, and the named handle that the call site demands. Tagged "API: requires implicit conversion / refactor."
 - **Kernel-lib gaps.** Cases where a shared kernel-lib helper or LLK is incompatible with Metal 2.0 binding semantics in a way the porter cannot work around. Cite the helper, the call site, the specific incompatibility.
-- **Framework gaps.** Audit-time entries that were YELLOW or UNSUPPORTED and that bit during the port. Cite the audit entry, what the port needed, and the workaround (if any) you adopted.
+- **Framework gaps.** Audit-time entries that were flagged (e.g., an UNSUPPORTED feature) and that bit during the port. Cite the audit entry, what the port needed, and the workaround (if any) you adopted.
 - **Removed pybind surface.** Any pybind line(s) deleted because the port made a legacy factory entry point (e.g., `create_program_descriptor`) vanish. Cite the pybind file path, the function name(s) removed, and a one-line description of what the function was for. Tagged "API surface: removed entry point." This is a *user-visible* surface change — downstream Python consumers (tests, notebooks, internal tooling) need to find this entry to update their callers. See [Pattern: Removing pybound legacy factory entry points](../shared/port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points).
 
 Each handoff entry should be writable as a standalone ticket. The porter is the original reporter; the listed team is the owner.
@@ -933,7 +932,6 @@ List any patterns from the catalog invoked by this port:
 
 ## Deferred / Flagged
 
-- Yellow items from audit: ... ([catalog override guidance link])
 - New findings during planning: ...
 
 (or "none")
