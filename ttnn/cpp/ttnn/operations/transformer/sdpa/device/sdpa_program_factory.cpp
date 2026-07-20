@@ -163,7 +163,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
-    const auto& output_tensor = tensor_return_value;
+    // Multi-output: tensor_return_value is [out] or [out, lse]. The output is always element [0].
+    const auto& output_tensor = tensor_return_value[0];
+    const bool return_lse = operation_attributes.return_lse;
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& page_table = tensor_args.page_table;
     const auto& attention_sink = tensor_args.attention_sink;
@@ -321,6 +323,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto* chunk_start_idx_buffer = flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr;
 
     auto* out0_buffer = output_tensor.buffer();
+    // T6: LSE output buffer (present only when return_lse). nullptr otherwise (like cu_window_buffer).
+    auto* lse_buffer = return_lse ? tensor_return_value[1].buffer() : nullptr;
 
     bool use_attention_sink = attention_sink.has_value();
 
@@ -370,6 +374,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+
+    // T6: return_lse is implemented only on the streaming compute path (the deferred-norm standard
+    // sdpa_standard / sdpa_inner_loop non-RING branch is out of scope). Reject otherwise so the flag
+    // is never silently ignored. gemma4 chunked prefill always takes the streaming path.
+    TT_FATAL(
+        !return_lse || use_streaming_compute,
+        "return_lse=True requires the streaming SDPA compute path (fp32_dest_acc_en must be false). "
+        "The non-streaming sdpa_standard path does not implement the LSE emit.");
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -580,13 +592,16 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                 // arg 23: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
         static_cast<uint32_t>(is_windowed),            // arg 25: windowed block-diagonal mask generation
+        static_cast<uint32_t>(return_lse),             // arg 26: T6 optional LSE output
     };
 
-    // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
-    // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
+    // out accessor, then the cu_window accessor, then the LSE accessor chained right after it (all
+    // before the CB-id block) so the accessor offset chain stays intact. nullptr placeholders when a
+    // given accessor is unused (consistent with the cu_window pattern).
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(is_windowed ? tensor_args.cu_window_seqlens.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
+    TensorAccessorArgs(return_lse ? lse_buffer : nullptr).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -624,6 +639,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
         k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
+        static_cast<uint32_t>(return_lse),            // arg 34: T6 optional LSE emit
     };
 
     std::map<std::string, std::string> defines_map;
@@ -763,6 +779,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+
+    // T6 LSE CBs. Fall back to valid ids so get_tile_size/format lookups on the writer's compiled
+    // (but runtime-discarded) return_lse branch stay well-formed, mirroring the cu_window fallback.
+    cb_ids.lse_out = cb_ids.out;
+    cb_ids.scale_in = cb_ids.identity_scale_in;
+    if (return_lse) {
+        // fp32 LSE, one column of Sq_chunk_t tiles (matches the stats drain granularity). The
+        // 1-tile bcast scalar holds `scale` for the row-max multiply (same as the ring path).
+        tt::DataFormat lse_df = tt::DataFormat::Float32;
+        cb_ids.lse_out = allocate_tile_cb(statistics_tiles, tt::tile_size(lse_df), lse_df);
+        cb_ids.scale_in = allocate_tile_cb(1, scalar_tile_size, scalar_df);
+    }
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
     const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
@@ -1392,7 +1420,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              global_q_start,                                   // 8
              global_q_count,                                   // 9
              cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
-             cu_window_seqlens_eles});                         // 11: window count + 1
+             cu_window_seqlens_eles,                           // 11: window count + 1
+             lse_buffer});                                     // 12: T6 LSE output (nullptr if !return_lse)
 
         compute_desc.emplace_runtime_args(
             core,

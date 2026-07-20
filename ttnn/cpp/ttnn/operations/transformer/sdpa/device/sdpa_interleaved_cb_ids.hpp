@@ -34,35 +34,38 @@ struct CBIds {
     uint32_t sum_B = inactive;
     uint32_t exp_max_diff = inactive;
     uint32_t cu_window_seqlens = inactive;  // windowed mode only
+    // T6 return_lse: dedicated fp32 LSE output CB + 1-tile bcast-scalar CB holding `scale`.
+    // Appended at the TAIL of the writer/compute CB-id blocks so existing indices are unchanged.
+    uint32_t lse_out = inactive;
+    uint32_t scale_in = inactive;
 
     std::vector<uint32_t> reader_compile_time_args() const {
         return {q_in, k_in, v_in, mask_in, attention_sink, page_table, chunk_start_idx_compute, chunk_start_idx_writer};
     }
 
     std::vector<uint32_t> writer_compile_time_args() const {
-        return {mask_in, identity_scale_in, col_identity, chunk_start_idx_writer, out, cu_window_seqlens};
+        return {
+            mask_in,
+            identity_scale_in,
+            col_identity,
+            chunk_start_idx_writer,
+            out,
+            cu_window_seqlens,
+            lse_out,
+            scale_in};
     }
 
     std::vector<uint32_t> compute_compile_time_args() const {
-        return {
-            q_in,
-            k_in,
-            v_in,
-            mask_in,
-            attention_sink,
-            identity_scale_in,
-            col_identity,
-            chunk_start_idx_compute,
-            recip_scratch,
-            out,
-            qk_im,
-            out_im_A,
-            out_im_B,
-            max_A,
-            max_B,
-            sum_A,
-            sum_B,
-            exp_max_diff};
+        return {q_in,           k_in,
+                v_in,           mask_in,
+                attention_sink, identity_scale_in,
+                col_identity,   chunk_start_idx_compute,
+                recip_scratch,  out,
+                qk_im,          out_im_A,
+                out_im_B,       max_A,
+                max_B,          sum_A,
+                sum_B,          exp_max_diff,
+                lse_out,        scale_in};
     }
 };
 

@@ -27,6 +27,22 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
 
+/// T6 return_lse variant: same as scaled_dot_product_attention but also returns the per-row
+/// log-sum-exp as an fp32 tensor [b, nqh, s, 1]. Returns (output, lse). Streaming path only.
+std::tuple<ttnn::Tensor, ttnn::Tensor> scaled_dot_product_attention_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
+    bool is_causal = true,
+    std::optional<float> scale = std::nullopt,
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
+
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
 
@@ -44,6 +60,29 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
 ttnn::Tensor chunked_scaled_dot_product_attention(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
+    const ttnn::Tensor& chunk_start_idx_tensor,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+/// T6 return_lse variants of chunked SDPA. Return (output, lse) with lse fp32 [b, nqh, s, 1].
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunked_scaled_dot_product_attention_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
+    int64_t chunk_start_idx,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunked_scaled_dot_product_attention_lse(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,

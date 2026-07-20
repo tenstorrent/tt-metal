@@ -95,6 +95,55 @@ ttnn::Tensor scaled_dot_product_attention(
         cu_window_seqlens);
 }
 
+// T6: return_lse variant. Identical setup to scaled_dot_product_attention (same mask pre-scale) but
+// routes to the multi-output prim and returns (output, lse).
+std::tuple<ttnn::Tensor, ttnn::Tensor> scaled_dot_product_attention_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& attn_mask,
+    bool is_causal,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens) {
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+
+    // Mirror the scale/mask pre-scale of scaled_dot_product_attention exactly.
+    std::optional<ttnn::Tensor> effective_mask = attn_mask;
+    if (attn_mask.has_value()) {
+        const float effective_scale =
+            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        if (effective_scale != 1.0f) {
+            effective_mask = ttnn::multiply(attn_mask.value(), 1.0f / effective_scale);
+        }
+    }
+
+    auto outs = ttnn::prim::sdpa_with_lse(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        effective_mask,
+        std::nullopt,  // page_table
+        attention_sink,
+        is_causal,
+        scale,
+        sliding_window_size,
+        std::nullopt,  // chunk_start_idx
+        std::nullopt,  // chunk_start_idx_tensor
+        false,         // use_mla
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val,
+        cu_window_seqlens);
+    return {outs[0], outs[1]};
+}
+
 // Legacy: chunk_start_idx as scalar (part of program cache key).
 ttnn::Tensor chunked_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -165,6 +214,73 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val);
+}
+
+// T6: return_lse variants of chunked SDPA (legacy + flexible). Always causal, streaming path.
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunked_scaled_dot_product_attention_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
+    int64_t chunk_start_idx,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+
+    auto outs = ttnn::prim::sdpa_with_lse(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        std::nullopt,        // attn_mask
+        page_table_tensor,   // page_table
+        std::nullopt,        // attention_sink
+        /*is_causal=*/true,  // Always causal for chunked version
+        scale,
+        std::nullopt,  // sliding_window_size
+        chunk_start_idx,
+        std::nullopt,  // chunk_start_idx_tensor
+        false,         // use_mla
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
+    return {outs[0], outs[1]};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunked_scaled_dot_product_attention_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
+    const ttnn::Tensor& chunk_start_idx_tensor,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+
+    auto outs = ttnn::prim::sdpa_with_lse(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        std::nullopt,       // attn_mask
+        page_table_tensor,  // page_table
+        std::nullopt,       // attention_sink
+        /*is_causal=*/true,
+        scale,
+        std::nullopt,  // sliding_window_size
+        std::nullopt,
+        chunk_start_idx_tensor,
+        false,         // use_mla
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
+    return {outs[0], outs[1]};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(

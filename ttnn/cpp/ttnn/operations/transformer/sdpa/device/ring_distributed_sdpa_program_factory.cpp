@@ -338,10 +338,13 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
         0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
+        0,  // arg 26: return_lse — ring never emits LSE (mirrors the regular factory arg layout)
     };
-    // out accessor, then the cu_window accessor chained right after it (mirrors the regular factory so the
-    // writer's accessor offset chain stays intact). Ring is never windowed → nullptr placeholder accessor.
+    // out accessor, then the cu_window accessor, then the LSE accessor chained right after it (mirrors
+    // the regular factory so the writer's accessor offset chain stays intact). Ring is never windowed and
+    // never emits LSE → nullptr placeholder accessors.
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs().append_to(writer_compile_time_args);
     TensorAccessorArgs().append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -380,6 +383,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
         0u,         // arg 32: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
+        0,  // arg 34: return_lse — ring never emits LSE (mirrors the regular factory arg layout)
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -463,6 +467,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    // T6: ring never emits LSE, but the shared writer/compute kernels reference cb_lse_out/cb_scale_in
+    // in their (runtime-discarded) return_lse branches. Point them at valid ids so get_tile_size/format
+    // lookups stay well-formed, mirroring the regular factory's fallback.
+    cb_ids.lse_out = cb_ids.out;
+    cb_ids.scale_in = cb_ids.identity_scale_in;
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
     const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
@@ -563,7 +572,8 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
              global_q_start,
              global_q_count,
              0u,    // arg 10: cu_window_seqlens_addr — unused (ring is never windowed)
-             0u});  // arg 11: cu_window_seqlens_eles — unused (ring is never windowed)
+             0u,    // arg 11: cu_window_seqlens_eles — unused (ring is never windowed)
+             0u});  // arg 12: lse_addr — unused (ring never emits LSE); kernel reads it unconditionally
 
         compute_desc.emplace_runtime_args(
             core,

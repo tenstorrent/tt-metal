@@ -43,10 +43,14 @@ void kernel_main() {
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
     constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
+    // T6: optional LSE output. Scalar slot BEFORE the accessor block, like use_windowed_mask.
+    constexpr bool return_lse = get_compile_time_arg_val(26) == 1;
 
-    // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    // out accessor, then the cu_window accessor, then the LSE accessor chained immediately after it
+    // (all before the CB-id block) so the accessor offset chain stays intact for all configs.
+    constexpr auto out_args = TensorAccessorArgs<27>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto lse_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -66,11 +70,16 @@ void kernel_main() {
     const uint32_t global_q_count = get_arg_val<uint32_t>(9);
     const uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(10);
     const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(11);
+    // T6: LSE output DRAM base (nullptr address 0 when return_lse is off).
+    const uint32_t lse_addr = get_arg_val<uint32_t>(12);
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
-    constexpr uint32_t cb_arg_offset = cu_window_args.next_compile_time_args_offset();
+    // CB-id block: the LSE CBs (cb_lse_out, cb_scale_in) are appended at the tail. They fall back to
+    // valid ids (cb_out / cb_identity_scale_in) when return_lse is off, so the get_tile_size lookups
+    // below stay well-formed even though this non-template kernel compiles the discarded branch.
+    constexpr uint32_t cb_arg_offset = lse_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -78,12 +87,17 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 4);
     // cu_window CB id lives in the CB-id block (appended by CBIds for windowed mode; inactive otherwise).
     constexpr uint32_t cb_cu_window_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_lse_out = get_compile_time_arg_val(cb_arg_offset + 6);
+    constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 7);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    // LSE logical shape is [B, NQH, Sq, 1] -> one tile-column in the last dim.
+    const auto lse_tile_shape = TensorTileShape(B, NQH, valid_Sqt, 1);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -93,6 +107,12 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+
+    // T6: the LSE emit multiplies the raw row-max by `scale` via mul_tiles_bcast_scalar; seed the
+    // 1-tile bcast-scalar CB the compute kernel reads (matches the ring-joint eager-LSE path).
+    if constexpr (return_lse) {
+        generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
+    }
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
     // Sliding layout: [neginf, trailing_primary, leading_prev, leading_current, trailing_next, k_partial?].
@@ -207,6 +227,29 @@ void kernel_main() {
                     tile_bytes,
                     out_subblock_h,
                     barrier_threshold);
+                // T6: drain the matching LSE tiles for this Q chunk. Compute pushes exactly Sq_chunk_t
+                // LSE tiles (one per Q row-tile, including padded rows); write only the valid rows
+                // (out_row_tile_count) and pop all Sq_chunk_t. Mirrors ring_joint_writer.cpp:324-337.
+                if constexpr (return_lse) {
+                    const auto lse_writer = TensorAccessor(lse_args, lse_addr);
+                    CircularBuffer cb_lse(cb_lse_out);
+                    cb_lse.wait_front(Sq_chunk_t);
+                    uint32_t rd = cb_lse.get_read_ptr();
+                    for (uint32_t i = 0; i < out_row_tile_count; ++i) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(rd),
+                            lse_writer,
+                            lse_tile_bytes,
+                            {},
+                            {.page_id = lse_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile + i, 0)});
+                        rd += lse_tile_bytes;
+                    }
+                    // Full barrier (not just flushed): the LSE writes are issued AFTER
+                    // write_block_row_grouped's per-chunk out barrier, so the last Q chunk has no
+                    // later barrier to guarantee DRAM arrival. This also frees the source L1 for pop.
+                    noc.async_write_barrier();
+                    cb_lse.pop_front(Sq_chunk_t);
+                }
             } else {
                 write_block(
                     noc,

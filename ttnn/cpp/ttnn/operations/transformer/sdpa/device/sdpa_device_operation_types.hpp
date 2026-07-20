@@ -25,6 +25,9 @@ struct SDPAParams {
     // Windowed (block-diagonal) attention: when true, the mask is synthesized on-device from the
     // cu_window_seqlens tensor instead of being read from attn_mask. Implies non-causal.
     bool is_windowed = false;
+    // T6: emit the per-row log-sum-exp as a second fp32 output [B, NQH, Sq, 1]. Streaming path only.
+    // Participates in the program-cache key. When false the op is byte-identical to today.
+    bool return_lse = false;
 };
 
 struct SDPAInputs {

@@ -7,11 +7,15 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <variant>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
@@ -234,7 +238,10 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
 // nanobind optional caster converts Python None|int at the wrapper boundary
 // (GIL held); the body runs with the GIL released (call_guard applied by
 // bind_function) and uses only C++ values.
-ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
+// Returns a bare Tensor when return_lse is false, or an (output, lse) tuple when true. nanobind's
+// variant caster maps each alternative to the matching Python object; the variant is built during
+// the GIL-released C++ call and cast to Python afterwards (GIL held), so this is GIL-safe.
+std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> chunked_scaled_dot_product_attention_wrapper(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -244,8 +251,21 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    bool return_lse) {
     if (chunk_start_idx_tensor_opt.has_value()) {
+        if (return_lse) {
+            return ttnn::transformer::chunked_scaled_dot_product_attention_lse(
+                input_tensor_q,
+                input_tensor_k,
+                input_tensor_v,
+                page_table_tensor,
+                chunk_start_idx_tensor_opt.value(),
+                scale,
+                memory_config,
+                program_config,
+                compute_kernel_config);
+        }
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
             input_tensor_k,
@@ -262,6 +282,18 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
             "chunk_start_idx_tensor=...");
     }
+    if (return_lse) {
+        return ttnn::transformer::chunked_scaled_dot_product_attention_lse(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            page_table_tensor,
+            *chunk_start_idx_arg,
+            scale,
+            memory_config,
+            program_config,
+            compute_kernel_config);
+    }
     return ttnn::transformer::chunked_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
@@ -272,6 +304,52 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         memory_config,
         program_config,
         compute_kernel_config);
+}
+
+// Plain SDPA binding: dispatches on return_lse and returns Tensor or (output, lse). Keeps the
+// return_lse=false path calling the unchanged scaled_dot_product_attention (byte-identical).
+std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> scaled_dot_product_attention_binding(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& attn_mask,
+    bool is_causal,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<SDPAProgramConfig>& program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens,
+    bool return_lse) {
+    if (return_lse) {
+        return ttnn::transformer::scaled_dot_product_attention_lse(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            attn_mask,
+            is_causal,
+            scale,
+            sliding_window_size,
+            memory_config,
+            program_config,
+            compute_kernel_config,
+            attention_sink,
+            cu_window_seqlens);
+    }
+    return ttnn::transformer::scaled_dot_product_attention(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        attn_mask,
+        is_causal,
+        scale,
+        sliding_window_size,
+        memory_config,
+        program_config,
+        compute_kernel_config,
+        attention_sink,
+        cu_window_seqlens);
 }
 
 }  // namespace
@@ -309,7 +387,7 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         doc,
-        &ttnn::transformer::scaled_dot_product_attention,
+        &scaled_dot_product_attention_binding,
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),
@@ -322,7 +400,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("attention_sink") = nb::none(),
-        nb::arg("cu_window_seqlens") = nb::none());
+        nb::arg("cu_window_seqlens") = nb::none(),
+        // T6: when True, returns (output, lse) with lse fp32 [b, nqh, s, 1]; else a bare Tensor.
+        nb::arg("return_lse") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
@@ -471,7 +551,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale").noconvert() = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
-        nb::arg("compute_kernel_config").noconvert() = nb::none());
+        nb::arg("compute_kernel_config").noconvert() = nb::none(),
+        // T6: when True, returns (output, lse) with lse fp32 [b, nqh, s, 1]; else a bare Tensor.
+        nb::arg("return_lse") = false);
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two

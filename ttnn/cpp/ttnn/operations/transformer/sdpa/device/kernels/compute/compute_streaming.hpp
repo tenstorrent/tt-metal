@@ -695,13 +695,18 @@ template <
     uint32_t normalized_out_cb,
     uint32_t scale_fp32 = 0,
     bool use_attention_sink = false,
-    uint32_t cb_attention_sink = INVALID_CB>
+    uint32_t cb_attention_sink = INVALID_CB,
+    // LSE emit (T6 return_lse): all default-off so existing callers compile to byte-identical code.
+    bool emit_lse = false,
+    uint32_t cb_lse_out = INVALID_CB,
+    uint32_t cb_scale_in = INVALID_CB>
 static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
     uint32_t sbh,
     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
-    [[maybe_unused]] uint32_t sink_row_offset = 0) {
+    [[maybe_unused]] uint32_t sink_row_offset = 0,
+    [[maybe_unused]] uint32_t lse_row_offset = 0) {
     // Attention sink: cb_attention_sink holds raw per-head sink logits (column 0, zeros elsewhere).
     // exp((sink - max)*scale) is computed inline per-row via sub_bcast_cols+exp, then folded into
     // the col-reduced denominator (DST[0]). sbh tiles consumed per call, popped once at end;
@@ -710,8 +715,62 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         CircularBuffer(cb_attention_sink).wait_front(sbh);
         CircularBuffer(cur_max_cb_rt).wait_front(sink_row_offset + sbh);
     }
+    // LSE emit reads cur.max (raw per-row max) non-destructively at absolute row index
+    // lse_row_offset + s. cur.max is kept fronted (Sq_chunk_t tiles) by the caller until it is
+    // popped once at the end of the K-loop, so this wait is safe and never pops.
+    if constexpr (emit_lse) {
+        CircularBuffer(cur_max_cb_rt).wait_front(lse_row_offset + sbh);
+        // cb_scale_in is a persistent 1-tile bcast scalar produced once by the writer and never
+        // popped (like cb_identity_scale_in), so wait for it once here.
+        CircularBuffer(cb_scale_in).wait_front(1);
+    }
     configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
+        // LSE_row = scale * m_raw + log(l), emitted BEFORE the recip step pops cur_sum_cb's front
+        // tile (l for this row). Mirrors the ring-joint 3-op sequence (log_block ->
+        // mul_block_bcast_scalar_inplace<scale> -> add_block_inplace -> copy_block) at row
+        // granularity into a dedicated fp32 cb_lse_out. cur.max is read at the absolute index
+        // (lse_row_offset + s); cur_sum_cb's front tile is read non-destructively (popped later by
+        // the recip step). Packs fp32 to cb_lse_out, then restores the pack format so the following
+        // recip step packs to scratch_cb exactly as in the no-LSE path (byte-identical when emit_lse
+        // is false: the whole block is if-constexpr-discarded).
+        if constexpr (emit_lse) {
+            // l (the softmax denominator for this row) is the COL-REDUCTION of cur_sum_cb, exactly
+            // what the recip step below computes via matmul(cur_sum_cb, col_identity). Reading the
+            // front tile directly would only capture one column's partial sum and lose log(#keys).
+            // cur_sum_cb is read NON-destructively here (popped later by the recip step), so a
+            // second identical col-reduction is safe. (No attention-sink term: the DG denoise path
+            // runs sink-off, so plain l is exact; sink-on would additionally need the sink mass.)
+            constexpr uint32_t N_lse = 1;
+            CircularBuffer(cb_lse_out).reserve_back(1);
+            CircularBuffer(col_identity_cb).wait_front(N_lse);
+            CircularBuffer(cur_sum_cb).wait_front(1);
+            reconfig_data_format(cur_sum_cb, col_identity_cb);
+            tile_regs_acquire();
+            // DST0 = l = col_reduce(cur_sum_cb)
+            matmul_block_init(cur_sum_cb, col_identity_cb, 0, N_lse, 1, N_lse);
+            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N_lse, 1, N_lse);
+            // DST0 = log(l)
+            log_tile_init();
+            log_tile(0);
+            // DST1 = scale * m_raw (raw max × the persistent scale scalar), then DST0 += DST1.
+            reconfig_data_format(cur_max_cb_rt, cb_scale_in);
+            mul_tiles_bcast_scalar_init_short(cur_max_cb_rt, cb_scale_in);
+            mul_tiles_bcast_scalar(cur_max_cb_rt, cb_scale_in, lse_row_offset + s, 0, 1);
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            // fp32 pack: cb_lse_out is Float32 while scratch/stats CBs are Float16_b, so the pack
+            // format must be reconfigured to fp32 for this pack and restored afterwards.
+            sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, cb_lse_out>();
+            pack_tile(0, cb_lse_out);
+            tile_regs_release();
+            CircularBuffer(cb_lse_out).push_back(1);
+            // Restore pack format to normalized_out_cb so the recip step's reconfig
+            // (<normalized_out_cb, scratch_cb>) behaves exactly as in the no-LSE path.
+            sdpa_maybe_pack_reconfig_data_format<cb_lse_out, normalized_out_cb>();
+        }
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
@@ -1241,7 +1300,10 @@ template <
     uint32_t sliding_window_size = 0,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
-    bool use_provided_mask = false>
+    bool use_provided_mask = false,
+    bool emit_lse = false,
+    uint32_t cb_lse_out = INVALID_CB,
+    uint32_t cb_scale_in = INVALID_CB>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1656,6 +1718,9 @@ static void sdpa_inner_loop_step(
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] uint32_t sink_row_offset = 0;
+        // Absolute row index into cur.max for the LSE emit; advances by sbh per normalize_row call,
+        // exactly mirroring sink_row_offset so LSE rows are labeled in lockstep with the recip cadence.
+        [[maybe_unused]] uint32_t lse_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             CircularBuffer(cur.sum).push_back(sbh);
@@ -1669,9 +1734,15 @@ static void sdpa_inner_loop_step(
                 cb_normalized_out,
                 scale_fp32,
                 use_attention_sink,
-                cb_attention_sink>(cur.sum, out_cb, sbh, cur.max, sink_row_offset);
+                cb_attention_sink,
+                emit_lse,
+                cb_lse_out,
+                cb_scale_in>(cur.sum, out_cb, sbh, cur.max, sink_row_offset, lse_row_offset);
             if constexpr (use_attention_sink) {
                 sink_row_offset += sbh;
+            }
+            if constexpr (emit_lse) {
+                lse_row_offset += sbh;
             }
             pushed++;
         };
@@ -1915,7 +1986,11 @@ template <
     bool is_causal_sdpa = false,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
-    bool use_provided_mask = false>
+    bool use_provided_mask = false,
+    // LSE emit (T6 return_lse): default-off so all existing instantiations are byte-identical.
+    bool emit_lse = false,
+    uint32_t cb_lse_out = INVALID_CB,
+    uint32_t cb_scale_in = INVALID_CB>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -2058,7 +2133,10 @@ void sdpa_standard_v2(
                 sliding_window_size,
                 use_attention_sink,
                 cb_attention_sink,
-                use_provided_mask>(
+                use_provided_mask,
+                emit_lse,
+                cb_lse_out,
+                cb_scale_in>(
                 prev,
                 cur,
                 is_last,
