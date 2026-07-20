@@ -486,6 +486,7 @@ def l1_sharded_linear(
     decode: bool = False,
     batch_rows: int | None = None,
     allow_width_shard: bool = True,
+    out_memory_config: "ttnn.MemoryConfig | None" = None,
 ) -> ttnn.Tensor:
     """ttnn.linear with a tuned matmul program config.
 
@@ -543,7 +544,10 @@ def l1_sharded_linear(
         from .parallel_utils import decode_mm_program_config
 
         program_config = decode_mm_program_config(x.device(), m, k, n)
-    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "compute_kernel_config": compute_kernel_config}
+    kwargs = {
+        "memory_config": out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+        "compute_kernel_config": compute_kernel_config,
+    }
     if program_config is not None:
         kwargs["program_config"] = program_config
     if bias is not None:
