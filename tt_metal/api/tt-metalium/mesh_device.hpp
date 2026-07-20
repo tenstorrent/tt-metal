@@ -131,7 +131,7 @@ public:
     // per device on a heterogeneous mesh. If `coord` maps to a remote device, this falls back to an
     // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
     // when the mesh has no local device to fall back to.
-    std::map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
+    std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
         NOC noc, const MeshCoordinate& coord);
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
