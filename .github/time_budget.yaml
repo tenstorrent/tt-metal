@@ -327,6 +327,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 260
     bh_galaxy: 70
+    bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
