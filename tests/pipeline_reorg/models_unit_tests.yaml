@@ -50,11 +50,18 @@
 
 - name: Llama 3.2-3B unit tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.2-3B-Instruct HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-3B-Instruct
-    # TTTv1 decoder legs (retained) — both files in one pytest call so they share a single device open
-    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py models/tt_transformers/tests/test_decoder_prefill.py -k "32-page_params or 128-page_params"  # b32 decode + 128 prefill
-    # TTTv2 _1d module legs (128-prefill + batch-32-decode) — three files in one pytest call, single device open. 3B 1x1 cases are marks=_slow so use -m slow; "not dn" drops the rmsnorm distributed-norm duplicates.
-    pytest --timeout 300 -m slow models/common/tests/modules/attention/test_attention_1d.py models/common/tests/modules/mlp/test_mlp_1d.py models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py -k "(1x1-prefill-128-3B or 1x1-decode-32-3B or 1x1-prefill-128-mixed-3B or 1x1-decode-32-uniform-3B) and not dn"
+    export HF_MODEL=meta-llama/Llama-3.2-3B-Instruct HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=1
+    # TTTv1 decoder legs (retained) — read the prebuilt weights from the shared (read-only) tt_cache
+    # mount. TT_CACHE_PATH is set PER-COMMAND so it does not leak into the TTTv2 legs below, which
+    # generate synthetic weights at runtime and must write them to the default (writable) model_cache/.
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-3B-Instruct pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-3B-Instruct pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
+    # TTTv2 _1d module legs (128-prefill + batch-32-decode), one pytest per file (mirrors the 1B legs) — no
+    # TT_CACHE_PATH (writes to model_cache/). 3B 1x1 cases are marks=_slow so use -m slow; on rmsnorm
+    # "not dn" drops the distributed-norm duplicates.
+    pytest --timeout 300 -m slow models/common/tests/modules/attention/test_attention_1d.py -k "1x1-prefill-128-3B or 1x1-decode-32-3B"
+    pytest --timeout 300 -m slow models/common/tests/modules/mlp/test_mlp_1d.py -k "1x1-prefill-128-mixed-3B or 1x1-decode-32-uniform-3B"
+    pytest --timeout 300 -m slow models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py -k "(1x1-prefill-128-3B or 1x1-decode-32-3B) and not dn"
   model: llama3.2-3b
   skus:
     wh_n150:
