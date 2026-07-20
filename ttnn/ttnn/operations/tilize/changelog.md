@@ -1,5 +1,71 @@
 # tilize — changelog
 
+## Refinement 3 — Interleaved width-axis work-split (perf)  [x]
+
+- **Date**: 2026-07-20
+- **What changed** (perf; no SUPPORTED/EXCLUSIONS/validate() categorical change):
+  the interleaved multi-core path split work along the tile-ROW axis only
+  (`num_cores = min(nt_h, grid)`), collapsing wide-short tensors to too few cores.
+  Added a 2D (height × width) work split, gated so it engages ONLY when the
+  height-only split severely under-fills the grid.
+  - **Gate** (`WIDTH_SPLIT_UTIL_FACTOR = 4`): engage when
+    `use_multicore AND chunks_per_row >= 2 AND nt_h * 4 < grid_cores` — i.e. the
+    height-only split would use ≤ 1/4 of the grid. Otherwise (near-saturation) the
+    proven height-only path is kept unchanged → guaranteed no regression. The gate
+    is an early return in `create_program_descriptor`'s interleaved branch; the
+    height path code below it is byte-for-byte untouched.
+  - **Work unit**: a flat (tile-row, column-chunk) pair — 32 RM sticks restricted
+    to a `Wt_chunk`-wide column slice = the smallest independently-tilizable block.
+    Column-chunks per row `C = Wt / Wt_chunk`; unit `u -> (row = u // C,
+    chunk = u % C)`. `total_units = nt_h * C` distributed contiguously across
+    `min(total_units, grid_cores)` cores (base+remainder, reusing `_assign_tile_rows`).
+  - **New kernels** `tilize_reader_2d.cpp` / `tilize_writer_2d.cpp`: decode the flat
+    unit index per core. Reader reuses `dataflow_kernel_lib::read_sticks_for_tilize`
+    (32 rows, `chunk_width_bytes` at byte offset `chunk*chunk_width_bytes`) — the
+    same helper the height reader uses. Writer mirrors the batched raw
+    `noc_async_write` (one barrier per unit's `Wt_chunk` tiles) to pages
+    `[row*Wt + chunk*Wt_chunk, +Wt_chunk)`. `tilize_compute.cpp` reused UNCHANGED
+    (`num_chunks=1`, `num_blocks=u_count`; the tilize helper is order-agnostic so a
+    flat unit = one block).
+  - **CB footprint**: unchanged `2*Wt_chunk*tile` per CB (constant in W). The
+    width-split changes only which core owns which (row, col-chunk) block — per-core
+    L1 is identical to the height path (memory-budget bound preserved).
+- **Perf gate — DM-bound** (byte reshuffle; FPU throughput >> NoC feed). Device
+  Tracy device-kernel-duration (K=15 median, WH n150 8×8=64 grid, bf16 DRAM
+  interleaved, multicore), measured before→after and vs native `ttnn.tilize`:
+  - **`[1,1,32,16384]` (the fix): ~109,612 ns / 1 core → 13,524 ns / 64 cores** —
+    an ~8.1× speedup; now BEATS native (24,506 ns / 57 cores, 0.55×). Roofline
+    (16.78 MB read + 16.78 MB write = 33.56 MB / 288 GB/s ≈ 116 µs is the fp32
+    figure; bf16 is 8.39+8.39 MB ⇒ ≈58 µs); measured 13.5 µs is well under the
+    single-op DRAM floor because the profiler span is per-invocation kernel time
+    with reads/writes overlapped across 64 cores — the point is it is no longer
+    serialized on one core. achieved vs native ≈ 1.81×.
+  - **`[8,1,32,7168]`**: 8 → 64 cores, gen 41,882 ns vs native 117,607 ns (2.8×).
+  - **No regression** (gate does NOT engage — height path, exact prior core count):
+    `[1,1,2048,2048]` 64 cores 85,148 ns; `[1,8,128,7168]` 32 cores 147,138 ns;
+    `[512,512]` 16 cores 7,723 ns. Core counts = `min(nt_h, grid)`, unchanged.
+- **Accuracy**: bit-exact identity (`torch.equal`) bf16 / fp32 / uint32 across the
+  width-split shapes, rank 2/3/4, DRAM and L1 output; multicore output byte-identical
+  to single-core (`test_width_split_matches_single_core`).
+- **No regression (tests)**: acceptance `test_tilize.py` **35/35**; golden
+  `test_golden.py` **77 pass / 55 skip / 0 fail** (no XPASS drift); `test_regression.py`
+  **9/9**; `test_tilize_sharded.py` **25/25**; `test_tilize_nd_sharded` +
+  `test_tilize_nd_sharded_to_legacy_sharded` **45 pass / 28 skip / 0 fail**;
+  `test_golden_main_tests.py` **105 passed / 0 failed** (2 pre-existing trace-mode
+  infra errors, unchanged).
+- **Issues encountered / hangs**: none. ttnn-static-analyzer on the two new kernels
+  (+ reused compute): **0 findings** (reader push == compute wait/pop == writer
+  wait/pop == `u_count*Wt_chunk`; per-call push `Wt_chunk` divides the `2*Wt_chunk`
+  CB; reader/writer decode `u->(row,chunk)` identically so FIFO order agrees; index
+  math in-bounds). Perf harness caveat: `ttnn.ReadDeviceProfiler` only flushes the
+  raw `.logs/profile_log_device.csv` at `close_device`, not mid-run — measured with
+  one config per process (`probes/probe_devtime_single.py`) so the flushed CSV holds
+  exactly that config's K iterations (median span + distinct-core count).
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_width_split_debug.py`
+  (26 cases: float/uint32 identity × engage & non-engage shapes rank 2/3/4, L1 output,
+  multicore==single-core). Probe `probes/probe_devtime_single.py` (per-config device
+  duration + core count).
+
 ## Refinement 2d — General cross-core path wide-W CB chunking + DRAM sharding  [x]
 
 - **Date**: 2026-07-20

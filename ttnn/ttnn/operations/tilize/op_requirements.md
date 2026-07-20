@@ -290,3 +290,38 @@ same-spec.
 
 **Done when**: a wide-W HEIGHT crossover keeps per-core CB L1 bounded by a
 constant (not `Wt`), identity preserved; no regression on the 2c golden targets.
+
+### [x] Refinement 3 — Interleaved width-axis work-split (perf: fix single-core collapse on wide-short tensors)
+
+**Goal** (perf, not a SUPPORTED-axis change): the interleaved multi-core path
+splits work along the tile-ROW (height) axis only (`num_cores = min(nt_h, grid)`),
+so a wide, short tensor (`nt_h` small, `Wt` large) collapses to too few cores. The
+DeepSeek MLA shape `[1,1,32,16384]` (`nt_h=1`) ran on **1 core, 109,612 ns vs
+native's 24,455 ns** — the one shape where the generated op lost to native.
+Add a 2D (height × width) work split so wide-short tensors spread across the grid.
+
+**Implementation skill**: /interleaved-parallel, /memory-budget-metal
+
+**Verifier notes**: engage the width-split only when the height-only split severely
+under-fills the grid; keep the proven height-only path otherwise (near-saturation
+regime — no regression). Each core owns flat (tile-row, column-chunk) work units;
+the CB stays bounded by `Wt_chunk` (never reintroduce a `Wt`-scaled CB). Correctness
+first: identity exact (bf16/fp32/uint32), all ranks. Reuse the existing compute
+kernel; the general cross-core sharded path is out of scope (interleaved only).
+
+**Done when**: `[1,1,32,16384]` interleaved bf16 multicore device-kernel-duration
+drops substantially from ~109,600 ns toward/below native's ~24,500 ns (core count
+rises 1 → many); no perf regression on shapes that already fill the grid
+(`[1,1,2048,2048]`, `[1,8,128,7168]`, `[512,512]`); all prior-phase tests pass.
+
+**Landed [x] (2026-07-20)**: gate = `use_multicore AND chunks_per_row >= 2 AND
+nt_h * 4 < grid_cores` (engage only when height-only would use ≤ 1/4 of the grid).
+New `_create_interleaved_width_split_descriptor` distributes `total_units = nt_h *
+(Wt/Wt_chunk)` flat (tile-row, col-chunk) units across the grid via contiguous
+base+remainder ranges; new `tilize_reader_2d.cpp` / `tilize_writer_2d.cpp` decode
+`u -> (row = u//C, chunk = u%C)`; `tilize_compute.cpp` reused unchanged
+(`num_chunks=1`, `num_blocks = u_count`). CBs stay `2*Wt_chunk*tile` (constant in
+W). `[1,1,32,16384]`: **1 core / ~109,612 ns → 64 cores / 13,524 ns** (now beats
+native's 24,506 ns, 0.55×). `[8,1,32,7168]`: 8 → 64 cores, 41,882 ns vs native
+117,607 ns. No-regression shapes keep exact prior core counts (64/32/16 =
+`min(nt_h, grid)`) — the gate does not engage. All prior tests green.

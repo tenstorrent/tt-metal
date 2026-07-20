@@ -29,6 +29,13 @@ CB_TILED_OUT = 16  # compute -> writer (tiled pages, output dtype)
 # Cap on the per-block width so the CB footprint stays bounded on wide tensors.
 WT_CHUNK_MAX = 8
 
+# Width-split engagement threshold (Refinement 3). The interleaved height-only
+# split uses nt_h cores; engage the 2D width-split only when that would leave the
+# grid severely under-filled — nt_h <= grid_cores / WIDTH_SPLIT_UTIL_FACTOR. Above
+# that the height split is near-saturation and the extra 2D machinery only adds
+# host/setup cost, so the proven height-only path is kept (no perf regression).
+WIDTH_SPLIT_UTIL_FACTOR = 4
+
 
 def _pick_wt_chunk(wt: int) -> int:
     """Largest divisor of `wt` that is <= WT_CHUNK_MAX (keeps chunking even)."""
@@ -379,6 +386,110 @@ def _create_general_program_descriptor(
     )
 
 
+# ---------------------------------------------------------------------------
+# Interleaved 2D (height x width) work-split path (Refinement 3)
+# ---------------------------------------------------------------------------
+# Fixes the single-core collapse on wide, short tensors (small nt_h, large Wt).
+# The height-only interleaved split uses only nt_h cores; this path distributes
+# flat WORK UNITS across the grid, where a unit is one (tile-row, column-chunk)
+# pair — 32 row-major sticks restricted to a Wt_chunk-wide column slice, the
+# smallest independently-tilizable block. Column-chunks per row C = Wt/Wt_chunk;
+# unit u -> (row = u // C, chunk = u % C). Each core owns a contiguous
+# [u_start, u_start+u_count) unit range. Per-core CBs stay 2*Wt_chunk*tile
+# (constant in W, identical to the height path). Reuses tilize_compute.cpp with
+# num_chunks=1 (each unit is one block; compute needs only the block count) and a
+# dedicated reader/writer that decode the flat unit index.
+def _create_interleaved_width_split_descriptor(
+    input_tensor: ttnn.Tensor,
+    output_tensor: ttnn.Tensor,
+    grid: "ttnn.CoreCoord",
+    wt: int,
+    nt_h: int,
+    wt_chunk: int,
+) -> ttnn.ProgramDescriptor:
+    in_dtype = input_tensor.dtype
+    out_dtype = output_tensor.dtype
+    elem_size = input_tensor.element_size()
+    in_tile_size = ttnn.tile_size(in_dtype)
+    out_tile_size = ttnn.tile_size(out_dtype)
+    tile_row_bytes = TILE_W * elem_size
+    chunk_width_bytes = wt_chunk * tile_row_bytes
+
+    chunks_per_row = wt // wt_chunk  # C
+    total_units = nt_h * chunks_per_row
+    grid_cores = grid.x * grid.y
+    num_cores = min(total_units, grid_cores)
+
+    cores = _row_wise_cores(grid, num_cores)
+    # _assign_tile_rows is a generic contiguous base+remainder splitter — reuse it
+    # to split the flat unit range (not tile-rows here) into (u_start, u_count).
+    assignment = _assign_tile_rows(total_units, num_cores)
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+    cb_rm_in_desc = ttnn.CBDescriptor(
+        total_size=2 * wt_chunk * in_tile_size,
+        core_ranges=core_ranges,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=CB_RM_IN, data_format=in_dtype, page_size=in_tile_size)
+        ],
+    )
+    cb_tiled_out_desc = ttnn.CBDescriptor(
+        total_size=2 * wt_chunk * out_tile_size,
+        core_ranges=core_ranges,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=CB_TILED_OUT, data_format=out_dtype, page_size=out_tile_size)
+        ],
+    )
+
+    in_addr = input_tensor.buffer_address()
+    out_addr = output_tensor.buffer_address()
+
+    reader_ct_args = [chunk_width_bytes, chunks_per_row]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    writer_ct_args = [out_tile_size, wt, wt_chunk, chunks_per_row]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    # num_chunks=1: each work unit is exactly one Wt_chunk-wide block, so compute
+    # processes u_count blocks in a single pass (FIFO — order matches reader/writer).
+    is_fp32_in, compute_config = _fp32_compute_config(in_dtype, out_dtype)
+    compute_ct_args = [wt_chunk, 1, is_fp32_in]
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    compute_rt_args = ttnn.RuntimeArgs()
+    for core, (u_start, u_count) in zip(cores, assignment):
+        reader_rt_args[core.x][core.y] = [in_addr, u_start, u_count]
+        writer_rt_args[core.x][core.y] = [out_addr, u_start, u_count]
+        compute_rt_args[core.x][core.y] = [u_count]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "tilize_reader_2d.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct_args,
+        runtime_args=compute_rt_args,
+        config=compute_config,
+    )
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "tilize_writer_2d.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    return ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=[],
+        cbs=[cb_rm_in_desc, cb_tiled_out_desc],
+    )
+
+
 def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
@@ -421,6 +532,20 @@ def create_program_descriptor(
     wt_chunk = _pick_wt_chunk(wt)
     num_chunks = wt // wt_chunk
     chunk_bytes = wt_chunk * tile_row_bytes
+
+    # ---- width-axis work-split gate (Refinement 3) ----
+    # The height-only split below uses min(nt_h, grid_cores) cores. On a wide,
+    # short tensor (small nt_h, large Wt) that collapses to a few cores. Engage
+    # the 2D width-split when the height split would severely under-fill the grid
+    # (nt_h * WIDTH_SPLIT_UTIL_FACTOR < grid_cores) AND there is >1 column-chunk to
+    # spread (chunks_per_row >= 2). Otherwise keep the proven height-only path
+    # (near-saturation regime — adding 2D machinery would only cost host/setup).
+    if use_multicore:
+        grid = device.compute_with_storage_grid_size()
+        grid_cores = grid.x * grid.y
+        chunks_per_row = wt // wt_chunk
+        if chunks_per_row >= 2 and nt_h * WIDTH_SPLIT_UTIL_FACTOR < grid_cores:
+            return _create_interleaved_width_split_descriptor(input_tensor, output_tensor, grid, wt, nt_h, wt_chunk)
 
     # ---- work distribution across tile-rows ----
     if use_multicore:
