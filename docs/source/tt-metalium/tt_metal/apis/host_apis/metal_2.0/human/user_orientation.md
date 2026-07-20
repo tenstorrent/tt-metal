@@ -68,7 +68,7 @@ Audit the TTNN op (OP NAME HERE) for Metal 2.0 portability.
 
 Op directory: `ttnn/cpp/ttnn/operations/...family.../...op.../`
 
-Read and follow `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/audit/metal2.md`.
+Read and follow `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/audit/metal2_audit.md`.
 
 Produce METAL2_PREPORT_AUDIT.md (and METAL2_PORT_BRIEF.md if the audit clears) in the op
 directory, then stop. Do not begin the port — that runs as a separate session after I review the audit.
@@ -82,7 +82,7 @@ Tests:        `tests/ttnn/unit_tests/operations/...wherever.../`
 Audit report:  METAL2_PREPORT_AUDIT.md in the op directory (GREEN)
 Audit brief:   METAL2_PORT_BRIEF.md in the op directory
 
-Read and follow `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2.md`.
+Read and follow `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md`.
 
 Delegate every build and test run to a subagent. The builds and tests are spammy; this preserves your context for the effort of the port itself.
 
