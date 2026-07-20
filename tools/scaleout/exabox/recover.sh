@@ -22,6 +22,10 @@ Optional:
     --use-docker <docker-image>             Run validation via mpi-docker with the given image
                                             (if not provided, uses plain mpirun with local build)
     --num-iterations <number>               Number of validation iterations (default: 5)
+                                            This is the inner per-run validation loop.
+    --max-attempts <number>                 Number of times to run the full recovery (reset + validation)
+                                            before giving up, or until it succeeds (default: 1).
+                                            This is the outer loop wrapping the whole recovery.
     --sleep-duration <seconds>              Sleep duration after reset, before validation (default: 5)
     --skip-reset                            Skip tt-smi reset, only run validation
     --skip-validation                       Skip validation, only run tt-smi reset
@@ -85,6 +89,7 @@ HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
 NUM_ITERATIONS=5
+MAX_ATTEMPTS=1
 SLEEP_DURATION=5
 SKIP_RESET=false
 SKIP_VALIDATION=false
@@ -155,6 +160,18 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             NUM_ITERATIONS="$2"
+            shift 2
+            ;;
+        --max-attempts)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --max-attempts requires a non-empty value"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --max-attempts must be a positive integer, got '$2'"
+                exit 1
+            fi
+            MAX_ATTEMPTS="$2"
             shift 2
             ;;
         --sleep-duration)
@@ -385,6 +402,7 @@ else
     echo "Deployment descriptor: $DEPLOYMENT_DESCRIPTOR_PATH"
 fi
 echo "Num iterations: $NUM_ITERATIONS"
+echo "Max attempts: $MAX_ATTEMPTS"
 echo "Send traffic: $SEND_TRAFFIC"
 echo "Sleep after reset: ${SLEEP_DURATION}s"
 echo "Skip reset: $SKIP_RESET"
@@ -484,6 +502,16 @@ else
     echo ""
 fi
 
+# Outer recovery loop: run the full reset + validation up to MAX_ATTEMPTS times, or until
+# validation succeeds. --num-iterations controls the inner validation loop; this controls how
+# many times the whole recovery is retried. Descriptor regeneration (Step 3) runs once after the
+# loop, only if every attempt failed.
+VALIDATION_EXIT=0
+for (( ATTEMPT=1; ATTEMPT<=MAX_ATTEMPTS; ATTEMPT++ )); do
+echo "=========================================="
+echo "Recovery attempt $ATTEMPT of $MAX_ATTEMPTS"
+echo "=========================================="
+
 # Step 1: tt-smi reset
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
 if [[ "$SKIP_RESET" == false ]]; then
@@ -575,6 +603,22 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
 else
     echo "Skipping validation (--skip-validation)"
 fi
+
+# Outer-loop control: stop as soon as an attempt succeeds; otherwise retry until attempts exhausted.
+if [[ $VALIDATION_EXIT -eq 0 ]]; then
+    echo ""
+    echo "Recovery succeeded on attempt $ATTEMPT of $MAX_ATTEMPTS."
+    break
+fi
+echo ""
+echo "Recovery attempt $ATTEMPT of $MAX_ATTEMPTS failed (exit code $VALIDATION_EXIT)."
+if [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; then
+    echo "Retrying full recovery..."
+    echo ""
+else
+    echo "Exhausted all $MAX_ATTEMPTS recovery attempts."
+fi
+done
 
 # Step 3: Regenerate descriptors if validation hit unrecoverable state
 if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
