@@ -24,12 +24,19 @@ namespace ttnn::ccl {
 
 bool is_fabric_2d();
 
+// Warn about ideal packet size
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
+
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
 tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+// Resolve the topology (Ring vs Linear) for a single mesh axis
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
