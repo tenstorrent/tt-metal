@@ -691,9 +691,12 @@ def _detect_partial_capture(profiles_dir) -> str | None:
     return None
 
 
-def _profile_once() -> dict:
+def _profile_once(cq=None) -> dict:
     ctx = _Ctx()
     tmpdir = ctx.run.dir
+    _saved_cq = os.environ.get("TT_PERF_NUM_CQ")
+    if cq is not None:
+        os.environ["TT_PERF_NUM_CQ"] = str(cq)
     try:
         profiles = measure_runs(ctx)
         prof = profiles[0]
@@ -707,6 +710,11 @@ def _profile_once() -> dict:
         prof = _persist_artifacts(prof)
         return prof
     finally:
+        if cq is not None:
+            if _saved_cq is None:
+                os.environ.pop("TT_PERF_NUM_CQ", None)
+            else:
+                os.environ["TT_PERF_NUM_CQ"] = _saved_cq
         _reap_measurement_dir(tmpdir)
 
 
@@ -747,7 +755,7 @@ def profile_model() -> dict:
     roofline target (the achievable floor). Records this as the baseline for measure_candidate.
     Call this first, and again whenever you want a fresh picture."""
     try:
-        prof = _profile_once()
+        prof = _profile_once(cq=2)
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
         if _is_dram_trace_overflow(_msg):
@@ -808,7 +816,7 @@ def measure_candidate() -> dict:
     A REJECTED measurement is NEVER a win no matter how fast it looks — do not keep it. Call this
     after every edit; only a 'valid' result that is faster than baseline is a real gain."""
     try:
-        prof = _profile_once()
+        prof = _profile_once(cq=1)
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
         if _is_dram_trace_overflow(_msg):
@@ -1838,7 +1846,7 @@ def termination_check() -> dict:
     stop' shortcut; NO OR-with-at_floor escape. can_stop is true iff no material op has a reachable
     rung left. Obey can_stop; for each blocking_op do the rung named in its 'next_rung'."""
     try:
-        prof = _profile_once()
+        prof = _profile_once(cq=1)
     except Exception as exc:  # noqa: BLE001
         _note_device_crash("termination_check")
         return {"can_stop": False, "error": f"profiler crashed: {str(exc)[-500:]}"}
