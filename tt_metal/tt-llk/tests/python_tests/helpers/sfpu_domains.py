@@ -163,8 +163,8 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
     MathOperation.Exp2: _exp2_spec,
-    # exp_with_base computes exp(0.5*x); the 0.5 scale only makes the argument
-    # tamer than plain exp, so the exp overflow-safe domain is a safe superset.
+    # exp_with_base computes exp(0.5*x); the 0.5 scale makes the argument
+    # tamer than plain exp, so the plain-exp overflow-safe domain is a conservative subset.
     MathOperation.ExpWithBase: _exp_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(

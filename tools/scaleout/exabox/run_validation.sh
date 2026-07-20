@@ -5,6 +5,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 
+# Tag each line with [hostname], adding [HH:MM:SS] only when the line has no
+# timestamp of its own so tool logs aren't stamped twice. Ranks prepend a bare
+# "[host] " prefix at the source; this keeps that host, adds the time, and passes
+# already fully-tagged lines through unchanged (idempotent under a second pass).
+tag_stream() {
+    local line host rest
+    local esc=$'\x1b'
+    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '   # already [host][time]
+    local rank_re='^\[([^][]*)\] (.*)$'                                # rank's bare [host] prefix
+    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"  # leading timestamp, ANSI-tolerant
+    local self="${HOSTNAME:-$(hostname)}"
+    while IFS= read -r line; do
+        if [[ "$line" =~ $done_re ]]; then
+            printf '%s\n' "$line"
+            continue
+        fi
+        if [[ "$line" =~ $rank_re ]]; then
+            host="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+        else
+            host="$self"
+            rest="$line"
+        fi
+        if [[ "$rest" =~ $ts_re ]]; then
+            printf '[%s] %s\n' "$host" "$rest"
+        else
+            printf '[%s][%(%H:%M:%S)T] %s\n' "$host" -1 "$rest"
+        fi
+    done
+}
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -246,19 +277,24 @@ run_cluster_validation() {
     done
 
     if [[ $DOCKER_IMAGE == "none" ]]; then
-        mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_include "$MPI_IF" \
-            "${MPI_EXTRA_ARGS[@]}" \
-            --tag-output \
-            ./build/tools/scaleout/run_cluster_validation \
+        # Bare [host] tag on the rank (only the rank knows its hostname); tag_stream
+        # adds the time. pipefail keeps run_cluster_validation's real exit code.
+        local bin_cmd
+        bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
             "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
-            --output-path "$validation_output_path"
+            --output-path "$validation_output_path")
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "set -o pipefail; h=\$(hostname); $bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
     else
+        # --tag-host makes mpi-docker prefix each rank with [hostname]; tag_stream adds the time.
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --tag-host \
             --mpi-interface "$MPI_IF" \
             "${volume_args[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
@@ -279,10 +315,10 @@ run_board_reset() {
     local output_file="$2"
     local msg_prefix="$3"
 
-    # Each rank host-tags the reset log and streams it to stderr (shown live + tee'd), then prints one
-    # "RESET_RESULT|<host>|<exit_code>" line to stdout for the retry logic below. tt-smi writes key
-    # progress to the tty (not stdout) so it runs under `script`; the tr/sed/awk pipeline collapses its
-    # animated \r/spinner output and keeps colors (pipefail+`script -e` give the real exit code).
+    # Each rank streams its host-tagged reset log to stderr and prints one
+    # "RESET_RESULT|<host>|<exit_code>" line to stdout for the retry logic below.
+    # tt-smi writes progress to the tty, so run under `script`; the tr/sed/awk
+    # pipeline collapses its animated \r/spinner output and keeps colors.
     read -r -d '' RESET_CMD <<'RESET_CMD' || true
 set -o pipefail
 h=$(hostname)
@@ -298,7 +334,7 @@ script -qefc "tt-smi -glx_reset" /dev/null |
     }
     END { if (seen) print buf }' |
     while IFS= read -r line; do
-        printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line"
+        printf '[%s] %s\n' "$h" "$line"
     done >&2
 ec=${PIPESTATUS[0]}
 echo "RESET_RESULT|$h|$ec"
@@ -338,6 +374,10 @@ RESET_CMD
     return 0  # Success
 }
 
+
+# Route all output through tag_stream. The per-iteration tee blocks below also
+# pipe through tag_stream; those lines arrive here already tagged and pass through.
+exec > >(tag_stream) 2>&1
 
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
@@ -420,7 +460,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
-    } 2>&1 | tee "$LOG_FILE"
+    } 2>&1 | tag_stream | tee "$LOG_FILE"
 
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
