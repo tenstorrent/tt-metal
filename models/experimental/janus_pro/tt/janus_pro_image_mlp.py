@@ -66,10 +66,10 @@ class TtJanusProImageFeedForward(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
-        w1 -> gate_proj
-        w2 -> down_proj
-        w3 -> up_proj
-        HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        FeedForward: c_proj(gelu(c_fc(x) + b_fc)) + b_proj
+        HF reference (SigLIP MLP): fc2(act_fn(fc1(x)))  ->  c_fc = fc1, c_proj = fc2, act_fn = gelu.
+        This is a plain two-layer FFN, not a gated/SwiGLU FFN: no gate/up split and no third projection.
+        Bias and gelu are applied outside ttnn.linear (see below).
         """
         seq_len = x.shape[-2]
         batch_size = x.shape[0]
@@ -84,7 +84,8 @@ class TtJanusProImageFeedForward(LightweightModule):
         pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
-        # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
+        # Both matmuls run at HiFi4 (full activation precision); no explicit core_grid/program_config
+        # is set, so the op uses its defaults.
         # Bias + activation applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         c_fc_out = ttnn.linear(
             x_in,

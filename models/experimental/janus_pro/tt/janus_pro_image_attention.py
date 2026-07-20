@@ -1,8 +1,9 @@
 """
 This is the ImageAttention block for Janus-Pro-7B
 We have reused the TTLlamaImageAttention with some modification.
-We have made the linears (Q,K,V) to be executed separately and added bias support for O_projection, along with few
-configuration changes.
+The Q/K/V weights are fused into a single wqkv tensor and projected with one ttnn.linear, then split via
+ttnn.nlp_create_qkv_heads. Bias is applied outside the matmul (to avoid the FUSE_BIAS kernel path), and
+bias support was added for the O projection, along with a few configuration changes.
 """
 
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
