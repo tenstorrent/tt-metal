@@ -120,8 +120,7 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
 }
 
 bool Tile::operator==(const Tile& other) const {
-    return tile_shape == other.tile_shape && face_shape == other.face_shape &&
-           transpose_within_face == other.transpose_within_face && transpose_of_faces == other.transpose_of_faces;
+    return tile_shape == other.tile_shape && face_shape == other.face_shape;
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& tile) {
