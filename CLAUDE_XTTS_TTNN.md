@@ -43,11 +43,11 @@ here.**
 
 | # | Block | File | Foundation | Status | Owner |
 |---|-------|------|-----------|--------|-------|
-| 0 | Text tokenizer / normalization | `CLAUDE_XTTS_TOKENIZER.md` | net-new (CPU) | not started | — |
-| 1 | Conditioning encoder + Perceiver resampler | `CLAUDE_XTTS_CONDITIONING.md` | net-new TTNN | not started | — |
-| 2 | ResNet speaker encoder (d-vector) | `CLAUDE_XTTS_SPEAKER_ENCODER.md` | net-new (CPU first) | not started | — |
+| 0 | Text tokenizer / normalization | `CLAUDE_XTTS_TOKENIZER.md` | **CPU by design (host)** | **DONE — runs on CPU (see decision 5)** | acicovic |
+| 1 | Conditioning encoder + Perceiver resampler | `CLAUDE_XTTS_CONDITIONING.md` | net-new TTNN | **DONE on TT — full block PCC 0.99999** | acicovic |
+| 2 | ResNet speaker encoder (d-vector) | `CLAUDE_XTTS_SPEAKER_ENCODER.md` | net-new TTNN (conv2d ResNet) | **DONE on TT — d-vector PCC 0.99972** | acicovic |
 | 3 | GPT (decoder-only, VQ codes) | `CLAUDE_XTTS_GPT.md` | HF GPT2 core (hand-written TTNN) | **prefill + KV-cache decode + e2e greedy generate passing (bf16 codes == fp32 ref)** | acicovic |
-| 4 | HiFi-GAN vocoder | `CLAUDE_XTTS_HIFIGAN.md` | `speecht5_tts` pattern (CPU first) | not started | — |
+| 4 | HiFi-GAN vocoder | `CLAUDE_XTTS_HIFIGAN.md` | net-new TTNN (conv1d + conv_transpose2d) | **DONE on TT — waveform PCC 0.9983 (fp32)** | acicovic |
 | — | Integration / top-level model + demo | this file + `tt/ttnn_xtts_model.py` | — | not started | — |
 
 Each block file follows the same template — see **Per-block file template** at the bottom.
@@ -91,6 +91,14 @@ sample rates.
    (as `speecht5_tts` does), then port. De-risks group_norm/conv tile-alignment (see below).
 4. **Golden-tensor-driven, per-block PCC** at ≈ 1.0 vs the PyTorch reference mirror before
    any integration.
+5. **Tokenizer (Block 0) stays on CPU — by design, this is "how it's done" and Block 0 is
+   considered DONE.** Tokenization is string/BPE/normalization work (branchy control flow
+   over variable-length symbols) with no tensor math to accelerate; it runs once per
+   utterance in ~ms on host and emits a few hundred int token ids. TT is a dense-tensor
+   accelerator, so there is nothing to move to device here (every LLM/TTS stack runs the
+   tokenizer on host). In the pipeline we wrap coqui's `VoiceBpeTokenizer`. The embedding
+   *lookup* (token id → 1024-d vector) is tensor-friendly and could live on device, but it's
+   cheap and currently folds into the GPT input stage.
 
 ---
 
