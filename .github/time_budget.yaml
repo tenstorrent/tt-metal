@@ -357,7 +357,7 @@ models:
     wh_galaxy_perf: 150
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 480
+    bh_sc1: 524
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

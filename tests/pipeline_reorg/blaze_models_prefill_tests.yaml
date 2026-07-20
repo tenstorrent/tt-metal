@@ -364,3 +364,31 @@
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
+
+- name: "Blaze - Chunked GLM-5.2 (code_debug 55k)"
+  # 55k-ISL chunked-prefill perf/smoke for GLM-5.2 (sparse DSA): full 78 layers, 11 chunks x 5120 =
+  # 56320 tokens, 10 iterations. No-PCC: drives the real chunked-prefill path end to end (build once,
+  # forward 10x) and passes on completion -- no golden readback, no accuracy compare. Mirrors Chunked Kimi.
+  #
+  # Paths:
+  #   GLM52_HF_MODEL              -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
+  #   TT_GLM52_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache; required, else conftest may invent HF downloads
+  #   PREFILL_TRACE_DIR           -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --pernode --tag-output bash -lc '
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc[blackhole-glm52-mesh-8x4-L78-chunks_eleven-ten_iters-margin5pct] -xvs
+    '
+  test_type: glm_chunked
+  test_group: module
+  skus:
+    bh_sc1:
+      # Full 78-layer sparse DSA prefill x10; slightly higher than Kimi's 40 for the extra depth + indexer.
+      timeout: 45
+  owner_id: U09LK84G4TF  # Nikola Milicevic
+  team: models
+  sp_config: sc1

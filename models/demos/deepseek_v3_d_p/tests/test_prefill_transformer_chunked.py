@@ -114,6 +114,12 @@ KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
     # ~unchanged (chunk c attends to KV[0:c*CHUNK] regardless of n_chunks); chunks 5-10 are new.
     # (61, 11, 10): [...],
 }
+# GLM-5.2 no-PCC baseline — same schema/gating as Kimi; record-only until a green CI run pins the medians.
+GLM_NO_PCC_BASELINE_CHUNK_TIMES_S = {
+    # test_glm_prefill_transformer_chunked_no_pcc[...-L78-chunks_eleven-ten_iters] (55k): populate the 11
+    # per-chunk medians from the first green GLM-5.2 55k CI run; until then it runs record-only (no gate).
+    # (78, 11, 10): [...],
+}
 # Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
 # perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
 DEFAULT_PERF_MARGIN = 0.05
@@ -982,11 +988,11 @@ def run_chunked_transformer_no_pcc(
     assert total_len <= SEQ_CACHE_NOPCC, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE_NOPCC}"
 
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    config.max_seq_len = SEQ_CACHE_NOPCC
+    config.max_seq_len = total_len
 
     logger.info(
         f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
-        f"total_len={total_len} cache={SEQ_CACHE_NOPCC} chunk={CHUNK} num_iters={num_iters}"
+        f"total_len={total_len} cache={total_len} chunk={CHUNK} num_iters={num_iters}"
     )
 
     iteration_chunk_times: list[list[float]] = []
@@ -1029,7 +1035,7 @@ def run_chunked_transformer_no_pcc(
         state_dict={},
         num_layers=num_layers,
         seq_len=CHUNK,  # per-chunk size -> MoE/FFN dispatch buffers
-        max_seq_len=SEQ_CACHE_NOPCC,  # KV ring buffer + RoPE cos/sin cache = full no-PCC cache (up to 100k)
+        max_seq_len=total_len,  # KV ring buffer + RoPE cos/sin cache sized to the actual ISL (n_chunks*CHUNK)
         dispatch_buffer_capacity_factor=8,
         num_links=num_links,
         topology=topology,
@@ -1047,15 +1053,36 @@ def run_chunked_transformer_no_pcc(
     gc.collect()
     profiler.end("tt_transformer_creation")
 
+    # Sparse (DSA) configs need bf16 ROW_MAJOR KVPE + a caller-owned block-cyclic indexer key cache
+    # (dense allocates neither and gets None). Caches are sized to the actual ISL (total_len), not a
+    # fixed max, so a shorter run does not over-reserve — per-layer slots, same scheme as Kimi.
+    has_indexer = resolve_has_indexer(config)
+    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if has_indexer else {}
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
-        seq_len=SEQ_CACHE_NOPCC,
+        seq_len=total_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
+        **kvpe_dtype_layout,
     )
+
+    tt_index_kv_cache = None
+    if has_indexer:
+        assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
+        index_cache_layers = num_full_indexer_layers(config) or num_layers
+        tt_index_kv_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=total_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=index_cache_layers,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
 
     # Precompute per-chunk SP-sharded token tiles once (reused across iterations). Chunk-aligned offsets
     # make the block-cyclic rotation degenerate to a plain per-chip reshape.
@@ -1091,6 +1118,7 @@ def run_chunked_transformer_no_pcc(
             actual_end=CHUNK,
             cache_user_id=0,
             return_intermediates=False,
+            index_kv_cache=tt_index_kv_cache,
         )
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_tokens)
@@ -1123,6 +1151,7 @@ def run_chunked_transformer_no_pcc(
                 actual_end=kv_actual + CHUNK,
                 cache_user_id=0,
                 return_intermediates=False,
+                index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
             ttnn.deallocate(tt_tokens)
@@ -1270,4 +1299,72 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         routing_use_l1_small_for_semaphores=False,
+    )
+
+
+# GLM-5.2 counterpart of the no-PCC perf sweep. glm_5_2 is sparse DSA, so run_chunked_transformer_no_pcc
+# allocates the bf16 ROW_MAJOR KVPE + bf8 indexer key cache (per-layer slots, like Kimi) and threads
+# index_kv_cache into forward. GLM device_params mirror the PCC test (GLM51Config fabric payload +
+# l1_small_size for the MoE routing semaphores).
+@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+@pytest.mark.parametrize(
+    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+)
+@pytest.mark.parametrize(
+    "n_chunks",
+    [1, 2, 5, 10, 11, 20],
+    ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks_eleven", "chunks20"],
+)
+@pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+                "l1_small_size": 512,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA (indexer) is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_prefill_transformer_chunked_no_pcc(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_iters,
+    num_links,
+    topology,
+    perf_margin,
+):
+    # Gate against the CI baseline only for the exact config we have a recorded number for; every other
+    # combo stays record-only (baseline None -> print_duration_table does not assert).
+    baseline_chunk_times_s = GLM_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters))
+    run_chunked_transformer_no_pcc(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        num_iters,
+        routing_use_l1_small_for_semaphores=True,
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=perf_margin,
     )
