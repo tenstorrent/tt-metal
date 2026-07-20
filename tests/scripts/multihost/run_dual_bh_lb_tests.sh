@@ -33,7 +33,7 @@ run_dual_bh_lb_unit_tests() {
   tt-run --rank-binding "$rank_binding_1x16" --mpi-args "$mpi_args" pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lbx2.py ; fail+=$?
 
   echo "LOG_METAL: Running microbenchmark tests for 1x16 rank binding on 2x BH-LB"
-  tt-run --rank-binding "$rank_binding_1x16" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_short_running.yaml ; fail+=$?
+  tt-run --rank-binding "$rank_binding_1x16" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short' ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
