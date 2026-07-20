@@ -258,9 +258,11 @@ def before_loop(
             repo = gitio.repo_root(model_root)
             head = gitio.head_sha(repo)
             dirty = gitio.changed_files(repo, head, pathspec=str(model_root))
-            if dirty:
-                gitio.checkout(repo, head, pathspec=str(model_root))
-                stages.done(f"restored {len(dirty)} leftover-dirty file(s) to {head[:9]} (prior interrupted run?)")
+            _generated = {"RUN_REPORT.md", ".module_optimize_state.json"}
+            code_dirty = [d for d in dirty if os.path.basename(d) not in _generated]
+            if code_dirty:
+                gitio.checkout(repo, head, pathspec=code_dirty)
+                stages.done(f"restored {len(code_dirty)} leftover-dirty file(s) to {head[:9]} (prior interrupted run?)")
             else:
                 stages.done(f"clean ({head[:9]})")
         except Exception as exc:  # never block the run on the restore

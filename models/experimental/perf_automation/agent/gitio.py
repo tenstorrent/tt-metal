@@ -72,10 +72,16 @@ def checkout(repo, sha: str, pathspec=None) -> None:
         untracked content. If `pathspec` was untracked at `sha`, git matches nothing
         and raises GitError — callers treat that as a safe no-op.
     """
-    args = ["checkout", sha, "--", str(pathspec) if pathspec else "."]
+    if pathspec is None:
+        specs = ["."]
+    elif isinstance(pathspec, (list, tuple)):
+        specs = [str(p) for p in pathspec]
+    else:
+        specs = [str(pathspec)]
+    args = ["checkout", sha, "--", *specs]
     r = _git(args, repo)
     if r.returncode != 0:
-        raise GitError(f"git checkout {sha} -- {pathspec} failed: {r.stderr.strip()}")
+        raise GitError(f"git checkout {sha} -- {specs} failed: {r.stderr.strip()}")
 
 
 def commit(repo, message: str, pathspec=None) -> str | None:
