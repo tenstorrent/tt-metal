@@ -96,10 +96,10 @@ std::vector<uint32_t> build_rm_reader_ct_args(
     uint32_t scaler_bits,
     const tt::tt_metal::MeshTensor& src,
     tt::tt_metal::ReduceOpDim dim,
-    uint32_t h_num_shards,
-    uint32_t shard_Ht) {
+    uint32_t num_h_slices,
+    uint32_t slice_Ht) {
     // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
-    // H_logical at slot 8 and the H-axis-split geometry (h_num_shards, shard_Ht) at slots 9-10; the
+    // H_logical at slot 8 and the H-axis-split geometry (num_h_slices, slice_Ht) at slots 9-10; the
     // W path omits all three, so the source TensorAccessor args follow at slot 8 (W) or slot 11 (H).
     // The kernel is templated on REDUCE_DIM so the unused slots are genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
@@ -115,8 +115,8 @@ std::vector<uint32_t> build_rm_reader_ct_args(
     };
     if (dim == tt::tt_metal::ReduceOpDim::H) {
         args.push_back(plan.H_logical);
-        args.push_back(h_num_shards);
-        args.push_back(shard_Ht == 0 ? plan.Ht_rm : shard_Ht);
+        args.push_back(num_h_slices);
+        args.push_back(slice_Ht == 0 ? plan.Ht_rm : slice_Ht);
     }
     tt::tt_metal::TensorAccessorArgs(src).append_to(args);
     return args;
@@ -189,7 +189,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
         mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         // Grid and orientation are identical in both spec formats (nd_shard_spec and shard_spec)
         // when both are populated. Pick whichever is available from the output config,
-        // falling back to the input tensor's shard spec for backward compatibility.
+        // falling back to the input tensor's slice spec for backward compatibility.
         const auto& nd = output_mem_config.nd_shard_spec();
         const auto& legacy = output_mem_config.shard_spec();
         const auto& input_nd = input_mem_config.nd_shard_spec();
@@ -214,7 +214,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
         };
         const auto& [grid, orientation] = get_grid_and_orientation();
 
-        // For width/height/block sharding modes, the output shard shape is fully determined
+        // For width/height/block sharding modes, the output slice shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
         // appropriate TensorSpec builder.
         if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -230,7 +230,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
         return tensor_spec.block_sharded(grid.bounding_box(), orientation);
     }
 
-    // ND sharding: adjust per-logical-dimension shard shape for reduced dims.
+    // ND sharding: adjust per-logical-dimension slice shape for reduced dims.
     // Fall back to the input tensor's nd_shard_spec when the output config omits it.
     if (mem_layout == TensorMemoryLayout::ND_SHARDED) {
         const auto& nd_shard_spec = output_mem_config.nd_shard_spec();

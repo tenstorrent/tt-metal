@@ -276,8 +276,8 @@ Tensor reduce(
     // column) and issues one narrow read per H row per core, so tall-H shapes starve the grid. When
     // that happens, split the reduction axis into S contiguous segments:
     //   stage 1 → (N,C,S,W) partial (pure SUM, FP32 for accumulation accuracy),
-    //   stage 2 → collapse the S-row shard axis with the user scaler and final dtype.
-    // Exact-sum decomposition: sum over H == sum of per-shard sums, so mean is applied once in stage 2.
+    //   stage 2 → collapse the S-row slice axis with the user scaler and final dtype.
+    // Exact-sum decomposition: sum over H == sum of per-slice sums, so mean is applied once in stage 2.
     if (use_rm_dense_h) {
         const auto& logical = input_tensor.logical_shape();
         const auto& padded = input_tensor.padded_shape();
@@ -294,13 +294,14 @@ Tensor reduce(
         // Only split genuinely tall reduces: below this the un-split path already performs well and a
         // second stage would just add a dispatch + reduction rounding (small-shape precision noise).
         constexpr uint32_t k_min_ht_for_split = 16;  // ~H >= 512 rows
-        uint32_t S = 1;
+        uint32_t num_h_slices = 1;
         if (col_groups > 0 && col_groups < grid_cores && Ht_rm >= k_min_ht_for_split) {
-            const uint32_t cand = grid_cores / col_groups;  // shards that keep the grid filled
-            S = (cand < Ht_rm) ? cand : Ht_rm;              // never more shards than H tiles
+            const uint32_t slices_to_fill_grid = grid_cores / col_groups;  // slices that keep the grid filled
+            num_h_slices =
+                (slices_to_fill_grid < Ht_rm) ? slices_to_fill_grid : Ht_rm;  // never more slices than H tiles
         }
 
-        if (S >= 2) {
+        if (num_h_slices >= 2) {
             const Tensor partials = ttnn::prim::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
@@ -314,7 +315,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/1.0f,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*h_num_shards=*/S);
+                /*num_h_slices=*/num_h_slices);
 
             return ttnn::prim::reduce(
                 partials,
@@ -329,7 +330,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/post_mul,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*h_num_shards=*/1);
+                /*num_h_slices=*/1);
         }
     }
 

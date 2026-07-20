@@ -127,7 +127,7 @@ void validate_rm_preconditions(
 
 // Build the reader compile-time args vector for the RM path (slots match
 // reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
-// `h_num_shards` / `shard_Ht` are H-axis-split geometry (H path only; 1 shard / full Ht_rm =
+// `num_h_slices` / `slice_Ht` are H-axis-split geometry (H path only; 1 slice / full Ht_rm =
 // normal reduce). The H branch always emits them (unified layout), so the TensorAccessor args
 // follow at slot 11 on the H path (slot 8 on the W path, which omits them).
 std::vector<uint32_t> build_rm_reader_ct_args(
@@ -135,13 +135,13 @@ std::vector<uint32_t> build_rm_reader_ct_args(
     uint32_t scaler_bits,
     const tt::tt_metal::MeshTensor& src,
     tt::tt_metal::ReduceOpDim dim,
-    uint32_t h_num_shards = 1,
-    uint32_t shard_Ht = 0);
+    uint32_t num_h_slices = 1,
+    uint32_t slice_Ht = 0);
 
 // Build the writer compile-time args vector for the RM path (slots match
 // writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst).
 // Unaffected by H-axis split: the writer derives the output page from global_tile_id / Wt, which
-// already equals nc*num_h_shards + shard under the split's (nc, shard, wt) work ordering.
+// already equals nc*num_h_slices + slice under the split's (nc, slice, wt) work ordering.
 std::vector<uint32_t> build_rm_writer_ct_args(
     const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim);
 
@@ -173,12 +173,12 @@ bool h_reduce_negate_fits_in_l1(
 //   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding TensorSpec
 //     builder using the grid/orientation taken from `output_mem_config` if
 //     available, otherwise falling back to `input_mem_config`.
-//   - ND_SHARDED (TILE output only): copies the ND shard spec (from
+//   - ND_SHARDED (TILE output only): copies the ND slice spec (from
 //     `output_mem_config` or, as a fallback, `input_mem_config`) and sets the
-//     shard shape entries for the reduced dim(s) to 1.
+//     slice shape entries for the reduced dim(s) to 1.
 //
 // `input_mem_config` is the memory config of the reduction's input tensor and
-// is only consulted as a fallback when the output config omits a shard spec.
+// is only consulted as a fallback when the output config omits a slice spec.
 tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     const tt::tt_metal::Shape& output_shape,
     tt::tt_metal::DataType output_dtype,
@@ -190,7 +190,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
 // Enforces the documented contract that, for reduction-style ops, any sharded
 // participant (input or output) must live in L1.  Sharded layouts and DRAM
 // buffers use disjoint coordinate spaces (worker cores vs DRAM bank cores), so
-// silently borrowing a grid across buffer types — as the shard-spec fallback
+// silently borrowing a grid across buffer types — as the slice-spec fallback
 // in `build_reduce_output_tensor_spec` would otherwise allow — produces an
 // invalid spec.  Pass an `op_name` (e.g. "reduce", "Std/Var reduction") for a
 // readable error message.

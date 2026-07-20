@@ -38,10 +38,10 @@ struct ReduceParams {
     // ttnn.mean(fast_and_approximate_mode=False).
     bool use_sfpu_reduce{false};
     // H-axis split (RM-H dense path only). 1 = normal H-reduce (output H=1). When >1 the reduce
-    // is segmented into `h_num_shards` contiguous H ranges, each reduced independently, producing a
-    // (N, C, h_num_shards, W) partial tensor that a second H-reduce collapses to (N, C, 1, W).
-    // Lets the op use NC*Wt*h_num_shards cores instead of NC*Wt on tall-H shapes. See reduce_op.cpp.
-    uint32_t h_num_shards{1};
+    // is segmented into `num_h_slices` contiguous H ranges, each reduced independently, producing a
+    // (N, C, num_h_slices, W) partial tensor that a second H-reduce collapses to (N, C, 1, W).
+    // Lets the op use NC*Wt*num_h_slices cores instead of NC*Wt on tall-H shapes. See reduce_op.cpp.
+    uint32_t num_h_slices{1};
 };
 
 }  // namespace ttnn::prim
