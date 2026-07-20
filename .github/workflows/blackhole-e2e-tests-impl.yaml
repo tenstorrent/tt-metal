@@ -24,11 +24,11 @@ on:
         required: false
         type: string
         default: "all"
-        description: "Filter test rows by id, or by the sdpa tag group"
+        description: "Filter test rows by id"
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -78,27 +78,17 @@ jobs:
           with open(tests_path, "r") as f:
               tests = yaml.safe_load(f) or []
 
-          if selection == "sdpa":
-              matches = any(selection in (test.get("tags") or []) for test in tests)
-          else:
-              matches = any(test.get("id") == selection for test in tests)
+          matches = any(test.get("id") == selection for test in tests)
 
           print("true" if matches else "false")
           PY
           )
             if [[ "$selection_exists" != "true" ]]; then
-              echo "::error::Unknown e2e test-selection '$TEST_SELECTION'. Use 'all', 'sdpa', or an id from $TESTS_YAML_PATH."
+              echo "::error::Unknown e2e test-selection '$TEST_SELECTION'. Use 'all' or an id from $TESTS_YAML_PATH."
               exit 1
             fi
 
-            case "$TEST_SELECTION" in
-              sdpa)
-                selected=$(echo "$selected" | jq -c '[.[] | select((.tags // []) | index("sdpa"))]')
-                ;;
-              *)
-                selected=$(echo "$selected" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
-                ;;
-            esac
+            selected=$(echo "$selected" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
           fi
 
           filtered="$selected"

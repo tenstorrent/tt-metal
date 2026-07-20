@@ -25,7 +25,7 @@ the underlying `Mesh` / MGD machinery, see
 
 ### 1. Configure the mesh in YAML
 
-To enable fsdp in [train_nanogpt.py](/tt-train/sources/examples/nano_gpt/train_nanogpt.py), add `enable_fsdp: true` to your training config's `device_config`. The
+To enable fsdp in [the training example](/tt-train/sources/examples/train/train.py), add `enable_fsdp: true` to your training config's `device_config`. The
 non-trivial axis of `mesh_shape` will be named `"fsdp"`:
 
 ```yaml

@@ -1,6 +1,6 @@
 # LLK perf — matrix for llk-perf / llk-perf-impl; speed-of-light, -n 15 consumer, perf marker.
 # Code coverage is collected in LLK e2e (`llk_e2e_tests.yaml` → llk-e2e-impl), not here (perf and coverage builds don't mix for LLK python_tests).
-# One matrix row per --group, like tests/pipeline_reorg/ttnn-tests.yaml.
+
 # LLK perf tests are no longer triggered on PR label "llk:performance"
 # ci-quiet log mode is hard-coded.
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,

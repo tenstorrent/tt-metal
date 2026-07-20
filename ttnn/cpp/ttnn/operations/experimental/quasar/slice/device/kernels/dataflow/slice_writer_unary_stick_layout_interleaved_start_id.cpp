@@ -8,27 +8,27 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t stick_size = get_arg_val<uint32_t>(1);
-    uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(3);
-    uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(4);
-    uint32_t num_read_per_barrier = get_arg_val<uint32_t>(5);
-    uint32_t start_id = get_arg_val<uint32_t>(6);
+    uint32_t stick_size = get_arg(args::stick_size);
+    uint32_t stick_size_offset = get_arg(args::stick_size_offset);
+    uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    uint32_t num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
+    uint32_t num_read_per_barrier = get_arg(args::num_read_per_barrier);
+    uint32_t start_id = get_arg(args::start_id);
     // Per-shard page size: shard_W on B/W-sharded outputs, full row otherwise.
     // Feeds `noc_async_write_sharded`'s multi-shard split via `get_aligned_page_size()`.
-    uint32_t page_size_override = get_arg_val<uint32_t>(7);
+    uint32_t page_size_override = get_arg(args::page_size_override);
 
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
-    const auto s0 = TensorAccessor(dst_args, dst_addr, page_size_override);
+    // Override the binding's page size (per-shard width); keep the auto-patched binding address
+    // (cache-hit safe).
+    const uint32_t base_addr = get_common_arg_val<uint32_t>(decltype(tensor::out)::addr_crta_offset / sizeof(uint32_t));
+    const auto s0 = TensorAccessor(decltype(tensor::out)::args, base_addr, page_size_override);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out0(cb_id_out0);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer cb_out0(dfb::cb_out);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

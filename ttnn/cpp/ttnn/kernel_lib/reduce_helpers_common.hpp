@@ -4,35 +4,62 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "llk_defs.h"
 
 /**
- * @brief Determines whether a reduce operation should use the matmul path.
+ * @brief Float32 reduce precision mode.
  *
- * SUM/AVG along REDUCE_ROW uses matmul_tiles (col-0 scaler).
- * All other combinations use reduce_tile LLK (row-0 scaler).
+ * Fast keeps fp32 on the FPU/GMPOOL path (inputs truncated to tf32 — faster, lossy); Accurate
+ * routes fp32 SUM through the SFPU for full-fp32 accumulation (accurate ttnn.mean). Only affects
+ * Float32 SUM; Int32 always uses the SFPU regardless of this mode.
  */
-template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim>
-constexpr bool reduce_uses_matmul() {
-    return (pool_type == ckernel::PoolType::SUM || pool_type == ckernel::PoolType::AVG) &&
-           reduce_dim == ckernel::ReduceDim::REDUCE_ROW;
-}
+enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
 
 /**
- * @brief Determines whether a reduce operation should use the SFPU max path.
+ * @brief Determines whether a reduce operation should use the SFPU path.
  *
- * Int32 MAX on REDUCE_ROW/COL uses SFPU. Int32 MAX REDUCE_SCALAR is unsupported.
+ * Int32 MAX and SUM on REDUCE_ROW/COL use SFPU (GMPOOL/matmul have no Int32 support).
+ * Int32 REDUCE_SCALAR is unsupported (no SFPU scalar primitive); the host decomposes an
+ * Int32 HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
+ * MIN is pre-lowered to MAX + negate and dispatched via reduce_{h,w}_neg.
+ *
+ * Float32 SUM additionally opts into the SFPU path when the caller passes ReduceFp32Mode::Accurate
+ * (accurate ttnn.mean); the host threads that mode in from the kernel's compile-time args.
  */
-template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, DataFormat data_format>
+template <
+    ckernel::PoolType pool_type,
+    ckernel::ReduceDim reduce_dim,
+    DataFormat data_format,
+    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast>
 constexpr bool is_sfpu_reduce_path() {
-    if constexpr (pool_type != ckernel::PoolType::MAX) {
+    if constexpr (pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM) {
         return false;
     }
     if constexpr (data_format != DataFormat::Int32) {
-        return false;
+        // Float32 opts into the SFPU path only in Accurate mode, and only for SUM (accurate ttnn.mean,
+        // which the host lowers to SUM + a 1/N post-mul). Everything else non-Int32 stays on the FPU.
+        if constexpr (
+            fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32 ||
+            pool_type != ckernel::PoolType::SUM) {
+            return false;
+        }
     }
     if constexpr (reduce_dim == ckernel::ReduceDim::REDUCE_SCALAR) {
         return false;
     }
     return reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL;
+}
+
+/**
+ * @brief Whether the FPU reduce path swaps SrcA/SrcB operands.
+ *
+ * REDUCE_ROW SUM/AVG uses matmul with scaler in SrcA and data in SrcB (the opposite of the
+ * default data→SrcA, scaler→SrcB ordering). This does not apply to MAX (which uses GMPOOL)
+ * or to the SFPU path (Int32), which bypasses matmul entirely.
+ */
+template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, bool is_sfpu>
+constexpr bool reduce_swaps_operands() {
+    return (reduce_dim == ckernel::ReduceDim::REDUCE_ROW) && (pool_type != ckernel::PoolType::MAX) && !is_sfpu;
 }

@@ -5,7 +5,10 @@
 
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
-#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
+#include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -50,8 +53,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
 
-    experimental::CB in_cb(in_cb_id);
-    experimental::CB clear_cb(clear_value_cb_id);
+    DataflowBuffer in_cb(in_cb_id);
+    DataflowBuffer clear_cb(clear_value_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -163,60 +166,66 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
 void kernel_main() {
-    constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
-    constexpr uint32_t kernel_h = get_compile_time_arg_val(1);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(2);
+    constexpr uint32_t reader_nindices = get_arg(args::reader_nindices);
+    constexpr uint32_t kernel_h = get_arg(args::kernel_h);
+    constexpr uint32_t kernel_w = get_arg(args::kernel_w);
 
-    constexpr int32_t pad_w = get_compile_time_arg_val(3);
+    constexpr int32_t pad_w = get_arg(args::pad_w);
 
     // channel size in bytes
-    constexpr uint32_t in_nbytes_leftover = get_compile_time_arg_val(4);
+    constexpr uint32_t in_nbytes_leftover = get_arg(args::in_nbytes_leftover);
 
     // input tensor height / width / channels
-    constexpr int32_t in_w = get_compile_time_arg_val(5);
+    constexpr int32_t in_w = get_arg(args::in_w);
 
-    constexpr uint32_t in_c = get_compile_time_arg_val(6);
+    constexpr uint32_t in_c = get_arg(args::in_c);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(7);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(8);
+    constexpr uint32_t split_reader = get_arg(args::split_reader);
+    constexpr uint32_t reader_id = get_arg(args::reader_id);
 
-    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
+    constexpr uint32_t bf16_scalar = get_arg(args::bf16_scalar);
+    constexpr uint32_t bf16_init_value = get_arg(args::bf16_init_value);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(12);
-    constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(13);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
+    constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
+    constexpr uint32_t in_cb_sz = get_arg(args::in_cb_sz);
+    constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
+    constexpr uint32_t ceil_pad_w = get_arg(args::ceil_pad_w);
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(22);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(25);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(26);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(28);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
-    constexpr bool zero_pages = (bool)get_compile_time_arg_val(31);
-    constexpr uint32_t config_in_dram = get_compile_time_arg_val(32);
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(33);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(34);
-    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(35);
-    constexpr uint32_t reader_page_size = get_compile_time_arg_val(36);
-    constexpr uint32_t reader_tensor_args_index = 55;
+    // CB ids now come from Metal 2.0 DFB bindings. Split-reader uses per-reader input/scalar
+    // DFBs bound under the same accessor names, so the kernel references one name regardless
+    // of reader_id (the host binds the right DFB per reader KernelSpec).
+    constexpr uint32_t in_cb_id = dfb::in_cb;
+    constexpr uint32_t in_shard_cb_id = dfb::in_shard_cb;
+    constexpr uint32_t in_reader_indices_cb_id = dfb::reader_indices_cb;
+    constexpr uint32_t in_scalar_cb_id = dfb::in_scalar_cb;
+    constexpr uint32_t clear_value_cb_id = dfb::clear_value_cb;
+    constexpr bool is_avg_pool = (bool)get_arg(args::pool_type_is_avg);
+    constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
+    // The avg-pool scalar config DFB + tensor::config only exist when !one_scalar_per_core; the
+    // host emits HAS_CONFIG to this kernel's defines exactly then. Gate every dfb::config_cb /
+    // tensor::config reference: `if constexpr (!one_scalar_per_core)` is not enough since the
+    // discarded branch still name-looks-up the (then-undeclared) tokens.
+#ifdef HAS_CONFIG
+    constexpr uint32_t config_cb_id = dfb::config_cb;
+    constexpr uint32_t config_page_size = get_arg(args::config_page_size);
+#endif
+    constexpr uint32_t in_nbytes_c = get_arg(args::in_nbytes_c);
+    constexpr uint32_t shard_width_bytes = get_arg(args::shard_width_bytes);
+    constexpr uint32_t multi_buffering_factor = get_arg(args::multi_buffering_factor);
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t dilation_h = get_arg(args::dilation_h);
+    constexpr uint32_t dilation_w = get_arg(args::dilation_w);
+    constexpr bool zero_pages = (bool)get_arg(args::zero_pages);
+    constexpr uint32_t config_in_dram = get_arg(args::config_in_dram);
+    constexpr uint32_t reader_page_size = get_arg(args::reader_page_size);
 
     constexpr bool use_split_reader = split_reader;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t in_scalar_cb_id =
-        use_split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+    // The per-reader scalar DFB selection that legacy code did here (in_scalar_cb_id_1 for
+    // reader1 when !one_scalar_per_core) is now done on the host: each reader KernelSpec binds
+    // its own scalar DFB under accessor name "in_scalar_cb", so in_scalar_cb_id == dfb::in_scalar_cb.
 
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
@@ -233,14 +242,23 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
-    experimental::CB clear_value_cb(clear_value_cb_id);
-    experimental::CB in_scalar_cb(in_scalar_cb_id);
-    experimental::CB in_shard_cb(in_shard_cb_id);
-    experimental::CB reader_indices_cb(in_reader_indices_cb_id);
-    experimental::CB config_cb(config_cb_id);
+    DataflowBuffer clear_value_cb(clear_value_cb_id);
+    DataflowBuffer in_scalar_cb(in_scalar_cb_id);
+    DataflowBuffer in_shard_cb(in_shard_cb_id);
+    DataflowBuffer reader_indices_cb(in_reader_indices_cb_id);
+#ifdef HAS_CONFIG
+    DataflowBuffer config_cb(config_cb_id);
+#endif
 
+    // QSR max_pool fix: for a partial-face window (face_r_dim < 16, e.g. 3x3 -> 9), need_to_initialize_in_cb
+    // is false, but the quasar reduce reads the FULL 16-row face while the reader fills only the populated
+    // rows -> the unwritten face rows leak stale L1 into the max (value inflation; masked only when the L1
+    // residue happens to be <= the data). Force the -inf pre-clear for MAX pool. -inf is the max identity,
+    // so pre-clearing can never change a correct max; the once-at-init clear persists across the in_cb ring
+    // because the reader never overwrites those rows. (Real fix: make the quasar reduce respect face_r_dim.)
+    constexpr bool force_max_clear = !is_avg_pool;
     // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+    if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         if constexpr (reader_id == 0) {
             fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             clear_value_cb.push_back(1);
@@ -250,7 +268,7 @@ void kernel_main() {
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
+            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
         }
     }
 
@@ -262,17 +280,19 @@ void kernel_main() {
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_cb.push_back(1);
     }
-    const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
+    const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
     const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
-            load_config_tensor_if_in_dram<
-                reader_dram_addr,
-                reader_page_size,
-                reader_tensor_args_index,
-                in_reader_indices_cb_id>(Noc(), reader_indices_cb, core_nhw_index);
-
+            // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
+            // Metal 2.0 TensorBinding (tensor::reader_indices) instead of a CTA-baked DRAM address.
+            Noc cfg_noc;
+            const auto reader_indices_accessor = TensorAccessor(tensor::reader_indices);
+            cfg_noc.async_read(
+                reader_indices_accessor, reader_indices_cb, reader_page_size, {.page_id = core_nhw_index}, {});
+            cfg_noc.async_read_barrier();
+            reader_indices_cb.push_back(1);
         } else {
             reader_indices_cb.wait_front(1);
         }
@@ -290,17 +310,20 @@ void kernel_main() {
     uint32_t scalar_value;
     uint32_t scalar_end;
     uint32_t counter = reader_id;
-    if constexpr (!one_scalar_per_core) {
+    // HAS_CONFIG <=> !one_scalar_per_core (host-emitted). Gated rather than `if constexpr` because
+    // the body references dfb::config_cb / tensor::config, which are only declared when HAS_CONFIG.
+#ifdef HAS_CONFIG
+    {
         uint32_t config_l1_addr = config_cb.get_read_ptr();
         if constexpr (config_in_dram) {
             if (reader_id == 0) {
-                constexpr uint32_t config_tensor_args_index =
-                    TensorAccessorArgs<reader_tensor_args_index>().next_compile_time_args_offset();
-                load_config_tensor_if_in_dram<
-                    config_dram_addr,
-                    config_page_size,
-                    config_tensor_args_index,
-                    config_cb_id>(Noc(), config_cb, core_nhw_index);
+                // Inlined load_config_tensor_if_in_dram: the scalar config tensor flows in via its
+                // Metal 2.0 TensorBinding (tensor::config) instead of a CTA-baked DRAM address.
+                Noc cfg_noc;
+                const auto config_accessor = TensorAccessor(tensor::config);
+                cfg_noc.async_read(config_accessor, config_cb, config_page_size, {.page_id = core_nhw_index}, {});
+                cfg_noc.async_read_barrier();
+                config_cb.push_back(1);
             } else {
                 config_cb.wait_front(1);
             }
@@ -310,14 +333,27 @@ void kernel_main() {
         scalar_value = config_ptr[1];
         scalar_end = config_ptr[2];
     }
+#endif
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
     bool first_row_value = reader_id == 0 || !use_split_reader;
+
+    // [#47797 DEBUG] If POOL hangs at waypoint R, dump the loop-control values. A garbage num_segments
+    // (e.g. unwritten reader_indices config) or stride_w==0 makes while(num_segments--)/the inner stride
+    // loop spin forever. Compare these against the host sliding-window config for this pool.
+    DPRINT(
+        "POOL rdr id={} nseg={} strW={} kH={} kW={}\n",
+        (uint32_t)reader_id,
+        (uint32_t)num_segments,
+        (uint32_t)stride_w,
+        (uint32_t)kernel_h,
+        (uint32_t)kernel_w);
 
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
         uint16_t end = start_end_segment >> 16;
+        DPRINT("POOL seg start={} end={}\n", (uint32_t)start, (uint32_t)end);  // [#47797 DEBUG]
 
         if (!first_row_value) {
             start += stride_w;

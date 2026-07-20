@@ -32,7 +32,7 @@
 #include "llk_math_reduce_api.h"
 // SFPU op kernels invoked directly via the unary macros below. The macros
 // themselves come from llk_math_eltwise_unary_sfpu_macros.h. These BH/WH-only
-// kernels (log, tanh, abs, ...) have no Quasar implementation; sigmoid/silu are
+// kernels (log, abs, ...) have no Quasar implementation; sigmoid/silu are
 // shared and included for Quasar in the #else branch below.
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
@@ -54,11 +54,14 @@
 #else
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
+#include "ckernel_sfpu_tanh.h"
+#include "ckernel_sfpu_square.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "ckernel_sfpu_topk.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -174,6 +177,89 @@ ALWI void silu_tile_init() {
 #endif
 }
 
+// TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
+/**
+ * Please refer to documentation for any_init.
+ *
+ * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
+ * fast_and_approx = true.
+ */
+template <bool fast_and_approx = false>
+ALWI void tanh_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
+#else
+    MATH(SFPU_UNARY_INIT(tanh));
+#endif
+}
+
+// TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
+// clang-format off
+/**
+ * Performs element-wise computation of tanh on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
+ */
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void tanh_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_tanh,
+        (fast_and_approx, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (8 /* ITERATIONS */), idst, ::ckernel::VectorMode::RC));
+#endif
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of square value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void square_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void square_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(square));
+#else
+    MATH(SFPU_UNARY_INIT(square, sfpu::init_square));
+#endif
+}
+
 #ifndef ARCH_QUASAR
 
 template <bool fast_and_approx = false>
@@ -266,51 +352,9 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
         base_scale));
 }
 
-// TODO: Move to trigonometry.h
-/**
- * Please refer to documentation for any_init.
- *
- * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
- * fast_and_approx = true.
- */
-template <bool fast_and_approx = false>
-ALWI void tanh_tile_init() {
-    // TODO(AP): move out init
-    MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
-}
-
 template <bool fast_and_approx = false>
 ALWI void tanh_tile_init_pack() {
     PACK(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
-}
-
-// TODO: Move to trigonometry.h
-// clang-format off
-/**
- * Performs element-wise computation of tanh on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
- */
-// clang-format on
-template <bool fast_and_approx = false>
-ALWI void tanh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_tanh,
-        (fast_and_approx, DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC));
 }
 
 template <bool fast_and_approx = false>
@@ -442,29 +486,6 @@ ALWI void sign_tile(uint32_t idst) {
  * Please refer to documentation for any_init.
  */
 ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
-
-// clang-format off
-/**
- * Performs element-wise computation of square value on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void square_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void square_tile_init() { MATH(SFPU_UNARY_INIT(square)); }
 
 // clang-format off
 /**
@@ -647,6 +668,8 @@ ALWI void silu_tile_pack(uint32_t idst) {
 }
 ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
 
+#endif  // !ARCH_QUASAR — TopK below is all-arch
+
 // topK local sort
 // clang-format off
 /**
@@ -802,6 +825,8 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  */
 ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
 
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
+
 // clang-format off
 /**
  * Performs MaxPool with indices algorithm on the data tile and index tile
@@ -891,7 +916,7 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_reduce,
-        (pool_type, reduce_dim, format),
+        (pool_type, reduce_dim, format, DST_ACCUM_MODE),
         idst,
         VectorMode::RC_custom,
         ct_dim,
@@ -916,7 +941,7 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH(SFPU_UNARY_INIT_FN_ARGS(reduce, sfpu::init_reduce, (pool_type, format), 1 /*block_ct_dim*/));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(reduce, sfpu::init_reduce, (pool_type, format, DST_ACCUM_MODE), 1 /* block_ct_dim */));
 }
 
 // clang-format off

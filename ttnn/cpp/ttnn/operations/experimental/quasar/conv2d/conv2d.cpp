@@ -22,12 +22,37 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/conv2d.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/device/conv2d_device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/matmul.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
+#include "ttnn/operations/experimental/quasar/tilize/tilize.hpp"
+#include "ttnn/operations/experimental/quasar/move/move.hpp"
+#include "ttnn/operations/experimental/quasar/pad/pad.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/experimental/quasar/to_device/to_device.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+
+namespace ttnn::operations::conv {
+// get_conv_padded_input_shape_and_mem_config has external linkage but is not declared in
+// conv2d_utils.hpp (only used within conv2d_utils.cpp originally). Forward-declare it so the quasar
+// shard_or_reshard fork can reuse it; resolves against conv2d_utils.cpp at link time.
+std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
+    MeshDevice* device,
+    const ttnn::Tensor& input_tensor_,
+    const Conv2dConfig& conv_config,
+    uint32_t batch_size,
+    uint32_t height,
+    uint32_t width,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    bool is_mm_conv);
+}  // namespace ttnn::operations::conv
 
 namespace ttnn::operations::experimental::quasar::detail {
 
@@ -35,11 +60,245 @@ namespace ttnn::operations::experimental::quasar::detail {
 // original conv namespaces; bring it into scope so this impl's bare references resolve unchanged.
 using namespace ttnn::operations::conv;          // conv2d_utils helpers (get_conv_configs, determine_*, ...)
 using namespace ttnn::operations::conv::conv2d;  // prepare_conv2d_weights helpers, get_conv2d_slice_attr
+using ttnn::operations::sliding_window::ParallelConfig;  // return/locals of shard_or_reshard fork
 
 using ttnn::operations::experimental::quasar::Conv2dResult;
 using ttnn::operations::experimental::quasar::Conv2dResultWithOptions;
 using Result = Conv2dResult;
 using ResultWithOptions = Conv2dResultWithOptions;
+
+// Mirrors to_layout_op.cpp::requires_padding_change for a RM->TILE conversion: true when tiling the
+// tensor would change its padded shape (i.e. needs val-padding, not just a layout repack).
+static bool conv_act_requires_tile_padding_qsr(const ttnn::Tensor& tensor) {
+    tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(Layout::TILE);
+    if (tensor.layout() == Layout::TILE) {
+        page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor.tensor_spec().tile());
+    }
+    tt::tt_metal::TensorSpec padded_spec(
+        tensor.padded_shape(), tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config()));
+    return tensor.padded_shape() != padded_spec.padded_shape();
+}
+
+// Quasar variant of conv2d_utils::tilize_with_optional_deallocation. The original converts the conv
+// activation to TILE via core to_layout, which dispatches the ORIGINAL tilize kernel. Here we route
+// the common (already tile-aligned) case through the QUASAR tilize op so that kernel runs from the
+// quasar tree. The genuinely-needs-padding case falls back to the shared helper, since quasar has no
+// tilize_with_val_padding port.
+static void tilize_with_optional_deallocation_qsr(ttnn::Tensor& input_tensor_on_device, bool deallocate) {
+    if (input_tensor_on_device.layout() == Layout::TILE) {
+        return;
+    }
+    if (conv_act_requires_tile_padding_qsr(input_tensor_on_device)) {
+        tilize_with_optional_deallocation(input_tensor_on_device, deallocate);
+        return;
+    }
+    ttnn::Tensor input_tensor_tilized = ttnn::operations::experimental::quasar::tilize(input_tensor_on_device);
+    if (deallocate) {
+        input_tensor_on_device.deallocate(/*force*/ true);
+    }
+    input_tensor_on_device = std::move(input_tensor_tilized);
+}
+
+// Relocate a (0,0)-anchored CoreRangeSet onto the same-shaped ranges whose top-left is `offset`. The
+// shared conv host helpers (get_conv_padded_input_shape_and_mem_config, determine_*_parallel_config)
+// always build shard grids from (0,0); this shifts them onto conv_config.core_grid's origin so the
+// conv's activation/output shards — and therefore the program factory's kernel placement, which follows
+// the input shard grid — land on the requested cores instead of always starting at (0,0). No-op when
+// offset == (0,0), so the default-grid path is unchanged.
+static CoreRangeSet offset_core_range_set_qsr(const CoreRangeSet& crs, const CoreCoord& offset) {
+    if (offset.x == 0 && offset.y == 0) {
+        return crs;
+    }
+    std::vector<CoreRange> ranges;
+    ranges.reserve(crs.ranges().size());
+    for (const CoreRange& r : crs.ranges()) {
+        ranges.emplace_back(
+            CoreCoord(r.start_coord.x + offset.x, r.start_coord.y + offset.y),
+            CoreCoord(r.end_coord.x + offset.x, r.end_coord.y + offset.y));
+    }
+    return CoreRangeSet(ranges);
+}
+
+// Rebuild a sharded MemoryConfig with its shard grid relocated to `offset` (shape/shard-shape preserved).
+static ttnn::MemoryConfig offset_sharded_mem_config_qsr(const ttnn::MemoryConfig& mem_config, const CoreCoord& offset) {
+    if ((offset.x == 0 && offset.y == 0) || !mem_config.shard_spec().has_value()) {
+        return mem_config;
+    }
+    const auto& shard_spec = mem_config.shard_spec().value();
+    return tt::tt_metal::MemoryConfig(
+        mem_config.memory_layout(),
+        mem_config.buffer_type(),
+        tt::tt_metal::ShardSpec(
+            offset_core_range_set_qsr(shard_spec.grid, offset), shard_spec.shape, shard_spec.orientation));
+}
+
+// Quasar variant of conv2d_utils::shard_or_reshard_tensor_if_required. Mirrors the shared function but
+// routes the per-conv input pad / reshard / reallocation through the QUASAR pad / to_memory_config / move
+// (hence the quasar reshard + interleaved<->sharded kernels). The BLOCK_SHARDED mm-conv tilize workaround
+// (#13979) keeps the core to_layout, which quasar tilize does not yet replicate for block-sharded inputs.
+// Shared decision helpers (get_conv_padded_input_shape_and_mem_config, flatten_4d_shape, ...) are reused.
+static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required_qsr(
+    MeshDevice* device,
+    const ttnn::Tensor& input_tensor_,
+    const Conv2dConfig& conv_config,
+    uint32_t batch_size,
+    uint32_t height,
+    uint32_t width,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    bool is_mm_conv,
+    bool auto_shard) {
+    ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
+    bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+
+    auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] =
+        get_conv_padded_input_shape_and_mem_config(
+            device, input_tensor_, conv_config, batch_size, height, width, in_channels, out_channels, is_mm_conv);
+
+    // Honor the OFFSET of conv_config.core_grid (the shared helper honors only its size, always anchoring
+    // at (0,0)). Shift the activation shard grid onto that origin so the conv runs on the requested cores
+    // — e.g. a 2-core sub-grid at logical y=1 on a small (emulated) device. For HEIGHT_SHARDED the output
+    // parallel config == the input parallel config, so this offset propagates to the output shard (and
+    // thus the program factory's placement) automatically. No-op when core_grid is unset or starts at (0,0).
+    const CoreCoord core_grid_offset =
+        conv_config.core_grid.has_value() ? conv_config.core_grid.value().bounding_box().start_coord : CoreCoord{0, 0};
+    input_tensor_sharded_memory_config =
+        offset_sharded_mem_config_qsr(input_tensor_sharded_memory_config, core_grid_offset);
+
+    ParallelConfig parallel_config = {
+        .grid = input_tensor_sharded_memory_config.shard_spec().value().grid,
+        .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
+        .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
+
+    auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, parallel_config);
+    ParallelConfig output_parallel_config = determine_output_parallel_config(
+        parallel_config, output_compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
+
+    // We can have flat and unflattened (n, h, w, c) tensors here
+    const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
+    const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.padded_shape());
+
+    input_tensor = ttnn::operations::experimental::quasar::reshape(
+        input_tensor, flattened_input_shape, flattened_padded_input_shape);
+    const ttnn::Shape& input_shape = flattened_input_shape;
+
+    if (needs_shard_or_reshard) {
+        uint32_t tensor_height = input_shape[2];
+        uint32_t tensor_width = input_shape[3];
+        if (!input_tensor_on_device) {
+            if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
+                input_tensor = ttnn::operations::experimental::quasar::pad(
+                    input_tensor,
+                    tt::tt_metal::Array4D(
+                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
+                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                    0);
+            }
+        }
+
+        // In case we are in auto sharded codepath and convolution maps to matmul
+        // Skip sharding of the input tensor and run the matmul out of interleaved tensor.
+        bool auto_shard_mm = auto_shard && is_mm_conv;
+        if (input_tensor_on_device) {
+            if (is_mm_conv && input_tensor.layout() == Layout::ROW_MAJOR &&
+                parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
+                // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout.
+                // Route the (already tile-aligned) common case through quasar tilize so its kernels run
+                // from the quasar tree; fall back to quasar to_layout only when val-padding is required.
+                Tensor input_tensor_tilized =
+                    conv_act_requires_tile_padding_qsr(input_tensor)
+                        ? ttnn::operations::experimental::quasar::to_layout(input_tensor, Layout::TILE)
+                        : ttnn::operations::experimental::quasar::tilize(input_tensor);
+                if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
+                    input_tensor.deallocate(/*force*/ true);
+                    input_tensor_tilized = ttnn::operations::experimental::quasar::move(input_tensor_tilized);
+                }
+                input_tensor = input_tensor_tilized;
+            }
+            if (!auto_shard_mm) {
+                ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
+                tt::tt_metal::Alignment alignment = {};
+                if (!input_tensor.is_sharded()) {
+                    // In case we need to run Interleaved2Sharded, adjust the shard spec,
+                    // in order to get smaller allocation size of sharded buffer.
+                    const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
+                    input_tensor_sharded_memory_config_to_layout = tt::tt_metal::MemoryConfig(
+                        input_tensor_sharded_memory_config_to_layout.memory_layout(),
+                        input_tensor_sharded_memory_config_to_layout.buffer_type(),
+                        tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
+                    alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
+                }
+                Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
+                    TensorSpec(
+                        input_tensor.logical_shape(),
+                        tt::tt_metal::TensorLayout(
+                            input_tensor.dtype(),
+                            tt::tt_metal::PageConfig(input_tensor.layout()),
+                            input_tensor_sharded_memory_config_to_layout,
+                            alignment)),
+                    input_tensor.device());
+                ttnn::operations::experimental::quasar::to_memory_config(
+                    input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt, resharded_input_tensor);
+                if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
+                    input_tensor.deallocate(/*force*/ true);
+                    resharded_input_tensor = ttnn::operations::experimental::quasar::move(resharded_input_tensor);
+                }
+                input_tensor = resharded_input_tensor;
+            }
+        } else {
+            input_tensor = ttnn::operations::experimental::quasar::to_device(
+                input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+        }
+    }
+    return {input_tensor, parallel_config, output_parallel_config};
+}
+
+// Quasar variant of determine_matmul_op_config_from_conv_op_config (conv2d_utils): builds the
+// QUASAR matmul program config (ttnn::operations::experimental::quasar::matmul) so the 1x1-conv
+// GEMM runs on the quasar matmul/linear instead of the original. Mirrors the shared helper
+// field-for-field; the config structs are identical copies.
+static ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig
+determine_matmul_op_config_from_conv_op_config_qsr(
+    Conv2dParallelizationConfig conv_parallelization_config,
+    Conv2dBlockConfig conv_blocking_config,
+    bool height_sharded,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
+    bool transpose_mcast,
+    uint32_t /*grid_size_along_c*/) {
+    namespace qmm = ttnn::operations::experimental::quasar::matmul;
+    if (height_sharded) {
+        qmm::MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
+            .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
+            .in0_block_w = conv_blocking_config.act_block_w_ntiles,
+            .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
+            .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
+            .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
+            .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
+            .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
+            .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
+            .fuse_batch = true,
+            .mcast_in0 = false};
+        if (activation.has_value()) {
+            matmul_config.fused_activation = activation.value();
+        }
+        return matmul_config;
+    }
+    qmm::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
+        .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
+        .in0_block_w = conv_blocking_config.act_block_w_ntiles,
+        .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
+        .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
+        .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
+        .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
+        .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
+        .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
+        .transpose_mcast = transpose_mcast};
+    if (activation.has_value()) {
+        matmul_config.fused_activation = activation.value();
+    }
+    return matmul_config;
+}
 
 Result conv2d_L1(
     const ttnn::Tensor& input_tensor_,
@@ -143,7 +402,7 @@ Result conv2d_L1(
         auto_shard = true;
     }
     const bool should_deallocate_act = conv_config.deallocate_activation && !input_tensor.memory_config().is_dram();
-    auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
+    auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required_qsr(
         device,
         input_tensor,
         conv_config,
@@ -302,7 +561,7 @@ Result conv2d_L1(
             input_tensor_post_tm = std::move(halo_output);
 
             if (conv_config.reallocate_halo_output) {
-                input_tensor_post_tm = ttnn::move(input_tensor_post_tm);
+                input_tensor_post_tm = ttnn::operations::experimental::quasar::move(input_tensor_post_tm);
             }
         }
 
@@ -337,19 +596,20 @@ Result conv2d_L1(
             conv_config.force_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
-            conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
+            conv_output = ttnn::operations::experimental::quasar::to_memory_config(
+                conv_output, memory_config.value(), std::nullopt);
         }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }  // Matmul expects inputs to be in Tile Layout
-    tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
+    tilize_with_optional_deallocation_qsr(input_tensor_post_tm, should_deallocate_act);
 
     // run conv as matmul
-    std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
+    std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> program_config = std::nullopt;
     std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
 
     if (input_tensor_post_tm.is_sharded()) {
         uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
-        program_config = determine_matmul_op_config_from_conv_op_config(
+        program_config = determine_matmul_op_config_from_conv_op_config_qsr(
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
@@ -359,7 +619,7 @@ Result conv2d_L1(
         mm_output_memory_config = conv_out_memory_config;
     }
 
-    ttnn::Tensor matmul_output = ttnn::linear(
+    ttnn::Tensor matmul_output = ttnn::operations::experimental::quasar::matmul::linear(
         input_tensor_post_tm,
         weight_tensor_on_device,
         bias_tensor_on_device,
@@ -376,7 +636,8 @@ Result conv2d_L1(
         input_tensor_post_tm.deallocate(/*force*/ true);
     }
     if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
-        matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
+        matmul_output = ttnn::operations::experimental::quasar::to_memory_config(
+            matmul_output, memory_config.value(), std::nullopt);
     }
 
     return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
@@ -824,7 +1085,8 @@ Result conv2d_DRAM(
     }
 
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
-    input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
+    input_tensor_on_device = ttnn::operations::experimental::quasar::reshape(
+        input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -873,7 +1135,8 @@ Result conv2d_DRAM(
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
     const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
-    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
+    dram_output_tensor = ttnn::operations::experimental::quasar::reshape(
+        dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }

@@ -106,11 +106,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::DataMovementHardwareConfig dm_cfg{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_proc, .noc = gen1_noc},
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-            };
+            experimental::DataMovementHardwareConfig dm_cfg;
+            if (is_quasar) {
+                dm_cfg = experimental::DataMovementGen2Config{};
+            } else {
+                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
+            }
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = experimental::KernelSpecName{name},
                 .source = kernel_path_metal2,
@@ -126,12 +127,15 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         };
 
     const experimental::KernelSpecName COMPUTE_KERNEL_NAME{"wp_compute"};
+    experimental::ComputeHardwareConfig compute_config;
     if (is_quasar) {
         constexpr uint32_t kQuasarUserDmCores = 6;
         add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
+        compute_config = experimental::ComputeGen2Config{};
     } else {
         add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
+        compute_config = experimental::ComputeGen1Config{};
     }
     kernel_specs.push_back(experimental::KernelSpec{
         .unique_id = COMPUTE_KERNEL_NAME,
@@ -139,7 +143,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         // Quasar Tensix has 4 Neos so the compute kernel fans out across all of them; WH/BH has 1 TRISC group.
         .num_threads = is_quasar ? 4u : 1u,
         .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = compute_config,
     });
     kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
@@ -200,6 +204,17 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
+    // Get processor counts from HAL and build expected waypoint strings.
+    uint32_t num_tensix = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
+    // On Quasar, DM0/DM1 are reserved for internal use and don't post a user waypoint,
+    // so the expected per-tensix waypoint count drops by 2.
+    if (is_quasar) {
+        num_tensix -= 2;
+    }
+    const uint32_t num_idle_eth = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
+    std::string tensix_waypoints = build_waypoint_string(num_tensix);
+    std::string idle_eth_waypoints = build_waypoint_string(num_idle_eth);
+
     // Build poll patterns and wait for waypoints to appear.
     // On Quasar, slots 0/1 (reserved DM0/DM1) post a non-AAAA status (e.g. " NTW,  W1,") before
     // the first user AAAA. Glob between ": " and the waypoint absorbs that prefix; it matches
@@ -207,7 +222,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     std::vector<std::string> poll_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: *{}", x, y, waypoint));
+            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: *{}", x, y, tensix_waypoints));
         }
     }
     if (has_eth_cores) {
@@ -217,7 +232,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            poll_strings.push_back(fmt::format("idleth core(x={:2},y={:2})*: {}", core.x, core.y, waypoint));
+            poll_strings.push_back(fmt::format("idleth core(x={:2},y={:2})*: {}", core.x, core.y, idle_eth_waypoints));
         }
     }
 
@@ -246,17 +261,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
     }
     distributed::Finish(mesh_device->mesh_command_queue());
-
-    // Get processor counts from HAL and build expected waypoint strings.
-    // On Quasar, DM0/DM1 are reserved for internal use and don't post a user waypoint,
-    // so the expected per-tensix waypoint count drops by 2.
-    uint32_t num_tensix = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
-    if (is_quasar) {
-        num_tensix -= 2;
-    }
-    uint32_t num_idle_eth = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
-    std::string tensix_waypoints = build_waypoint_string(num_tensix);
-    std::string idle_eth_waypoints = build_waypoint_string(num_idle_eth);
 
     log_info(tt::LogTest, "Verifying: {} waypoints/TENSIX, 1/active ETH, {}/idle ETH", num_tensix, num_idle_eth);
 

@@ -466,7 +466,7 @@ void kernel_main() {
                 // Forward K chunk to next core(s): initiate async write (NOC write channel)
                 // For mcast: send linked data + companion semaphore back-to-back.
                 // The companion must be issued immediately after the linked write —
-                // any noc_async_read_barrier() between them deadlocks (the read barrier
+                // any NOC read barrier between them deadlocks (the read barrier
                 // blocks while a linked write awaits its companion).
                 if (should_forward) {
                     Semaphore<> sender_sem(sender_semaphore_id);
@@ -572,8 +572,8 @@ void kernel_main() {
                 }
 
                 // Q subblock push: K is fully forwarded, now push Q one subblock at
-                // a time. Compute waits for K first (cb_wait_front(cb_k_in, K*N)),
-                // then waits for Q subblocks incrementally (accumulating cb_wait_front).
+                // a time. Compute waits for K first (waiting for K*N tiles in cb_k_in),
+                // then waits for Q subblocks incrementally (accumulating waits on cb_q_in).
                 // Each push unblocks the next QK subblock computation.
                 // Placed after K forward complete so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside read_q_subblock deadlocks on BH

@@ -1,0 +1,44 @@
+# Qwen3-32B GRPO + FSDP on a 32-card Blackhole galaxy.
+#
+# Run:
+#   python3 boolq_training_example.py --model qwen3 --model_source Qwen/Qwen3-32B \
+#     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
+#
+# Uses lazy init (the default for the Qwen3 FSDP path; no config flag needed).
+# With lazy + FSDP, each parameter is built as deferred metadata, fully_shard
+# rewrites its mapper to shard on the 'fsdp' axis, and materialize_module
+# allocates it already-sharded; the HF weights are then streamed in sharded. The
+# full unsharded 32B model is never materialized on a single chip. (The eager
+# full-replicated path would OOM at this scale; set device_config.lazy_parameter_init
+# to false only if you specifically want it.)
+#
+# Per_device_train_batch_size * num_devices must be divisible by num_generations.
+
+training_config:
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    per_device_train_batch_size: 8
+    num_iterations: 1
+    gradient_accumulation_steps: 1
+    logging_steps: 1
+    checkpointing: false
+    checkpoint_interval: 5
+    prompts_to_train: 1600
+    temperature: 0.7
+    max_completion_length: 256
+    num_generations: 8
+    warmup_steps: 0
+
+device_config:
+  enable_fsdp: true
+  mesh_shape: [32, 1]

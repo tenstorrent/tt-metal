@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
@@ -21,41 +22,41 @@ ALWI void process_tile(
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
 
-    CircularBuffer cb_post_lhs(cb_post_lhs_id);
-    CircularBuffer cb_post_rhs(cb_post_rhs_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
+    DataflowBuffer cb_post_rhs(cb_post_rhs_id);
+    DataflowBuffer cb_out(cb_out_id);
 
 #if BCAST_INPUT
 #define CB_PRE_BCAST cb_pre_rhs_id
 #define CB_PRE_OTHER cb_pre_lhs_id
-    CircularBuffer& cb_post_bcast = cb_post_rhs;
-    CircularBuffer& cb_post_other = cb_post_lhs;
+    DataflowBuffer& cb_post_bcast = cb_post_rhs;
+    DataflowBuffer& cb_post_other = cb_post_lhs;
 #else
 #define CB_PRE_BCAST cb_pre_lhs_id
 #define CB_PRE_OTHER cb_pre_rhs_id
-    CircularBuffer& cb_post_bcast = cb_post_lhs;
-    CircularBuffer& cb_post_other = cb_post_rhs;
+    DataflowBuffer& cb_post_bcast = cb_post_lhs;
+    DataflowBuffer& cb_post_other = cb_post_rhs;
 #endif
 
-    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), cb_post_bcast, cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, DataflowBuffer(CB_PRE_BCAST), cb_post_bcast, cb_out, num_tiles_per_cycle);
     cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        PREPROCESS(OTHER_OP, CircularBuffer(CB_PRE_OTHER), cb_post_other, cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, DataflowBuffer(CB_PRE_OTHER), cb_post_other, cb_out, num_tiles_per_cycle);
         cb_post_other.wait_front(num_tiles_per_cycle);
 
         cb_out.reserve_back(num_tiles_per_cycle);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_id(), cb_post_rhs.get_id());
 #endif
         tile_regs_acquire();
-        BINARY_OP(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0);
+        BINARY_OP(cb_post_lhs.get_id(), cb_post_rhs.get_id(), 0, 0, 0);
         PROCESS_POST_ACTIVATIONS(0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_out.get_cb_id());
+        pack_tile(0, cb_out.get_id());
         tile_regs_release();
 
         cb_out.push_back(num_tiles_per_cycle);

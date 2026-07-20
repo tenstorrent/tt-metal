@@ -6,11 +6,12 @@ import evaluate
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoTokenizer, DistilBertForQuestionAnswering, pipeline
+from transformers import AutoTokenizer, DistilBertForQuestionAnswering
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
 from models.demos.wormhole.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
 
@@ -58,7 +59,7 @@ def run_distilbert_question_and_answering_inference(
     # set up tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = HF_model.config
-    nlp = pipeline("question-answering", model=HF_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=HF_model, tokenizer=tokenizer)
 
     context, question = load_inputs(input_path, batch_size)
     preprocess_params, _, postprocess_params = nlp._sanitize_parameters(max_seq_len=sequence_size, padding="max_length")
@@ -195,7 +196,7 @@ def run_distilbert_question_and_answering_inference_squad_v2(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = HF_model.config
 
-    nlp = pipeline("question-answering", model=HF_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=HF_model, tokenizer=tokenizer)
     attention_mask = True
     token_type_ids = False
     inputs_squadv2 = squadv2_1K_samples_input(tokenizer, sequence_size, attention_mask, token_type_ids, batch_size)

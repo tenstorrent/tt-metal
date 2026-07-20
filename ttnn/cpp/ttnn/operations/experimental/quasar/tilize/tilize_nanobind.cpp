@@ -36,7 +36,7 @@ void bind_tilize(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
     )doc";
 
-    ttnn::bind_function<"tilize">(
+    ttnn::bind_function<"tilize", "ttnn.experimental.quasar.">(
         mod,
         doc,
         &ttnn::operations::experimental::quasar::tilize,

@@ -27,9 +27,7 @@ std::optional<std::string> get_mock_cluster_desc_name(tt::ARCH arch, uint32_t nu
                 case 2: return "blackhole_P300_both_mmio.yaml";
                 case 4: return "blackhole_4xP150.yaml";
                 case 8: return "blackhole_8xP150.yaml";
-                // 32-chip BH cluster descriptor is not yet available in
-                // cluster_descriptor_examples/; add a "blackhole_32xP*.yaml" entry
-                // here once one is checked in.
+                case 32: return "blackhole_galaxy.yaml";  // Blackhole Galaxy (UBB), 32 chips
                 default: return std::nullopt;
             }
         case tt::ARCH::QUASAR:

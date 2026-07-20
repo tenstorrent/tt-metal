@@ -1571,12 +1571,12 @@ void write_block(
     CircularBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
 
-    uint32_t l1_read_addr = cb.get_read_ptr();
+    uint32_t tile_offset = 0;
     for (uint32_t row = 0; row < rows; ++row) {
         for (uint32_t col = 0; col < cols; ++col) {
-            noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), out_writer, tile_bytes, {}, {.page_id = tile_id});
+            noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
             ++tile_id;
-            l1_read_addr += tile_bytes;
+            tile_offset += tile_bytes;
 
             if (++barrier_count == barrier_threshold) {
                 noc.async_writes_flushed();
@@ -1619,17 +1619,12 @@ void write_block_row_grouped(
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
         cb.wait_front(tiles_this_group);
-        uint32_t l1_read_addr = cb.get_read_ptr();
         for (uint32_t r = 0; r < rows_this_group; ++r) {
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
                 for (uint32_t col = 0; col < cols; ++col) {
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(l1_read_addr + col * tile_bytes),
-                        out_writer,
-                        tile_bytes,
-                        {},
-                        {.page_id = tile_id});
+                    uint32_t tile_offset = (r * cols + col) * tile_bytes;
+                    noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
                     ++tile_id;
                     if (++barrier_count == barrier_threshold) {
                         noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = default_trid});
@@ -1637,7 +1632,6 @@ void write_block_row_grouped(
                     }
                 }
             }
-            l1_read_addr += cols * tile_bytes;
         }
         // Flush THIS drain's writes (default trid) before pop so compute can safely reuse the L1 slot.
         noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = default_trid});

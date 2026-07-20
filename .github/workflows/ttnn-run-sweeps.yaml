@@ -7,8 +7,6 @@ run-name: >-
     github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' && 'ttnn - run sweeps model traced' ||
     github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' && 'ttnn - run sweeps lead models' ||
     github.event.inputs.sweep_name && format('ttnn - run sweeps ({0})', github.event.inputs.sweep_name) ||
-    github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ttnn - run sweeps nightly (scheduled)' ||
-    github.event.schedule == '0 4 * * 3,6' && 'ttnn - run sweeps comprehensive (scheduled)' ||
     github.event.schedule == '0 3 * * *' && 'ttnn - run sweeps model traced (scheduled)' ||
     github.event.schedule == '0 2 * * *' && 'ttnn - run sweeps lead models (scheduled)' ||
     'ttnn - Run sweeps scheduled'
@@ -661,8 +659,6 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
   schedule:
-    - cron: "30 4 * * 0,1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Sun, Mon, Tue, Thu, Fri (nightly runs)
-    - cron: "0 4 * * 3,6" # This cron schedule runs the workflow at 4:00 AM UTC on Wed/Sat (comprehensive run)
     - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (model traced runs)
     - cron: "0 2 * * *" # This cron schedule runs the workflow at 2:00 AM UTC daily (lead model runs)
 
@@ -673,7 +669,7 @@ jobs:
   # from literal strings/booleans or job outputs.
   resolve-inputs:
     name: Resolve workflow inputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       sweep-name: ${{ steps.resolve.outputs.sweep-name }}
       suite-name: ${{ steps.resolve.outputs.suite-name }}
@@ -687,6 +683,7 @@ jobs:
       runner-label: ${{ steps.resolve.outputs.runner-label }}
       log-level: ${{ steps.resolve.outputs.log-level }}
       mesh-shape: ${{ steps.resolve.outputs.mesh-shape }}
+      fail-on-test-failure: ${{ steps.resolve.outputs.fail-on-test-failure }}
       platform: ${{ steps.resolve.outputs.platform }}
       build-type: ${{ steps.resolve.outputs.build-type }}
       enable-lto: ${{ steps.resolve.outputs.enable-lto }}
@@ -699,8 +696,6 @@ jobs:
           # Resolve sweep name: map schedule cron to friendly name, or use dispatch input
           if [[ "$IS_SCHEDULED" == "true" ]]; then
             case "${{ github.event.schedule }}" in
-              "30 4 * * 0,1,2,4,5") SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
-              "0 4 * * 3,6")         SWEEP_NAME="ALL SWEEPS (Comprehensive)" ;;
               "0 3 * * *")            SWEEP_NAME="ALL SWEEPS (Model Traced)" ;;
               "0 2 * * *")            SWEEP_NAME="ALL SWEEPS (Lead Models)" ;;
               *)                      SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
@@ -740,6 +735,14 @@ jobs:
           echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
           echo "log-level=${{ github.event.inputs['log-level'] || 'INFO' }}" >> $GITHUB_OUTPUT
           echo "mesh-shape=${{ github.event.inputs.mesh_shape || '' }}" >> $GITHUB_OUTPUT
+
+          # Fail sweep jobs on test failures for Lead Models and Model Traced suites
+          if [[ "$SWEEP_NAME" == *"Lead Models"* ]] || [[ "$SWEEP_NAME" == *"Model Traced"* ]]; then
+            echo "fail-on-test-failure=true" >> $GITHUB_OUTPUT
+          else
+            echo "fail-on-test-failure=false" >> $GITHUB_OUTPUT
+          fi
+
           echo "platform=${{ github.event.inputs.platform || 'Ubuntu 22.04' }}" >> $GITHUB_OUTPUT
           echo "build-type=${{ github.event.inputs['build-type'] || 'Release' }}" >> $GITHUB_OUTPUT
           echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
@@ -943,6 +946,8 @@ jobs:
       n150-matrix: ${{ steps.set-matrix.outputs.n150-matrix }}
       n300-matrix: ${{ steps.set-matrix.outputs.n300-matrix }}
       p150b-matrix: ${{ steps.set-matrix.outputs.p150b-matrix }}
+      p100a-matrix: ${{ steps.set-matrix.outputs.p100a-matrix }}
+      p300a-matrix: ${{ steps.set-matrix.outputs.p300a-matrix }}
       t3k-matrix: ${{ steps.set-matrix.outputs.t3k-matrix }}
       galaxy-matrix: ${{ steps.set-matrix.outputs.galaxy-matrix }}
     steps:
@@ -980,6 +985,15 @@ jobs:
           echo "::group::Sweep module matrix"
           jq . /tmp/sweep_matrix.pretty.json
           echo "::endgroup::"
+
+      - name: Verify sweep budget
+        shell: bash
+        run: |
+          pip3 install PyYAML > /dev/null 2>&1
+          python3 .github/scripts/utils/verify_time_budget.py \
+            tests/pipeline_reorg/ttnn_sweep_tests.yaml \
+            .github/time_budget.yaml \
+            sweep
 
   ttnn-run-single-sweep:
     name: Run single sweep
@@ -1147,6 +1161,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-n300:
@@ -1170,6 +1185,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-p150b:
@@ -1185,6 +1201,53 @@ jobs:
     secrets: inherit
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p150b-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p100a:
+    name: ttnn sweeps P100a
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p100a-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p300a:
+    name: ttnn sweeps P300a
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p300a-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1216,6 +1279,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-galaxy:
@@ -1237,6 +1301,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
@@ -1249,12 +1314,14 @@ jobs:
       - ttnn-sweeps-n150
       - ttnn-sweeps-n300
       - ttnn-sweeps-p150b
+      - ttnn-sweeps-p100a
+      - ttnn-sweeps-p300a
       - ttnn-sweeps-t3k
       - ttnn-sweeps-galaxy
     if: |
       always() &&
       !cancelled() &&
-      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'success')
+      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'failure' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'failure' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'failure' || needs.ttnn-sweeps-p100a.result == 'success' || needs.ttnn-sweeps-p100a.result == 'failure' || needs.ttnn-sweeps-p300a.result == 'success' || needs.ttnn-sweeps-p300a.result == 'failure' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-t3k.result == 'failure' || needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'failure')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:

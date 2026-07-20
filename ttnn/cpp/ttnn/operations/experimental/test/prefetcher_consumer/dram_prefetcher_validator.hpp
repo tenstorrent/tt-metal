@@ -29,6 +29,14 @@ struct DramPrefetcherValidatorDeviceOperation {
         // optional<> because reflection-based profiler serialization needs a default-
         // constructible attribute struct, and GlobalCircularBuffer has no default ctor.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
+        // When true, expect the streaming prefetcher's ring-rotated delivery: the block at FIFO
+        // position p for a receiver is physical block (lead_block + p) mod num_blocks of its slab,
+        // consumed one page at a time. False = batched natural order 0..N-1.
+        bool streaming = false;
+        // Per-receiver streaming rotation, indexed by global ring position (must match what was
+        // queued to the prefetcher). Empty == identity (lead_block = ring_pos), the natural
+        // topology order. Non-empty exercises a host-chosen lead block per receiver.
+        std::vector<uint32_t> rotation = {};
     };
 
     struct tensor_args_t {
@@ -62,7 +70,7 @@ struct DramPrefetcherValidatorDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 // Public free function (kept for the nanobind binding `ttnn.experimental.test_dram_prefetcher_validator`).
@@ -71,6 +79,8 @@ void test_dram_prefetcher_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb);
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    bool streaming = false,
+    const std::vector<uint32_t>& rotation = {});
 
 }  // namespace ttnn::operations::experimental::test

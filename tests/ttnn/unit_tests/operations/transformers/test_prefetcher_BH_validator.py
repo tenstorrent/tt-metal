@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bytes_per_tile as _bytes_per_tile,
     ring_grid_cols as _ring_grid_cols,
     bank_receivers_strided as _bank_receivers_strided,
+    bank_receivers_contiguous as _bank_receivers_contiguous,
     make_recv_contig_weight as _make_recv_contig_weight,
     tensor_prefetcher_session,
 )
@@ -35,7 +36,9 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
+        pytest.skip(
+            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
+        )
 
 
 _GCB_DEPTH_PAGES = 4  # small ring so the validator stresses reserve_back/wait_front handshakes
@@ -53,11 +56,16 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int,
     return ttnn.CoreRangeSet(cores)
 
 
-def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0):
+def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0, dual_senders=False):
     """Build a DRAM-sender GCB sized to the prefetcher's per-receiver-per-block push.
 
     `row_offset` shifts the receiver grid down; the multi-GCB switching test uses
     it to place two GCBs on disjoint receiver rows for the same prefetcher.
+
+    `dual_senders` requests the two-sender-per-bank GCB variant. With recv_per_bank=1
+    each bank has a single receiver that cannot split, so every bank falls back to its
+    primary sender — the mapping is identical to a single-sender GCB and stays
+    K-row-major compatible.
 
     Returns (tt_weight, addrs, gcb, num_iters_total, push_page_size_bytes, ring_size).
     """
@@ -109,7 +117,9 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
         for b in range(num_dram_banks)
     ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    )
 
     num_iters_total = num_layers * ring_size
     return tt_weight, addrs, gcb, num_iters_total, push_page_size, ring_size
@@ -328,10 +338,25 @@ def test_validator_worker_sender(device, K, N, dtype, recv_per_bank, num_layers)
         device.remove_sub_device_manager(sub_device_manager)
 
 
-def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders=False):
+def _setup_weight_and_gcb_recv_contig(
+    device,
+    K,
+    N,
+    dtype,
+    recv_per_bank,
+    num_layers,
+    dual_senders=False,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
     """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the
     receiver-contiguous DRAM-core path. num_shards = ring_size > num_dram_banks
-    triggers the manager's recv-contig detection."""
+    triggers the manager's recv-contig detection.
+
+    The weight's shard distribution and the GCB sender->receiver pairing must
+    agree: round-robin shards pair with strided arcs, shard-contiguous (CONTIGUOUS_1D)
+    shards pair with contiguous arcs. Either pairing yields shard index == ring
+    position, so the validator's per-receiver column slice is unchanged."""
+    is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
     tile_bytes = _bytes_per_tile(dtype)
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -347,12 +372,19 @@ def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_la
     pt_weight = torch.zeros(1, 1, K_padded, N)
     pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
 
-    tt_weight = _make_recv_contig_weight(device, pt_weight, num_dram_banks, ring_size, dtype)
+    tt_weight = _make_recv_contig_weight(
+        device, pt_weight, num_dram_banks, ring_size, dtype, distribution_strategy=distribution_strategy
+    )
 
-    bank_to_receivers = [
-        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
-        for b in range(num_dram_banks)
-    ]
+    if is_shard_contiguous:
+        bank_to_receivers = [
+            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+        ]
+    else:
+        bank_to_receivers = [
+            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+            for b in range(num_dram_banks)
+        ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
         device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
@@ -361,6 +393,7 @@ def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_la
     return tt_weight, gcb, num_iters_total, push_page_size, ring_size
 
 
+@pytest.mark.parametrize("streaming", [False, True], ids=["batched", "streaming"])
 @pytest.mark.parametrize(
     "K,N,dtype,recv_per_bank,num_layers,dual_senders",
     [
@@ -374,11 +407,49 @@ def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_la
     ],
     ids=["multi_ksub", "ff1", "single_r4", "multi_ksub_dual", "ff1_dual", "odd_dual"],
 )
-def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders):
+def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders, streaming):
+    # streaming=True exercises the ring-rotated delivery order: the prefetcher reads each
+    # receiver's slab circularly from its ring index g_r, and the validator expects FIFO
+    # position p to hold physical block (ring_pos + p) mod ring_size. Same byte content as
+    # batched, reordered per receiver — a byte mismatch localizes a g_r/rotation bug here,
+    # before the matmul.
     tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
         device, K, N, dtype, recv_per_bank, num_layers, dual_senders=dual_senders
     )
-    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+    # Non-identity rotation (cyclic shift by 1): receiver at ring position g leads at block
+    # (g + 1) % ring_size, not g. Unlike identity (rotation[g] == g), this only validates if the
+    # prefetcher actually slices by the supplied rotation values rather than the bare ring index.
+    # Empty == batched. The same rotation is handed to the validator so it expects the matching order.
+    rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size, rotation)] * num_layers, global_cb=gcb
+        )
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+            streaming=streaming,
+            rotation=rotation,
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,num_layers", [(448, 1792, ttnn.bfloat16, 2)])
+def test_validator_dram_sender_dual_single_receiver_bank(device, K, N, dtype, num_layers):
+    """dual_senders_per_bank=True with a single receiver per bank (recv_per_bank=1).
+
+    A single receiver cannot split across two senders, so every bank falls back to its
+    primary sender and the mapping is identical to a single-sender GCB — previously this
+    was rejected with a TT_FATAL. num_blocks == num_dram_banks keeps it on the K-row-major
+    path (which the validator addresses uniformly), so this validates the fallback end to
+    end. Same shape as test_validator_dram_sender[bench_default], only dual_senders flipped.
+    """
+    tt_weight, addrs, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_dram_sender(
+        device, K, N, dtype, recv_per_bank=1, num_layers=num_layers, dual_senders=True
+    )
+    with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
@@ -386,6 +457,56 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
             num_layers=num_layers,
             print_stride=max(1, ring_size // 4),
             global_cb=gcb,
+        )
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["batched", "streaming"])
+@pytest.mark.parametrize(
+    "K,N,dtype,recv_per_bank,num_layers,dual_senders",
+    [
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, False),  # ring=16, contiguous arcs
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, False),  # FF1 ring=64
+        (2048, 7168, ttnn.bfloat8_b, 4, 1, False),  # ring=32, single-sender nr=4
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, True),  # FF1 ring=64, dual-sender split 4/4
+    ],
+    ids=["multi_ksub", "ff1", "single_r4", "ff1_dual"],
+)
+def test_validator_dram_sender_recv_contig_shard_contiguous(
+    device, K, N, dtype, recv_per_bank, num_layers, dual_senders, streaming
+):
+    """Shard-contiguous (CONTIGUOUS_1D) recv-contig: adjacent shards share a bank, so each bank
+    feeds a contiguous ring arc. Exercises the shard-contiguous shard->bank placement (host BDS)
+    and the distribution-aware TensorAccessor the validator reads the source through.
+
+    streaming=True additionally exercises the CONTIGUOUS_1D streaming path: the host must slice the
+    rotation table by the *contiguous* global receiver position (bank*receivers_per_bank + slab),
+    not the strided one. A strided-only slice (the pre-generalization bug) mismatches even for
+    identity rotation, so the non-identity cyclic rotation below is a strict check."""
+    tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
+        device,
+        K,
+        N,
+        dtype,
+        recv_per_bank,
+        num_layers,
+        dual_senders=dual_senders,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    # Cyclic shift by 1 (empty == batched); same rotation handed to the validator so it expects the
+    # matching contiguous-order delivery.
+    rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size, rotation)] * num_layers, global_cb=gcb
+        )
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+            streaming=streaming,
+            rotation=rotation,
         )
 
 

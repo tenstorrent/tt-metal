@@ -77,7 +77,7 @@ public:
     TensorPrefetcherManager(TensorPrefetcherManager&&) = delete;
     TensorPrefetcherManager& operator=(TensorPrefetcherManager&&) = delete;
 
-    void start(const experimental::TensorPrefetcherConfig& config);
+    void start();
 
     // When `cq_id`'s command queue is mid trace-capture, the serialized request pages are
     // captured into trace_requests_ keyed by that trace's MeshTraceId instead of being sent
@@ -127,17 +127,26 @@ private:
     static constexpr uint32_t kSocketFifoPages = 128;
 
     struct Request {
-        std::vector<uint8_t> page;  // one socket page; identical bytes for every target
+        // One logical socket page. For PREFETCH this is either one shared page or one page
+        // per entry in target_sender_indices (streaming rotations differ by sender).
+        // STOP / WAIT_CQ carry one shared page and leave target_sender_indices empty to
+        // broadcast to every provisioned sender.
+        std::vector<std::vector<uint8_t>> sender_pages;
         std::vector<MeshCoordinate> target_devices;
+        std::vector<uint32_t> target_sender_indices;
     };
 
     void worker_loop();
     void enumerate_dram_senders();
+    std::vector<uint32_t> sender_indices_for_gcb(const experimental::GlobalCircularBuffer& gcb) const;
     void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
     void allocate_sockets();
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
-    // tensor layouts within each page and splitting when a page fills.
-    std::vector<std::vector<uint8_t>> serialize_request_pages(
+    // tensor layouts within each page and splitting when a page fills. Returns one entry per
+    // logical page; each entry is either one shared page or a vector in GCB sender-mapping
+    // order. The header/entry/geometry bytes are identical across senders, while a streaming
+    // page carries only that GCB sender's slice of the per-receiver rotation table.
+    std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
         const experimental::GlobalCircularBuffer& gcb,
         const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
     MeshCoordinateRangeSet full_mesh_subset() const;
@@ -164,15 +173,12 @@ private:
     // write and the WAIT_CQ request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
-    // sender_logical_cores_[s] = logical DRAM core for sender s. Picked at start
-    // via pick_unused_dram_logical_core / dram_sender_logical_cores; GCBs queued
-    // must use the same picks (deterministic on bank_id), which they do because the
-    // GCB factory calls the same pickers with the same dual_senders_per_bank flag.
+    // sender_logical_cores_[s] = logical DRAM core for sender s. Both available
+    // sender cores per bank are provisioned at start. Each queued GCB may map either
+    // the primary sender only or both senders; PREFETCH requests target that subset.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;
-    // When true, each DRAM bank is driven by two sender cores (see TensorPrefetcherConfig).
-    bool dual_senders_per_bank_ = false;
 
     // One program per IDevice in the mesh; programs_[d].
     std::vector<std::unique_ptr<Program>> programs_;

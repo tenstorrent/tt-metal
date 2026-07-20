@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -35,14 +36,14 @@ FORCE_INLINE void process_sfpu_tiles(
     uint32_t cb_pre_rhs_id,
     uint32_t cb_post_rhs_id,
     uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
-    CircularBuffer cb_post_lhs(cb_post_lhs_id);
-    CircularBuffer cb_post_rhs(cb_post_rhs_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
+    DataflowBuffer cb_post_rhs(cb_post_rhs_id);
+    DataflowBuffer cb_out(cb_out_id);
 
-    PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
     cb_post_lhs.wait_front(n);
 
-    PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
+    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
     cb_post_rhs.wait_front(n);
 
     cb_out.reserve_back(n);
@@ -52,13 +53,13 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+    copy_tile_to_dst_init_short_with_dt(cb_post_rhs.get_id(), cb_post_lhs.get_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+        copy_tile(cb_post_lhs.get_id(), i, i * 2);
     }
-    copy_tile_to_dst_init_short_with_dt(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    copy_tile_to_dst_init_short_with_dt(cb_post_lhs.get_id(), cb_post_rhs.get_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
+        copy_tile(cb_post_rhs.get_id(), i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
@@ -73,7 +74,7 @@ FORCE_INLINE void process_sfpu_tiles(
 
     tile_regs_wait();
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out.get_cb_id());
+        pack_tile(i * 2, cb_out.get_id());
     }
     tile_regs_release();
 

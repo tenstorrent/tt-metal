@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATMUL
@@ -26,6 +27,9 @@ inline void llk_math_matmul_init(
     const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
 
     const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
+
+    // In0/operandA -> srcB, In1/operandB -> srcA
+    llk::san::math_operand_check(unpack_dst_format[in1_id], unpack_dst_format[in0_id]);
 
     _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);

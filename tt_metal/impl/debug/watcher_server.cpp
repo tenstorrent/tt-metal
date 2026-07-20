@@ -162,11 +162,20 @@ void WatcherServer::Impl::detach_devices() {
         stop_server_ = true;
         stop_server_cv_.notify_all();
 
-        // Wait for the thread to end, with a timeout
+        // Wait for the thread to end. The timeout is used only to emit a diagnostic if the
+        // thread is slow to return (e.g. wedged inside a device read in dump()); we must not
+        // delete a still-joinable std::thread (that calls std::terminate()), nor delete it
+        // while the async join task below is still executing on it (use-after-free). The poll
+        // loop is guaranteed to observe stop_server_ and return once any in-flight dump()
+        // completes, so we block until the join genuinely finishes before deleting.
         auto future = std::async(std::launch::async, &std::thread::join, server_thread_);
         if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-            log_fatal(tt::LogMetal, "Timed out waiting on watcher server thread to terminate.");
+            log_warning(
+                tt::LogMetal,
+                "Watcher server thread is taking longer than 2s to terminate (likely blocked in a device read); "
+                "continuing to wait for it to finish.");
         }
+        future.wait();
         delete server_thread_;
         server_thread_ = nullptr;
     }
@@ -517,8 +526,8 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
     // Initialize DRAM cores debug values (Blackhole only)
     bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
-        for (const auto& dram_core :
-             cluster.get_soc_desc(device_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             write_watcher_init_val_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
         }
     }

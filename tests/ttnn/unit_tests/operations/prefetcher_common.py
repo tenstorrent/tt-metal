@@ -58,10 +58,41 @@ def bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: in
     return ttnn.CoreRangeSet(cores)
 
 
-def make_recv_contig_weight(device, pt_weight, num_dram_banks: int, ring_size: int, dtype):
+def bank_receivers_contiguous(bank_idx: int, recv_per_bank: int, ring_cols: int):
+    """Contiguous receiver arc matching BufferDistributionSpec CONTIGUOUS_1D (shard-contiguous)
+    placement: bank b -> ring positions [b*recv_per_bank .. (b+1)*recv_per_bank - 1].
+
+    Under CONTIGUOUS_1D shard distribution, shard s lands on bank
+    (s // recv_per_bank) at bank-local slab (s % recv_per_bank). Pairing that with
+    this GCB topology means shard index == ring position (no permutation), and each
+    bank feeds a contiguous arc of the ring instead of a strided set.
+    """
+    cores = []
+    for s in range(recv_per_bank):
+        ring_pos = bank_idx * recv_per_bank + s
+        col = ring_pos % ring_cols
+        row = ring_pos // ring_cols
+        cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
+    return ttnn.CoreRangeSet(cores)
+
+
+def make_recv_contig_weight(
+    device,
+    pt_weight,
+    num_dram_banks: int,
+    ring_size: int,
+    dtype,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
     """Allocate ``pt_weight`` ((1, 1, K, N)) as a DRAM-sharded ND tensor in
-    receiver-contiguous layout: ``num_shards = ring_size`` distributed round-robin
-    across ``num_dram_banks`` DRAM cores, each shard ``(K, N // ring_size)``.
+    receiver-contiguous layout: ``num_shards = ring_size`` distributed across
+    ``num_dram_banks`` DRAM cores, each shard ``(K, N // ring_size)``.
+
+    ``distribution_strategy`` selects how shards map to banks: ROUND_ROBIN_1D
+    (shard s -> bank s % num_dram_banks) or CONTIGUOUS_1D (shard s -> bank
+    s // recv_per_bank). The GCB sender->receiver pairing must match (use
+    ``bank_receivers_strided`` for round-robin, ``bank_receivers_contiguous`` for
+    shard-contiguous) so that shard index == ring position.
 
     With ``ring_size > num_dram_banks`` (bank b stacks ``ring_size //
     num_dram_banks`` slabs vertically), the prefetcher manager auto-detects this
@@ -79,20 +110,20 @@ def make_recv_contig_weight(device, pt_weight, num_dram_banks: int, ring_size: i
         ttnn.Shape([K, n_per_recv]),
         dram_core_range_set,
         ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        distribution_strategy,
     )
     mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
     return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
 
 @contextlib.contextmanager
-def tensor_prefetcher_session(device, dual_senders_per_bank: bool = False):
+def tensor_prefetcher_session(device):
     """Open a Tensor prefetcher Start/Stop window. Stop (and a device sync)
     runs even on test failure so the next test sees a clean device, replacing the
     explicit ``start -> ... -> stop -> synchronize`` callers used to spell out at
     every test site.
     """
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders_per_bank)
+    ttnn.experimental.start_tensor_prefetcher(device)
     try:
         yield
     finally:
@@ -388,7 +419,8 @@ def run_prefetcher_mm(
         )
         program_configs.append(program_config)
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,

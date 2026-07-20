@@ -24,21 +24,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t buf_desc_id = 0;
     const std::uint32_t num_tiles   = params.TILE_CNT;
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         // Direct path: UNPACK writes data straight into Dest — no FPU datacopy needed.
         // Requires format bit-width to match Dest mode (e.g., 16-bit input with 16-bit Dest).
         // dvalid clients: UNPACK (writes Dest), SFPU (reads/writes Dest), PACK (reads Dest).
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-        // When unpacking directly to Dest (bypassing FPU), MATH HW still needs format configuration
-        // so the SFPU reads Dest data in the correct format.
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
     }
     else
     {
         // FPU path: UNPACK -> SrcA -> FPU datacopy (MOVA2D) -> Dest.
         // Needed when input format bit-width differs from Dest mode (format conversion required).
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+
+        const DataFormat src_format = static_cast<DataFormat>(formats.math);
+
+        if (src_format == DataFormat::Int32)
+        {
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /* is_fp32_dest_acc_en */, true /*int32_dest*/>();
+        }
+        else
+        {
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
+        }
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -56,7 +66,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
-    if (is_fp32_dest_acc_en && !unpack_to_dest)
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         // When Dest is 32-bit (fp32_dest_acc) and data goes through the FPU path,
         // MOVA2D/MOVB2D requires both SrcA and SrcB format registers configured,
@@ -71,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
@@ -80,8 +90,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef LLK_TRISC_MATH
-
-const bool is_int_fpu_en = false;
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
@@ -100,14 +108,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+
+    const DataFormat src_format = static_cast<DataFormat>(formats.math);
+
     // dvalid clients for Dest are the producer/consumer set this MATH thread
     // participates in. The chain MUST match what UNPACK declared, otherwise
     // the producer will not hand off Dest sections correctly.
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         // Direct path: UNPACK writes Dest, SFPU reads/writes Dest, PACK reads Dest.
         // No FPU datacopy, so FPU is not in the chain.
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
     }
     else
     {
@@ -116,12 +129,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // and SFPU-producer (for the SFPU handoff to PACK).
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+
+        // Enable INT8 math only when an integer needs to be transferred into the
+        // 32-bit Dest
+        if (src_format == DataFormat::Int32)
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(src_format, src_format);
+        }
+        else
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
+        }
     }
 
-    DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
-
-    if (!unpack_to_dest)
+    if constexpr (!unpack_to_dest)
     {
         // FPU path: datacopy tiles from SrcA to Dest via MOVA2D before SFPU can operate on them.
         // (This kernel does not use the ELWADD-as-datacopy workaround from WH/BH —
@@ -133,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // so MATH writes the same Dest region PACK will later read.
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
+            _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
 
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
@@ -142,12 +163,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
     test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION>();
 
+    const DataFormat sfpu_format = static_cast<DataFormat>(formats.sfpu_math);
+
     // Apply the selected SFPU op in-place on Dest for each tile. Tile index must
     // match the one used by the producer (datacopy above, or UNPACK-to-Dest),
     // so it is offset by params.DST_INDEX.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION>(params.DST_INDEX + i);
+        test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en>(params.DST_INDEX + i, sfpu_format);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
@@ -179,7 +202,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Declare the same dvalid client chain that UNPACK/MATH used, seen from
     // PACK's side. The chain must match on all three threads.
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }

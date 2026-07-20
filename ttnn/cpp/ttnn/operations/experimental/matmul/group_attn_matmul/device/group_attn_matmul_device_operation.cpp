@@ -205,35 +205,6 @@ GroupAttnMatmulDeviceOperation::tensor_return_value_t GroupAttnMatmulDeviceOpera
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-ttsl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-
-    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
-    TT_FATAL(is_device_tensor(input_tensor_b), "Unexpected Tensor type {}", input_tensor_b.storage_type());
-    return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
-        operation_attributes.transpose_hw,
-        operation_attributes.out_subblock_w,
-        operation_attributes.compute_with_storage_grid_size.str(),
-        operation_attributes.output_mem_config.memory_layout(),
-        operation_attributes.output_mem_config.buffer_type(),
-        operation_attributes.output_dtype,
-        operation_attributes.row_major,
-        operation_attributes.compute_kernel_config,  // Affects math_fidelity and fp32_dest_acc_en in ComputeConfig
-        input_tensor_a.memory_config().memory_layout(),
-        input_tensor_a.memory_config().buffer_type(),
-        input_tensor_a.dtype(),
-        input_tensor_a.padded_shape(),  // drives CB total_size (Kt, Mt) — must be in hash since CB sizing is not
-                                        // patched on cache hit
-        input_tensor_a.device()->id(),
-        input_tensor_b.memory_config().memory_layout(),
-        input_tensor_b.memory_config().buffer_type(),
-        input_tensor_b.dtype(),
-        input_tensor_b.padded_shape(),  // drives CB total_size (KV_HEADS, Kt)
-        input_tensor_b.device()->id());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

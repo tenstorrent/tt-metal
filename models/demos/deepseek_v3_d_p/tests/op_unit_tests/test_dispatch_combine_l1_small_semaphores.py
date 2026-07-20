@@ -135,7 +135,6 @@ def run_dispatch_op(mesh_device, use_l1_small):
 
     dispatched_buffer, dispatch_metadata = ttnn.experimental.deepseek_prefill.dispatch(
         input_tensor=tt_x,
-        weights_tensor=tt_weights,
         indices_tensor=tt_indices,
         expert_offsets_tensor=tt_expert_offsets,
         expert_dispatch_table_tensor=tt_expert_dispatch_table,
@@ -218,7 +217,7 @@ def run_combine_op(
 )
 @pytest.mark.parametrize("ccl_op", ["dispatch", "combine"])
 @pytest.mark.parametrize("use_l1_small", [False, True], ids=["l1_default", "l1_small"])
-def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_small):
+def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_small, expect_error):
     """Test that dispatch/combine semaphores can be placed in L1_SMALL to prevent L1 fragmentation."""
 
     compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -302,7 +301,7 @@ def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op
     logger.info(f"Tensor C: shape [1, 1, 32, {tensor_c_cols}], {tensor_c_bytes} bytes total")
 
     if not use_l1_small:
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "Out of Memory"):
             ttnn.from_torch(
                 torch.randn(1, 1, 32, tensor_c_cols),
                 dtype=ttnn.bfloat16,

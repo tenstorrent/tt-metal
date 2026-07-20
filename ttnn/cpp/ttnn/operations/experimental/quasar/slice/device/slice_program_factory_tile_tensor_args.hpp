@@ -5,13 +5,12 @@
 
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim::qsr {
 
 struct SliceTileTensorArgsProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 

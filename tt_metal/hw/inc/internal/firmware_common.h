@@ -140,9 +140,10 @@ uint32_t firmware_config_init(
         sem_l1_base[index] =
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when cache invalidating
     // functionality is ready for Quasar
+    // Note that the uncached address range is only valid for Quasar DM cores.
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                         launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset +
                                         MEM_L1_UNCACHED_BASE);
@@ -208,14 +209,31 @@ void wait_for_go_message() {
 FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
     go_msg_t go_message;
     go_message.all = go_message_in->all;
+#ifdef ARCH_QUASAR
+    constexpr uint32_t dispatch_message_stride = L1_ALIGNMENT;
+#else
+    constexpr uint32_t dispatch_message_stride = NOC_STREAM_REG_SPACE_SIZE;
+#endif
     uint64_t addr = NOC_XY_ADDR(
         NOC_X(go_message.master_x),
         NOC_Y(go_message.master_y),
-        DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * go_message.dispatch_message_offset);
+        DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset);
     return addr;
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
+#ifdef ARCH_QUASAR
+    // Quasar has no stream registers; dispatch_addr points to an L1 worker completion counter address.
+    noc_fast_atomic_increment<DM_DEDICATED_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        dispatch_addr,
+        NOC_UNICAST_WRITE_VC,
+        1,     // increment
+        31,    // wrap bits
+        false  // linked
+    );
+#else
     // Workaround for BH inline writes does not apply here because this writes to a stream register.
     // See comment in `noc_get_interim_inline_value_addr` for more details.
     noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
@@ -228,6 +246,7 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
         false,  // mcast
         true    // posted
     );
+#endif
 }
 #endif
 

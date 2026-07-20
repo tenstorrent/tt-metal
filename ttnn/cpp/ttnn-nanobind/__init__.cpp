@@ -18,8 +18,10 @@
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
+#include "ttnn-nanobind/d2d_stream_service.hpp"
 #include "ttnn-nanobind/counter_channel.hpp"
 #include "ttnn-nanobind/h2d_stream_service.hpp"
+#include "ttnn-nanobind/d2h_stream_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/bfp_utils.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
@@ -250,6 +252,10 @@ NB_MODULE(_ttnn, mod) {
     auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
     auto m_h2d_stream_service =
         mod.def_submodule("h2d_stream_service", "ttnn persistent host-to-device streaming service");
+    auto m_d2h_stream_service =
+        mod.def_submodule("d2h_stream_service", "ttnn persistent device-to-host streaming service");
+    auto m_d2d_stream_service =
+        mod.def_submodule("d2d_stream_service", "ttnn persistent device-to-device streaming service");
     auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
@@ -276,6 +282,8 @@ NB_MODULE(_ttnn, mod) {
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
     ttnn::hd_socket::py_module_types(m_hd_socket);
     ttnn::h2d_stream_service::py_module_types(m_h2d_stream_service);
+    ttnn::d2h_stream_service::py_module_types(m_d2h_stream_service);
+    ttnn::d2d_stream_service::py_module_types(m_d2d_stream_service);
     ttnn::counter_channel::py_module_types(m_counter_channel);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
@@ -315,6 +323,8 @@ NB_MODULE(_ttnn, mod) {
     ttnn::global_semaphore::py_module(m_global_semaphore);
     ttnn::hd_socket::py_module(m_hd_socket);
     ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
+    ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
+    ttnn::d2d_stream_service::py_module(m_d2d_stream_service);
     ttnn::counter_channel::py_module(m_counter_channel);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);

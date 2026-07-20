@@ -262,7 +262,7 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
@@ -305,7 +305,7 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
@@ -328,7 +328,7 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
@@ -351,7 +351,7 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
@@ -374,7 +374,7 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)

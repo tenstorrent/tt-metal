@@ -124,7 +124,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint16_t temp = temp_ptr[core_id];
     uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
-    generate_bcast_unary_scalar(cb_id_temp, temp_packed);
+    generate_bcast_unary_scalar(CircularBuffer(cb_id_temp), temp_packed);
     // generate the top-k mask
     constexpr uint32_t one = 1;
     generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);

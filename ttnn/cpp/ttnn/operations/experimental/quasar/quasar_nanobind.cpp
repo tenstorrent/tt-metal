@@ -17,6 +17,14 @@
 #include "ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/binary/binary_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/fold/fold_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/untilize/untilize_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/reallocate/reallocate_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/to_device/to_device_nanobind.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -44,6 +52,32 @@ void bind_quasar(nb::module_& mod) {
 
     // binary front-end (add/subtract/multiply/... -> quasar binary_ng device op).
     binary::py_module(m_quasar);
+
+    // fold (compositional data-movement op).
+    detail::bind_fold_operation(m_quasar);
+
+    // to_memory_config (dispatches to quasar reshard / interleaved_to_sharded / sharded_to_interleaved).
+    detail::bind_to_memory_config(m_quasar);
+
+    // reshape (enum exported first so it is available as a python default-arg type).
+    bind_reshape_enum(m_quasar);
+    bind_reshape_view(m_quasar);
+
+    // untilize.
+    detail::bind_untilize(m_quasar);
+
+    // tilize_with_val_padding / tilize_with_zero_padding.
+    detail::bind_tilize_with_val_padding(m_quasar);
+    detail::bind_tilize_with_zero_padding(m_quasar);
+
+    // to_layout (composite; dispatches to quasar tilize/untilize/tilize_with_val_padding/...).
+    detail::bind_to_layout(m_quasar);
+
+    // reallocate (thin wrapper over quasar move).
+    detail::bind_reallocate(m_quasar);
+
+    // to_device (thin host->device transfer wrapper).
+    detail::bind_to_device(m_quasar);
 
     // NOTE: halo and binary_ng have no python binding (internal device backends).
 }

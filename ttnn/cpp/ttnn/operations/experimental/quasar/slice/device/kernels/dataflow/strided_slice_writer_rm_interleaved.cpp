@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -20,8 +21,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = 24;
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out0(cb_id_out0);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer cb_out0(cb_id_out0);
     const uint32_t start_id = 0;
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

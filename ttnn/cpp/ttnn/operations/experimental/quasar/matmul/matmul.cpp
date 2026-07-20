@@ -12,11 +12,13 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"  // ttnn::typecast (addmm dtype-match, port of c3da306a7dd)
 #include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/sparse/sparse_matmul_device_operation.hpp"
 
 namespace ttnn::operations::experimental::quasar::matmul {
@@ -220,7 +222,8 @@ static ttnn::Tensor bound_matmul(
 
     ttnn::Tensor input_tensor_b_adjusted = input_tensor_b;
     if (input_tensor_b.logical_shape().rank() == 1) {
-        input_tensor_b_adjusted = ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}));
+        input_tensor_b_adjusted = ttnn::operations::experimental::quasar::reshape(
+            input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}));
     } else if (needs_manual_transpose_b) {
         input_tensor_b_adjusted = ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config());
     }
@@ -255,7 +258,7 @@ static ttnn::Tensor bound_matmul(
                              .at(0);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
-        output_tensor = ttnn::reshape(
+        output_tensor = ttnn::operations::experimental::quasar::reshape(
             output_tensor,
             utilities::compute_matmul_output_shape(
                 input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b));
@@ -285,10 +288,10 @@ static ttnn::Tensor bound_matmul(
 
         TT_FATAL(desired_vol == current_vol, "Invalid optional output tensor");
 
-        output_tensor = ttnn::reshape(output_tensor, desired_shape);
+        output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, desired_shape);
 
     } else if (bias.has_value()) {
-        output_tensor = ttnn::reshape(output_tensor, result_shape);
+        output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, result_shape);
     }
 
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
@@ -516,7 +519,12 @@ Tensor addmm(
     }
 
     if (beta != 0.0) {
-        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta) : input_tensor;
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
+        // Port of tt-metal c3da306a7dd: the matmul output dtype can differ from input_tensor's when
+        // `dtype` overrides it; binary_ng's in-place add_ requires both operands share a dtype.
+        if (add_tensor.dtype() != out_tensor.dtype()) {
+            add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
+        }
         add_(out_tensor, add_tensor);
     }
 

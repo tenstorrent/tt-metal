@@ -25,6 +25,7 @@ struct DeviceStorage;
 
 namespace distributed {
 class MeshDevice;
+class MeshBuffer;
 }
 
 /**
@@ -62,8 +63,10 @@ public:
     static MeshTensor allocate_on_device(
         distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
 
-    // Internal Constructor for transition.
-    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
+    /**
+     * Construct a MeshTensor that takes ownership of an already-allocated MeshBuffer.
+     */
+    static MeshTensor from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
 
     /**
      * Release ownership of the underlying device memory.
@@ -178,24 +181,9 @@ public:
     const MeshTensorImpl& impl() const;
 
 private:
-    // TODO(#43693): Remove once DeviceStorage no longer keeps a shared_ptr<MeshBuffer>
-    // in its DeallocatedTombStone state.
-    // DeviceStorage is the sole caller — it uses mesh_buffer_invariant_breaking() to
-    // populate the tombstone when a tensor is deallocated, so the device pointer
-    // remains accessible on aliased tensors (e.g. after a zero-copy reshape).
-    // This breaks MeshTensor's core invariant: that it is the sole owner of the
-    // underlying MeshBuffer. Shared ownership leaks out, allowing the MeshBuffer to
-    // outlive the MeshTensor.
-    friend struct DeviceStorage;
-
-    /**
-     * Returns shared ownership of the underlying MeshBuffer.
-     *
-     * WARNING: Breaks MeshTensor's sole-ownership invariant. The caller becomes a
-     * shared owner of the MeshBuffer, which can outlive the MeshTensor.
-     * Only accessible to DeviceStorage. See #43693 for removal plan.
-     */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
+    // Internal constructor for transition. Use the from_buffer factory or allocate_on_device
+    // to build a MeshTensor.
+    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
 
     // impl_ could be a nullptr if MeshTensor is in a moved-from state.
     // Avoid using impl_ pointer directly, use the impl() accessor instead.

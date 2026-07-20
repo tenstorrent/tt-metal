@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
+#include <limits>
+
+#include "sfpi.h"
+
 // Helper function for _sfpu_binary_power_
 // This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
 // and makes it faster
@@ -14,7 +19,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     v_elseif(exp > 30)  // overflow occurs above this range
     {
         // set to int32 max value in case of overflow
-        result = std::numeric_limits<int32_t>::max();
+        result = std::numeric_limits<std::int32_t>::max();
     }
     v_else {
         // extract mantissa
@@ -33,7 +38,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
 // This implements the "add 0x7fff + LSB" algorithm for correct tie-breaking
 sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     // Get the float32 bits as unsigned integer
-    sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);
+    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
 
     // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32)
     // This is needed for the tie-breaker: round to even
@@ -50,5 +55,5 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     bits = bits & 0xFFFF0000U;
 
     // Reinterpret back as float
-    return sfpi::reinterpret<sfpi::vFloat>(bits);
+    return sfpi::as<sfpi::vFloat>(bits);
 }

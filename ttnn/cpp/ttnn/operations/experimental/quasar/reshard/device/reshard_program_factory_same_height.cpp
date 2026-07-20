@@ -6,45 +6,42 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <algorithm>
+#include <filesystem>
+
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
 namespace {
 
-// Anonymous-namespace helper unique to reshard same-height to avoid unity-build collisions.
-void push_reshard_same_height_cb_pair(
-    ProgramDescriptor& desc,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_size,
-    uint32_t page_size,
-    const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
-    CBDescriptor cb;
-    cb.total_size = total_size;
-    cb.core_ranges = core_ranges;
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-    });
-    cb.buffer = bound_buffer;
-    desc.cbs.push_back(std::move(cb));
-}
+// Reader source reads remote -> local; writer source writes local -> remote.
+// (Names are prefixed to avoid Unity-build collisions with the sibling reshard factories.)
+constexpr const char* kSHReaderKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/dataflow/reshard_same_height_reader.cpp";
+constexpr const char* kSHWriterKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/dataflow/reshard_same_height_writer.cpp";
+
+// Resource / parameter names referenced by the kernel sources (tensor::/dfb:: accessors).
+constexpr const char* kSHRemoteTensorParam = "remote";
+constexpr const char* kSHLocalTensorParam = "local_shard";
+constexpr const char* kSHDfbName = "shard_cb";
 
 }  // namespace
 
 template <bool local_is_output>
-ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_output>::create_program_artifacts(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = output_tensor;
+    auto& output = output_tensor;
     const auto& local_tensor = local_is_output ? output : input;
     const auto& remote_tensor = local_is_output ? input : output;
     const auto local_shard_spec = local_tensor.shard_spec().value();
@@ -53,7 +50,7 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
     auto* device = input.device();
 
     const auto remote_core_type = remote_tensor.buffer()->core_type();
-    bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
+    const bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
     auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
@@ -65,38 +62,8 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
     const uint32_t unit_size =
         static_cast<uint32_t>(local_shard_spec.shape[1] * local_tensor.element_size());  // width * element size
     const uint32_t remote_units_per_shard = remote_shard_spec.shape[0];                  // height
-    const uint32_t total_size = remote_units_per_shard * unit_size;
 
-    constexpr uint32_t cb_index = tt::CBIndex::c_0;
-
-    auto* local_buffer = local_tensor.buffer();
     auto* remote_buffer = remote_tensor.buffer();
-
-    ProgramDescriptor desc;
-
-    // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
-    push_reshard_same_height_cb_pair(
-        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
-
-    const std::string kernel_name =
-        local_is_output
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_writer.cpp";
-
-    KernelDescriptor reader_desc;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.kernel_source = kernel_name;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.compile_time_args = {cb_index, static_cast<uint32_t>(interface_with_dram)};
-
-    KernelDescriptor writer_desc;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.kernel_source = kernel_name;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.compile_time_args = {cb_index, static_cast<uint32_t>(interface_with_dram)};
-
     auto remote_buffer_type = remote_buffer->buffer_type();
 
     // Generate all read/write offsets for each core
@@ -115,49 +82,147 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
     const uint32_t total_num_sticks_kernel_0 = total_num_sticks / 2;
     const uint32_t total_num_sticks_kernel_1 = total_num_sticks - total_num_sticks_kernel_0;
 
-    // Here all we do is convert pre-computed offsets into vectors so they can be passed as runtime arguments
+    // Varargs carry the per-segment tail (4 values/segment). The count varies per core, so we set a
+    // uniform schema count of the max-over-cores and pad shorter cores; the kernel only reads the
+    // real prefix (it loops over the num_segments named RTA).
+    uint32_t max_num_segments = 0;
+    for (const auto& args_for_all_segments : runtime_args_for_each_core) {
+        max_num_segments = std::max(max_num_segments, static_cast<uint32_t>(args_for_all_segments.size()));
+    }
+    const uint32_t num_varargs = max_num_segments * 4;
+
+    // ------------------------------------------------------------------
+    // ProgramSpec (immutable)
+    // ------------------------------------------------------------------
+    ProgramSpec spec;
+    spec.name = "reshard_same_height";
+
+    const KernelSpec::CompileTimeArgs compile_time_args = {
+        {"interface_with_dram", static_cast<uint32_t>(interface_with_dram)},
+    };
+
+    const char* kernel_path = local_is_output ? kSHReaderKernelPath : kSHWriterKernelPath;
+
+    // Two data-movement workers run the same kernel source on every local core; they split the
+    // shard height across the two RISCs. The local sharded DFB is bound producer on k0 / consumer
+    // on k1 to satisfy the DFB endpoint invariant (the CB is used only as an address source).
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
+        return KernelSpec{
+            .unique_id = KernelSpecName{name},
+            .source = std::filesystem::path(kernel_path),
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DFBSpecName{kSHDfbName},
+                .accessor_name = kSHDfbName,
+                .endpoint_type = endpoint,
+            }},
+            .tensor_bindings =
+                {TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam},
+                     .accessor_name = kSHRemoteTensorParam},
+                 TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSHLocalTensorParam},
+                     .accessor_name = kSHLocalTensorParam}},
+            .compile_time_args = compile_time_args,
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"total_num_sticks", "local_stride_bytes", "remote_stride_bytes", "num_segments"}},
+            .hw_config = std::move(hw_config),
+            .advanced_options = {.num_runtime_varargs = num_varargs},
+        };
+    };
+
+    KernelSpec k0 =
+        make_worker("reader", ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER);
+    KernelSpec k1 =
+        make_worker("writer", ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER);
+
+    DataflowBufferSpec shard_dfb{
+        .unique_id = DFBSpecName{kSHDfbName},
+        .entry_size = unit_size,
+        .num_entries = remote_units_per_shard,
+        .data_format_metadata = data_format,
+        .borrowed_from = TensorParamName{kSHLocalTensorParam},
+    };
+
+    spec.kernels = {k0, k1};
+    spec.dataflow_buffers = {shard_dfb};
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = TensorParamName{kSHRemoteTensorParam}, .spec = remote_tensor.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{kSHLocalTensorParam}, .spec = local_tensor.tensor_spec()},
+    };
+    spec.work_units = {WorkUnitSpec{
+        .name = "reshard_same_height_work_unit",
+        .kernels = {KernelSpecName{"reader"}, KernelSpecName{"writer"}},
+        .target_nodes = all_cores,
+    }};
+
+    // ------------------------------------------------------------------
+    // ProgramRunArgs (mutable)
+    // ------------------------------------------------------------------
+    KernelRunArgs k0_run_args{.kernel = KernelSpecName{"reader"}};
+    KernelRunArgs k1_run_args{.kernel = KernelSpecName{"writer"}};
+
     for (uint32_t core_idx = 0; core_idx < local_cores.size(); core_idx++) {
         const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
+        const uint32_t num_segments = static_cast<uint32_t>(args_for_all_segments.size());
+        const NodeCoord node{local_cores[core_idx].x, local_cores[core_idx].y};
 
-        // arg 3 is remote-buffer base address (binding via Buffer*).
-        KernelDescriptor::RTArgList runtime_args_0;
-        runtime_args_0.push_back(total_num_sticks_kernel_0);
-        runtime_args_0.push_back(local_stride_bytes);
-        runtime_args_0.push_back(remote_stride_bytes);
-        runtime_args_0.push_back(remote_buffer);
-        runtime_args_0.push_back(static_cast<uint32_t>(args_for_all_segments.size()));
+        KernelRunArgs::RuntimeArgValues& k0_rtas = k0_run_args.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& k1_rtas = k1_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            k0_rtas,
+            node,
+            {
+                {"total_num_sticks", total_num_sticks_kernel_0},
+                {"local_stride_bytes", local_stride_bytes},
+                {"remote_stride_bytes", remote_stride_bytes},
+                {"num_segments", num_segments},
+            });
+        AddRuntimeArgsForNode(
+            k1_rtas,
+            node,
+            {
+                {"total_num_sticks", total_num_sticks_kernel_1},
+                {"local_stride_bytes", local_stride_bytes},
+                {"remote_stride_bytes", remote_stride_bytes},
+                {"num_segments", num_segments},
+            });
 
-        KernelDescriptor::RTArgList runtime_args_1;
-        runtime_args_1.push_back(total_num_sticks_kernel_1);
-        runtime_args_1.push_back(local_stride_bytes);
-        runtime_args_1.push_back(remote_stride_bytes);
-        runtime_args_1.push_back(remote_buffer);
-        runtime_args_1.push_back(static_cast<uint32_t>(args_for_all_segments.size()));
-
+        AdvancedKernelRunArgs::Varargs varargs_0(num_varargs, 0u);
+        AdvancedKernelRunArgs::Varargs varargs_1(num_varargs, 0u);
+        uint32_t idx = 0;
         for (const auto& args : args_for_all_segments) {
-            runtime_args_0.push_back(args.write_size);
-            runtime_args_0.push_back(args.read_offset);
-            runtime_args_0.push_back(args.bank_id);
-            runtime_args_0.push_back(args.write_offset);
-
-            // Adjust read and write offsets to the correct stick address because we are splitting work across 2 kernels
+            // Adjust read/write offsets to the correct stick address (work is split across 2 kernels).
             const uint32_t adjusted_read_offset = args.read_offset + (total_num_sticks_kernel_0 * local_stride_bytes);
             const uint32_t adjusted_write_offset =
                 args.write_offset + (total_num_sticks_kernel_0 * remote_stride_bytes);
 
-            runtime_args_1.push_back(args.write_size);
-            runtime_args_1.push_back(adjusted_read_offset);
-            runtime_args_1.push_back(args.bank_id);
-            runtime_args_1.push_back(adjusted_write_offset);
+            varargs_0[idx + 0] = args.write_size;
+            varargs_0[idx + 1] = args.read_offset;
+            varargs_0[idx + 2] = args.bank_id;
+            varargs_0[idx + 3] = args.write_offset;
+
+            varargs_1[idx + 0] = args.write_size;
+            varargs_1[idx + 1] = adjusted_read_offset;
+            varargs_1[idx + 2] = args.bank_id;
+            varargs_1[idx + 3] = adjusted_write_offset;
+            idx += 4;
         }
-        reader_desc.emplace_runtime_args(local_cores[core_idx], runtime_args_0);
-        writer_desc.emplace_runtime_args(local_cores[core_idx], runtime_args_1);
+        k0_run_args.advanced_options.runtime_varargs.emplace(node, std::move(varargs_0));
+        k1_run_args.advanced_options.runtime_varargs.emplace(node, std::move(varargs_1));
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {std::move(k0_run_args), std::move(k1_run_args)};
+    run_params.tensor_args = {
+        {TensorParamName{kSHRemoteTensorParam}, TensorArgument{remote_tensor.mesh_tensor()}},
+        {TensorParamName{kSHLocalTensorParam}, TensorArgument{local_tensor.mesh_tensor()}},
+    };
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_params),
+    };
 }
 
 // Explicit template instantiations

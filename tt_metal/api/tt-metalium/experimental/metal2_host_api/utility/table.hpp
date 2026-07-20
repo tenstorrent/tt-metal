@@ -19,6 +19,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
+#include <tt_stl/small_vector.hpp>
 
 // Forward declarations of the ttsl::hash entry points used by the std::hash<Table> specialization
 // below, so this header need not pull in the (heavy) <tt_stl/reflection.hpp>. The definitions live
@@ -67,7 +68,10 @@ private:
     // Entries are stored as a mutable std::pair<K, V> (so the backing vector stays
     // easy to grow, erase, and assign), but exposed through the iterators below as
     // the const-key value_type.
-    using Storage = std::vector<std::pair<K, V>>;
+    // Small-vector backing: Tables typically hold only a handful of entries, so the inline storage
+    // avoids a heap allocation in the common case. Larger Tables spill to the heap with identical
+    // semantics, so correctness never depends on the inline capacity.
+    using Storage = ttsl::SmallVector<std::pair<K, V>, 8>;
 
 public:
     // Wraps a backing iterator and re-presents the stored pair it points at as the

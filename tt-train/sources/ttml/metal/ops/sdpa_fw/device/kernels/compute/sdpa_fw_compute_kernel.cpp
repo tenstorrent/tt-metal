@@ -26,7 +26,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "sdpa_compute_utils.hpp"
 
 // For standard mode: num_rows_per_core = rows to process

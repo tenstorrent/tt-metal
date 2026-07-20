@@ -16,6 +16,7 @@
 #include "api/compute/binary_shift.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/gelu.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -24,14 +25,18 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
+    CircularBuffer cb_grad_out_cb(cb_grad_out);
+    CircularBuffer cb_input_cb(cb_input);
+    CircularBuffer cb_grad_in_cb(cb_grad_in);
+
     unary_op_init_common(cb_grad_out, cb_grad_in);
     gelu_derivative_tile_init<false>();
     mul_binary_tile_init();
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_reserve_back(cb_grad_in, 1);
-        cb_wait_front(cb_grad_out, 1);
-        cb_wait_front(cb_input, 1);
+        cb_grad_in_cb.reserve_back(1);
+        cb_grad_out_cb.wait_front(1);
+        cb_input_cb.wait_front(1);
 
         tile_regs_acquire();
 
@@ -47,8 +52,8 @@ void kernel_main() {
 
         tile_regs_release();
 
-        cb_pop_front(cb_grad_out, 1);
-        cb_pop_front(cb_input, 1);
-        cb_push_back(cb_grad_in, 1);
+        cb_grad_out_cb.pop_front(1);
+        cb_input_cb.pop_front(1);
+        cb_grad_in_cb.push_back(1);
     }
 }

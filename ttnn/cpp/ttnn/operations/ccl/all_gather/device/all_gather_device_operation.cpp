@@ -33,7 +33,9 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.num_links);
     TT_FATAL(
         operation_attributes.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelized over rows");
+        "Worker cores used by {} links are parallelized over {} rows",
+        operation_attributes.num_links,
+        input_tensor.device()->compute_with_storage_grid_size().y);
 
     // Page alignment check
     auto page_size = input_tensor.buffer()->page_size();
@@ -136,31 +138,6 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
 
     return {tt::tt_metal::TensorTopology(
         input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
-}
-
-ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
-    }
-    return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.cluster_axis,
-        operation_attributes.memory_config,
-        operation_attributes.topology,
-        operation_attributes.chunks_per_sync,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        operation_attributes.use_l1_small_for_semaphores,
-        subdevice_core_range_set,
-        tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::tensor_return_value_t>

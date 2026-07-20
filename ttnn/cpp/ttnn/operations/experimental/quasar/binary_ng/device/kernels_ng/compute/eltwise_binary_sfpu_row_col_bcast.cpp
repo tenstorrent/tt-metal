@@ -29,6 +29,7 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,
@@ -40,7 +41,7 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
     using namespace ckernel;
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
 #define CB_PRE_BCAST cb_pre_rhs
@@ -60,13 +61,13 @@ ALWI void process_tile(
     auto cb_right = cb_post_rhs;
 #endif
 
-    CircularBuffer exp_cb_raw_other(cb_raw_other);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_post_bcast(CB_POST_BCAST);
-    CircularBuffer exp_cb_post_other(CB_POST_OTHER);
+    DataflowBuffer exp_cb_raw_other(cb_raw_other);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_cb_post_bcast(CB_POST_BCAST);
+    DataflowBuffer exp_cb_post_other(CB_POST_OTHER);
 
     unary_op_init_common(cb_left, cb_out);
-    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, DataflowBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
@@ -88,7 +89,7 @@ ALWI void process_tile(
         pack_reconfig_data_format(cb_llk_post, cb_out);
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
-        PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, DataflowBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);

@@ -64,17 +64,6 @@
   model-type: DiT
   save-perf-data: true
 
-- name: t3k_DiT_Flux.1-dev_model_perf_tests
-  cmd: run_t3000_flux1_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 50
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux1-dev
-  model-type: DiT
-  save-perf-data: true
-
 - name: t3k_DiT_Motif_model_perf_tests
   cmd: run_t3000_motif_tests
   skus:

@@ -102,27 +102,6 @@ AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOpera
         input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
 }
 
-ttsl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllReduceAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = args.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<AllReduceAsyncDeviceOperation>(
-        args.num_links,
-        args.ring_size,
-        args.dtype,
-        args.output_mem_config,
-        args.topology,
-        args.use_noc1_only,
-        args.use_optimal_ccl_for_llama,
-        args.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllReduceAsyncDeviceOperation::tensor_return_value_t>
 AllReduceAsyncDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {

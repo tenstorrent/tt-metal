@@ -7,63 +7,57 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t dst_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-    uint32_t num_pages = get_arg_val<uint32_t>(3);
-    uint32_t semaphore_arg = get_arg_val<uint32_t>(4);
-    uint32_t controller_noc_x = get_arg_val<uint32_t>(5);
-    uint32_t controller_noc_y = get_arg_val<uint32_t>(6);
-    uint32_t control_value = get_arg_val<uint32_t>(7);
-    bool is_controller = get_arg_val<uint32_t>(8) == 1;
-    uint32_t range_0_start_noc_x = get_arg_val<uint32_t>(9);
-    uint32_t range_0_start_noc_y = get_arg_val<uint32_t>(10);
-    uint32_t range_0_end_noc_x = get_arg_val<uint32_t>(11);
-    uint32_t range_0_end_noc_y = get_arg_val<uint32_t>(12);
-    uint32_t range_0_size = get_arg_val<uint32_t>(13);
-    uint32_t range_1_start_noc_x = get_arg_val<uint32_t>(14);
-    uint32_t range_1_start_noc_y = get_arg_val<uint32_t>(15);
-    uint32_t range_1_end_noc_x = get_arg_val<uint32_t>(16);
-    uint32_t range_1_end_noc_y = get_arg_val<uint32_t>(17);
-    uint32_t range_1_size = get_arg_val<uint32_t>(18);
-    uint32_t range_2_start_noc_x = get_arg_val<uint32_t>(19);
-    uint32_t range_2_start_noc_y = get_arg_val<uint32_t>(20);
-    uint32_t range_2_end_noc_x = get_arg_val<uint32_t>(21);
-    uint32_t range_2_end_noc_y = get_arg_val<uint32_t>(22);
-    uint32_t range_2_size = get_arg_val<uint32_t>(23);
-    bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
-    uint32_t aligned_page_size = get_arg_val<uint32_t>(25);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_pages = get_arg(args::num_pages);
+    uint32_t controller_noc_x = get_arg(args::controller_noc_x);
+    uint32_t controller_noc_y = get_arg(args::controller_noc_y);
+    uint32_t control_value = get_arg(args::control_value);
+    bool is_controller = get_arg(args::is_controller) == 1;
+    uint32_t range_0_start_noc_x = get_arg(args::range_0_start_noc_x);
+    uint32_t range_0_start_noc_y = get_arg(args::range_0_start_noc_y);
+    uint32_t range_0_end_noc_x = get_arg(args::range_0_end_noc_x);
+    uint32_t range_0_end_noc_y = get_arg(args::range_0_end_noc_y);
+    uint32_t range_0_size = get_arg(args::range_0_size);
+    uint32_t range_1_start_noc_x = get_arg(args::range_1_start_noc_x);
+    uint32_t range_1_start_noc_y = get_arg(args::range_1_start_noc_y);
+    uint32_t range_1_end_noc_x = get_arg(args::range_1_end_noc_x);
+    uint32_t range_1_end_noc_y = get_arg(args::range_1_end_noc_y);
+    uint32_t range_1_size = get_arg(args::range_1_size);
+    uint32_t range_2_start_noc_x = get_arg(args::range_2_start_noc_x);
+    uint32_t range_2_start_noc_y = get_arg(args::range_2_start_noc_y);
+    uint32_t range_2_end_noc_x = get_arg(args::range_2_end_noc_x);
+    uint32_t range_2_end_noc_y = get_arg(args::range_2_end_noc_y);
+    uint32_t range_2_size = get_arg(args::range_2_size);
+    bool do_third_multicast = get_arg(args::do_third_multicast) == 1;
+    uint32_t aligned_page_size = get_arg(args::aligned_page_size);
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr uint32_t page_size = get_arg(args::page_size);
 
     Noc noc;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(dfb::scratch);
 
-    const auto src_addrgen = TensorAccessor(src_args, src_addr);
-    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
+    const auto src_addrgen = TensorAccessor(tensor::input);
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
     // control_value locally
-    Semaphore<> sem(semaphore_arg);
+    Semaphore sem(sem::sem);
 
     // read a ublock of tiles from src to CB
     cb.reserve_back(num_pages);
-    uint32_t l1_write_addr = cb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        CoreLocalMem<uint32_t> dst(l1_write_addr);
-        noc.async_read(src_addrgen, dst, page_size, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read(
+            src_addrgen,
+            cb,
+            page_size,
+            {.page_id = i, .offset_bytes = 0},
+            {.offset_bytes = (i - start_id) * aligned_page_size});
         noc.async_read_barrier();
-        l1_write_addr += aligned_page_size;
     }
-    cb.push_back(num_pages);
 
     if (is_controller) {
         sem.wait(control_value);
@@ -84,13 +78,10 @@ void kernel_main() {
         sem.wait(control_value);
     }
 
-    cb.wait_front(num_pages);
-    uint32_t l1_read_addr = cb.get_read_ptr();
-    for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        CoreLocalMem<uint32_t> src(l1_read_addr);
-        noc.async_write(src, dst_addrgen, page_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
-        noc.async_write_barrier();
-        l1_read_addr += aligned_page_size;
-    }
-    cb.pop_front(num_pages);
+    // Publish the staged data to the writer kernel only AFTER the read barriers and the all-cores
+    // handshake above, so the writer's wait_front(dfb::scratch) cannot drain CB -> dst until every
+    // core has finished reading src (the overlap-safety invariant). Then drain the handshake's NoC
+    // writes/atomics before returning (the Metal 2.0 FW epilogue does not).
+    cb.push_back(num_pages);
+    noc.async_full_barrier();
 }

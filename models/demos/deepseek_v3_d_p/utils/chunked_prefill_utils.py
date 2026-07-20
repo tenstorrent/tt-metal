@@ -16,6 +16,7 @@ from loguru import logger
 from safetensors.torch import load_file
 from transformers.cache_utils import DynamicCache
 
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 
 
@@ -92,5 +93,5 @@ def cpu_mla_reference(config, weights, hidden_2d):
             hidden_states=hidden_2d.unsqueeze(0), position_ids=pos, past_key_value=ref_cache, use_cache=True
         )
     logger.warning(f"===== HOST ATTENTION END: torch reference done in {time.perf_counter() - t0:.1f}s =====")
-    kvpe = ref_cache.key_cache[0][0, 0]  # [S, kvpe], latent k_nope + roped k_pe (Meta basis)
+    kvpe = hf_cache_layer_kv(ref_cache, 0)[0][0, 0]  # [S, kvpe], latent k_nope + roped k_pe (Meta basis)
     return out[0].to(torch.bfloat16), kvpe.to(torch.bfloat16)

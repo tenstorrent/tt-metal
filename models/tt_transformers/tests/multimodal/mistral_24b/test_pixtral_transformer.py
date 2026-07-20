@@ -29,7 +29,7 @@ from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_transformer
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "num_command_queues": 1}],
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):

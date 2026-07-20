@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "moe_ring_common.h"
 
 // Triple buffering constants
@@ -84,22 +86,27 @@ void kernel_main() {
     }
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
-    [[maybe_unused]] constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
-    [[maybe_unused]] constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
-    [[maybe_unused]] constexpr auto cb_w2c_md = tt::CBIndex::c_7;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1_id = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy_id = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy_id = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2_id = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md_id = tt::CBIndex::c_7;
 
     // CB Aliases
-    [[maybe_unused]] constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
+    constexpr auto cb_c2s_out_id = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    constexpr auto cb_r2c_w2_id = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
+
+    // CircularBuffer typed wrappers
+    CircularBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
+    CircularBuffer cb_r2c_w2(cb_r2c_w2_id);
+    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
 
     // Tile sizes
-    [[maybe_unused]] constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
-    constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
-    [[maybe_unused]] constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
+    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
+    constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1_id);
+    constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2_id);
+    constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2_id);
 
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
@@ -188,7 +195,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // CB addresses
     //-------------------------------------------------------------------------
-    const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w0_w1);
+    const uint32_t w_cb_base_addr = cb_r2c_w0_w1.get_write_ptr();
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 2 transactions (28 tiles)
@@ -206,12 +213,12 @@ void kernel_main() {
     //-------------------------------------------------------------------------
 
     // Receive number of tokens per expert from the tilize cores
-    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+    Semaphore<> metadata_ready_sem(metadata_ready_semaphore_id);
+    metadata_ready_sem.wait_min(1);
 
     // Read per-expert token counts from CB
     volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_per_expert_total_tokens.get_read_ptr());
 
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
@@ -225,11 +232,16 @@ void kernel_main() {
     //-------------------------------------------------------------------------
 
     // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block);
 
     // Pre-set state for this ring core's first bank (WH fast path: when
     // pages_per_ring_core_total <= pages_per_bank_total). The bank-run loop below will
     // re-set_state only when shard_idx changes.
+    // Device 2.0 migration: legacy primitives retained: noc_async_read_set_trid /
+    // noc_async_read_one_packet_set_state / noc_async_read_one_packet_with_state_with_trid /
+    // noc_async_read_barrier_with_trid are the trid-pipelined state-machine API used to
+    // drive a triple-buffered DRAM read pipeline; Device 2.0 Noc wrapper does not yet expose
+    // typed equivalents for the set_state / with_state / with_trid family
     const uint32_t initial_shard_idx_w0 =
         (ring_core_id * w0_w1_pages_per_ring_core_total + w0_w1_layer_offset_in_ring_core) / w0_w1_pages_per_bank_total;
     const uint32_t initial_bank_id_w0 = shard_to_bank[initial_shard_idx_w0];
@@ -336,12 +348,12 @@ void kernel_main() {
                 // Only when we first start the pipeline, we don't have any txns in flight
                 if (txns_in_flight) {
                     noc_async_read_barrier_with_trid(trid_to_wait);
-                    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                    cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
 
                     ADVANCE_TRID(trid_to_wait);
 
                     // Reserve for next block
-                    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+                    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * 2);
                 }
                 txns_in_flight = true;
             }
@@ -402,23 +414,23 @@ void kernel_main() {
                 ADVANCE_TRID(trid_to_issue);
 
                 noc_async_read_barrier_with_trid(trid_to_wait);
-                cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+                cb_r2c_w2.push_back(w2_tiles_per_block);
 
                 ADVANCE_TRID(trid_to_wait);
 
                 // Reserve for next block
-                cb_reserve_back(cb_r2c_w2, w2_tiles_per_block * 2);
+                cb_r2c_w2.reserve_back(w2_tiles_per_block * 2);
             }
         }
     }
 
     // Drain the pipeline - the last txn in flight
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w2.push_back(w2_tiles_per_block);
 
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w2.push_back(w2_tiles_per_block);
 }
 
 #undef ADVANCE_TRID

@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
+#include <algorithm>
+#include <bit>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
+#include <random>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <functional>
 #include <map>
 #include <memory>
 #include <string>
-#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -23,6 +24,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -60,6 +62,8 @@ struct TransposeConfig {
     uint32_t single_tile_size;
     std::vector<uint32_t> shape;
     TransposeType transpose_type;
+    tt::DataFormat data_format = tt::DataFormat::Float16_b;
+    bool dst_full_sync_en = false;
 };
 
 // Tiled dimensions derived from a 4-D NCHW tensor shape, with shared validation.
@@ -93,51 +97,55 @@ static TransposeDims compute_and_validate_transpose_dims(const std::vector<uint3
     };
 }
 
+// Validate a WH-transpose device result against a CPU golden for any tested data format.
+// 16-bit (bfloat16) packs two datums per uint32 and goes through format conversions, so it uses a
+// tolerant float compare. 32-bit formats (Float32/Int32) are exact, lossless data movement, so they
+// use an exact word compare.
 void validate_transpose_wh(
-    const std::vector<uint32_t>& src_vec, const std::vector<uint32_t>& shape, const std::vector<uint32_t>& result_vec) {
-    int argfail = -1;
-    auto comparison_function = [](float a, float b) {
-        const float rtol = 0.02f;
-        const float atol = 1e-3f;
-        float maxabs = fmaxf(fabsf(a), fabsf(b));
-        float absdiff = fabsf(a - b);
-        auto result = (absdiff <= atol) || absdiff < rtol * maxabs;
-        if (!result) {
-            absdiff *= 1.0f;  // breakpoint spot
-        }
-        return result;
-    };
-
-    // recover a linear view of input vector for consumption by gold_ function
-    auto u16_src0_vec = u16_from_u32_vector(src_vec);
-    vector<uint16_t> src_linear =
-        convert_layout<uint16_t>(u16_src0_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
-    vector<uint16_t> gold_reduced =
-        ::unit_tests::compute::gold_transpose_wh(src_linear, shape);  // result is uint16_t untilized
-
-    // Tilize from row major and convert to pairs (uint32_t)
-    TT_FATAL(shape.size() == 4, "Error");
-    vector<uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
-    auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
-        gold_reduced, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
-
-    bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
-    if (not pass) {
-        log_error(LogTest, "Failure position={}", argfail);
-    }
-    EXPECT_TRUE(pass);
-}
-
-static void read_and_validate_transpose_result(
-    const MeshTensor& dst_tensor,
     const std::vector<uint32_t>& src_vec,
     const std::vector<uint32_t>& shape,
-    const TransposeDims& dims) {
-    std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(*dst_tensor.mesh_buffer().get_reference_buffer(), result_vec);
-    // Expecting one tile in H, and half the elements since the vector packs 2 uint16_ts.
-    EXPECT_EQ(result_vec.size(), dims.NC * dims.H * dims.W / 2);
-    validate_transpose_wh(src_vec, shape, result_vec);
+    const std::vector<uint32_t>& result_vec,
+    tt::DataFormat data_format) {
+    TT_FATAL(shape.size() == 4, "Error");
+    const vector<uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
+
+    bool pass = false;
+    int argfail = -1;
+    if (tt::datum_size(data_format) == sizeof(uint32_t)) {
+        // 32-bit datum: one uint32 per element, exact compare.
+        auto src_linear =
+            convert_layout<uint32_t>(src_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+        auto gold_lin = ::unit_tests::compute::gold_transpose_wh(src_linear, shape);
+        auto gold_tiled =
+            convert_layout<uint32_t>(gold_lin, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+
+        ASSERT_EQ(result_vec.size(), gold_tiled.size());
+        const auto res_it = std::mismatch(result_vec.begin(), result_vec.end(), gold_tiled.begin()).first;
+        pass = (res_it == result_vec.end());
+        if (!pass) {
+            argfail = static_cast<int>(std::distance(result_vec.begin(), res_it));
+        }
+    } else {
+        // 16-bit datum (bfloat16): two datums packed per uint32, tolerant float compare.
+        auto comparison_function = [](float a, float b) {
+            const float rtol = 0.02f;
+            const float atol = 1e-3f;
+            const float absdiff = fabsf(a - b);
+            return (absdiff <= atol) || (absdiff < rtol * fmaxf(fabsf(a), fabsf(b)));
+        };
+        auto src_linear = convert_layout<uint16_t>(
+            u16_from_u32_vector(src_vec), shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+        auto gold_lin = ::unit_tests::compute::gold_transpose_wh(src_linear, shape);
+        auto gold_tiled = u32_from_u16_vector(convert_layout<uint16_t>(
+            gold_lin, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
+
+        pass = packed_uint32_t_vector_comparison(result_vec, gold_tiled, comparison_function, &argfail);
+    }
+
+    if (!pass) {
+        log_error(LogTest, "Transpose WH mismatch at position {}", argfail);
+    }
+    EXPECT_TRUE(pass);
 }
 
 // Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
@@ -182,15 +190,22 @@ void run_single_core_transpose(
         .unique_id = INPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_buffer_tiles,
-        .data_format_metadata = tt::DataFormat::Float16_b,
+        .data_format_metadata = test_config.data_format,
     };
     experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_output_buffer_tiles,
-        .data_format_metadata = tt::DataFormat::Float16_b,
+        .data_format_metadata = test_config.data_format,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
@@ -200,15 +215,16 @@ void run_single_core_transpose(
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {INPUT_DFB}}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -218,13 +234,7 @@ void run_single_core_transpose(
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUTPUT_DFB}}},
+        .hw_config = writer_hw_config,
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -236,6 +246,29 @@ void run_single_core_transpose(
                                           ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
                                           : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp";
 
+    // Enable 32-bit dest accumulate for the 32-bit formats (Float32/Int32); the compute kernel forwards
+    // DST_ACCUM_MODE as the transpose-dest EN_32BIT_DEST template arg, so the two must agree.
+    const bool fp32_dest_acc_en =
+        (test_config.data_format == tt::DataFormat::Float32 || test_config.data_format == tt::DataFormat::Int32);
+    experimental::ComputeHardwareConfig compute_hw_config;
+    experimental::ComputeUnpackModes unpack_modes{};
+    if (fp32_dest_acc_en) {
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
+            .unpack_to_dest_en = fp32_dest_acc_en,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel_path,
@@ -255,7 +288,7 @@ void run_single_core_transpose(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -288,11 +321,12 @@ void run_single_core_transpose(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", num_tensor_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tensor_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -302,13 +336,38 @@ void run_single_core_transpose(
     };
     experimental::SetProgramRunArgs(program_run, params);
 
-    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
+    // Fixed seed so each test produces a repeatable input vector across runs.
+    constexpr std::uint32_t kRandomSeed = 0x1234;
+    vector<uint32_t> src_vec;
+    const std::uint32_t n_u32 = dram_buffer_size / sizeof(uint32_t);
+    // Fill src_vec with seeded random words: `dist` draws values and `convert` reinterprets
+    // each draw into its uint32 word representation for the given data format.
+    auto fill_random = [&](auto dist, auto convert) {
+        src_vec.resize(n_u32);
+        std::mt19937 rng(kRandomSeed);
+        std::generate(src_vec.begin(), src_vec.end(), [&]() { return convert(dist(rng)); });
+    };
+    if (test_config.data_format == tt::DataFormat::Float32) {
+        fill_random(
+            std::uniform_real_distribution<float>(-100.0f, 100.0f), [](float v) { return std::bit_cast<uint32_t>(v); });
+    } else if (test_config.data_format == tt::DataFormat::Int32) {
+        fill_random(
+            std::uniform_int_distribution<int32_t>(-10000, 10000), [](int32_t v) { return static_cast<uint32_t>(v); });
+    } else {
+        src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, kRandomSeed);
+    }
     tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    read_and_validate_transpose_result(out_tensor, src_vec, test_config.shape, dims);
+    std::vector<uint32_t> result_vec;
+    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), result_vec);
+
+    const std::uint32_t bytes_per_elem = tt::datum_size(test_config.data_format);
+    EXPECT_EQ(result_vec.size(), (dims.NC * dims.H * dims.W * bytes_per_elem) / sizeof(uint32_t));
+
+    validate_transpose_wh(src_vec, test_config.shape, result_vec, test_config.data_format);
 }
 
 }  // namespace unit_tests::compute::transpose
@@ -344,6 +403,41 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHDest) {
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
+    // Tests SyncHalf and SyncFull
+    for (const bool dst_full_sync_en : {false, true}) {
+        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
+        unit_tests::compute::transpose::TransposeConfig test_config = {
+            .short_init = false,
+            .transpose_dest = true,
+            .single_tile_size = constants::TILE_HW * sizeof(uint32_t),
+            .shape = {1, 1, 64, 64},
+            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+            .data_format = tt::DataFormat::Float32,
+            .dst_full_sync_en = dst_full_sync_en,
+        };
+        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+    }
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
+    // 16-bit dest (EN_32BIT_DEST=false): exercises the implied-math-format-disabled config path.
+    // Tests SyncHalf and SyncFull
+    for (const bool dst_full_sync_en : {false, true}) {
+        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
+        unit_tests::compute::transpose::TransposeConfig test_config = {
+            .short_init = false,
+            .transpose_dest = true,
+            .single_tile_size = constants::TILE_HW * sizeof(uint16_t),
+            .shape = {1, 1, 64, 64},
+            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+            .data_format = tt::DataFormat::Float16_b,
+            .dst_full_sync_en = dst_full_sync_en,
+        };
+        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+    }
 }
 
 }  // namespace tt::tt_metal

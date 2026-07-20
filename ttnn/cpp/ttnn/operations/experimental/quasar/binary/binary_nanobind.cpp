@@ -236,7 +236,7 @@ void bind_binary_inplace_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -318,7 +318,7 @@ void bind_binary_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -404,7 +404,7 @@ void bind_binary_gcd_lcm_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         fn,
@@ -491,7 +491,7 @@ void bind_binary_unary_max_operation(
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}));
-    ttnn::bind_function<Name>(mod, doc.c_str(), scalar_overload, tensor_overload);
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(mod, doc.c_str(), scalar_overload, tensor_overload);
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
@@ -551,7 +551,7 @@ void bind_binary_unary_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -631,7 +631,7 @@ void bind_binary_with_float_param(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         fn,
@@ -699,7 +699,7 @@ void bind_bitwise_binary_ops_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -778,7 +778,7 @@ void bind_binary_composite(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         fn,
@@ -833,7 +833,7 @@ void bind_binary_composite_with_rtol_atol(
         math,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         fn,
@@ -897,7 +897,7 @@ void bind_binary_composite_overload(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -964,7 +964,7 @@ void bind_prelu(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -1072,7 +1072,8 @@ void bind_div(
         nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("sub_device_id") = nb::none());
-    ttnn::bind_function<Name>(mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload);
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
+        mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload);
 }
 
 // Free functions for multiply and divide with fast_and_approximate_mode
@@ -1241,7 +1242,7 @@ void bind_binary_operation_with_fast_approx(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -1324,7 +1325,7 @@ void bind_polyval(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         fn,
@@ -1387,7 +1388,7 @@ void bind_binary_overload_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -1460,7 +1461,7 @@ void bind_inplace_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -1538,7 +1539,7 @@ void bind_inplace_operation_with_fast_approx(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
+    ttnn::bind_function<Name, "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(
@@ -1607,7 +1608,7 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<"pow">(
+    ttnn::bind_function<"pow", "ttnn.experimental.quasar.">(
         mod,
         doc.c_str(),
         ttnn::overload_t(

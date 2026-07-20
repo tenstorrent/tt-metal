@@ -3,23 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <tt-metalium/workload_descriptor.hpp>
-#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 namespace ttnn::prim::qsr {
 
 struct Conv2dWidthShardedProgramFactory {
-    // Builds the workload in one call (cache miss).  The intermediate
-    // conv_reader_indices tensor — which must outlive the cached program — is
-    // allocated here and parked on the WorkloadDescriptor's `buffers` vector
-    // (wrapped in `shared_ptr<Tensor>` so `~Tensor` cannot force-deallocate the
-    // device memory while the cached program is still alive).
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const Conv2dParams& operation_attributes,
-        const Conv2dInputs& tensor_args,
-        Tensor& output_tensor,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    // Metal 2.0 factory entry point.  Builds the immutable ProgramSpec + mutable
+    // ProgramRunArgs (paired in ProgramArtifacts) for the width-sharded conv2d.
+    //
+    // The intermediate conv_reader_indices tensor — which must outlive the cached
+    // program — is allocated here and parked on ProgramArtifacts::op_owned_tensors
+    // (the adapter keeps it alive in the program cache so its device-memory
+    // allocation stays at a stable address across dispatches).  This replaces the
+    // legacy WorkloadDescriptor::buffers parking.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim::qsr

@@ -1687,29 +1687,38 @@ public:
         return path;
     }
 
-    bool validate_num_links_supported(uint32_t num_links) const override {
-        // Validate that num_links doesn't exceed available routing planes for any row/column
+    uint32_t get_max_num_links() const override {
+        // Maximum num_links usable on this platform: the minimum, across all local devices, of the
+        // usable routing planes for that device. Shared by validate_num_links_supported and by the
+        // YAML max/all resolution so both stay consistent.
         const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
         const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
 
+        uint32_t max_num_links = std::numeric_limits<uint32_t>::max();
         std::vector<FabricNodeId> devices = get_local_node_ids();
         for (const auto& device : devices) {
             uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
             // TODO: remove this once we have correct
-            if (num_pci_devices != num_devices) {
+            if (num_pci_devices != num_devices && max_routing_planes > 0) {
                 max_routing_planes -= 1;
             }
-            if (num_links > max_routing_planes) {
-                log_warning(
-                    LogTest,
-                    "Skipping: Requested num_links ({}) exceeds maximum available routing planes ({}) for "
-                    "device {}. "
-                    "Please reduce num_links or check your fabric configuration.",
-                    num_links,
-                    max_routing_planes,
-                    device.chip_id);
-                return false;  // Indicate test should be skipped
-            }
+            max_num_links = std::min(max_num_links, max_routing_planes);
+        }
+
+        return (max_num_links == std::numeric_limits<uint32_t>::max()) ? 0 : max_num_links;
+    }
+
+    bool validate_num_links_supported(uint32_t num_links) const override {
+        // Validate that num_links doesn't exceed available routing planes for any device
+        uint32_t max_num_links = get_max_num_links();
+        if (num_links > max_num_links) {
+            log_warning(
+                LogTest,
+                "Skipping: Requested num_links ({}) exceeds maximum available routing planes ({}). "
+                "Please reduce num_links or check your fabric configuration.",
+                num_links,
+                max_num_links);
+            return false;  // Indicate test should be skipped
         }
 
         return true;
@@ -1721,9 +1730,9 @@ public:
 
         // Check all possible directions
         for (const auto& direction : FabricContext::routing_directions) {
-            size_t routing_planes = tt::tt_metal::MetalContext::instance()
-                                        .get_control_plane()
-                                        .get_num_available_routing_planes_in_direction(node_id, direction);
+            size_t routing_planes =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_num_usable_routing_planes(
+                    node_id, direction);
             if (routing_planes > 0) {  // Only consider directions that have routing planes
                 min_routing_planes = std::min(min_routing_planes, static_cast<uint32_t>(routing_planes));
             }
@@ -1747,7 +1756,7 @@ public:
                 master_seed = std::random_device()();
                 for (int recv_host_rank = 1; recv_host_rank < *(distributed_context->size()); ++recv_host_rank) {
                     distributed_context->send(
-                        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
                         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
                     );
@@ -1755,7 +1764,7 @@ public:
                 log_info(tt::LogTest, "Master seed sent: {}", master_seed);
             } else {
                 distributed_context->recv(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                     tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
                     tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
                 );

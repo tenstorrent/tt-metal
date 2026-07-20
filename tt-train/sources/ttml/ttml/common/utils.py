@@ -24,6 +24,56 @@ def set_seed(seed: int = 42):
     ttml.manual_seed(seed)
 
 
+def build_mesh(device_config) -> "ttml.Mesh":
+    """Construct a named mesh from ``device_config``; axis names follow the C++ ``(dp -> fsdp -> tp)`` order.
+
+    First enabled name claims axis 0, the next claims axis 1, etc. -- matching PyTorch FSDP2's HSDP
+    convention (replicate/``dp`` outermost, shard/``fsdp`` inner) so ``ttml.fsdp.fully_shard`` and
+    ``ttml.sync_gradients`` bind to the same physical axes the C++ trainer would. A line mesh
+    (<=1 dim > 1) needs exactly one of enable_ddp/enable_fsdp/enable_tp. HSDP+TP (a full 3D mesh)
+    is not supported by the dataloader batch sharding in the training scripts.
+
+    ``device_config`` is a :class:`ttml.common.config.DeviceConfig` (accessed by duck typing -- it
+    is not imported here to avoid a circular import, since ``config`` imports from this module).
+    """
+    shape = tuple(int(s) for s in device_config.mesh_shape)
+    n = len(shape)
+    nontrivial = [i for i, s in enumerate(shape) if s > 1]
+    is_line = len(nontrivial) <= 1
+
+    # Ordered (dp -> fsdp -> tp): maps mesh axis index -> parallelism name.
+    enabled_names: list[str] = []
+    if device_config.enable_ddp:
+        enabled_names.append("dp")
+    if device_config.enable_fsdp:
+        enabled_names.append("fsdp")
+    if device_config.enable_tp:
+        enabled_names.append("tp")
+
+    # ttml.Mesh requires a name per axis; "_i" is a placeholder for unassigned axes.
+    axis_names = [f"_{i}" for i in range(n)]
+    if not enabled_names:
+        return ttml.Mesh(shape, tuple(axis_names))
+
+    if is_line:
+        if len(enabled_names) != 1:
+            raise ValueError(
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_fsdp / enable_tp; "
+                f"got enabled={enabled_names}"
+            )
+        active = nontrivial[0] if nontrivial else 0
+        axis_names[active] = enabled_names[0]
+    else:
+        if len(enabled_names) != n:
+            raise ValueError(
+                f"Mesh {shape} requires {n} parallelisms enabled "
+                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
+            )
+        for i, name in enumerate(enabled_names):
+            axis_names[i] = name
+    return ttml.Mesh(shape, tuple(axis_names))
+
+
 def get_tt_metal_runtime_root() -> str:
     """Return TT-Metal runtime root from the environment.
 
@@ -105,6 +155,18 @@ def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.
     logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
     logits_mask[:, :, :, vocab_size:] = 1e4
     return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)  # [1,1,1,T], bfloat16
+
+
+def build_causal_mask(T: int, device: bool = False):
+    """Square causal attention mask ``[1, 1, T, T]`` (1 = attend).
+
+    By default returns a host numpy array. With ``device=True`` the mask is
+    uploaded as a replicated TILE bf16 ttml tensor (no mesh mapper).
+    """
+    m = np.tril(np.ones((1, 1, T, T), dtype=np.float32))
+    if not device:
+        return m
+    return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
 def get_available_device_memory_in_bytes() -> int:

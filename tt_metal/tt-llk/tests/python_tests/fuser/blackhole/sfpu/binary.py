@@ -6,10 +6,10 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.sfpu_node import SfpuNode
 from helpers.golden_generators import (
     BinarySFPUGolden,
     get_golden_generator,
@@ -55,7 +55,7 @@ class BinarySfpu(Sfpu):
         tensor: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
@@ -85,25 +85,26 @@ class BinarySfpu(Sfpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
         format = self._format_arg(config)
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
-            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
+            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {dest_acc}, {op}, {iterations}, {format}>();\n"
         )
 
     def calculate(
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         dest_sync = operation.dest_sync.cpp_enum_value

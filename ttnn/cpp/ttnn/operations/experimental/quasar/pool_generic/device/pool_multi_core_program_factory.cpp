@@ -1,57 +1,58 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pool_op.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
+#include "pool_multi_core_program_factory.hpp"
+
 #include "tt-metalium/constants.hpp"
-#include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
-#include "ttnn/operations/cb_utils.hpp"
+#include "tt-metalium/tile.hpp"
+#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/math.hpp"
+#include "tt-metalium/mesh_buffer.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/buffer.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/hal.hpp>
+
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/tensor/storage.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <algorithm>
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::pool::quasar {
 
-// Circular buffer ID used to indicate an unallocated/invalid CB
-constexpr uint32_t INVALID_CB_ID = 32;
+namespace {
 
-/**
- * Generic pool implementation that uses the new sliding window infrastructure.
- */
+// ---------------------------------------------------------------------------
+// Op-owned scalar-config tensor for avg pool (unchanged host computation).
+// ---------------------------------------------------------------------------
 struct ScalarInfo {
-    // Scalar Info is used to store the information about the scalar used in avg pool op
-    // start and end refer to indices of the output stick core is calculating.
-    // These are directly mapped to the for loop that can be found in reader and compute kernel of the pool op
-    // for (uint32_t i = 0; i < nsticks_per_core; ++i), start is first stick which should be reduced and multiplied by
-    // scalar value, end is the first stick which should not be reduced and multiplied by scalar value. So the interval
-    // [start, end) is the range of sticks that should be reduced and multiplied by scalar value.
     uint16_t start;
     uint16_t value;
     uint16_t end;
 };
 
-// This function generates a vector of elements of type ScalarInfo. It is called once per core and generates the
-// adequate scalars for each output element that core should produce. It should be called only for avg pool operation
-// and only if the divisor_override is NOT set and the idea behind it is to generate config tensor in cases where one
-// scalar per core is not sufficient to create correct result. Those scenarios are ceil_mode == true and (ceil_pad_h > 0
-// || ceil_pad_w > 0) or count_include_pad == false || (pad_h > 0 || pad_w > 0). Both of these scenarios can be
-// irrelevant if the divisor_override is set, in which case we don't calculate the divisor since it is already passed as
-// an argument. It only adds scalars that are different than the scalar preceding it not to have duplicates of data,
-// this is why we use start and end indices to know how many sequential output elements should be multiplied by the same
-// scalar value.
 std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     const AvgPoolConfig& config, uint32_t output_stick_x, uint32_t output_stick_y) {
     TT_FATAL(
@@ -72,11 +73,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     uint32_t last_pool_area = 0;
 
     for (uint32_t i = 0; i < config.max_out_nhw_per_core; i++) {
-        // Compute starting and ending indices of the pooling window
         int h_start = (output_stick_x * config.stride_h) - config.pad_t;
         int w_start = (output_stick_y * config.stride_w) - config.pad_l;
-        // omit any ceiling mode related padding from end point calculations as these are not used in the
-        // calculation of the pool area even when count_include_pad is on
         int h_end = std::min(h_start + static_cast<int>(config.kernel_h), static_cast<int>(config.in_h + config.pad_b));
         int w_end = std::min(w_start + static_cast<int>(config.kernel_w), static_cast<int>(config.in_w + config.pad_r));
 
@@ -95,18 +93,18 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         }
         float value = pool_area > 0 ? 1.f / static_cast<float>(pool_area) : 0.f;
 
-        // Add new scalar if padding config changes
         if (first_scalar || static_cast<uint32_t>(pool_area) != last_pool_area) {
             if (!scalars.empty()) {
                 scalars.back().end = i;
             }
-            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            scalars.push_back({i, std::bit_cast<uint16_t>(bfloat16::truncate(value)), i});
+            scalars.push_back(
+                {static_cast<uint16_t>(i),
+                 std::bit_cast<uint16_t>(bfloat16::truncate(value)),
+                 static_cast<uint16_t>(i)});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
 
-        // Advance output element coordinates
         output_stick_y = (output_stick_y + 1) % config.out_w;
         if (output_stick_y == 0) {
             output_stick_x = (output_stick_x + 1) % config.out_h;
@@ -117,7 +115,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     return scalars;
 }
 
-static void push_back_scalar_info_or_zero(
+void push_back_scalar_info_or_zero(
     std::vector<uint16_t>& config_vector,
     const std::vector<ScalarInfo>& scalars,
     uint32_t max_scalars_cnt,
@@ -133,11 +131,7 @@ static void push_back_scalar_info_or_zero(
     }
 }
 
-// This function creates a scalar config tensor for the AvgPool2D operation. It is entirely made of
-// a vector of ScalarInfo structs, which are used to configure the pooling operation. The config tensor
-// is filled with max_out_nhw_per_core number of ScalarInfos for each core and then sharded across the cores.
-// Since we don't usually have that many different scalars, we fill the rest of the config tensor with 0s.
-static Tensor create_scalar_config_tensor(
+Tensor create_scalar_config_tensor(
     const AvgPoolConfig& config,
     TensorMemoryLayout in_memory_layout,
     uint32_t n_dim,
@@ -166,7 +160,6 @@ static Tensor create_scalar_config_tensor(
             scalars_per_core.emplace_back(get_bf16_avg_pool_config_scalars(config, output_stick_h, output_stick_w));
             max_scalars_cnt = std::max(max_scalars_cnt, scalars_per_core.back().size());
 
-            // Width sharded layout requires only one iteration, so we can break here
             if (in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
                 in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                 nhw_linear += config.max_out_nhw_per_core;
@@ -195,10 +188,7 @@ static Tensor create_scalar_config_tensor(
 
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
-        // With height sharded layout each scalar is unique and needs to be calculated
         case TensorMemoryLayout::BLOCK_SHARDED: {
-            // With block sharded layout scalars across sequential channels shard repeat, so we use repeats variable not
-            // to recalculate scalars that we can reuse
             for (const std::vector<ScalarInfo>& scalars : scalars_per_core) {
                 uint32_t repeats = config_tensor_in_dram ? 1 : num_shards_c;
                 push_back_scalar_info_or_zero(config_vector, scalars, max_scalars_cnt, repeats);
@@ -206,13 +196,10 @@ static Tensor create_scalar_config_tensor(
             break;
         }
         case TensorMemoryLayout::WIDTH_SHARDED: {
-            // With width sharded layout scalars should be calculated only once, so we push them back num_shards_c times
-            // but have only one array of scalars
             uint32_t repeats = config_tensor_in_dram ? 1 : num_shards_c;
             push_back_scalar_info_or_zero(config_vector, scalars_per_core[0], max_scalars_cnt, repeats);
             break;
         }
-
         default: break;
     }
 
@@ -244,7 +231,6 @@ std::vector<uint32_t> generate_core_starting_indices(
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
-            // this core has no output
             starting_indices.push_back(0);
             continue;
         }
@@ -253,815 +239,9 @@ std::vector<uint32_t> generate_core_starting_indices(
             starting_indices.push_back(op_trace_metadata[output_shard_start]);
         }
     }
-
     return starting_indices;
 }
 
-static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_impl_new(
-    const Tensor& input,
-    tt::tt_metal::Buffer* reader_indices_buffer,
-    tt::tt_metal::Buffer* scalar_config_buffer,
-    uint32_t reader_indices_size,
-    std::vector<Tensor>& outputs,
-    Pool2DType pool_type,
-    uint32_t in_n,
-    uint32_t in_c,
-    uint32_t in_h,
-    uint32_t in_w,
-    uint32_t out_h,
-    uint32_t out_w,
-    uint32_t out_c,
-    uint32_t kernel_h,
-    uint32_t kernel_w,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    uint32_t pad_t,
-    uint32_t pad_b,
-    uint32_t pad_l,
-    uint32_t pad_r,
-    uint32_t ceil_pad_h,
-    uint32_t ceil_pad_w,
-    bool ceil_mode,
-    bool return_indices,
-    std::vector<uint32_t> core_starting_indices,
-    bool count_include_pad,
-    uint32_t dilation_h,
-    uint32_t dilation_w,
-    uint32_t num_shards_c,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<int32_t> divisor_override,
-    uint32_t memory_used,
-    const Layout& output_layout,
-    bool config_tensor_in_dram) {
-    using namespace tt::tt_metal;
-
-    TT_FATAL(
-        reader_indices_buffer != nullptr,
-        "Pool2D::MultiCore::create_workload_descriptor must populate the reader-indices buffer before building "
-        "programs");
-
-    const bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-
-    // distributing out_hw across the grid
-    const auto all_cores = input.shard_spec().value().grid;
-    const uint32_t ncores = all_cores.num_cores();
-    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
-    const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
-    const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
-    const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
-    TT_FATAL(
-        max_in_nhw_per_core <= std::numeric_limits<uint16_t>::max(),
-        "Input nhw per core {} exceeds uint16_t limit, this will cause overflow because the reader indices are stored "
-        "as uint16_t",
-        max_in_nhw_per_core);
-
-    const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
-    const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    FactoryParameters params = get_factory_parameters(
-        num_shards_c,
-        input.dtype(),
-        outputs[0].dtype(),
-        kernel_h,
-        kernel_w,
-        in_c,
-        pool_type,
-        return_indices,
-        in_h,
-        in_w,
-        output_layout);
-    uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
-    uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
-    uint32_t pad_h = pad_t + pad_b;
-    uint32_t pad_w = pad_l + pad_r;
-    const uint32_t in_h_padded = in_h + pad_h + ceil_pad_h;
-    const uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
-    const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
-        pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
-
-    // Compute CB sizes centrally - used for both CB creation and L1 validation.
-    // When the DRAM config-tensor path is active, the reader indices tensor is already built on
-    // host so we pass its real per-core page size. Auto-shard evaluation in pool_utils.cpp still
-    // falls back to the worst case because the buffers do not exist yet there. The scalar config
-    // tensor (only created for avg pool without one_scalar_per_core) is not yet known at this
-    // point, so its prediction remains the worst case; that matches how the CB is created below.
-    auto output_shard_shape = outputs[0].shard_spec().value().shape;
-    std::optional<uint32_t> reader_indices_actual_page_size;
-    if (config_tensor_in_dram) {
-        reader_indices_actual_page_size = reader_indices_buffer->page_size();
-    }
-    PoolCBSizes cb_sizes = calculate_pool_cb_sizes(
-        params,
-        one_scalar_per_core,
-        return_indices,
-        output_layout,
-        outputs[0].dtype(),
-        {output_shard_shape[0], output_shard_shape[1]},
-        config_tensor_in_dram,
-        reader_indices_actual_page_size);
-
-    const auto& input_shape = input.padded_shape();
-    const uint32_t shard_width = input.shard_spec()->shape[1];
-    const uint32_t in_c_per_shard_ceil = in_c % shard_width != 0 && num_shards_c > 1
-                                             ? (in_c - (in_c % shard_width)) / (num_shards_c - 1)
-                                             : in_c / num_shards_c;
-    const uint32_t in_nbytes_c = in_c_per_shard_ceil * params.nbytes;  // row of input (channels)
-    const uint32_t shard_width_bytes = input_shape[3] / num_shards_c * params.nbytes;
-
-    TT_FATAL(
-        input_shape[3] % num_shards_c == 0,
-        "Input channels {} should be divisible by number of shards {}",
-        input_shape[3],
-        num_shards_c);
-    const uint32_t in_nbytes_leftover =
-        params.is_wide_reduction &&
-                (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
-            ? tt::round_up(
-                  (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
-                  tt::constants::TILE_WIDTH) *
-                  params.nbytes
-            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * params.nbytes;
-
-    ProgramDescriptor desc;
-
-    // Helper to add a non-globally-allocated (local) CB to desc with a single format.
-    auto add_local_cb = [&](uint32_t cb_id,
-                            uint32_t page_size,
-                            uint32_t num_pages,
-                            tt::DataFormat data_format,
-                            std::optional<FaceGeometry> face_geometry = std::nullopt,
-                            std::optional<TileDescriptor> tile = std::nullopt) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size * num_pages,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_id),
-                .data_format = data_format,
-                .page_size = page_size,
-                .tile = tile,
-                .face_geometry = face_geometry,
-            }}},
-        });
-    };
-    // Helper for sharded (globally-allocated) CBs whose address is patched on cache hit.
-    auto add_sharded_cb = [&](uint32_t cb_id,
-                              uint32_t page_size,
-                              uint32_t num_pages,
-                              tt::DataFormat data_format,
-                              tt::tt_metal::Buffer* buffer,
-                              std::optional<FaceGeometry> face_geometry = std::nullopt,
-                              std::optional<TileDescriptor> tile = std::nullopt) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size * num_pages,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_id),
-                .data_format = data_format,
-                .page_size = page_size,
-                .tile = tile,
-                .face_geometry = face_geometry,
-            }}},
-            .buffer = buffer,
-        });
-    };
-
-    uint32_t next_cb_index = tt::CBIndex::c_0;
-    const uint32_t in_scalar_cb_id_0 = next_cb_index++;
-    const uint32_t in_scalar_cb_pagesize = cb_sizes.scalar_cb_pagesize;
-    const uint32_t in_scalar_cb_npages = cb_sizes.scalar_cb_npages;
-    const auto scalar_face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
-    add_local_cb(
-        in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format, scalar_face_geometry);
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
-
-    uint32_t in_scalar_cb_id_1 = INVALID_CB_ID;
-    if (cb_sizes.has_second_scalar_cb) {
-        in_scalar_cb_id_1 = next_cb_index++;
-        add_local_cb(
-            in_scalar_cb_id_1, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format, scalar_face_geometry);
-        log_debug(
-            tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_1, in_scalar_cb_pagesize, in_scalar_cb_npages);
-    }
-
-    // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
-    uint32_t clear_value_cb_id = next_cb_index++;
-    add_local_cb(clear_value_cb_id, cb_sizes.clear_value_cb_size, 1, params.data_format);
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, cb_sizes.clear_value_cb_size, 1);
-
-    // incoming data is the input cb instead of raw l1/dram addr
-    // this input shard has halo and padding inserted.
-    const uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
-    const uint32_t raw_in_cb_pagesize = in_nbytes_c;
-    const uint32_t raw_in_cb_id = next_cb_index++;
-    add_sharded_cb(raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages, params.data_format, input.buffer());
-
-    log_debug(tt::LogOp, "Raw In CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
-
-    // reader indices
-    const uint32_t in_reader_indices_cb_id = next_cb_index++;
-    const uint32_t in_reader_indices_cb_pagesize =
-        tt::round_up(reader_indices_size, 4);  // pagesize needs to be multiple of 4
-    constexpr uint32_t in_reader_indices_cb_npages = 1;
-
-    const uint32_t max_reader_indices_size =
-        (max_out_nhw_per_core * 3 * sizeof(uint16_t)) + 2;  // worst case of 3 indices per output element
-    const uint32_t actual_reader_indices_buffer_page_size = reader_indices_buffer->page_size();
-    TT_FATAL(
-        actual_reader_indices_buffer_page_size <= max_reader_indices_size,
-        "Reader indices buffer page size {} exceeds max expected size {}",
-        actual_reader_indices_buffer_page_size,
-        max_reader_indices_size);
-
-    if (config_tensor_in_dram) {
-        // DRAM-backed reader indices buffer: the CB is purely local scratch; the kernel
-        // reads from DRAM via TensorAccessor and the CB is sized to the actual buffer
-        // page size (see PR #43193) to keep the L1 footprint tight. The worst-case
-        // value above is only used as an upper-bound check.
-        add_local_cb(
-            in_reader_indices_cb_id,
-            actual_reader_indices_buffer_page_size,
-            in_reader_indices_cb_npages,
-            tt::DataFormat::UInt16);
-    } else {
-        add_sharded_cb(
-            in_reader_indices_cb_id,
-            in_reader_indices_cb_pagesize,
-            in_reader_indices_cb_npages,
-            tt::DataFormat::UInt16,
-            reader_indices_buffer);
-    }
-
-    log_debug(
-        tt::LogOp,
-        "In Reader Indices CB {} :: PS = {}, NP = {}",
-        in_reader_indices_cb_id,
-        in_reader_indices_cb_pagesize,
-        in_reader_indices_cb_npages);
-    // in_nblocks_c is factory-specific (used for kernel args), derived from the shared in_cb_raw_size
-    uint32_t in_nblocks_c = 1;
-    if (return_indices || params.is_wide_reduction) {
-        in_nblocks_c =
-            static_cast<uint32_t>(std::ceil(static_cast<float>(params.in_ntiles_c) / params.MAX_TILES_PER_REDUCTION));
-    }
-
-    // reader output == input to tilize
-    const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_id_1 = INVALID_CB_ID;          // input rows for "multiple (out_nelems)" output pixels
-    const uint32_t in_cb_pagesize = cb_sizes.in_cb_pagesize;
-    const uint32_t in_cb_npages = cb_sizes.in_cb_npages;
-
-    const uint32_t window_size_hw = kernel_h * kernel_w;
-    const uint32_t raw_face_r = std::min(window_size_hw, 16u);
-    const uint32_t num_faces_in_input_tile_for_cb =
-        (params.max_rows_for_reduction < tt::constants::TILE_HEIGHT || window_size_hw <= tt::constants::FACE_HEIGHT)
-            ? 2u
-            : 4u;
-    const std::optional<FaceGeometry> input_face_geometry =
-        return_indices
-            ? std::nullopt
-            : std::optional{FaceGeometry{.face_r_dim = raw_face_r, .num_faces = num_faces_in_input_tile_for_cb}};
-
-    add_local_cb(in_cb_id_0, in_cb_pagesize, in_cb_npages, params.data_format, input_face_geometry);
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
-
-    if (cb_sizes.has_split_reader) {
-        in_cb_id_1 = next_cb_index++;
-        add_local_cb(in_cb_id_1, in_cb_pagesize, in_cb_npages, params.data_format, input_face_geometry);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
-    }
-
-    uint32_t in_idx_cb_id = INVALID_CB_ID;
-    uint32_t pack_tmp_cb_id = INVALID_CB_ID;
-    uint32_t pack_idx_tmp_cb_id = INVALID_CB_ID;
-    uint32_t right_inc_cb_id = INVALID_CB_ID;
-    uint32_t down_left_wrap_inc_cb_id = INVALID_CB_ID;
-    uint32_t up_left_wrap_inc_cb_id = INVALID_CB_ID;
-    uint32_t intra_kernel_right_inc_cb_id = INVALID_CB_ID;
-    uint32_t intra_kernel_down_left_wrap_inc_cb_id = INVALID_CB_ID;
-    uint32_t compute_tmp_idx_cb_id = INVALID_CB_ID;
-    uint32_t right_inc = 0;
-    uint32_t down_left_wrap_inc = 0;
-    uint32_t up_left_wrap_inc = 0;
-    uint32_t intra_kernel_right_inc = 0;
-    uint32_t intra_kernel_down_left_wrap_inc = 0;
-    bool indexes_32_bit = false;
-    if (return_indices) {
-        indexes_32_bit = params.index_format == tt::DataFormat::UInt32;
-        uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        in_idx_cb_id = next_cb_index++;
-        add_local_cb(in_idx_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id, params.index_nbytes * tile_elems, 1);
-        pack_tmp_cb_id = next_cb_index++;
-        add_local_cb(pack_tmp_cb_id, params.nbytes * tile_elems, 1, params.data_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", pack_tmp_cb_id, params.nbytes * tile_elems, 1);
-        pack_idx_tmp_cb_id = next_cb_index++;
-        add_local_cb(pack_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", pack_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
-        right_inc_cb_id = next_cb_index++;
-        add_local_cb(right_inc_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", right_inc_cb_id, params.index_nbytes * tile_elems, 1);
-        down_left_wrap_inc_cb_id = next_cb_index++;
-        add_local_cb(down_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(
-            tt::LogOp, "CB {} :: PS = {}, NP = {}", down_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1);
-        up_left_wrap_inc_cb_id = next_cb_index++;
-        add_local_cb(up_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", up_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1);
-
-        compute_tmp_idx_cb_id = next_cb_index++;
-        add_local_cb(compute_tmp_idx_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", compute_tmp_idx_cb_id, params.index_nbytes * tile_elems, 1);
-
-        // compute increments for index tile population
-        right_inc = stride_w;
-        down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
-        up_left_wrap_inc =
-            (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;  // allow overflow for negative values
-
-        // edit incs for large kernels
-        if (params.is_large_kernel) {
-            intra_kernel_right_inc_cb_id = next_cb_index++;
-            add_local_cb(intra_kernel_right_inc_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-            log_debug(
-                tt::LogOp,
-                "CB {} :: PS = {}, NP = {}",
-                intra_kernel_right_inc_cb_id,
-                params.index_nbytes * tile_elems,
-                1);
-            intra_kernel_down_left_wrap_inc_cb_id = next_cb_index++;
-            add_local_cb(
-                intra_kernel_down_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1, params.index_format);
-            log_debug(
-                tt::LogOp,
-                "CB {} :: PS = {}, NP = {}",
-                intra_kernel_down_left_wrap_inc_cb_id,
-                params.index_nbytes * tile_elems,
-                1);
-
-            // for large kernels we process row by row since inc's aren't consistent if we just process fixed-size
-            // batches this means we process multiple top left positions within the kernel for a single top left
-            // position in the tensor, so when we move the kernel to a new position in the tensor we need to subtract
-            // the difference between the first top left index in the kernel and the last one
-            uint32_t sticks_per_chunk =
-                kernel_w <= params.max_rows_for_reduction ? kernel_w : params.max_rows_for_reduction;
-            uint32_t w_chunks =
-                kernel_w % sticks_per_chunk == 0 ? kernel_w / sticks_per_chunk : (kernel_w / sticks_per_chunk) + 1;
-            uint32_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
-            uint32_t first_top_left_kernel_index = 0;
-            uint32_t last_top_left_kernel_index = ((kernel_h - 1) * dilation_h * in_w) + last_w_chunk_w_offset;
-            uint32_t index_correction = last_top_left_kernel_index - first_top_left_kernel_index;
-            right_inc -= index_correction;
-            down_left_wrap_inc -= index_correction;
-            up_left_wrap_inc -= index_correction;
-
-            intra_kernel_right_inc = dilation_w * sticks_per_chunk;
-            intra_kernel_down_left_wrap_inc = dilation_h * in_w - last_w_chunk_w_offset;
-        }
-    }
-
-    const bool is_output_tiled = output_layout == Layout::TILE;
-    const bool is_output_block_format = is_block_float(outputs[0].dtype());
-    const bool zero_pages = is_output_tiled && is_output_block_format;
-
-    // Conditionally allocate temporary CB - only needed for TILED output
-    uint32_t pre_tilize_cb_id = INVALID_CB_ID;
-    uint32_t fast_tilize_cb_id = INVALID_CB_ID;
-
-    constexpr uint32_t pack_untilize_face_r_dim = 1;
-    const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
-    const bool single_partial_fits_in_face = last_tile_is_partial && in_c <= tt::constants::FACE_WIDTH;
-    const uint32_t pack_untilize_num_faces = single_partial_fits_in_face ? 1u : 2u;
-    const auto pack_untilize_face_geometry =
-        FaceGeometry{.face_r_dim = pack_untilize_face_r_dim, .num_faces = pack_untilize_num_faces};
-    const std::optional<TileDescriptor> pack_untilize_tile =
-        single_partial_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}} : std::nullopt;
-
-    if (cb_sizes.has_pre_tilize) {
-        pre_tilize_cb_id = next_cb_index++;
-        fast_tilize_cb_id = next_cb_index++;
-        // pre_tilize_cb is a multi-format CB: one L1 allocation backs two CB indices that
-        // present different face_geometry/page_size views of the same bytes.
-        //   * pre_tilize_cb_id  -- producer view, used by pack_untilize. Stick-packed
-        //                          (face_r_dim=1, num_faces<=2), pagesize=TILE_WIDTH*nbytes.
-        //   * fast_tilize_cb_id -- consumer view, used by fast_tilize. Full-tile
-        //                          (face_r_dim=16, num_faces=4), pagesize=tile_size.
-        // The kernel keeps both FIFOs in lock-step by pushing/popping the same byte amount
-        // per round, so their rd/wr pointers always point at matching L1 addresses.
-        const uint32_t pre_tilize_total_size = cb_sizes.pre_tilize_cb_pagesize * cb_sizes.pre_tilize_cb_npages;
-        const uint32_t fast_tilize_page_size = tt::tile_size(params.data_format);
-        TT_FATAL(
-            pre_tilize_total_size % fast_tilize_page_size == 0,
-            "pre_tilize_cb total size {} must be a multiple of fast_tilize tile size {}",
-            pre_tilize_total_size,
-            fast_tilize_page_size);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = pre_tilize_total_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{
-                CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(pre_tilize_cb_id),
-                    .data_format = params.data_format,
-                    .page_size = cb_sizes.pre_tilize_cb_pagesize,
-                    .tile = pack_untilize_tile,
-                    .face_geometry = pack_untilize_face_geometry,
-                },
-                CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(fast_tilize_cb_id),
-                    .data_format = params.data_format,
-                    .page_size = fast_tilize_page_size,
-                    // tile/face_geometry left nullopt -> default 32x32, 4 faces of 16x16.
-                },
-            }},
-        });
-        log_debug(
-            tt::LogOp,
-            "CB {} :: PS = {}, NP = {} (aliased as fast_tilize CB {} PS = {} NP = {})",
-            pre_tilize_cb_id,
-            cb_sizes.pre_tilize_cb_pagesize,
-            cb_sizes.pre_tilize_cb_npages,
-            fast_tilize_cb_id,
-            fast_tilize_page_size,
-            pre_tilize_total_size / fast_tilize_page_size);
-    }
-
-    const uint32_t out_cb_pagesize = cb_sizes.out_cb_pagesize;
-    const uint32_t out_cb_npages = cb_sizes.out_cb_npages;
-
-    const uint32_t out_cb_id = next_cb_index++;
-    add_sharded_cb(
-        out_cb_id,
-        out_cb_pagesize,
-        out_cb_npages,
-        params.output_data_format,
-        outputs[0].buffer(),
-        is_output_tiled ? std::nullopt : std::optional{pack_untilize_face_geometry},
-        is_output_tiled ? std::nullopt : pack_untilize_tile);
-
-    uint32_t out_idx_cb_id = INVALID_CB_ID;
-    if (cb_sizes.has_out_idx) {
-        TT_FATAL(
-            outputs.size() == 2,
-            "When return_indices is true, there should be two outputs, but got {}",
-            outputs.size());
-        out_idx_cb_id = next_cb_index++;
-        add_sharded_cb(
-            out_idx_cb_id,
-            cb_sizes.out_idx_cb_pagesize,
-            cb_sizes.out_idx_cb_npages,
-            params.index_format,
-            outputs[1].buffer());
-    }
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
-
-    for (const auto& output : outputs) {
-        TT_FATAL(
-            output.memory_config().is_sharded(),
-            "Output memory config needs to be sharded, but got {}",
-            output.memory_config());
-    }
-
-    /**
-     * Reader Kernel: input rows -> input cb
-     */
-    uint32_t config_cb_id = INVALID_CB_ID;
-    tt::tt_metal::Buffer* config_buffer = nullptr;
-    if (!one_scalar_per_core) {
-        // The scalar config tensor was uploaded once in create_workload_descriptor
-        // and parked in WorkloadDescriptor::buffers; the framework keeps it
-        // alive for the cached workload's lifetime.  scalar_config_buffer must
-        // be non-null whenever !one_scalar_per_core (avg-pool with non-trivial
-        // scalar layout).
-        TT_FATAL(scalar_config_buffer != nullptr, "scalar config buffer must be populated when !one_scalar_per_core");
-
-        constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt32;
-        config_buffer = scalar_config_buffer;
-        const uint32_t config_buffer_page_size = config_buffer->page_size();
-        uint32_t max_config_tensor_size =
-            max_out_nhw_per_core * 3 * sizeof(uint16_t);  // worst case of 3 entries per output element
-
-        TT_FATAL(
-            config_buffer->page_size() <= max_config_tensor_size,
-            "Config tensor buffer page size {} exceeds max expected size {}",
-            config_buffer->page_size(),
-            max_config_tensor_size);
-
-        config_cb_id = next_cb_index++;
-        if (config_tensor_in_dram) {
-            // DRAM-backed: kernel reads from DRAM via TensorAccessor; the CB is
-            // local scratch sized to the worst-case payload of one page.
-            add_local_cb(config_cb_id, max_config_tensor_size, 1, config_df);
-        } else {
-            add_sharded_cb(config_cb_id, config_buffer_page_size, 1, config_df, config_buffer);
-        }
-    }
-    KernelDescriptor::CompileTimeArgs reader0_ct_args = {
-        max_out_nhw_per_core,                                  // 0
-        kernel_h,                                              // 1
-        kernel_w,                                              // 2
-        pad_w,                                                 // 3
-        in_nbytes_leftover,                                    // 4
-        in_w,                                                  // 5
-        in_c_per_shard_ceil,                                   // 6
-        params.split_reader,                                   // enable split reader //7
-        0,                                                     // split reader id //8
-        bf16_scalar,                                           // 9
-        bf16_init_value,                                       // 10
-        in_nblocks_c,                                          // 11
-        cb_sizes.in_cb_raw_size,                               // 12
-        params.max_rows_for_reduction,                         // 13
-        ceil_pad_w,                                            // 14
-        in_cb_id_0,                                            // 15
-        in_cb_id_1,                                            // 16
-        raw_in_cb_id,                                          // 17
-        in_reader_indices_cb_id,                               // 18
-        in_scalar_cb_id_0,                                     // 19
-        in_scalar_cb_id_1,                                     // 20
-        clear_value_cb_id,                                     // 21
-        static_cast<uint32_t>(pool_type),                      // 22
-        one_scalar_per_core,                                   // 23
-        config_cb_id,                                          // 24
-        in_nbytes_c,                                           // 25
-        shard_width_bytes,                                     // 26
-        params.multi_buffering_factor,                         // 27
-        stride_w,                                              // 28
-        dilation_h,                                            // 29
-        dilation_w,                                            // 30
-        static_cast<uint32_t>(zero_pages),                     // 31
-        config_tensor_in_dram,                                 // 32
-        one_scalar_per_core ? 0 : config_buffer->address(),    // 33
-        one_scalar_per_core ? 0 : config_buffer->page_size(),  // 34
-        reader_indices_buffer->address(),                      // 35
-        reader_indices_buffer->page_size(),                    // 36
-        // MPWI-only args start here (for reader_mpwi.cpp, not used by reader_pool_2d.cpp)
-        in_idx_cb_id,                           // 37
-        pack_tmp_cb_id,                         // 38
-        pack_idx_tmp_cb_id,                     // 39
-        right_inc_cb_id,                        // 40
-        down_left_wrap_inc_cb_id,               // 41
-        up_left_wrap_inc_cb_id,                 // 42
-        pad_t,                                  // 43
-        pad_l,                                  // 44
-        right_inc,                              // 45
-        down_left_wrap_inc,                     // 46
-        up_left_wrap_inc,                       // 47
-        intra_kernel_right_inc,                 // 48
-        intra_kernel_down_left_wrap_inc,        // 49
-        out_cb_id,                              // 50
-        out_idx_cb_id,                          // 51
-        intra_kernel_right_inc_cb_id,           // 52
-        intra_kernel_down_left_wrap_inc_cb_id,  // 53
-        static_cast<uint32_t>(indexes_32_bit),  // 54
-    };
-
-    tt::tt_metal::TensorAccessorArgs(reader_indices_buffer).append_to(reader0_ct_args);
-    if (!one_scalar_per_core) {
-        tt::tt_metal::TensorAccessorArgs(config_buffer).append_to(reader0_ct_args);
-    }
-    KernelDescriptor::CompileTimeArgs reader1_ct_args = reader0_ct_args;
-    reader1_ct_args[8] = 1;  // split reader id for reader1
-
-    std::string reader_kernel_fname =
-        return_indices ? "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/dataflow/"
-                         "reader_mpwi.cpp"
-                       : "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/dataflow/"
-                         "reader_pool_2d.cpp";
-
-    KernelDescriptor reader0_desc;
-    reader0_desc.kernel_source = reader_kernel_fname;
-    reader0_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader0_desc.core_ranges = all_cores;
-    reader0_desc.compile_time_args = std::move(reader0_ct_args);
-    reader0_desc.config = DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::NOC::RISCV_0_default,
-    };
-
-    std::optional<KernelDescriptor> reader1_desc;
-    if (params.split_reader) {
-        KernelDescriptor rd;
-        rd.kernel_source = reader_kernel_fname;
-        rd.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        rd.core_ranges = all_cores;
-        rd.compile_time_args = std::move(reader1_ct_args);
-        rd.config = DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-        };
-        reader1_desc = std::move(rd);
-    }
-
-    /**
-     * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block ->
-     * output cb
-     */
-
-    KernelDescriptor::CompileTimeArgs compute_ct_args = {
-        params.in_ntiles_c,             // 0
-        kernel_h * kernel_w,            // 1
-        params.split_reader,            // 2
-        0,                              // 3 - max_out_nhw_per_core, used for grid sample but not for pool
-        in_c_per_shard_ceil,            // 4
-        in_nblocks_c,                   // 5
-        params.max_rows_for_reduction,  // 6
-        in_cb_id_0,                     // 7
-        in_cb_id_1,                     // 8
-        in_scalar_cb_id_0,              // 9
-        in_scalar_cb_id_1,              // 10
-        out_cb_id,                      // 11
-        one_scalar_per_core,            // 12
-        pre_tilize_cb_id,               // 13
-        is_output_tiled,                // 14
-        is_output_block_format,         // 15
-        0,                              // 16: force_max_tiles_per_reduction_4 (off for pool2d)
-        // MPWI-only args start here (for compute_mpwi.cpp, not used by compute_pool_2d.cpp)
-        in_idx_cb_id,                           // 17
-        pack_tmp_cb_id,                         // 18
-        pack_idx_tmp_cb_id,                     // 19
-        right_inc_cb_id,                        // 20
-        down_left_wrap_inc_cb_id,               // 21
-        up_left_wrap_inc_cb_id,                 // 22
-        out_idx_cb_id,                          // 23
-        stride_h,                               // 24
-        stride_w,                               // 25
-        in_h_padded,                            // 26
-        in_w_padded,                            // 27
-        eff_kernel_h,                           // 28
-        eff_kernel_w,                           // 29
-        pad_l,                                  // 30
-        intra_kernel_right_inc_cb_id,           // 31
-        intra_kernel_down_left_wrap_inc_cb_id,  // 32
-        compute_tmp_idx_cb_id,                  // 33
-        clear_value_cb_id,                      // 34
-        kernel_h,                               // 35
-        kernel_w,                               // 36
-        static_cast<uint32_t>(indexes_32_bit),  // 37
-        // compute_pool_2d.cpp-only arg (ignored by compute_mpwi.cpp)
-        fast_tilize_cb_id  // 38 - consumer-view alias of pre_tilize_cb_id (full-tile face_geometry)
-    };
-
-    // Get device arch for compute kernel config initialization
-    auto device_arch = input.device()->arch();
-
-    // Initialize device compute kernel config with user-provided config or defaults
-    auto device_compute_kernel_config = init_device_compute_kernel_config(
-        device_arch,
-        compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi4,
-        false,                                                             // math_approx_mode
-        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
-        false,                                                             // packer_l1_acc
-        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
-    );
-
-    const auto pool_defines_map = get_defines(pool_type);
-    KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());
-
-    std::string compute_kernel_fname =
-        return_indices
-            ? "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/compute/compute_mpwi.cpp"
-            : "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/compute/compute_pool_2d.cpp";
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_kernel_fname;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = std::move(compute_ct_args);
-    compute_desc.defines = std::move(compute_defines);
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
-        .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
-        .math_approx_mode = false,
-    };
-
-    // set the starting indices for each core as runtime args
-    uint32_t total_out_nhw = in_n * out_h * out_w;
-    for (uint32_t core_i = 0; core_i < ncores; core_i++) {
-        const uint32_t core_x_i = core_i % rectangular_x;
-        const uint32_t core_y_i = core_i / rectangular_x;
-        const CoreCoord core(core_x_i, core_y_i);
-
-        uint32_t total_out_nhw_processed;
-        uint32_t core_nhw_index = 0;
-        if (is_block_sharded) {
-            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
-            core_nhw_index = core_y_i;
-        } else if (is_width_sharded) {
-            total_out_nhw_processed = 0;
-            core_nhw_index = 0;
-        } else {
-            total_out_nhw_processed = core_i * max_out_nhw_per_core;
-            core_nhw_index = core_i;
-        }
-        uint32_t remaining_out_nhw =
-            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
-        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
-        KernelDescriptor::CoreRuntimeArgs args = {out_nhw_this_core, core_nhw_index};
-
-        if (return_indices) {
-            TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
-            const uint32_t start_index = core_starting_indices[core_i];
-            const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
-            const uint32_t start_row = start_mod_batch / in_w_padded;
-            const uint32_t start_col = start_mod_batch % in_w_padded;
-
-            args.push_back(start_row);
-            args.push_back(start_col);
-        }
-        reader0_desc.runtime_args.emplace_back(core, args);
-        if (params.split_reader) {
-            reader1_desc->runtime_args.emplace_back(core, args);
-        }
-        compute_desc.runtime_args.emplace_back(core, std::move(args));
-    }
-
-    // Push kernels in deterministic order: reader0 (BRISC), reader1 (NCRISC) when
-    // split_reader is enabled, then compute. The framework patches per-core runtime
-    // args by kernel index, so this ordering MUST match between every invocation.
-    desc.kernels.push_back(std::move(reader0_desc));
-    if (reader1_desc.has_value()) {
-        desc.kernels.push_back(std::move(*reader1_desc));
-    }
-    desc.kernels.push_back(std::move(compute_desc));
-
-    // Validate local and global CB sizes separately to prevent two errors from cancelling out.
-    // Note: local CBs are non-globally-allocated (computed by the program); global CBs are
-    // tensor-backed (sharded onto an existing buffer). We compute these directly from the
-    // descriptor's CBs rather than from a Program object since we no longer create one here.
-    uint32_t actual_local_cb_size = 0;
-    for (const auto& cb : desc.cbs) {
-        if (cb.buffer == nullptr) {
-            actual_local_cb_size += cb.total_size;
-        }
-    }
-
-    uint32_t post_allocate_size =
-        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t actual_global_cb_size = post_allocate_size == 0 ? 0 : post_allocate_size - memory_used;
-
-    // For now assume that if post_op_l1_allocation_size == 0 op is being run
-    // in graph capture NO_DISPATCH mode.
-    bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
-    TT_FATAL(
-        actual_local_cb_size == cb_sizes.local_cb_total() || is_graph_capture_no_dispatch_mode,
-        "Local CB size mismatch: actual {} != expected {}",
-        actual_local_cb_size,
-        cb_sizes.local_cb_total());
-    TT_FATAL(
-        actual_global_cb_size == cb_sizes.global_cb_total() || is_graph_capture_no_dispatch_mode,
-        "Global CB size mismatch: actual {} != expected {}",
-        actual_global_cb_size,
-        cb_sizes.global_cb_total());
-
-    {  // debug
-        log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
-        log_debug(tt::LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
-        log_debug(
-            tt::LogOp,
-            "in_reader_indices_cb :: PS = {}, NP = {}",
-            in_reader_indices_cb_pagesize,
-            in_reader_indices_cb_npages);
-        log_debug(tt::LogOp, "in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
-        log_debug(tt::LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
-        log_debug(tt::LogOp, "in_reader_indices_addr: {}", reader_indices_buffer->address());
-        log_debug(
-            tt::LogOp,
-            "scalar_config_addr: {}",
-            config_buffer != nullptr ? std::to_string(config_buffer->address()) : "not set");
-        log_debug(tt::LogOp, "kernel_h: {}", kernel_h);
-        log_debug(tt::LogOp, "kernel_w: {}", kernel_w);
-        log_debug(tt::LogOp, "stride_h: {}", stride_h);
-        log_debug(tt::LogOp, "stride_w: {}", stride_w);
-        log_debug(tt::LogOp, "pad_h: {}", pad_h);
-        log_debug(tt::LogOp, "pad_w: {}", pad_w);
-        log_debug(tt::LogOp, "out_h: {}", out_h);
-        log_debug(tt::LogOp, "out_w: {}", out_w);
-        log_debug(tt::LogOp, "out_c: {}", out_c);
-        log_debug(tt::LogOp, "in_h: {}", in_h);
-        log_debug(tt::LogOp, "in_w: {}", in_w);
-        log_debug(tt::LogOp, "in_c: {}", in_c);
-        log_debug(tt::LogOp, "in_ntiles_c: {}", params.in_ntiles_c);
-        log_debug(tt::LogOp, "out_ntiles_c: {}", params.out_ntiles_c);
-        log_debug(tt::LogOp, "in_nblocks_c: {}", in_nblocks_c);
-        log_debug(tt::LogOp, "in_nbytes_c: {}", in_nbytes_c);
-        log_debug(tt::LogOp, "ncores: {}", ncores);
-        log_debug(tt::LogOp, "max_out_nhw_per_core: {}", max_out_nhw_per_core);
-        log_debug(tt::LogOp, "split_reader: {}", params.split_reader);
-        log_debug(tt::LogOp, "multi_buffering_factor: {}", params.multi_buffering_factor);
-        log_debug(tt::LogOp, "is_wide_reduction: {}", params.is_wide_reduction);
-        log_debug(tt::LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
-        log_debug(tt::LogOp, "is_out_sharded: {}", outputs[0].memory_config().is_sharded());
-    }
-
-    return desc;
-}
-
-namespace {
-// Common preamble shared between the resource-allocation phase and the
-// per-coord program build of create_workload_descriptor(): pulls per-op fields out
-// of the SlidingWindowConfig and computes the parallel config / output shape
-// pieces we need in both phases.  Lives in an anonymous namespace because it's
-// purely a local helper for this factory.
 struct PoolSetup {
     sliding_window::ParallelConfig parallel_config;
     bool is_block_sharded;
@@ -1111,20 +291,112 @@ PoolSetup compute_pool_setup(const Pool2D::operation_attributes_t& op_attr, cons
     setup.num_shards_c = sliding_window_config.num_cores_c;
     return setup;
 }
+
+// ---------------------------------------------------------------------------
+// Metal 2.0 named resource handles (locals to avoid unity-build collisions).
+// DFB names mirror the legacy CB-id variable names so the kernel-side dfb::<name>
+// tokens line up 1:1 with the migrated kernels.
+// ---------------------------------------------------------------------------
+const TensorParamName INPUT_TENSOR{"input"};
+const TensorParamName OUTPUT_TENSOR{"output"};
+const TensorParamName OUTPUT_IDX_TENSOR{"output_idx"};
+const TensorParamName READER_INDICES_TENSOR{"reader_indices"};
+const TensorParamName CONFIG_TENSOR{"config"};
+
+const DFBSpecName DFB_IN_SCALAR_0{"in_scalar_cb_0"};
+const DFBSpecName DFB_IN_SCALAR_1{"in_scalar_cb_1"};
+const DFBSpecName DFB_CLEAR_VALUE{"clear_value_cb"};
+const DFBSpecName DFB_IN_SHARD{"in_shard_cb"};  // raw_in_cb (borrowed input)
+const DFBSpecName DFB_READER_INDICES{"reader_indices_cb"};
+const DFBSpecName DFB_IN_0{"in_cb_0"};
+const DFBSpecName DFB_IN_1{"in_cb_1"};
+const DFBSpecName DFB_IN_IDX{"in_idx_cb"};
+const DFBSpecName DFB_PACK_TMP{"pack_tmp_cb"};
+const DFBSpecName DFB_PACK_IDX_TMP{"pack_idx_tmp_cb"};
+const DFBSpecName DFB_RIGHT_INC{"right_inc_cb"};
+const DFBSpecName DFB_DOWN_LEFT{"down_left_wrap_inc_cb"};
+const DFBSpecName DFB_UP_LEFT{"up_left_wrap_inc_cb"};
+const DFBSpecName DFB_INTRA_RIGHT{"intra_kernel_right_inc_cb"};
+const DFBSpecName DFB_INTRA_DOWN_LEFT{"intra_kernel_down_left_wrap_inc_cb"};
+const DFBSpecName DFB_COMPUTE_TMP_IDX{"compute_tmp_idx_cb"};
+const DFBSpecName DFB_PRE_TILIZE{"pre_tilize_cb"};
+const DFBSpecName DFB_FAST_TILIZE{"fast_tilize_cb"};
+const DFBSpecName DFB_OUT{"out_cb"};
+const DFBSpecName DFB_OUT_IDX{"out_idx_cb"};
+const DFBSpecName DFB_CONFIG{"config_cb"};
+
+const KernelSpecName READER0_KERNEL{"reader0"};
+const KernelSpecName READER1_KERNEL{"reader1"};
+const KernelSpecName COMPUTE_KERNEL{"compute"};
+
+constexpr const char* READER_POOL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/dataflow/reader_pool_2d.cpp";
+constexpr const char* READER_MPWI_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/dataflow/reader_mpwi.cpp";
+constexpr const char* COMPUTE_POOL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/compute/compute_pool_2d.cpp";
+constexpr const char* COMPUTE_MPWI_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/compute/compute_mpwi.cpp";
+
+// A local DFB (Program-lifetime L1 allocation).
+DataflowBufferSpec local_dfb(
+    const DFBSpecName& id,
+    uint32_t page_size,
+    uint32_t num_pages,
+    tt::DataFormat df,
+    std::optional<FaceGeometry> face = std::nullopt,
+    std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
+    return DataflowBufferSpec{
+        .unique_id = id,
+        .entry_size = page_size,
+        .num_entries = num_pages,
+        .data_format_metadata = df,
+        .tile_format_metadata = tile,
+        .unpack_face_geometry_metadata = face,
+    };
+}
+
+// A borrowed DFB (non-owning view over a TensorParameter's L1 storage).
+DataflowBufferSpec borrowed_dfb(
+    const DFBSpecName& id,
+    uint32_t page_size,
+    uint32_t num_pages,
+    tt::DataFormat df,
+    const TensorParamName& borrowed_from,
+    std::optional<FaceGeometry> face = std::nullopt,
+    std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
+    return DataflowBufferSpec{
+        .unique_id = id,
+        .entry_size = page_size,
+        .num_entries = num_pages,
+        .data_format_metadata = df,
+        .tile_format_metadata = tile,
+        .unpack_face_geometry_metadata = face,
+        .borrowed_from = borrowed_from,
+    };
+}
+
 }  // namespace
 
-tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
-    const operation_attributes_t& op_attr,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    const auto& input = tensor_args.input_tensor_;
+ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
+    const Pool2D::operation_attributes_t& op_attr,
+    const Pool2D::tensor_args_t& tensor_args,
+    Pool2D::tensor_return_value_t& output_tensors) {
+    const Tensor& input = tensor_args.input_tensor_;
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     PoolSetup setup = compute_pool_setup(op_attr, input);
 
-    // Build the per-core sliding-window halo lookup table on host, then upload it.
-    // The resulting MeshBuffer must outlive the program, so we park its
-    // shared_ptr on the WorkloadDescriptor (held by the program cache).
+    const Pool2DType pool_type = op_attr.pool_type_;
+    const Layout output_layout = op_attr.output_layout_;
+    const bool count_include_pad = op_attr.count_include_pad_;
+    const std::optional<int32_t> divisor_override = op_attr.divisor_override_;
+    const bool return_indices = op_attr.return_indices_;
+    const bool config_tensor_in_dram = op_attr.config_tensor_in_dram;
+
+    // -----------------------------------------------------------------------
+    // Op-owned tensors: sliding-window reader-indices table (always) and the
+    // avg-pool scalar config tensor (only when !one_scalar_per_core).
+    // -----------------------------------------------------------------------
     std::vector<uint32_t> op_trace_metadata =
         ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
     std::vector<sliding_window::ShardBoundary> shard_boundaries =
@@ -1132,46 +404,51 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
     std::vector<std::vector<uint16_t>> top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, setup.stride_w);
 
-    Tensor reader_indices_host = sliding_window::construct_on_host_config_tensor(
-        top_left_indices, setup.parallel_config, op_attr.config_tensor_in_dram);
-    Tensor reader_indices_on_device = sliding_window::move_config_tensor_to_device(
-        reader_indices_host,
-        setup.parallel_config,
-        setup.is_block_sharded,
-        input.device(),
-        op_attr.config_tensor_in_dram);
+    auto* mesh_device = input.device();
+    auto& cq = mesh_device->mesh_command_queue();
 
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    // Keep the source Tensor alive in the cached workload.  Holding only a
-    // shared_ptr<MeshBuffer> would not be enough: when the local Tensor went
-    // out of scope here, ~Tensor would call DeviceStorage::deallocate which
-    // force-frees the underlying device memory regardless of shared_ptr
-    // ownership (see is_sole_owner_of_device_memory).  Wrapping the Tensor in
-    // a shared_ptr held by WorkloadBuffer.owner defers ~Tensor until the
-    // cached workload itself is evicted.
-    auto reader_indices_tensor_owner = std::make_shared<Tensor>(std::move(reader_indices_on_device));
-    tt::tt_metal::Buffer* reader_indices_buffer = reader_indices_tensor_owner->buffer();
-    workload_descriptor.buffers.push_back({reader_indices_tensor_owner, reader_indices_buffer});
+    // Reader-indices table: build on host, then upload to an OWNING MeshTensor (parked in
+    // op_owned_tensors). The memory config mirrors sliding_window::move_config_tensor_to_device.
+    Tensor reader_indices_host =
+        sliding_window::construct_on_host_config_tensor(top_left_indices, setup.parallel_config, config_tensor_in_dram);
+    MemoryConfig reader_indices_mem_config = [&]() -> MemoryConfig {
+        if (config_tensor_in_dram) {
+            return MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        }
+        const std::array<uint32_t, 2> ri_shard_shape{1, static_cast<uint32_t>(reader_indices_host.logical_shape()[-1])};
+        const tt::tt_metal::ShardOrientation ri_orient =
+            setup.is_block_sharded
+                ? (setup.parallel_config.shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR
+                       ? tt::tt_metal::ShardOrientation::ROW_MAJOR
+                       : tt::tt_metal::ShardOrientation::COL_MAJOR)
+                : tt::tt_metal::ShardOrientation::ROW_MAJOR;
+        const tt::tt_metal::ShardSpec ri_shard_spec(setup.parallel_config.grid, ri_shard_shape, ri_orient);
+        return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, ri_shard_spec};
+    }();
+    MeshTensor reader_indices_owned = tt::tt_metal::enqueue_write_tensor(
+        cq, reader_indices_host.host_tensor(), *mesh_device, reader_indices_mem_config);
+    const TensorSpec reader_indices_spec = reader_indices_owned.tensor_spec();
+    const uint32_t reader_indices_page_size = reader_indices_owned.mesh_buffer().page_size();
 
-    // For avg-pool, decide whether a single bf16 scalar per core is sufficient.  When it isn't
-    // (ceil_mode w/ ceil_pad, or !count_include_pad with non-zero padding, both with no
-    // divisor_override), we materialize the per-output-stick scalar config tensor and upload it.
     const uint32_t pad_h = setup.pad_t + setup.pad_b;
     const uint32_t pad_w = setup.pad_l + setup.pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
-        op_attr.pool_type_,
+        pool_type,
         setup.ceil_mode,
         setup.ceil_pad_h,
         setup.ceil_pad_w,
-        op_attr.count_include_pad_,
+        count_include_pad,
         pad_h,
         pad_w,
-        op_attr.divisor_override_);
+        divisor_override);
 
+    // Op-owned avg-pool scalar config tensor (only when !one_scalar_per_core).
+    std::optional<MeshTensor> config_tensor_owned;
+    std::optional<TensorSpec> config_tensor_spec;
+    uint32_t config_buffer_page_size = 0;
     if (!one_scalar_per_core) {
         const uint32_t max_out_nhw_per_core = output_tensors[0].shard_spec()->shape[0];
         const uint32_t ncores = input.shard_spec().value().grid.num_cores();
-
         AvgPoolConfig avg_pool_config = {
             .kernel_h = setup.kernel_h,
             .kernel_w = setup.kernel_w,
@@ -1184,103 +461,875 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
             .ceil_mode = setup.ceil_mode,
             .ceil_h = setup.ceil_pad_h,
             .ceil_w = setup.ceil_pad_w,
-            .count_include_pad = op_attr.count_include_pad_,
+            .count_include_pad = count_include_pad,
             .pad_t = setup.pad_t,
             .pad_b = setup.pad_b,
             .pad_l = setup.pad_l,
             .pad_r = setup.pad_r,
             .max_out_nhw_per_core = max_out_nhw_per_core,
-            .divisor_override = op_attr.divisor_override_};
+            .divisor_override = divisor_override};
         Tensor config_tensor = create_scalar_config_tensor(
             avg_pool_config,
             input.memory_config().memory_layout(),
             setup.in_n,
             setup.num_shards_c,
             ncores,
-            op_attr.config_tensor_in_dram);
+            config_tensor_in_dram);
 
-        const std::array<uint32_t, 2> shard_shape =
-            std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
-        const tt::tt_metal::ShardOrientation config_tensor_shard_orientation = input.shard_spec().value().orientation;
-        const tt::tt_metal::ShardSpec config_shard_spec(
-            input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
-        const MemoryConfig l1_small_memory_config{
-            TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
-
-        Tensor config_tensor_on_device = config_tensor.to_device(
-            input.device(), op_attr.config_tensor_in_dram ? DRAM_MEMORY_CONFIG : l1_small_memory_config);
-        auto scalar_config_tensor_owner = std::make_shared<Tensor>(std::move(config_tensor_on_device));
-        tt::tt_metal::Buffer* scalar_config_buf = scalar_config_tensor_owner->buffer();
-        workload_descriptor.buffers.push_back({std::move(scalar_config_tensor_owner), scalar_config_buf});
+        MemoryConfig config_mem_config = [&]() -> MemoryConfig {
+            if (config_tensor_in_dram) {
+                return DRAM_MEMORY_CONFIG;
+            }
+            const std::array<uint32_t, 2> shard_shape{1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])};
+            const tt::tt_metal::ShardOrientation config_orient = input.shard_spec().value().orientation;
+            const tt::tt_metal::ShardSpec config_shard_spec(
+                input.shard_spec().value().grid, shard_shape, config_orient);
+            return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+        }();
+        config_tensor_owned =
+            tt::tt_metal::enqueue_write_tensor(cq, config_tensor.host_tensor(), *mesh_device, config_mem_config);
+        config_tensor_spec = config_tensor_owned->tensor_spec();
+        config_buffer_page_size = config_tensor_owned->mesh_buffer().page_size();
     }
-    tt::tt_metal::Buffer* scalar_config_buffer =
-        workload_descriptor.buffers.size() > 1 ? workload_descriptor.buffers[1].buffer : nullptr;
 
-    // Single-device op: the kernel program is structurally identical for every
-    // coord in `tensor_coords` (Pool2D doesn't depend on cluster position).
-    // Build the per-coord ProgramDescriptor ONCE and copy it into each
-    // coord-range entry to avoid redundant work on multi-coord workloads.
-    const auto& pool_type = op_attr.pool_type_;
-    const auto& compute_kernel_config = op_attr.compute_kernel_config_;
-    const auto& output_layout = op_attr.output_layout_;
-    bool count_include_pad = op_attr.count_include_pad_;
-    std::optional<int32_t> divisor_override = op_attr.divisor_override_;
-    bool return_indices = op_attr.return_indices_;
+    // Park the op-owned tensors. The TensorArgument/borrowed_from references below point
+    // at these parked (owning) MeshTensors, matched by identity.
+    std::vector<MeshTensor> op_owned_tensors;
+    op_owned_tensors.reserve(2);
+    op_owned_tensors.push_back(std::move(reader_indices_owned));
+    const MeshTensor& reader_indices_mt = op_owned_tensors.back();
+    const MeshTensor* config_mt = nullptr;
+    if (config_tensor_owned.has_value()) {
+        op_owned_tensors.push_back(std::move(*config_tensor_owned));
+        config_mt = &op_owned_tensors.back();
+    }
 
+    // -----------------------------------------------------------------------
+    // Sizing (mirrors the legacy factory verbatim).
+    // -----------------------------------------------------------------------
+    const bool is_block_sharded = setup.is_block_sharded;
+    const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const auto all_cores = input.shard_spec().value().grid;
+    const uint32_t ncores = all_cores.num_cores();
+    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+    const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
+    const uint32_t max_out_nhw_per_core = output_tensors[0].shard_spec()->shape[0];
+    const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
+    TT_FATAL(
+        max_in_nhw_per_core <= std::numeric_limits<uint16_t>::max(),
+        "Input nhw per core {} exceeds uint16_t limit",
+        max_in_nhw_per_core);
+
+    const uint32_t in_n = setup.in_n;
+    const uint32_t in_c = setup.in_c;
+    const uint32_t in_h = setup.in_h;
+    const uint32_t in_w = setup.in_w;
+    const uint32_t out_h = setup.out_h;
+    const uint32_t out_w = setup.out_w;
+    const uint32_t kernel_h = setup.kernel_h;
+    const uint32_t kernel_w = setup.kernel_w;
+    const uint32_t stride_h = setup.stride_h;
+    const uint32_t stride_w = setup.stride_w;
+    const uint32_t dilation_h = setup.dilation_h;
+    const uint32_t dilation_w = setup.dilation_w;
+    const uint32_t num_shards_c = setup.num_shards_c;
+
+    const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
+    const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+    FactoryParameters params = get_factory_parameters(
+        num_shards_c,
+        input.dtype(),
+        output_tensors[0].dtype(),
+        kernel_h,
+        kernel_w,
+        in_c,
+        pool_type,
+        return_indices,
+        in_h,
+        in_w,
+        output_layout);
+
+    const uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
+    const uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
+    const uint32_t in_h_padded = in_h + pad_h + setup.ceil_pad_h;
+    const uint32_t in_w_padded = in_w + pad_w + setup.ceil_pad_w;
+
+    auto output_shard_shape = output_tensors[0].shard_spec().value().shape;
+    std::optional<uint32_t> reader_indices_actual_page_size;
+    if (config_tensor_in_dram) {
+        reader_indices_actual_page_size = reader_indices_page_size;
+    }
+    PoolCBSizes cb_sizes = calculate_pool_cb_sizes(
+        params,
+        one_scalar_per_core,
+        return_indices,
+        output_layout,
+        output_tensors[0].dtype(),
+        {output_shard_shape[0], output_shard_shape[1]},
+        config_tensor_in_dram,
+        reader_indices_actual_page_size);
+
+    const auto& input_shape = input.padded_shape();
+    const uint32_t shard_width = input.shard_spec()->shape[1];
+    const uint32_t in_c_per_shard_ceil = in_c % shard_width != 0 && num_shards_c > 1
+                                             ? (in_c - (in_c % shard_width)) / (num_shards_c - 1)
+                                             : in_c / num_shards_c;
+    const uint32_t in_nbytes_c = in_c_per_shard_ceil * params.nbytes;
+    const uint32_t shard_width_bytes = input_shape[3] / num_shards_c * params.nbytes;
+    TT_FATAL(
+        input_shape[3] % num_shards_c == 0,
+        "Input channels {} should be divisible by num shards {}",
+        input_shape[3],
+        num_shards_c);
+    const uint32_t in_nbytes_leftover =
+        params.is_wide_reduction &&
+                (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
+            ? tt::round_up(
+                  (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
+                  tt::constants::TILE_WIDTH) *
+                  params.nbytes
+            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * params.nbytes;
+
+    uint32_t in_nblocks_c = 1;
+    if (return_indices || params.is_wide_reduction) {
+        in_nblocks_c =
+            static_cast<uint32_t>(std::ceil(static_cast<float>(params.in_ntiles_c) / params.MAX_TILES_PER_REDUCTION));
+    }
+
+    const bool is_output_tiled = output_layout == Layout::TILE;
+    const bool is_output_block_format = is_block_float(output_tensors[0].dtype());
+    const bool zero_pages = is_output_tiled && is_output_block_format;
+    const bool indexes_32_bit = return_indices && params.index_format == tt::DataFormat::UInt32;
+
+    // MPWI index increments (host computation, unchanged).
+    uint32_t right_inc = 0, down_left_wrap_inc = 0, up_left_wrap_inc = 0;
+    uint32_t intra_kernel_right_inc = 0, intra_kernel_down_left_wrap_inc = 0;
+    if (return_indices) {
+        right_inc = stride_w;
+        down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
+        up_left_wrap_inc = (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;
+        if (params.is_large_kernel) {
+            uint32_t sticks_per_chunk =
+                kernel_w <= params.max_rows_for_reduction ? kernel_w : params.max_rows_for_reduction;
+            uint32_t w_chunks =
+                kernel_w % sticks_per_chunk == 0 ? kernel_w / sticks_per_chunk : (kernel_w / sticks_per_chunk) + 1;
+            uint32_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
+            uint32_t last_top_left_kernel_index = ((kernel_h - 1) * dilation_h * in_w) + last_w_chunk_w_offset;
+            uint32_t index_correction = last_top_left_kernel_index;  // first_top_left_kernel_index == 0
+            right_inc -= index_correction;
+            down_left_wrap_inc -= index_correction;
+            up_left_wrap_inc -= index_correction;
+            intra_kernel_right_inc = dilation_w * sticks_per_chunk;
+            intra_kernel_down_left_wrap_inc = dilation_h * in_w - last_w_chunk_w_offset;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tensor parameters.
+    // -----------------------------------------------------------------------
+    ProgramSpec spec;
+    spec.name = "pool2d_multi_core";
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = INPUT_TENSOR, .spec = input.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = output_tensors[0].tensor_spec()},
+        TensorParameter{.unique_id = READER_INDICES_TENSOR, .spec = reader_indices_spec},
+    };
+    if (return_indices) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = OUTPUT_IDX_TENSOR, .spec = output_tensors[1].tensor_spec()});
+    }
+    if (config_tensor_spec.has_value()) {
+        spec.tensor_parameters.push_back(TensorParameter{.unique_id = CONFIG_TENSOR, .spec = *config_tensor_spec});
+    }
+
+    // -----------------------------------------------------------------------
+    // Dataflow buffers.
+    // -----------------------------------------------------------------------
+    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
+    const uint32_t window_size_hw = kernel_h * kernel_w;
+    // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
+    // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
+    // (validate_tensor_shape_tile_dependent_ops_ in common/tensor_shape.h, validate_buffer_desc in
+    // tt_llk_quasar/common/inc/ckernel_trisc_common.h). WH/BH accept the raw window size directly
+    // (e.g. 9 for a 3x3 window) since they don't run those validators; Quasar asserts. Round the
+    // packed face_r_dim up to the next power of 2 so the tile shape validates (9 -> 16, giving the
+    // valid 16x16 tile: x=16,y=16,z=1). The input CB page is already padded to a full tile
+    // (round_up(in_cb_sz, TILE_HW) in pool_utils.cpp) so the larger face_r_dim reads no OOB.
+    // NOTE: this is a bring-up workaround. For correct results the padded rows [window_size, pow2)
+    // must hold the pool identity (-inf max / 0 avg) via clear_value_cb; otherwise stale L1 leaks
+    // into the reduce. Remove once Quasar reduce/buffer-descriptor supports non-pow2 face_r_dim.
+    const uint32_t raw_face_r_unpadded = std::min(window_size_hw, 16u);
+    uint32_t raw_face_r_pow2 = 1;
+    while (raw_face_r_pow2 < raw_face_r_unpadded) {
+        raw_face_r_pow2 <<= 1;
+    }
+    const uint32_t raw_face_r = raw_face_r_pow2;
+    const uint32_t num_faces_in_input_tile_for_cb =
+        (params.max_rows_for_reduction < tt::constants::TILE_HEIGHT || window_size_hw <= tt::constants::FACE_HEIGHT)
+            ? 2u
+            : 4u;
+    const std::optional<FaceGeometry> input_face_geometry =
+        return_indices
+            ? std::nullopt
+            : std::optional{FaceGeometry{.face_r_dim = raw_face_r, .num_faces = num_faces_in_input_tile_for_cb}};
+
+    constexpr uint32_t pack_untilize_face_r_dim = 1;
+    const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
+    const bool single_partial_fits_in_face = last_tile_is_partial && in_c <= tt::constants::FACE_WIDTH;
+    const uint32_t pack_untilize_num_faces = single_partial_fits_in_face ? 1u : 2u;
+    const auto pack_untilize_face =
+        FaceGeometry{.face_r_dim = pack_untilize_face_r_dim, .num_faces = pack_untilize_num_faces};
+    const std::optional<tt::tt_metal::Tile> pack_untilize_tile =
+        single_partial_fits_in_face ? std::optional{tt::tt_metal::Tile({1, tt::constants::FACE_WIDTH}, false)}
+                                    : std::nullopt;
+
+    std::vector<DataflowBufferSpec> dfbs;
+
+    // scalar CB(s)
+    // The pool2d split-reader compute kernel references dfb::in_cb_1 and dfb::in_scalar_cb_1
+    // (under #ifdef SPLIT_READER) regardless of dtype, so both second-stream DFBs must exist
+    // whenever pool2d uses a split reader. (mpwi has a single input/scalar stream — reader1 is
+    // the writer face.)
+    const bool has_second_input_cb = cb_sizes.has_split_reader && !return_indices;
+
+    dfbs.push_back(local_dfb(
+        DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
+    if (has_second_input_cb) {
+        dfbs.push_back(local_dfb(
+            DFB_IN_SCALAR_1, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
+    }
+    // clear value CB
+    dfbs.push_back(local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, 1, params.data_format));
+    // raw input shard CB (borrowed input)
+    dfbs.push_back(
+        borrowed_dfb(DFB_IN_SHARD, in_nbytes_c, input.shard_spec().value().shape[0], params.data_format, INPUT_TENSOR));
+    // reader indices CB (borrowed L1 config tensor, or local scratch for DRAM path)
+    const uint32_t in_reader_indices_cb_pagesize = tt::round_up(top_left_indices[0].size(), 4);
+    // RawUInt16 (not UInt16): the reader-indices DFB is a raw packed-uint16 index/config buffer, and Quasar
+    // does not support the typed UInt16 DFB format (is_supported_quasar) — RawUInt16 is the raw 16-bit format
+    // supported on Quasar (and WH/BH), semantically correct here.
+    if (config_tensor_in_dram) {
+        dfbs.push_back(local_dfb(DFB_READER_INDICES, reader_indices_page_size, 1, tt::DataFormat::RawUInt16));
+    } else {
+        dfbs.push_back(borrowed_dfb(
+            DFB_READER_INDICES, in_reader_indices_cb_pagesize, 1, tt::DataFormat::RawUInt16, READER_INDICES_TENSOR));
+    }
+    // input CB(s). The second input stream (in_cb_1) only exists for the pool2d split-reader
+    // (mpwi has a single input stream — reader1 is the writer face, not a second producer).
+    dfbs.push_back(
+        local_dfb(DFB_IN_0, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
+    if (has_second_input_cb) {
+        dfbs.push_back(local_dfb(
+            DFB_IN_1, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
+    }
+
+    // MPWI scratch / index CBs
+    if (return_indices) {
+        const uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        const uint32_t idx_pagesize = params.index_nbytes * tile_elems;
+        const uint32_t data_pagesize = params.nbytes * tile_elems;
+        dfbs.push_back(local_dfb(DFB_IN_IDX, idx_pagesize, 1, params.index_format));
+        dfbs.push_back(local_dfb(DFB_PACK_TMP, data_pagesize, 1, params.data_format));
+        dfbs.push_back(local_dfb(DFB_PACK_IDX_TMP, idx_pagesize, 1, params.index_format));
+        dfbs.push_back(local_dfb(DFB_RIGHT_INC, idx_pagesize, 1, params.index_format));
+        dfbs.push_back(local_dfb(DFB_DOWN_LEFT, idx_pagesize, 1, params.index_format));
+        dfbs.push_back(local_dfb(DFB_UP_LEFT, idx_pagesize, 1, params.index_format));
+        dfbs.push_back(local_dfb(DFB_COMPUTE_TMP_IDX, idx_pagesize, 1, params.index_format));
+        // intra-kernel increment CBs are referenced unconditionally at file scope by
+        // both mpwi kernels (FIFO ops are gated by is_large_kernel, but the dfb:: token
+        // must always exist), so always declare and bind them.
+        dfbs.push_back(local_dfb(DFB_INTRA_RIGHT, idx_pagesize, 1, params.index_format));
+        dfbs.push_back(local_dfb(DFB_INTRA_DOWN_LEFT, idx_pagesize, 1, params.index_format));
+    }
+
+    // pre_tilize / fast_tilize: two aliased DFBs over one L1 region (TILED output).
+    if (cb_sizes.has_pre_tilize) {
+        const uint32_t pre_tilize_total = cb_sizes.pre_tilize_cb_pagesize * cb_sizes.pre_tilize_cb_npages;
+        const uint32_t fast_tilize_page_size = tt::tile_size(params.data_format);
+        TT_FATAL(
+            pre_tilize_total % fast_tilize_page_size == 0,
+            "pre_tilize_cb total {} must be a multiple of fast_tilize tile {}",
+            pre_tilize_total,
+            fast_tilize_page_size);
+        DataflowBufferSpec pre = local_dfb(
+            DFB_PRE_TILIZE,
+            cb_sizes.pre_tilize_cb_pagesize,
+            cb_sizes.pre_tilize_cb_npages,
+            params.data_format,
+            pack_untilize_face,
+            pack_untilize_tile);
+        pre.advanced_options.alias_with = {DFB_FAST_TILIZE};
+        DataflowBufferSpec fast = local_dfb(
+            DFB_FAST_TILIZE, fast_tilize_page_size, pre_tilize_total / fast_tilize_page_size, params.data_format);
+        fast.advanced_options.alias_with = {DFB_PRE_TILIZE};
+        dfbs.push_back(std::move(pre));
+        dfbs.push_back(std::move(fast));
+    }
+
+    // output CB (borrowed output) + optional output index CB (borrowed output_idx)
+    dfbs.push_back(borrowed_dfb(
+        DFB_OUT,
+        cb_sizes.out_cb_pagesize,
+        cb_sizes.out_cb_npages,
+        params.output_data_format,
+        OUTPUT_TENSOR,
+        is_output_tiled ? std::nullopt : std::optional{pack_untilize_face},
+        is_output_tiled ? std::nullopt : pack_untilize_tile));
+    if (cb_sizes.has_out_idx) {
+        TT_FATAL(output_tensors.size() == 2, "return_indices requires two outputs, got {}", output_tensors.size());
+        dfbs.push_back(borrowed_dfb(
+            DFB_OUT_IDX,
+            cb_sizes.out_idx_cb_pagesize,
+            cb_sizes.out_idx_cb_npages,
+            params.index_format,
+            OUTPUT_IDX_TENSOR));
+    }
+
+    // scalar config CB (avg pool, !one_scalar_per_core)
+    if (!one_scalar_per_core) {
+        TT_FATAL(config_mt != nullptr, "config tensor must be present when !one_scalar_per_core");
+        constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt32;
+        const uint32_t max_config_tensor_size = max_out_nhw_per_core * 3 * sizeof(uint16_t);
+        if (config_tensor_in_dram) {
+            dfbs.push_back(local_dfb(DFB_CONFIG, max_config_tensor_size, 1, config_df));
+        } else {
+            dfbs.push_back(borrowed_dfb(DFB_CONFIG, config_buffer_page_size, 1, config_df, CONFIG_TENSOR));
+        }
+    }
+    spec.dataflow_buffers = std::move(dfbs);
+
+    // -----------------------------------------------------------------------
+    // Compile-time args (named; values lifted verbatim from the legacy layout).
+    // -----------------------------------------------------------------------
+    KernelSpec::CompileTimeArgs reader_cta = {
+        {"reader_nindices", max_out_nhw_per_core},
+        {"kernel_h", kernel_h},
+        {"kernel_w", kernel_w},
+        {"pad_w", pad_w},
+        {"in_nbytes_leftover", in_nbytes_leftover},
+        {"in_w", in_w},
+        {"in_c", in_c_per_shard_ceil},
+        {"split_reader", params.split_reader},
+        {"reader_id", 0u},
+        {"bf16_scalar", bf16_scalar},
+        {"bf16_init_value", bf16_init_value},
+        {"in_nblocks_c", in_nblocks_c},
+        {"in_cb_sz", cb_sizes.in_cb_raw_size},
+        {"max_sticks_for_reduction", params.max_rows_for_reduction},
+        {"ceil_pad_w", setup.ceil_pad_w},
+        {"pool_type_is_avg", static_cast<uint32_t>(params.is_avg_pool)},
+        {"one_scalar_per_core", static_cast<uint32_t>(one_scalar_per_core)},
+        {"in_nbytes_c", in_nbytes_c},
+        {"shard_width_bytes", shard_width_bytes},
+        {"multi_buffering_factor", params.multi_buffering_factor},
+        {"stride_w", stride_w},
+        {"dilation_h", dilation_h},
+        {"dilation_w", dilation_w},
+        {"zero_pages", static_cast<uint32_t>(zero_pages)},
+        {"config_in_dram", static_cast<uint32_t>(config_tensor_in_dram)},
+        {"config_page_size", one_scalar_per_core ? 0u : config_buffer_page_size},
+        {"reader_page_size", reader_indices_page_size},
+    };
+    if (return_indices) {
+        reader_cta["pad_t"] = setup.pad_t;
+        reader_cta["pad_l"] = setup.pad_l;
+        reader_cta["right_inc"] = right_inc;
+        reader_cta["down_left_wrap_inc"] = down_left_wrap_inc;
+        reader_cta["up_left_wrap_inc"] = up_left_wrap_inc;
+        reader_cta["intra_kernel_right_inc"] = intra_kernel_right_inc;
+        reader_cta["intra_kernel_down_left_wrap_inc"] = intra_kernel_down_left_wrap_inc;
+        reader_cta["indexes_32_bit"] = static_cast<uint32_t>(indexes_32_bit);
+    }
+
+    // -----------------------------------------------------------------------
+    // Reader kernel(s).
+    // -----------------------------------------------------------------------
+    const std::filesystem::path reader_path{return_indices ? READER_MPWI_PATH : READER_POOL_PATH};
+
+    // Endpoint roles must satisfy the per-node DFB invariant (exactly one producer and one
+    // consumer per node). reader0 and reader1 share nodes, so a DFB cannot take the same role
+    // on both. For mpwi the readers are asymmetric (reader0 = input/index producer, reader1 =
+    // the writer face); for pool2d they are symmetric input producers.
+    auto make_reader_bindings = [&](bool is_reader1) {
+        Group<DFBBinding> b;
+        // Shard input (fake CB, base-pointer read by both readers): reader0=P / reader1=C when
+        // split, self-loop on reader0 otherwise.
+        if (params.split_reader) {
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_IN_SHARD,
+                .accessor_name = "in_shard_cb",
+                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+        } else {
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_IN_SHARD,
+                .accessor_name = "in_shard_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_IN_SHARD,
+                .accessor_name = "in_shard_cb",
+                .endpoint_type = DFBEndpointType::CONSUMER});
+        }
+        // Reader-indices CB: reader0=P / reader1=C when split (DRAM push -> wait), else self-loop.
+        if (params.split_reader) {
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_READER_INDICES,
+                .accessor_name = "reader_indices_cb",
+                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+        } else {
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_READER_INDICES,
+                .accessor_name = "reader_indices_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_READER_INDICES,
+                .accessor_name = "reader_indices_cb",
+                .endpoint_type = DFBEndpointType::CONSUMER});
+        }
+        if (!one_scalar_per_core) {
+            if (params.split_reader) {
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CONFIG,
+                    .accessor_name = "config_cb",
+                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+            } else {
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CONFIG,
+                    .accessor_name = "config_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CONFIG,
+                    .accessor_name = "config_cb",
+                    .endpoint_type = DFBEndpointType::CONSUMER});
+            }
+        }
+
+        if (return_indices) {
+            // mpwi: asymmetric. reader0 produces input/index/inc CBs (consumed by compute) and
+            // clear_value (consumed by compute); reader1 is the writer face.
+            if (!is_reader1) {
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_IN_0, .accessor_name = "in_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_IN_SCALAR_0,
+                    .accessor_name = "in_scalar_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CLEAR_VALUE,
+                    .accessor_name = "clear_value_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_IN_IDX,
+                    .accessor_name = "in_idx_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_RIGHT_INC,
+                    .accessor_name = "right_inc_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_DOWN_LEFT,
+                    .accessor_name = "down_left_wrap_inc_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_UP_LEFT,
+                    .accessor_name = "up_left_wrap_inc_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_INTRA_RIGHT,
+                    .accessor_name = "intra_kernel_right_inc_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_INTRA_DOWN_LEFT,
+                    .accessor_name = "intra_kernel_down_left_wrap_inc_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+            } else {
+                // reader1 (writer face): consumes the compute-produced pack tmps, and is the
+                // producer-only writer into the borrowed output / output-index (self-loop).
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_PACK_TMP,
+                    .accessor_name = "pack_tmp_cb",
+                    .endpoint_type = DFBEndpointType::CONSUMER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_PACK_IDX_TMP,
+                    .accessor_name = "pack_idx_tmp_cb",
+                    .endpoint_type = DFBEndpointType::CONSUMER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::CONSUMER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_OUT_IDX,
+                    .accessor_name = "out_idx_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_OUT_IDX,
+                    .accessor_name = "out_idx_cb",
+                    .endpoint_type = DFBEndpointType::CONSUMER});
+            }
+        } else {
+            // pool2d: each reader produces its own input + scalar stream (compute consumes both).
+            b.push_back(DFBBinding{
+                .dfb_spec_name = is_reader1 ? DFB_IN_1 : DFB_IN_0,
+                .accessor_name = "in_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            b.push_back(DFBBinding{
+                .dfb_spec_name = is_reader1 ? DFB_IN_SCALAR_1 : DFB_IN_SCALAR_0,
+                .accessor_name = "in_scalar_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            // clear value: reader0=P / reader1=C when split, self-loop on reader0 otherwise.
+            if (params.split_reader) {
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CLEAR_VALUE,
+                    .accessor_name = "clear_value_cb",
+                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+            } else {
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CLEAR_VALUE,
+                    .accessor_name = "clear_value_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_CLEAR_VALUE,
+                    .accessor_name = "clear_value_cb",
+                    .endpoint_type = DFBEndpointType::CONSUMER});
+            }
+        }
+        return b;
+    };
+
+    // Both reader binaries reference tensor::reader_indices / tensor::config at file scope
+    // (the DRAM-path TensorAccessor sits in an `if constexpr (reader_id==0)` branch, which is
+    // still name-looked-up), so both bind them. Tensor bindings carry no 1P/1C constraint.
+    auto make_reader_tensor_bindings = [&](bool /*is_reader1*/) {
+        Group<TensorBinding> tb;
+        tb.push_back(TensorBinding{.tensor_parameter_name = READER_INDICES_TENSOR, .accessor_name = "reader_indices"});
+        if (!one_scalar_per_core) {
+            tb.push_back(TensorBinding{.tensor_parameter_name = CONFIG_TENSOR, .accessor_name = "config"});
+        }
+        return tb;
+    };
+
+    // Per-kernel RTA schemas: readers consume core_nhw_index (+ start_row/start_col for
+    // mpwi); compute consumes out_nhw_this_core (+ start_row/start_col for mpwi).
+    Group<std::string> reader_rta_names = {"core_nhw_index"};
+    Group<std::string> compute_rta_names = {"out_nhw_this_core"};
+    if (return_indices) {
+        reader_rta_names.push_back("start_row");
+        reader_rta_names.push_back("start_col");
+        compute_rta_names.push_back("start_row");
+        compute_rta_names.push_back("start_col");
+    }
+
+    KernelSpec::CompileTimeArgs reader1_cta = reader_cta;
+    reader1_cta["reader_id"] = 1u;
+
+    // reader_mpwi.cpp #ifdef-gates its per-role token references on READER_ID so each
+    // reader binary references only the DFB tokens it actually drives. reader_pool_2d.cpp
+    // #ifdef-gates dfb::config_cb / tensor::config on HAS_CONFIG (avg-pool, !one_scalar).
+    KernelSpec::CompilerOptions::Defines reader0_defines{{"READER_ID", "0"}};
+    KernelSpec::CompilerOptions::Defines reader1_defines{{"READER_ID", "1"}};
+    if (!one_scalar_per_core) {
+        reader0_defines.insert({"HAS_CONFIG", "1"});
+        reader1_defines.insert({"HAS_CONFIG", "1"});
+    }
+
+    KernelSpec reader0{
+        .unique_id = READER0_KERNEL,
+        .source = reader_path,
+        .compiler_options = {.defines = reader0_defines},
+        .dfb_bindings = make_reader_bindings(false),
+        .tensor_bindings = make_reader_tensor_bindings(false),
+        .compile_time_args = reader_cta,
+        .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+    };
+
+    std::optional<KernelSpec> reader1;
+    if (params.split_reader) {
+        reader1 = KernelSpec{
+            .unique_id = READER1_KERNEL,
+            .source = reader_path,
+            .compiler_options = {.defines = reader1_defines},
+            .dfb_bindings = make_reader_bindings(true),
+            .tensor_bindings = make_reader_tensor_bindings(true),
+            .compile_time_args = reader1_cta,
+            .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
+            .hw_config = ttnn::create_writer_datamovement_config(
+                mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Compute kernel.
+    // -----------------------------------------------------------------------
+    KernelSpec::CompileTimeArgs compute_cta = {
+        {"in_ntiles_c", params.in_ntiles_c},
+        {"window_size_hw", kernel_h * kernel_w},
+        {"split_reader", params.split_reader},
+        {"max_out_sticks_per_core", 0u},
+        {"in_c", in_c_per_shard_ceil},
+        {"in_nblocks_c", in_nblocks_c},
+        {"max_sticks_for_reduction", params.max_rows_for_reduction},
+        {"one_scalar_per_core", static_cast<uint32_t>(one_scalar_per_core)},
+        {"is_output_tiled", static_cast<uint32_t>(is_output_tiled)},
+        {"is_output_block_format", static_cast<uint32_t>(is_output_block_format)},
+        {"force_max_tiles_per_reduction_4", 0u},
+    };
+    if (return_indices) {
+        compute_cta["stride_h"] = stride_h;
+        compute_cta["stride_w"] = stride_w;
+        compute_cta["in_h_padded"] = in_h_padded;
+        compute_cta["in_w_padded"] = in_w_padded;
+        compute_cta["eff_kernel_h"] = eff_kernel_h;
+        compute_cta["eff_kernel_w"] = eff_kernel_w;
+        compute_cta["pad_l"] = setup.pad_l;
+        compute_cta["kernel_h"] = kernel_h;
+        compute_cta["kernel_w"] = kernel_w;
+        compute_cta["indexes_32_bit"] = static_cast<uint32_t>(indexes_32_bit);
+    }
+
+    Group<DFBBinding> compute_bindings;
+    compute_bindings.push_back(
+        DFBBinding{.dfb_spec_name = DFB_IN_0, .accessor_name = "in_cb_0", .endpoint_type = DFBEndpointType::CONSUMER});
+    compute_bindings.push_back(DFBBinding{
+        .dfb_spec_name = DFB_IN_SCALAR_0,
+        .accessor_name = "in_scalar_cb_0",
+        .endpoint_type = DFBEndpointType::CONSUMER});
+    // pool2d split-reader compute consumes the second input + scalar streams (both DFBs exist
+    // whenever has_second_input_cb; the kernel references them under #ifdef SPLIT_READER).
+    if (has_second_input_cb) {
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_IN_1, .accessor_name = "in_cb_1", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_IN_SCALAR_1,
+            .accessor_name = "in_scalar_cb_1",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+    if (!return_indices) {
+        // pool2d: compute produces output directly into the borrowed output DFB.  The
+        // result stays resident (the DFB is borrowed from OUTPUT_TENSOR and sized to the
+        // full output shard, so the producer never wraps), so there is no real consumer.
+        // Self-loop the compute as producer+consumer to satisfy the SPSC completeness
+        // check (mirrors the mpwi writer-face self-loop on DFB_OUT); no kernel-side
+        // pop is needed since the data is the final resident output.
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::CONSUMER});
+        if (cb_sizes.has_pre_tilize) {
+            compute_bindings.push_back(DFBBinding{
+                .dfb_spec_name = DFB_PRE_TILIZE,
+                .accessor_name = "pre_tilize_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            compute_bindings.push_back(DFBBinding{
+                .dfb_spec_name = DFB_PRE_TILIZE,
+                .accessor_name = "pre_tilize_cb",
+                .endpoint_type = DFBEndpointType::CONSUMER});
+            compute_bindings.push_back(DFBBinding{
+                .dfb_spec_name = DFB_FAST_TILIZE,
+                .accessor_name = "fast_tilize_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            compute_bindings.push_back(DFBBinding{
+                .dfb_spec_name = DFB_FAST_TILIZE,
+                .accessor_name = "fast_tilize_cb",
+                .endpoint_type = DFBEndpointType::CONSUMER});
+        }
+    } else {
+        // mpwi: compute consumes index/inc CBs (reader-produced), produces pack tmps + self-loops scratch idx.
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_CLEAR_VALUE,
+            .accessor_name = "clear_value_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_IN_IDX, .accessor_name = "in_idx_cb", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_RIGHT_INC,
+            .accessor_name = "right_inc_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_DOWN_LEFT,
+            .accessor_name = "down_left_wrap_inc_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_UP_LEFT,
+            .accessor_name = "up_left_wrap_inc_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_INTRA_RIGHT,
+            .accessor_name = "intra_kernel_right_inc_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_INTRA_DOWN_LEFT,
+            .accessor_name = "intra_kernel_down_left_wrap_inc_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_PACK_TMP, .accessor_name = "pack_tmp_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_PACK_IDX_TMP,
+            .accessor_name = "pack_idx_tmp_cb",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        // compute_tmp_idx: self-loop accumulator on compute.
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_COMPUTE_TMP_IDX,
+            .accessor_name = "compute_tmp_idx_cb",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_COMPUTE_TMP_IDX,
+            .accessor_name = "compute_tmp_idx_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+
+    // Compute defines (REDUCE_OP / REDUCE_DIM, etc.) plus the conditional-binding gates the
+    // compute kernel uses to preprocessor-guard optional DFB token references.
+    const auto pool_defines_map = get_defines(pool_type);
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    for (const auto& [k, v] : pool_defines_map) {
+        compute_defines.insert({k, v});
+    }
+    if (cb_sizes.has_split_reader) {
+        compute_defines.insert({"SPLIT_READER", "1"});
+    }
+    if (is_output_tiled) {
+        compute_defines.insert({"OUTPUT_TILED", "1"});
+    }
+
+    auto device_arch = input.device()->arch();
+    auto device_compute_kernel_config = init_device_compute_kernel_config(
+        device_arch,
+        op_attr.compute_kernel_config_,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/(params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,
+        /*default_l1_acc=*/false,
+        /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
+
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
+        device_arch,
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+            .math_approx_mode = false,
+            .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+            .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
+
+    KernelSpec compute{
+        .unique_id = COMPUTE_KERNEL,
+        .source = std::filesystem::path{return_indices ? COMPUTE_MPWI_PATH : COMPUTE_POOL_PATH},
+        .dfb_bindings = std::move(compute_bindings),
+        .compile_time_args = compute_cta,
+        .runtime_arg_schema = {.runtime_arg_names = compute_rta_names},
+        .hw_config = compute_hw,
+    };
+    compute.compiler_options.defines = std::move(compute_defines);
+
+    spec.kernels = {reader0};
+    if (reader1.has_value()) {
+        spec.kernels.push_back(*reader1);
+    }
+    spec.kernels.push_back(compute);
+
+    Group<KernelSpecName> wu_kernels = {READER0_KERNEL};
+    if (reader1.has_value()) {
+        wu_kernels.push_back(READER1_KERNEL);
+    }
+    wu_kernels.push_back(COMPUTE_KERNEL);
+    spec.work_units = {WorkUnitSpec{.name = "pool2d_wu", .kernels = wu_kernels, .target_nodes = all_cores}};
+
+    // -----------------------------------------------------------------------
+    // Run args: per-core RTAs (mirrors the legacy per-core loop).
+    // -----------------------------------------------------------------------
     std::vector<uint32_t> core_starting_indices;
     if (return_indices) {
-        const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
-        const uint32_t ncores = input.shard_spec().value().grid.num_cores();
         const TensorMemoryLayout shard_scheme = input.memory_config().memory_layout();
         core_starting_indices =
             generate_core_starting_indices(op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
+        TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
     }
 
-    tt::tt_metal::ProgramDescriptor desc = pool2d_multi_core_sharded_with_halo_v2_impl_new(
-        tensor_args.input_tensor_,
-        reader_indices_buffer,
-        scalar_config_buffer,
-        top_left_indices[0].size(),
-        output_tensors,
-        pool_type,
-        setup.in_n,
-        setup.in_c,
-        setup.in_h,
-        setup.in_w,
-        setup.out_h,
-        setup.out_w,
-        setup.out_c,
-        setup.kernel_h,
-        setup.kernel_w,
-        setup.stride_h,
-        setup.stride_w,
-        setup.pad_t,
-        setup.pad_b,
-        setup.pad_l,
-        setup.pad_r,
-        setup.ceil_pad_h,
-        setup.ceil_pad_w,
-        setup.ceil_mode,
-        return_indices,
-        core_starting_indices,
-        count_include_pad,
-        setup.dilation_h,
-        setup.dilation_w,
-        setup.num_shards_c,
-        compute_kernel_config,
-        divisor_override,
-        op_attr.memory_used,
-        output_layout,
-        op_attr.config_tensor_in_dram);
-    auto ranges = tensor_coords.ranges();
-    workload_descriptor.programs.reserve(ranges.size());
-    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
-        workload_descriptor.programs.push_back({ranges[i], desc});
+    KernelRunArgs reader0_run{.kernel = READER0_KERNEL};
+    KernelRunArgs reader1_run{.kernel = READER1_KERNEL};
+    KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
+
+    const uint32_t total_out_nhw = in_n * out_h * out_w;
+    for (uint32_t core_i = 0; core_i < ncores; core_i++) {
+        const uint32_t core_x_i = core_i % rectangular_x;
+        const uint32_t core_y_i = core_i / rectangular_x;
+        const NodeCoord node{core_x_i, core_y_i};
+
+        uint32_t total_out_nhw_processed;
+        uint32_t core_nhw_index;
+        if (is_block_sharded) {
+            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
+            core_nhw_index = core_y_i;
+        } else if (is_width_sharded) {
+            total_out_nhw_processed = 0;
+            core_nhw_index = 0;
+        } else {
+            total_out_nhw_processed = core_i * max_out_nhw_per_core;
+            core_nhw_index = core_i;
+        }
+        uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
+
+        KernelRunArgs::RuntimeArgValues& reader0_rtas = reader0_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& reader1_rtas = reader1_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
+        reader0_rtas["core_nhw_index"][node] = core_nhw_index;
+        compute_rtas["out_nhw_this_core"][node] = out_nhw_this_core;
+        if (reader1.has_value()) {
+            reader1_rtas["core_nhw_index"][node] = core_nhw_index;
+        }
+        if (return_indices) {
+            const uint32_t start_index = core_starting_indices[core_i];
+            const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
+            const uint32_t start_row = start_mod_batch / in_w_padded;
+            const uint32_t start_col = start_mod_batch % in_w_padded;
+            AddRuntimeArgsForNode(
+                reader0_rtas,
+                node,
+                {
+                    {"start_row", start_row},
+                    {"start_col", start_col},
+                });
+            AddRuntimeArgsForNode(
+                compute_rtas,
+                node,
+                {
+                    {"start_row", start_row},
+                    {"start_col", start_col},
+                });
+            if (reader1.has_value()) {
+                AddRuntimeArgsForNode(
+                    reader1_rtas,
+                    node,
+                    {
+                        {"start_row", start_row},
+                        {"start_col", start_col},
+                    });
+            }
+        }
     }
-    if (!ranges.empty()) {
-        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader0_run};
+    if (reader1.has_value()) {
+        run_args.kernel_run_args.push_back(reader1_run);
     }
-    return workload_descriptor;
+    run_args.kernel_run_args.push_back(compute_run);
+
+    run_args.tensor_args = {
+        {INPUT_TENSOR, TensorArgument{std::cref(input.mesh_tensor())}},
+        {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensors[0].mesh_tensor())}},
+        {READER_INDICES_TENSOR, TensorArgument{std::cref(reader_indices_mt)}},
+    };
+    if (return_indices) {
+        run_args.tensor_args.insert({OUTPUT_IDX_TENSOR, TensorArgument{std::cref(output_tensors[1].mesh_tensor())}});
+    }
+    if (config_mt != nullptr) {
+        run_args.tensor_args.insert({CONFIG_TENSOR, TensorArgument{std::cref(*config_mt)}});
+    }
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec), .run_params = std::move(run_args), .op_owned_tensors = std::move(op_owned_tensors)};
 }
 
 }  // namespace ttnn::operations::pool::quasar

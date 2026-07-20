@@ -181,7 +181,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            HostTensor copy(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
+            auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -214,28 +214,12 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        HostTensor copy(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
+        auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }
     EXPECT_EQ(ctor_count, 2);
     EXPECT_EQ(dtor_count, 1);
-}
-
-TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
-    Shape shape{32, 32};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    auto tensor = HostTensor::from_borrowed_data(
-        std::span<TypeParam>(input),
-        shape,
-        MemoryPin(/*increment_ref_count=*/[]() {}, /*decrement_ref_count=*/[]() {}),
-        /*tile=*/Tile({16, 16}));
-
-    // Retain row major layout, but use custom tile.
-    // TODO: #18536 - this should be illegal.
-    EXPECT_EQ(tensor.tensor_spec().layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(tensor.tensor_spec().tile(), Tile({16, 16}));
 }
 
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};

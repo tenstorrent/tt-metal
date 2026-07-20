@@ -85,8 +85,8 @@ std::vector<Tensor> clamp_bw(
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
-    Tensor minT = ttnn::le(input, min.value(), std::nullopt, output_memory_config);
-    Tensor maxT = ttnn::ge(input, max.value(), std::nullopt, output_memory_config);
+    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
+    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
     result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
     grad_tensor.emplace_back(result);
@@ -1566,58 +1566,12 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
 
     auto output_memory_config =
         input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
-    TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'None', 'tanh')");
+    TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'none', 'tanh')");
 
-    if (approximate == "tanh") {
-        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5f;
-        float kKappa = 0.044715;
-        Tensor x_sq = ttnn::multiply(input, input, std::nullopt, output_memory_config);
-        Tensor x_cube = ttnn::multiply(x_sq, input, std::nullopt, output_memory_config);
-        Tensor inner = ttnn::multiply(
-            ttnn::add(input, ttnn::multiply(x_cube, kKappa, std::nullopt, output_memory_config)),
-            kBeta,
-            std::nullopt,
-            output_mem_config);
-        Tensor tanh_inner = ttnn::tanh(inner, output_memory_config);
-
-        Tensor left = ttnn::multiply(input, 0.5f, std::nullopt, output_memory_config);
-        Tensor right = ttnn::add(tanh_inner, 1.0f, std::nullopt, output_memory_config);
-
-        Tensor left_derivative = ttnn::multiply(right, 0.5f, std::nullopt, output_memory_config);
-
-        Tensor tanh_derivative = ttnn::neg(
-            ttnn::subtract(
-                ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_memory_config),
-                1.0f,
-                std::nullopt,
-                output_mem_config),
-            output_memory_config);
-        Tensor inner_derivative = ttnn::multiply(
-            (ttnn::add(
-                ttnn::multiply(
-                    ttnn::multiply(x_sq, kKappa, std::nullopt, output_memory_config),
-                    3.0f,
-                    std::nullopt,
-                    output_memory_config),
-                1.0f,
-                std::nullopt,
-                output_mem_config)),
-            kBeta);
-        Tensor right_derivative = ttnn::multiply(
-            ttnn::multiply(tanh_derivative, left, std::nullopt, output_memory_config),
-            inner_derivative,
-            std::nullopt,
-            output_memory_config);
-
-        ttnn::multiply(
-            grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config, input_grad);
-        result.push_back(input_grad);
-    } else {
-        DataType output_dtype = input.dtype();
-        auto result_tensor = ttnn::operations::unary_backward::gelu_bw::launch_gelu_bw(
-            grad, input, output_dtype, output_memory_config, input_grad);
-        result.push_back(result_tensor);
-    }
+    DataType output_dtype = input.dtype();
+    auto result_tensor = ttnn::operations::unary_backward::gelu_bw::launch_gelu_bw(
+        grad, input, approximate == "tanh", output_dtype, output_memory_config, input_grad);
+    result.push_back(result_tensor);
 
     return result;
 }
@@ -1642,7 +1596,7 @@ std::vector<Tensor> repeat_bw(
         return grad_tensor;
     }
     if (shape[0] > 1) {
-        ttnn::SmallVector<int64_t> dim = {0};
+        ttsl::SmallVector<int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
@@ -1657,7 +1611,7 @@ std::vector<Tensor> repeat_bw(
         return grad_tensor;
     }
     if (shape[1] > 1) {
-        ttnn::SmallVector<int64_t> dim = {1};
+        ttsl::SmallVector<int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
@@ -1724,13 +1678,13 @@ std::vector<Tensor> prod_bw(
 
     // all_dimensions = False
     Tensor updated_grad = prod_result;
-    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+    auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
     if (prod_result.logical_shape() != grad.padded_shape()) {
         if (*dim == 3 || *dim == -1) {
-            ttnn::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
+            ttsl::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
@@ -1741,10 +1695,10 @@ std::vector<Tensor> prod_bw(
                 updated_grad = pad_updated_grad.to_device(input.device());
             }
         } else if (*dim == 2 || *dim == -2) {
-            ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
+            ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
@@ -1778,11 +1732,11 @@ std::vector<Tensor> prod_bw(
     if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
-            ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+            ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
             tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
         }
-        ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
+        ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
         Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
@@ -1793,10 +1747,11 @@ std::vector<Tensor> prod_bw(
         // Only need to convert if tensor_1 is ROW_MAJOR
         tensor_2 = tensor_2.to_device(tensor_1.device());
         if (tensor_1.layout() == Layout::ROW_MAJOR) {
-            // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
-            bool pad_needed = tensor_2.padded_shape() != padded_shape;
+            // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
+            // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
+            // padding is required from the tensor *after* untilize rather than before.
             tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
-            if (pad_needed) {
+            if (tensor_2.padded_shape() != padded_shape) {
                 tensor_2 = ttnn::pad(
                     tensor_2,
                     padded_shape.to_array_4D(),
@@ -1815,10 +1770,10 @@ std::vector<Tensor> prod_bw(
             output_memory_config);
         Tensor grad_result = result;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {
                 input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
-            auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+            auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
             grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
         }
         grad_tensor.emplace_back(grad_result);
@@ -1827,11 +1782,11 @@ std::vector<Tensor> prod_bw(
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
-        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+        ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
         tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
     }
-    ttnn::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
+    ttsl::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
     Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
@@ -1842,10 +1797,11 @@ std::vector<Tensor> prod_bw(
     // Only need to convert if tensor_1 is ROW_MAJOR
     tensor_2 = tensor_2.to_device(tensor_1.device());
     if (tensor_1.layout() == Layout::ROW_MAJOR) {
-        // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
-        bool pad_needed = tensor_2.padded_shape() != padded_shape;
+        // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
+        // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
+        // padding is required from the tensor *after* untilize rather than before.
         tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
-        if (pad_needed) {
+        if (tensor_2.padded_shape() != padded_shape) {
             tensor_2 = ttnn::pad(
                 tensor_2,
                 padded_shape.to_array_4D(),
@@ -1863,8 +1819,8 @@ std::vector<Tensor> prod_bw(
         output_memory_config);
     Tensor grad_result = result;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {
             input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
         grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
     }

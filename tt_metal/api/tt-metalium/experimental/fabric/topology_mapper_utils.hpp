@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -20,6 +23,7 @@ class PhysicalSystemDescriptor;
 
 namespace tt::tt_fabric {
 class PhysicalGroupingDescriptor;
+struct PsdPlacement;
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal::experimental::tt_fabric {
@@ -28,6 +32,7 @@ namespace tt::tt_metal::experimental::tt_fabric {
 using ::tt::tt_fabric::AdjacencyGraph;
 using ::tt::tt_fabric::ConnectionValidationMode;
 using ::tt::tt_fabric::FabricNodeId;
+using ::tt::tt_fabric::LogicalChipId;
 using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
 
@@ -47,8 +52,8 @@ using PinningConstraint = std::pair<AsicPosition, FabricNodeId>;
 
 // Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
 // and the mesh is not folded. Pins all four logical corners to the four tray corners (with hard_pin_node_0
-// fixing the NW corner to tray 1 / asic 1); nw_corner_only pins ONLY the NW corner (a single-position pin
-// for sub-galaxy slices, which the solver can satisfy without over-constraining a small slice). Shared by
+// fixing the NW corner to tray 1 / asic 1); nw_corner_only pins ONLY the NW corner to any tray-corner ASIC
+// (asic_location==1 on trays 1..4) for sub-galaxy slices. Shared by
 // generate_rank_bindings (Phase 1) and ControlPlane (Phase 2) so both apply identical placement.
 std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
     MeshId mesh_id,
@@ -361,6 +366,26 @@ struct PhysicalMultiMeshGraph {
     // mesh_id (which mesh it belongs to) and asic_id (the ASIC identifier). Multiple channels between the same pair are
     // represented by duplicate entries.
     std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
+
+    // PGD-derived intra-mesh pinning: physical MeshId (this graph's own mesh index, same key space as
+    // mesh_adjacency_graphs_) -> (row-major logical chip id -> AsicPosition). Captured from the PGD<->MGD match
+    // during grouping selection and carried through PSD placement, so later intra-mesh mapping can follow the PGD
+    // layout instead of re-solving it. The inner resolution is purely logical-chip-id -> physical ASIC position
+    // (TrayID + ASICLocation), NOT a specific hardware AsicID; the layout is expressed in stable physical
+    // positions and resolved back to ASIC(s) at consume time. It deliberately does NOT bake a logical mesh
+    // assignment into the key (that decision is made later during the multi-mesh solve). Populated when the graph
+    // was built from a PhysicalGroupingDescriptor, or by the rank-bound PGD pinning fast path; empty otherwise.
+    std::map<MeshId, std::map<LogicalChipId, AsicPosition>> mesh_pgd_pinnings_;
+};
+
+/**
+ * Per-mesh ASIC footprint plus optional PGD-derived chip-id -> ASIC-position pinning.
+ * Keyed by MeshId when building a PhysicalMultiMeshGraph from PSD placements.
+ */
+struct MeshPhysicalLayout {
+    std::unordered_set<tt::tt_metal::AsicID> asics;
+    // Empty when the placement did not carry a PGD<->MGD pinning (callers assume row-major identity).
+    std::map<LogicalChipId, AsicPosition> mesh_node_to_asic_position;
 };
 
 /**
@@ -383,6 +408,19 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
+ * @brief Rank-bound physical graph plus PGD preferred pinnings (ControlPlane / Phase 2 fast path).
+ *
+ * Builds mesh partitions from asic_id_to_mesh_rank, then for each mesh on that graph copies the
+ * committed PGD<->MGD MESH grouping pinning for the mesh's MGD type onto mesh_pgd_pinnings_.
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const std::optional<std::vector<PinningConstraint>>& pinnings = std::nullopt);
+
+/**
  * @brief Build a physical multi-mesh adjacency graph from physical system descriptor and physical grouping descriptor
  *
  * Creates a PhysicalMultiMeshGraph with:
@@ -393,12 +431,15 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
  * @param physical_grouping_descriptor Reference to the physical grouping descriptor containing mesh grouping
  * information
  * @param mesh_graph_descriptor Reference to the mesh graph descriptor containing logical mesh topology
+ * @param pinnings Optional fabric-node pinning constraints used to restrict logical-to-physical mesh placement
+ * during multi-shape physical graph construction
  * @return PhysicalMultiMeshGraph containing mesh-level graph and internal mesh nodes
  */
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const std::optional<std::vector<PinningConstraint>>& pinnings = std::nullopt);
 
 /**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
@@ -416,22 +457,50 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
  * @brief Build hierarchical multi-mesh graph from a flattened adjacency graph
  *
  * Takes a flat adjacency graph (all ASICs and their neighbors) and splits it into a multi-mesh graph
- * based on mesh groupings. This is useful when you have a pre-built adjacency graph and need to
+ * based on mesh layouts. This is useful when you have a pre-built adjacency graph and need to
  * organize it by mesh.
  *
  * The function:
  * - Splits the flat adjacency graph into per-mesh adjacency graphs (only intra-mesh connections)
  * - Builds the mesh-level graph based on intermesh connections
  * - Builds exit node graphs for each mesh
+ * - Stores non-empty PGD pinnings under PhysicalMultiMeshGraph::mesh_pgd_pinnings_
  *
  * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
- * @param mesh_groupings Vector of mesh groupings, where each grouping is a set of ASIC IDs belonging to one mesh.
- *                       Each element in the vector represents one mesh, and the index becomes the MeshId.
+ * @param mesh_layouts Map from MeshId to per-mesh ASIC footprint and optional PGD pinning. MeshIds are used
+ *                     as-is in the resulting PhysicalMultiMeshGraph (no index remapping).
  * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs
  */
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::vector<std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings);
+    const std::map<MeshId, MeshPhysicalLayout>& mesh_layouts);
+
+/**
+ * @brief Build hierarchical multi-mesh graph from ASIC groupings (and optional PGD pinnings)
+ *
+ * Convenience overload: MeshIds are used as-is. Prefer std::map<MeshId, MeshPhysicalLayout> when both footprint and
+ * pinning are available together.
+ *
+ * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
+ * @param mesh_groupings Map from MeshId to the set of ASIC IDs belonging to that mesh
+ * @param mesh_pgd_pinnings Optional per-mesh logical-chip-id -> ASIC position layouts, keyed by the same MeshId
+ *                          as mesh_groupings. Non-empty entries are stored under that MeshId.
+ * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs
+ */
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
+    const std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings,
+    const std::map<MeshId, std::map<LogicalChipId, tt::tt_metal::ASICPosition>>& mesh_pgd_pinnings = {});
+
+/**
+ * @brief Build hierarchical multi-mesh graph from PSD placements
+ *
+ * Each placement's ASIC footprint is keyed by MeshId{placement_index}; pinning is read from
+ * placement.mesh_node_to_asic_position.
+ */
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
+    const std::vector<::tt::tt_fabric::PsdPlacement>& placements);
 
 /**
  * @brief Map logical multi-mesh topology to physical multi-mesh topology
@@ -473,6 +542,21 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const TopologyMappingConfig& config,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+/** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
+void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);
+void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph);
+
+// Choose one (exit, peer) FabricNodeId pair per candidate set ("hop") such that no FabricNodeId is
+// reused across sets. `candidates[i]` are the candidate pairs for position i; returns the chosen pairs
+// in order, or std::nullopt if no collision-free assignment exists (any set empty, or overconstrained).
+//
+// A backtracking solver for a system of distinct representatives (most-constrained set first). The blitz
+// decode pipeline builder uses it to lay out inter-mesh ring hops, where per-hop greedy first-fit can
+// strand a mid-chain hop on tight rings; kept here so it is reusable and unit-testable without a control
+// plane.
+std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_colliding_hops(
+    const std::vector<std::vector<std::pair<FabricNodeId, FabricNodeId>>>& candidates);
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
 

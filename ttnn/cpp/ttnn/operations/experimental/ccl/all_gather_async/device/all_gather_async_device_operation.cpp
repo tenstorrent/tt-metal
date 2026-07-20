@@ -248,40 +248,6 @@ AllGatherAsyncDeviceOperation::topology_return_value_t AllGatherAsyncDeviceOpera
         input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
 }
 
-ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllGatherAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = args.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    if (args.sub_core_grid.has_value()) {
-        subdevice_core_range_set = subdevice_core_range_set.intersection(args.sub_core_grid.value());
-    }
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<AllGatherAsyncDeviceOperation>(
-        args.dim,
-        args.num_links,
-        args.ring_size,
-        args.output_mem_config,
-        args.topology,
-        args.cluster_axis,
-        args.barrier_semaphore.has_value(),
-        args.using_persistent_buffers,
-        args.chunks_per_sync,
-        args.num_workers_per_link,
-        args.num_buffers_per_channel,
-        args.use_all_gather_async_llama_sharded,
-        args.use_optimal_ccl_for_llama,
-        args.reverse_order,
-        subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
-}
-
 std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,

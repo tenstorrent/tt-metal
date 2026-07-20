@@ -33,10 +33,12 @@
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_build/kernel_signature_parser.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
@@ -121,6 +123,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
 
+    // Get the scratchpad bindings from the settings callback.
+    // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
+    // (Kernel::compute_hash hashes them in the same order — the two must agree).
+    struct ScratchEntry {
+        string name;
+        uint32_t size_bytes;
+        uint32_t addr_crta_word;
+    };
+    vector<ScratchEntry> scratch_entries;
+    settings.process_scratchpad_binding_handles(
+        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+            scratch_entries.push_back({name, size_bytes, addr_crta_word});
+        });
+
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
@@ -140,7 +156,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -150,7 +166,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include <cstdint>\n";
         }
         if (!ta_entries.empty()) {
-            content << "#include \"api/tensor/tensor_accessor.h\"\n";
+            // This header defines TensorBindingToken, a type which can be used
+            // to construct a TensorAccessor or LocalTensorAccessor.
+            content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+        }
+        if (!scratch_entries.empty()) {
+            // The full Scratchpad accessor (NOC-free, so it compiles on both data-movement and
+            // compute/TRISC builds), which also pulls in the ScratchpadAccessor binding type.
+            content << "#include \"api/scratchpad.h\"\n";
         }
         content << "\n";
 
@@ -171,20 +194,35 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!ta_entries.empty()) {
-            // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA. The kernel-side TensorAccessor(token) constructor
-            // unpacks both pieces.
+            // its implicit base-address CRTA.
+            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
-                content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
-                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
+                        << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             content << "}  // namespace tensor\n";
+        }
+
+        if (!scratch_entries.empty()) {
+            // ScratchpadAccessor scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+            // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
+            // and the scratchpad's compile-time per-node size.
+            // The kernel-side Scratchpad(accessor) constructor unpacks both.
+            // The accessor's members are opaque, so the framework can extend it later without touching
+            // kernel source.
+            content << "namespace scratch {\n";
+            for (const auto& entry : scratch_entries) {
+                content << "constexpr ScratchpadAccessor " << entry.name << "{" << entry.addr_crta_word << "u, "
+                        << entry.size_bytes << "u};\n";
+            }
+            content << "}  // namespace scratch\n";
         }
     }
     write_file(path, content.str());
@@ -277,6 +315,51 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     write_file(path, content.str());
 }
 
+// Scan a kernel source for a TT_KERNEL entry and, if present, return the generated kernel_main()
+// shim text (validated against the host-registered arg schema). Returns "" when the source has no
+// TT_KERNEL marker (a legacy / hand-written kernel_main() — fully backward compatible). Fail-fasts
+// if a TT_KERNEL entry appears in a non-Metal 2.0 kernel: it would have no kernel_main() and fail
+// to link with a confusing error (TT_KERNEL is defined only in the Metal 2.0 header
+// experimental/kernel_args.h). Shared by the data-movement/eth path and the compute (TRISC) path
+// so both author styles behave identically — the compute entry symbol is kernel_main() too
+// (run_kernel() calls it), which is exactly what the shim defines.
+std::string generate_tt_kernel_shim_if_present(
+    const JitBuildSettings& settings, const KernelSource& kernel_src, bool is_metal2) {
+    auto sig = parse_kernel_main_signature(kernel_src.get_content());
+    if (!sig) {
+        return {};
+    }
+    const std::string source_desc =
+        kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
+    log_debug(
+        tt::LogBuildKernels,
+        "TT_KERNEL entry '{}': CTAs=[{}] runtime=[{}] (source: {})",
+        sig->name,
+        fmt::join(sig->template_param_names, ", "),
+        fmt::join(sig->fn_param_names, ", "),
+        source_desc);
+    if (!is_metal2) {
+        TT_FATAL(
+            false,
+            "TT_KERNEL entry '{}' found in a non-Metal 2.0 kernel. Named kernel arguments (the TT_KERNEL "
+            "marker with template/function parameters) require the Metal 2.0 host API.",
+            sig->name);
+    }
+    // Cross-check the kernel's declared parameters against the host-registered schema before
+    // generating the shim, so a name typo or schema drift fails here with a clear message rather
+    // than as a compile error buried in generated code (kernel param the host never registered) or
+    // a silently-unused arg (registered name the kernel never takes).
+    std::vector<std::string> cta_names;
+    settings.process_named_compile_time_args([&cta_names](const std::unordered_map<std::string, uint32_t>& named) {
+        for (const auto& entry : named) {
+            cta_names.push_back(entry.first);
+        }
+    });
+    validate_signature_against_schema(
+        *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
+    return generate_kernel_main_shim(*sig);
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -297,6 +380,11 @@ void jit_build_genfiles_kernel_include(
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
     kernel_header_content += get_kernel_source_to_include(kernel_src);
+
+    // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
+    // by name and calls the user entry. It must follow the user source (so the entry is declared)
+    // and the args:: header (emitted above for Metal 2.0). Empty for legacy kernels.
+    kernel_header_content += generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
 
     string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
@@ -330,11 +418,18 @@ void jit_build_genfiles_triscs_src(
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
+    // For a TT_KERNEL-tagged compute entry, append the generated kernel_main() shim after the user
+    // source (same as the data-movement path). The compute entry symbol is kernel_main() —
+    // run_kernel() calls it — so the generated shim is compiled into each TRISC just like a
+    // hand-written kernel_main(). Computed once and reused for all TRISC variants; empty for legacy
+    // kernels and for kernels that don't use the named-arg entry syntax.
+    const string tt_kernel_shim = generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
+
     // Generate the four TRISC source files (fourth only used on Quasar)
-    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include);
-    write_file(math_cpp, math_prolog + kernel_src_to_include);
-    write_file(pack_cpp, pack_prolog + kernel_src_to_include);
-    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include);
+    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(math_cpp, math_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(pack_cpp, pack_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include + tt_kernel_shim);
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
@@ -661,13 +756,21 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
 
-void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options) {
+void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
+    // (Quasar only) Explicit op-writer unpack-to-dest flag, baked here like DST_ACCUM_MODE so it is
+    // visible to the compute/LLK headers that consume it (all included after this descriptor file).
+    // WH/BH keep UnpackToDestEn hardcoded in their llk_defs.h (format-inferred routing), so we do not emit it
+    // for them doing so would redefine their constexpr.
+    if (arch == tt::ARCH::QUASAR) {
+        fmt::format_to(
+            std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", options.unpack_to_dest_en);
+    }
 }
 
 void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
@@ -721,7 +824,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
-    emit_compute_scalar_descriptors(out, options);
+    emit_compute_scalar_descriptors(out, options, env.get_arch());
     out << "#endif\n";
 
     if (!out) {
@@ -733,9 +836,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
 // clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
-    //ZoneScoped;
-    //const std::string tracyPrefix = "generate_descriptors_";
-    //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    TTZoneScopedDN(JIT, "generate_descriptors");
+    TTZoneTextD(JIT, options.name.c_str(), options.name.length());
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
 }

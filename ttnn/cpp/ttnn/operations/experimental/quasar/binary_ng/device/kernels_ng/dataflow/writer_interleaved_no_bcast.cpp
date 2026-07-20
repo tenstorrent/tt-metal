@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -27,7 +28,7 @@ void kernel_main() {
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 
     Noc noc;
-    CircularBuffer cb_dst(cb_id_dst);
+    DataflowBuffer cb_dst(cb_id_dst);
 
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();

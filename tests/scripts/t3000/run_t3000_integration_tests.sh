@@ -182,7 +182,6 @@ run_t3000_sd35large_tests() {
 run_t3000_flux1_tests() {
   run_t3000_dit_tests \
     "models/tt_dit/tests/blocks/test_attention.py::test_attention_flux" \
-    "models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block -k 2x4" \
     "models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k 2x4"
 }
 

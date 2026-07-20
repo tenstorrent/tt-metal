@@ -30,6 +30,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_p100_sanity_tests:
+        description: "Run P100 Sanity Tests"
+        required: false
+        type: boolean
+        default: false
       run_tutorials_tests:
         description: "Run TTNN Tutorials"
         required: false
@@ -40,8 +45,13 @@ on:
         required: false
         type: boolean
         default: false
-      run_tt_train_perf_tests:
-        description: "Run TT-Train Perf Tests (Python)"
+      run_tt_train_perf_pretraining_tests:
+        description: "Run TT-Train Pretraining Tests"
+        required: false
+        type: boolean
+        default: false
+      run_tt_train_perf_finetuning_tests:
+        description: "Run TT-Train Finetuning Tests"
         required: false
         type: boolean
         default: false
@@ -50,6 +60,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_triage_tests:
+        description: "Run tt-triage tests"
+        required: false
+        type: boolean
+        default: true
       additional_test_categories:
         description: >
           Additional test categories to run (comma-separated, e.g.,
@@ -102,11 +117,13 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
+      # UMD test binaries are needed by the umd-p100-tests job below.
+      build-umd-tests: true
       skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   generate-arch-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       l2-nightly-skus: ${{ steps.parse.outputs.l2-nightly-skus }}
     steps:
@@ -146,16 +163,16 @@ jobs:
       basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
 
   # =============================================================================
-  # No Team determined
+  # Shield team
   # =============================================================================
-  tt-metal-l2-tests:
+  shield-sdxl-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
         github.event_name == 'schedule' || inputs.additional_test_categories != ''
       )
     secrets: inherit
-    uses: ./.github/workflows/tt-metal-l2-impl.yaml
+    uses: ./.github/workflows/shield-sdxl-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -268,6 +285,31 @@ jobs:
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: cnn_pipeline,cnn_builder
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  ttnn-p100-tests:
+    needs: [check-harbor, build-artifact]
+    if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
+    with:
+      enabled-skus: "bh_p100"
+      docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
+  # =============================================================================
+  # UMD team
+  # =============================================================================
+  umd-p100-tests:
+    needs: [resolve-docker-pull-refs, build-artifact]
+    if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
+    secrets: inherit
+    uses: ./.github/workflows/umd-sanity-tests-impl.yaml
+    with:
+      enabled-skus: "bh_p100a_civ2_viommu"
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # =============================================================================
   # tt-train team
@@ -286,10 +328,10 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-perf-tests:
+  tt-train-perf-pretraining-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_perf_tests) &&
+      (github.event_name == 'schedule' || inputs.run_tt_train_perf_pretraining_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/tt-train-tests.yaml
@@ -300,13 +342,31 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      subcategories: pretraining
+  tt-train-perf-finetuning-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_perf_finetuning_tests) &&
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
+    secrets: inherit
+    uses: ./.github/workflows/tt-train-tests.yaml
+    with:
+      test-category: perf
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      subcategories: finetuning
 
   # =============================================================================
   # Triage team
   # =============================================================================
   triage-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
-    if: ${{ contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150') }}
+    if: |
+      (github.event_name == 'schedule' || inputs.run_triage_tests) &&
+      contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
     secrets: inherit
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:

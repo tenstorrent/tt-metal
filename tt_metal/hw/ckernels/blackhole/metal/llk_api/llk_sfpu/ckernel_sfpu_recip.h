@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +9,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 #include "lltt.h"
@@ -31,17 +33,17 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
         sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
 
         if constexpr (max_iter > 1) {
-            sfpi::vFloat y1 = y * -t - sfpi::vConst0;
+            sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
             v_if(t < 0) {
                 t = x * y1 - sfpi::vConstFloatPrgm0;
-                y = y1 * -t - sfpi::vConst0;
+                y = y1 * -t - 0.0f;
             }
             v_endif;
         } else {
             // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the
             // preceding SFPMAD.
-            v_if(t < 0) { y = y * -t - sfpi::vConst0; }
+            v_if(t < 0) { y = y * -t - 0.0f; }
             v_endif;
         }
     }
@@ -384,6 +386,14 @@ inline void calculate_reciprocal() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool legacy_compat = false>
 void recip_init() {
+    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + reciprocal's ADDR_MOD_6 + counter
+    // reset), then the op-specific reciprocal setup below -- one self-contained init, matching exp_init.
+    // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
+    // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole.
+    sfpu::_init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
         if constexpr (APPROXIMATION_MODE) {
             _init_reciprocal_fast_7b_();

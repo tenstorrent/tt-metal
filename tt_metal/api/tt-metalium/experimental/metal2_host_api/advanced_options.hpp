@@ -36,25 +36,13 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// Canonical definition of DFBSpecName. It lives in this lower-level header
-// (rather than dataflow_buffer_spec.hpp) because AdvancedOptions members here
-// reference it, and dataflow_buffer_spec.hpp includes this header.
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
+// NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
+//       re-declared here for use in AdvancedOptions to avoid circular dependency.
+//       This is legal so long as the declarations are identical, which is compiler-enforced.
 
 struct KernelAdvancedOptions {
-    ////////////////////////////////////////////////////////////////////////////////
-    // Per-node thread count (Gen2)
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // The default kernel threading is specified by KernelSpec::num_threads.
-    // However, you may override this on a per-node basis.
-    //
-    // NOTE: This feature is currently UNSUPPORTED!
-    //       (It's an open question if we EVER want to support it.)
-    //       It is included here just as a placeholder for use case feedback.
-    //       Attempting to use it will trigger a runtime error.
-    Table<Nodes, /* num_threads */ uint32_t> node_specific_thread_counts;
-
     ////////////////////////////////////////////////////////////////////////////////
     // Enqueue-loop invariant kernel arguments
     ////////////////////////////////////////////////////////////////////////////////
@@ -112,33 +100,7 @@ struct KernelAdvancedOptions {
     //       existing uses are refactored to avoid it.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // Multi-threaded self-loop DFBs on compute kernels
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Self-loop DFBs on compute kernels (niche use case).
-    // This applies only to compute kernels that bind BOTH the producer and consumer
-    // endpoints of the same DFB (self-loop).
-    //
-    // The compute kernel threads can communicate via the DFB in two topologies:
-    //
-    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
-    //         (no cross-thread communication). This is the common case.
-    //   INTER (inter-thread): Within the kernel, some threads produce data for other
-    //          threads to consume.
-    //
-    // Only the INTRA case is currently supported. INTER will trigger a validation error.
-    // There are currently no known use cases for an INTER-thread self-loop. This option
-    // is present in the API for completeness, to surface any use cases that may arise.
-    enum class DFBSelfLoopConnectivity { INTRA, INTER };
-
-    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
-    Table<DFBSpecName, DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
 };
-
-// (Convenience aliases for nested types)
-using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -159,6 +121,39 @@ struct DFBAdvancedOptions {
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
     Group<DFBSpecName> alias_with;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // DFB multi-bindings
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A DFB is a software FIFO. By default, a DFB instance (i.e., a DFB on a
+    // particular node) must have exactly one producer kernel instance and exactly
+    // one consumer kernel instance.
+    //
+    // This invariant holds at the INSTANCE level; a *DFBSpec* (spanning multiple
+    // nodes) can have more than one KernelSpec producer or more consumer bindings,
+    // as long as every node's DFB instance has one producer and one consumer.
+    // (This enables, for example, a grid-spanning compute kernel to be fed data by
+    // different types of producer kernels on different nodes.)
+    //
+    // "Multi-binding" refers to a DFB instance that has more than one producer
+    // and/or more than one consumer kernel instance. Gen1 hardware (Wormhole and
+    // Blackhole) is technically capable of supporting multi-binding: a DFB lowers
+    // to a plain circular buffer there, so the FIFO pointers are shared L1 state
+    // that any number of producer/consumer RISCs can drive.
+    // However, this configuration is unsafe and its use is discouraged.
+    //
+    // CAUTION:
+    // Multi-binding a DFB instance is UNSAFE in most circumstances.
+    // The kernel logic must explicitly ensure access safety and synchronization.
+    // Multi-binding forfeits the protections of the FIFO synchronization mechanics.
+    // There is a high likelihood of race conditions and non-deterministic behavior.
+    //
+    // NOTE:
+    // This feature is included for backwards compatibility with legacy APIs.
+    // It is NOT supported on Gen2 architectures: setting this flag on a Gen2
+    // target is a hard error, whether or not any instance is actually multi-bound.
+    bool allow_instance_multi_binding = false;
 };
 
 struct AdvancedKernelRunArgs {
@@ -219,10 +214,12 @@ struct TensorParameterAdvancedOptions {
     // CAUTION:
     // These options are UNSAFE if set to true; most kernels will not function
     // correctly if the tensor argument's spec deviates from the declared spec.
-    // Use with caution and ensure that your kernel logic is compatible.
+    // Use with caution. You must ensure that your kernel logic outside of the
+    // TensorAccessor itself is compatible with the chosen relaxation option(s)!
 
     // Permit tensor arguments whose logical_shape differs from the declared shape.
     // The argument's padded_shape must still match exactly.
+    //
     // Effects:
     //  - Validation checks are relaxed
     //  - TensorAccessor configuration is completely unchanged
@@ -230,11 +227,20 @@ struct TensorParameterAdvancedOptions {
 
     // Permit tensor arguments with dynamic logical shape.
     // The argument's logical_shape AND padded_shape may differ from the declared shape.
+    //
     // Effects:
-    //  - Validation checks are relaxed
-    //  - For an interleaved tensor, TensorAccessor configuration is unchanged
-    //  - For a sharded tensor, the TensorAccessor configuration dynamically reflects the
-    //    argument's actual shape. (Shape becomes an implicit runtime argument.)
+    //  - Validation checks are relaxed.
+    //  - For a sharded tensor:
+    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's actual shape.
+    //    Shape, expressed in pages-per-dim, becomes implicit common runtime arguments.
+    //  - For an interleaved TILED tensor:
+    //    TensorAccessor configuration is unchanged
+    //    (The page size is fixed by dtype/tile dims, so it cannot vary with shape).
+    //  - For an interleaved ROW-MAJOR tensor:
+    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's page size.
+    //    NOTE: page_size = last_dim_width * element_size is part of the varying shape!
+    //    The aligned_page_size becomes an implicit common runtime argument.
+    //    (Your kernel can access this value via TensorAccessor::get_aligned_page_size().)
     bool dynamic_tensor_shape = false;
 };
 

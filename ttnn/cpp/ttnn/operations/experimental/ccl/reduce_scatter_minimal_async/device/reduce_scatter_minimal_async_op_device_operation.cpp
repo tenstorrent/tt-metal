@@ -124,23 +124,44 @@ std::vector<Tensor> ReduceScatterMinimalAsyncDeviceOperation::create_output_tens
 
 std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperation::compute_output_topologies(
     const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
-    // reduce_scatter produces (intermediate, output). The output is sharded along `dim`
-    // across `cluster_axis`; the intermediate is an internal workspace whose topology is
-    // best left matching the input so that downstream introspection is not misleading.
+    // TODO(#48421): Enforce input invariants with TT_FATAL instead of sanitising malformed topologies.
+    // Output is sharded along `dim` across `cluster_axis`; intermediate keeps the input topology.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     auto output_placements = input_topology.placements();
 
-    auto shard_placement =
-        tt::tt_metal::distributed::MeshMapperConfig::Shard{static_cast<int>(operation_attributes.dim)};
+    // Normalize `dim` so Shard placements are stored consistently (avoids [Shard(-1), Shard(3)]).
+    const int rank = static_cast<int>(tensor_args.input_tensor.logical_shape().rank());
+    const int dim = ((static_cast<int>(operation_attributes.dim) % rank) + rank) % rank;
+    const auto shard_placement = tt::tt_metal::distributed::MeshMapperConfig::Shard{dim};
+
+    // Replicate any other mesh axis still sharding the same tensor dim — concat_ndim requires unique dims.
+    auto clear_same_dim = [&](auto& placement) {
+        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement)) {
+            if (((shard->dim % rank) + rank) % rank == dim) {
+                placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+            }
+        }
+    };
 
     if (operation_attributes.cluster_axis.has_value()) {
         const auto axis = operation_attributes.cluster_axis.value();
         if (axis < output_placements.size()) {
+            for (size_t i = 0; i < output_placements.size(); ++i) {
+                if (i != axis) {
+                    clear_same_dim(output_placements[i]);
+                }
+            }
             output_placements[axis] = shard_placement;
         }
     } else {
-        for (auto& placement : output_placements) {
-            placement = shard_placement;
+        // Whole-mesh reduce_scatter: shard only real (>1) axes on `dim`; replicate size-1 axes to keep dims unique.
+        const auto& mesh_shape = input_topology.distribution_shape();
+        for (size_t i = 0; i < output_placements.size(); ++i) {
+            if (i < mesh_shape.dims() && mesh_shape[static_cast<int>(i)] > 1) {
+                output_placements[i] = shard_placement;
+            } else {
+                output_placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+            }
         }
     }
 
@@ -148,36 +169,6 @@ std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperati
         input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
 
     return {input_topology, std::move(output_topology)};
-}
-
-ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<ReduceScatterMinimalAsyncDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.optional_intermediate_mem_config,
-        operation_attributes.topology,
-        operation_attributes.barrier_semaphore.has_value(),
-        operation_attributes.using_persistent_buffers,
-        operation_attributes.cluster_axis,
-        operation_attributes.chunks_per_sync,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        operation_attributes.compute_kernel_config,
-        subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterMinimalAsyncDeviceOperation::tensor_return_value_t>

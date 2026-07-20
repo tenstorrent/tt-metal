@@ -7,49 +7,143 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include <algorithm>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
-namespace {
+ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_program_artifacts(
+    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
+    const DFBSpecName CB_IN0{"cb_in0"};  // legacy c_0: stick stream (reader produces, writer consumes)
 
-// Compute per-core runtime args (reader+writer) for HC RM transpose and append them to the
-// supplied KernelDescriptors. The traversal logic that advances (curr_c, curr_h, curr_n) was
-// previously shared between `create` and `override_runtime_arguments`; now it has a single home.
-void emit_runtime_args_hc_rm(
-    KernelDescriptor& reader_desc,
-    KernelDescriptor& writer_desc,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    uint32_t num_cores_total,
-    uint32_t num_cores_y,
-    const CoreRangeSet& core_group_1,
-    uint32_t num_sticks_per_core_group_1,
-    const CoreRangeSet& core_group_2,
-    uint32_t num_sticks_per_core_group_2) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.padded_shape();
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
 
-    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
-    uint32_t W_bytes = W * input_tensor.element_size();
+    const KernelSpecName READER_KERNEL{"reader"};
+    const KernelSpecName WRITER_KERNEL{"writer"};
 
-    uint32_t max_read_size = 2048;
+    constexpr const char* READER_PATH =
+        "ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/"
+        "reader_unary_transpose_hc_interleaved_partitioned_rm.cpp";
+    constexpr const char* WRITER_PATH =
+        "ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/"
+        "writer_unary_transpose_hc_interleaved_start_id_rm.cpp";
+
+    const auto& input_tensor = tensor_args.input;
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+
+    const auto& a_shape = input_tensor.logical_shape();
+    const uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
+    const uint32_t NCH = N * C * H;
+
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+
+    log_debug(tt::LogOp, "transpose_hc_rm");
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+
+    IDevice* device = input_tensor.device();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_cores_total = num_cores_x * num_cores_y;
+    const CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
+        split_work_to_cores(compute_with_storage_grid_size, NCH);
+
+    Buffer* src0_buffer = input_tensor.buffer();
+    Buffer* dst_buffer = output_tensor.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    const uint32_t num_sticks = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
+                                                                                          : num_sticks_per_core_group_2;
+
+    const uint32_t aligned_page = std::max(src0_buffer->aligned_page_size(), dst_buffer->aligned_page_size());
+    const uint32_t stick_size = std::max(W * input_tensor.element_size(), aligned_page);
+
+    // ------------------------------------------------------------------------
+    // DataflowBufferSpec (legacy CB c_0, normal/non-borrowed).
+    // ------------------------------------------------------------------------
+    DataflowBufferSpec cb_in0_spec{
+        .unique_id = CB_IN0,
+        .entry_size = stick_size,
+        .num_entries = num_sticks,
+        .data_format_metadata = cb_data_format,
+    };
+
+    // ------------------------------------------------------------------------
+    // Tensor parameters. Both carried RuntimeTensorShape on the legacy accessors,
+    // which maps to dynamic_tensor_shape = true.
+    // ------------------------------------------------------------------------
+    TensorParameter input_param{
+        .unique_id = INPUT_TENSOR,
+        .spec = input_tensor.tensor_spec(),
+        .advanced_options = {.dynamic_tensor_shape = true},
+    };
+    TensorParameter output_param{
+        .unique_id = OUTPUT_TENSOR,
+        .spec = output_tensor.tensor_spec(),
+        .advanced_options = {.dynamic_tensor_shape = true},
+    };
+
+    // ------------------------------------------------------------------------
+    // Reader: streams transposed sticks into cb_in0 (c_0). W_size_bytes == stick_size.
+    // (The legacy unused aligned_page_size CTA slot is dropped under named args.)
+    // ------------------------------------------------------------------------
+    KernelSpec reader_spec{
+        .unique_id = READER_KERNEL,
+        .source = std::filesystem::path{READER_PATH},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = CB_IN0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
+        .compile_time_args = {{"N", N}, {"H", H}, {"C", C}, {"W_size_bytes", stick_size}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_sticks_per_core_read", "num_read_per_barrier", "start_id", "curr_c", "curr_h", "curr_n"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    // ------------------------------------------------------------------------
+    // Writer: consumes cb_in0 (c_0) and writes the transposed sticks (Case-1).
+    // ------------------------------------------------------------------------
+    KernelSpec writer_spec{
+        .unique_id = WRITER_KERNEL,
+        .source = std::filesystem::path{WRITER_PATH},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = CB_IN0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
+        .compile_time_args = {{"W_size_bytes", stick_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_sticks_per_core_read", "num_read_per_barrier", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    // ------------------------------------------------------------------------
+    // Per-core runtime args: the HC stick walk, preserved exactly from legacy.
+    // Kernels are placed on the full grid; idle cores carry num_sticks = 0.
+    // ------------------------------------------------------------------------
+    const uint32_t W_bytes = W * input_tensor.element_size();
+    const uint32_t max_read_size = 2048;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
 
-    reader_desc.runtime_args.reserve(num_cores_total);
-    writer_desc.runtime_args.reserve(num_cores_total);
+    KernelRunArgs reader_run{.kernel = READER_KERNEL};
+    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
 
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_sticks_per_core;
-
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -64,12 +158,28 @@ void emit_runtime_args_hc_rm(
             num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
         }
 
-        reader_desc.emplace_runtime_args(
-            core,
-            {input_buffer, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_read, curr_c, curr_h, curr_n});
-
-        writer_desc.emplace_runtime_args(
-            core, {output_buffer, num_sticks_per_core_read, num_read_per_barrier, curr_sticks_write});
+        const NodeCoord node = core;
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            node,
+            {
+                {"num_sticks_per_core_read", num_sticks_per_core_read},
+                {"num_read_per_barrier", num_read_per_barrier},
+                {"start_id", curr_sticks_read},
+                {"curr_c", curr_c},
+                {"curr_h", curr_h},
+                {"curr_n", curr_n},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_sticks_per_core_read", num_sticks_per_core_read},
+                {"num_read_per_barrier", num_read_per_barrier},
+                {"start_id", curr_sticks_write},
+            });
 
         curr_sticks_write += num_sticks_per_core;
 
@@ -90,113 +200,28 @@ void emit_runtime_args_hc_rm(
             }
         }
     }
-}
 
-}  // namespace
+    WorkUnitSpec wu{
+        .name = "transpose_hc_rm",
+        .kernels = {READER_KERNEL, WRITER_KERNEL},
+        .target_nodes = total_cores,
+    };
 
-tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
-    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
+    ProgramSpec spec{
+        .name = "transpose_hc_rm",
+        .kernels = {reader_spec, writer_spec},
+        .dataflow_buffers = {cb_in0_spec},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {wu},
+    };
 
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader_run, writer_run};
+    run_args.tensor_args = {
+        {INPUT_TENSOR, TensorArgument{std::cref(input_tensor.mesh_tensor())}},
+        {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor.mesh_tensor())}}};
 
-    const auto& a_shape = input_tensor.logical_shape();
-    uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
-    uint32_t NCH = N * C * H;
-
-    ProgramDescriptor desc;
-
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-
-    log_debug(tt::LogOp, "transpose_hc_rm");
-    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
-
-    IDevice* device = input_tensor.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, NCH);
-
-    Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    uint32_t src0_cb_index = 0;
-
-    auto num_sticks = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
-                                                                                : num_sticks_per_core_group_2;
-
-    Buffer* src0_buffer = input_tensor.buffer();
-    uint32_t aligned_page = std::max(src0_buffer->aligned_page_size(), dst_buffer->aligned_page_size());
-    auto stick_size = std::max(W * input_tensor.element_size(), aligned_page);
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_sticks * stick_size,
-        .core_ranges = total_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = stick_size,
-        }}},
-    });
-
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
-    reader_compile_time_args.push_back(N);
-    reader_compile_time_args.push_back(H);
-    reader_compile_time_args.push_back(C);
-    reader_compile_time_args.push_back(stick_size);
-    reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
-    std::vector<uint32_t> writer_common_runtime_args;
-    writer_compile_time_args.push_back(stick_size);
-    writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_interleaved_partitioned_rm.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/"
-        "writer_unary_transpose_hc_interleaved_start_id_rm.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
-
-    emit_runtime_args_hc_rm(
-        reader_desc,
-        writer_desc,
-        input_tensor,
-        output_tensor,
-        num_cores_total,
-        num_cores_y,
-        core_group_1,
-        num_sticks_per_core_group_1,
-        core_group_2,
-        num_sticks_per_core_group_2);
-
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

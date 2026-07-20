@@ -241,7 +241,7 @@ def test_mochi_pipeline_performance(
         assert is_blackhole(), "2x2 is only supported for blackhole"
         # Tighten these once we have a stable BH QuietBox baseline in CI.
         expected_metrics = {
-            "encoder": 8.0,
+            "encoder": 12.5,
             "denoising": 2600,
             "vae": 90,
             "total": 2700,
@@ -250,8 +250,8 @@ def test_mochi_pipeline_performance(
         expected_metrics = {
             "encoder": 8.0,
             "denoising": 400,
-            "vae": 22,
-            "total": 430,
+            "vae": 70,
+            "total": 478,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"

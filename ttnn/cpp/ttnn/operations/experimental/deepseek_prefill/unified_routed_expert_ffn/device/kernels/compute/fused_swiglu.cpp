@@ -62,6 +62,17 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 
+#ifdef SWIGLU_OAI
+// SwiGLU-OAI (gpt-oss / MiniMax-M3) activation: reuse the proven binary SFPU op.
+// Computes (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L)).
+// Default SwiGLUConfigGPTOSS (alpha=1.702, clamp_limit=7.0) matches M3's config.json.
+// swiglu_sfpu.h lives under the gpt-oss moe_gpt op; this repo-root-relative include
+// resolves on the kernel include path (same convention as bmm_fused_activation.hpp
+// above). It could later move to a shared kernel-include dir, but the path is valid
+// as-is (verified on Blackhole via test_swigluoai_routed_expert.py).
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#endif
+
 namespace {
 
 template <
@@ -105,9 +116,14 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
     // cost of down-matmul efficiency. The fused gate/up phase escapes the race
     // because its two interleaved matmuls already separate consecutive same-slot
     // packs. Keeping the perf-optimal wide subblock here is now safe.
+    CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer partials_cb(partials_cb_id);
+    CircularBuffer final_cb(final_cb_id);
+
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        cb_wait_front(in0_cb_id, in0_block_num_tiles);
-        cb_wait_front(in1_cb_id, in1_block_num_tiles);
+        in0_cb.wait_front(in0_block_num_tiles);
+        in1_cb.wait_front(in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
         for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
@@ -134,11 +150,11 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
                 }
 
                 tile_regs_commit();
-                cb_reserve_back(partials_cb_id, out_subblock_num_tiles);
+                partials_cb.reserve_back(out_subblock_num_tiles);
                 tile_regs_wait();
                 pack_tile_block(0, partials_cb_id, out_subblock_num_tiles);
                 tile_regs_release();
-                cb_push_back(partials_cb_id, out_subblock_num_tiles);
+                partials_cb.push_back(out_subblock_num_tiles);
 
                 in1_index_subblock_offset += out_subblock_w;
             }
@@ -152,8 +168,8 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
         }
 #endif
 
-        cb_pop_front(in0_cb_id, in0_block_num_tiles);
-        cb_pop_front(in1_cb_id, in1_block_num_tiles);
+        in0_cb.pop_front(in0_block_num_tiles);
+        in1_cb.pop_front(in1_block_num_tiles);
 
         // Drain all but the last K-block (see header comment): forces the
         // packer's writes visible before the next block's L1_ACC RMW and wraps
@@ -161,8 +177,8 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
         // left pushed for the second-pass copy below.
         if (block + 1 < num_blocks) {
             for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                cb_wait_front(partials_cb_id, out_subblock_num_tiles);
-                cb_pop_front(partials_cb_id, out_subblock_num_tiles);
+                partials_cb.wait_front(out_subblock_num_tiles);
+                partials_cb.pop_front(out_subblock_num_tiles);
             }
         }
     }
@@ -183,11 +199,11 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
 
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
-        cb_wait_front(partials_cb_id, out_subblock_num_tiles);
+        partials_cb.wait_front(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             copy_tile(partials_cb_id, i, i);
         }
-        cb_pop_front(partials_cb_id, out_subblock_num_tiles);
+        partials_cb.pop_front(out_subblock_num_tiles);
 
         tile_regs_commit();
 
@@ -197,11 +213,11 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
             tile_regs_wait();
         }
 
-        cb_reserve_back(final_cb_id, out_subblock_num_tiles);
+        final_cb.reserve_back(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, final_cb_id);
         }
-        cb_push_back(final_cb_id, out_subblock_num_tiles);
+        final_cb.push_back(out_subblock_num_tiles);
 
         tile_regs_release();
     }
@@ -245,18 +261,25 @@ FORCE_INLINE void matmul_phase_fused_gu(
     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
+    CircularBuffer x_cb(x_cb_id);
+    CircularBuffer gate_cb(gate_cb_id);
+    CircularBuffer up_cb(up_cb_id);
+    CircularBuffer partials_gu_cb(partials_gu_cb_id);
+    CircularBuffer partials_up_cb(partials_up_cb_id);
+    CircularBuffer gate_intermed_cb(gate_intermed_cb_id);
+
     // Reserve both partials CBs once for the full per-core block. pack_tile
     // with output_tile_index writes to absolute slots; WrPtr doesn't advance
     // until cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land
     // back in the SAME L1 slots — accumulating physically — which is what
     // we want. No per-K-block pop+repush needed.
-    cb_reserve_back(partials_gu_cb_id, out_block_num_tiles);
-    cb_reserve_back(partials_up_cb_id, out_block_num_tiles);
+    partials_gu_cb.reserve_back(out_block_num_tiles);
+    partials_up_cb.reserve_back(out_block_num_tiles);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        cb_wait_front(x_cb_id, in0_block_num_tiles);
-        cb_wait_front(gate_cb_id, in1_block_num_tiles);
-        cb_wait_front(up_cb_id, in1_block_num_tiles);
+        x_cb.wait_front(in0_block_num_tiles);
+        gate_cb.wait_front(in1_block_num_tiles);
+        up_cb.wait_front(in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
@@ -329,13 +352,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
         }
 #endif
 
-        cb_pop_front(x_cb_id, in0_block_num_tiles);
-        cb_pop_front(gate_cb_id, in1_block_num_tiles);
-        cb_pop_front(up_cb_id, in1_block_num_tiles);
+        x_cb.pop_front(in0_block_num_tiles);
+        gate_cb.pop_front(in1_block_num_tiles);
+        up_cb.pop_front(in1_block_num_tiles);
     }
     // Make the accumulated partials visible to the second-pass copy loops.
-    cb_push_back(partials_gu_cb_id, out_block_num_tiles);
-    cb_push_back(partials_up_cb_id, out_block_num_tiles);
+    partials_gu_cb.push_back(out_block_num_tiles);
+    partials_up_cb.push_back(out_block_num_tiles);
 
     // After K-loop: partials_gu holds gate-matmul accumulator,
     // partials_up holds up-matmul accumulator. Copy each to its intermed
@@ -344,6 +367,16 @@ FORCE_INLINE void matmul_phase_fused_gu(
     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
+#ifdef SWIGLU_OAI
+    // SwiGLU-OAI path: do NOT apply silu here and do NOT consume the partials.
+    // Both partials_gu and partials_up are left pushed (bf16, full precision) so
+    // swiglu_oai_activation_phase() in kernel_main can read raw gate AND raw up
+    // together and run the fused clamp/alpha-sigmoid/(up+1) binary SFPU op.
+    // (Keeping the activation off the bf8 gate_intermed avoids a precision loss
+    // before the activation.)
+    (void)gate_intermed_cb_id;
+    (void)up_intermed_cb_id;
+#else
     // Gate partials → gate_intermed (silu applied via MATH-thread SFPU on dst,
     // NOT packer-fused). Per subblock:
     //   * copy partials_gu → dst (UNPACK reads bf16, MATH stores in dst regs).
@@ -357,22 +390,22 @@ FORCE_INLINE void matmul_phase_fused_gu(
     copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
-        cb_wait_front(partials_gu_cb_id, out_subblock_num_tiles);
+        partials_gu_cb.wait_front(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             copy_tile(partials_gu_cb_id, i, i);
         }
-        cb_pop_front(partials_gu_cb_id, out_subblock_num_tiles);
+        partials_gu_cb.pop_front(out_subblock_num_tiles);
         // MATH-thread SFPU pass: apply silu to each dst tile before pack.
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             silu_tile(i);
         }
         tile_regs_commit();
         tile_regs_wait();
-        cb_reserve_back(gate_intermed_cb_id, out_subblock_num_tiles);
+        gate_intermed_cb.reserve_back(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, gate_intermed_cb_id);
         }
-        cb_push_back(gate_intermed_cb_id, out_subblock_num_tiles);
+        gate_intermed_cb.push_back(out_subblock_num_tiles);
         tile_regs_release();
     }
 
@@ -381,12 +414,94 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // cb_gate_intermed (bf8 after silu+pack). Skipping the copy saves 48KB of
     // L1 and lets cb_in0_down_full stay double-buffered.
     (void)up_intermed_cb_id;
+#endif
 }
+
+#ifdef SWIGLU_OAI
+// Dst-accumulator mode (fp32 dest accum on/off) from the host ComputeConfig,
+// passed via -DFP32_DEST_ACC_EN. Defaults to bf16 dst (0) if not passed.
+#ifndef FP32_DEST_ACC_EN
+#define FP32_DEST_ACC_EN 0
+#endif
+// SwiGLU-OAI activation pass (replaces gate-silu + multiply_phase for M3/gpt-oss).
+// Reads the raw bf16 gate & up matmul accumulators (both still resident in their
+// partials CBs) and writes the activated result into activated_cb:
+//   (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L))
+// via the reusable binary SFPU op (swiglu_sfpu.h, SwiGLUConfigGPTOSS = M3 config).
+//
+// SFPU thread: invoked on MATH (between tile_regs_acquire/commit), matching this
+// kernel's existing silu_tile structure (copy_tile -> SFPU -> pack). gpt-oss's
+// moe_gpt runs it on PACK only because of its bespoke pack-fused pipeline.
+//
+// DST budget: the binary swiglu pins BOTH gate and up in dst at the same time, so
+// each output tile costs 2 dst slots. With fp32_dest_acc_en=false the MATH thread
+// has 8 dst tiles (DST_CAPACITY in the program factory), so we stream the block in
+// chunks of <=4 output tiles (<=8 dst). The activated CB is drained count-based by
+// the reader (cb_activated_obj.wait_front(d_in0_block_num_tiles)), so the push
+// granularity here is free and need not match out_subblock_num_tiles.
+template <uint32_t out_block_num_tiles>
+FORCE_INLINE void swiglu_oai_activation_phase(
+    uint32_t prev_srcA_cb_id, uint32_t gate_partials_cb_id, uint32_t up_partials_cb_id, uint32_t activated_cb_id) {
+    // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
+    // it and the SFPU op's fp32-dest template below stay in sync with the
+    // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
+    // 16-tile dst reg file halves under fp32 dest accum. Each output tile pins
+    // gate+up simultaneously -> 2 dst slots -> kActChunk output tiles / acquire.
+    constexpr bool kFp32DestAccEn = (FP32_DEST_ACC_EN != 0);
+    constexpr uint32_t kDstCapacity = kFp32DestAccEn ? 4u : 8u;
+    constexpr uint32_t kActChunk = kDstCapacity / 2;
+
+    CircularBuffer gate_partials_cb(gate_partials_cb_id);
+    CircularBuffer up_partials_cb(up_partials_cb_id);
+    CircularBuffer activated_cb(activated_cb_id);
+
+    gate_partials_cb.wait_front(out_block_num_tiles);
+    up_partials_cb.wait_front(out_block_num_tiles);
+
+    PACK((pack_reconfig_data_format(activated_cb_id)));
+    // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
+    // e.g. bf4). Reconfig to the Float16_b partials so copy_tile reads the
+    // accumulator with the right format. Both partials CBs are Float16_b, so this
+    // single init covers reads from gate AND up partials. (Passing a Float16_b CB
+    // as the "old" operand would no-op the reconfig and leave SrcA on bf4.)
+    copy_tile_to_dst_init_short_with_dt(prev_srcA_cb_id, gate_partials_cb_id);
+
+    for (uint32_t base = 0; base < out_block_num_tiles; base += kActChunk) {
+        const uint32_t remaining = out_block_num_tiles - base;
+        const uint32_t c = remaining < kActChunk ? remaining : kActChunk;
+        tile_regs_acquire();
+        // gate -> dst[0..c), up -> dst[c..2c)
+        for (uint32_t j = 0; j < c; ++j) {
+            copy_tile(gate_partials_cb_id, base + j, j);
+            copy_tile(up_partials_cb_id, base + j, c + j);
+        }
+        // Fused clamp + alpha-sigmoid + (up+1) multiply; result written in place to
+        // dst[j] (out == gate slot, mirroring moe_gpt's swiglu(0,1,0)).
+        for (uint32_t j = 0; j < c; ++j) {
+            MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<kFp32DestAccEn>(j, c + j, j)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        activated_cb.reserve_back(c);
+        for (uint32_t j = 0; j < c; ++j) {
+            pack_tile(j, activated_cb_id);
+        }
+        activated_cb.push_back(c);
+        tile_regs_release();
+    }
+    gate_partials_cb.pop_front(out_block_num_tiles);
+    up_partials_cb.pop_front(out_block_num_tiles);
+}
+#endif
 
 template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
 FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id) {
-    cb_wait_front(gate_cb_id, out_block_num_tiles);
-    cb_wait_front(up_cb_id, out_block_num_tiles);
+    CircularBuffer gate_cb(gate_cb_id);
+    CircularBuffer up_cb(up_cb_id);
+    CircularBuffer activated_cb(activated_cb_id);
+
+    gate_cb.wait_front(out_block_num_tiles);
+    up_cb.wait_front(out_block_num_tiles);
 
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
@@ -408,16 +523,16 @@ FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_
         }
         tile_regs_commit();
         tile_regs_wait();
-        cb_reserve_back(activated_cb_id, out_subblock_num_tiles);
+        activated_cb.reserve_back(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, activated_cb_id);
         }
-        cb_push_back(activated_cb_id, out_subblock_num_tiles);
+        activated_cb.push_back(out_subblock_num_tiles);
         tile_regs_release();
         base += out_subblock_num_tiles;
     }
-    cb_pop_front(gate_cb_id, out_block_num_tiles);
-    cb_pop_front(up_cb_id, out_block_num_tiles);
+    gate_cb.pop_front(out_block_num_tiles);
+    up_cb.pop_front(out_block_num_tiles);
 }
 
 }  // namespace
@@ -482,14 +597,17 @@ void kernel_main() {
     constexpr uint32_t cb_counts_scratch = get_named_compile_time_arg_val("cb_counts_scratch");
     constexpr uint32_t cb_idx_scratch = get_named_compile_time_arg_val("cb_idx_scratch");
 
+    CircularBuffer counts_scratch_cb(cb_counts_scratch);
+    CircularBuffer idx_scratch_cb(cb_idx_scratch);
+
     // Wait for the reader (BRISC) to push the per-expert counts/idx into
     // shared L1. UNPACK reads the L1 via LocalCBInterface and broadcasts
     // count_value to MATH and PACK via the inter-thread mailbox (MATH cannot
     // access get_local_cb_interface symbols at link time). Production matmul
     // uses the same UNPACK→mailbox→MATH/PACK pattern (see
     // circular_buffer.h::read_tile_value).
-    cb_wait_front(cb_counts_scratch, 1);
-    cb_wait_front(cb_idx_scratch, 1);
+    counts_scratch_cb.wait_front(1);
+    idx_scratch_cb.wait_front(1);
     uint32_t count_value = 0;
     UNPACK(({
         const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
@@ -516,7 +634,12 @@ void kernel_main() {
     // gate-intermed write. silu_tile_init() configures the MATH-side SFPU
     // for silu; the pack then runs plain (no per-tile SFPU on the pack
     // thread). Same total compute, better pipelining.
+#ifdef SWIGLU_OAI
+    // SwiGLU-OAI uses the binary swiglu SFPU op (sigmoid/recip table init).
+    MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()));
+#else
     silu_tile_init();
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
@@ -554,6 +677,16 @@ void kernel_main() {
             gu_out_block_num_tiles>(
             cb_in0_x, cb_in1_gate, cb_in1_up, cb_partials_gu, cb_partials_up, cb_gate_intermed, cb_up_intermed);
 
+#ifdef SWIGLU_OAI
+        // Phase 3 (SwiGLU-OAI): fused clamp + alpha-sigmoid + (up+1) directly on
+        // the raw bf16 gate/up accumulators -> cb_activated. Replaces both the
+        // gate-silu pass (skipped above) and the plain multiply_phase. cb_in1_up is
+        // the unpacker's last SrcA operand (up matmul in1), passed so the partials
+        // reconfig (weights df -> Float16_b) actually fires.
+        swiglu_oai_activation_phase<gu_out_block_num_tiles>(cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated);
+        (void)cb_gate_intermed;
+        (void)cb_up_intermed;
+#else
         // Phase 3: elementwise multiply (cb_gate_intermed is silu(partials_gu)
         // in bf8; cb_partials_up is the up matmul accumulator in bf16). The
         // multiply does the format conversion via reconfig_data_format inside
@@ -562,6 +695,7 @@ void kernel_main() {
         multiply_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
             cb_gate_intermed, cb_partials_up, cb_activated);
         (void)cb_up_intermed;
+#endif
 
         // Phase 4: down matmul, output to cb_out.
         // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);

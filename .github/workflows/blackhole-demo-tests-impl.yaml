@@ -21,7 +21,7 @@ on:
         required: false
         type: string
         default: "all"
-        description: "If not 'all', only emit matrix entries whose system-name matches."
+        description: "If not 'all', only emit matrix entries whose SKU matches."
       regenerate-ttnn-cache:
         required: false
         type: boolean
@@ -29,7 +29,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-matrix.outputs.matrix }}
     env:
@@ -53,14 +53,13 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "demo"
-      - name: Build full test matrix (all SKUs, with weights-cache-mode + system-name annotated)
+      - name: Build full test matrix (all SKUs, with weights-cache-mode annotated)
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             ALL_SKUS_IN_TESTS \
-            ./.github/sku_config.yaml \
-            ./.github/blackhole_demo_systems.yaml
+            ./.github/sku_config.yaml
       - name: Filter test matrix by model + system-type
         id: filter-matrix
         env:
@@ -70,9 +69,7 @@ jobs:
         run: |
           # Filter pipeline:
           #   1. Drop entries whose model-name doesn't match (unless model == 'all')
-          #   2. Drop entries whose system-name doesn't match (unless system-type-filter == 'all')
-          #      Entries without a system-name (e.g. tests on SKUs not in
-          #      blackhole_demo_systems.yaml) are kept verbatim.
+          #   2. Drop entries whose sku doesn't match (unless system-type-filter == 'all')
           filtered=$(echo "$MATRIX" \
             | jq -c --arg model "$MODEL" '
                 if $model == "all" then .
@@ -80,7 +77,7 @@ jobs:
                 end' \
             | jq -c --arg sys "$SYSTEM_TYPE_FILTER" '
                 if $sys == "all" then .
-                else [.[] | select((.["system-name"] // "") == $sys)]
+                else [.[] | select(.sku == $sys)]
                 end')
           count=$(echo "$filtered" | jq 'length')
           if [[ "$count" -eq 0 ]]; then
@@ -112,7 +109,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         # Cache-mode is per-job now (matrix.test-group.weights-cache-mode), populated
-        # from .github/blackhole_demo_systems.yaml during matrix build.
+        # from the weights-cache-mode field in .github/sku_config.yaml during matrix build.
         # If weights-cache-mode is lfc, we don't mount the model cache volume — weights download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
         # If weights-cache-mode is cloud-mlperf, mount from /mnt/MLPerf/huggingface (canonical HF cache root, shared with the Wormhole pipelines)
         # If weights-cache-mode is yyz4-mnt-models, mount from /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
@@ -150,14 +147,6 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
-      - name: Download Flux.1-dev model weights from LFC
-        if: ${{ matrix.test-group['weights-cache-mode'] == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
-        timeout-minutes: 15
-        run: |
-          set -e
-          mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
       - name: Download Mochi model weights to local cache
         if: ${{ inputs.regenerate-ttnn-cache && matrix.test-group['weights-cache-mode'] == 'local-disk' && contains(matrix.test-group.name, 'Mochi') }}
         timeout-minutes: 120

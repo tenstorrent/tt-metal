@@ -16,9 +16,11 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
@@ -52,6 +54,8 @@ def run_mla_inference(
     is_balanced,
     topology,
     tt_kvpe_cache,
+    return_indices=False,
+    inject_indices=None,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -84,9 +88,34 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
+        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
+        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
+        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-    rope_tensors = rope_setup.get_rope_tensors(seq_len)
+    # Sparse (DSA) single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
+    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked
+    # path. Dense keeps natural rope + no index cache.
+    has_indexer = resolve_has_indexer(config)
+    index_kv_cache = None
+    if has_indexer:
+        rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
+        # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
+        # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
+        # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
+        index_kv_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
     # Verify TT MLA exists
     assert mla_tt is not None, "TT MLA should exist"
@@ -119,15 +148,27 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_output = mla_tt.forward(
+    # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
+    # feed a prior layer's to skip the indexer. Defaults leave the single-shot forward unchanged.
+    mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
         kvpe_cache=tt_kvpe_cache,
+        indexer_indices=inject_indices,
+        return_indexer_indices=return_indices,
+        index_kv_cache=index_kv_cache,
     )
+    indices = None
+    if return_indices:
+        tt_output, indices = mla_out
+    else:
+        tt_output = mla_out
 
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
 
+    if return_indices:
+        return tt_output, hidden_states, chunk_order, shard_dims, indices
     return tt_output, hidden_states, chunk_order, shard_dims
 
 
@@ -262,7 +303,7 @@ def run_model(
                     use_cache=True,
                 )
 
-            ref_kvpe = ref_cache.key_cache[0]  # layer 0
+            ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
 
             if not (is_ci_env or is_ci_v2_env):
                 # Save to cache for future runs
@@ -723,7 +764,6 @@ def _run_chunked_prefill(
                 rope_tensors=indexed_rope,
                 kvpe_cache=tt_kvpe_cache,
                 actual_start=kv_actual,
-                actual_end=valid_end,
                 cache_user_id=u,
             )
             out_flat = ttnn.to_torch(
