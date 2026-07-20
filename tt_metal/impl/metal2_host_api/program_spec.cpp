@@ -29,6 +29,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "distributed/mesh_workload_impl.hpp"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <variant>
@@ -1242,6 +1243,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             dfb.unique_id);
     }
 
+    // The allow_instance_multi_binding escape hatch is Gen1-only. On Gen2 the DFB's per-RISC
+    // tile-counter / remapper machinery is driven by the producer/consumer masks, so a multi-bound
+    // instance cannot be lowered. Reject the flag itself on Gen2, independent of whether any instance
+    // is actually multi-bound — a Gen2 spec carrying it is never valid.
+    if (is_gen2_arch()) {
+        for (const auto& dfb : spec.dataflow_buffers) {
+            TT_FATAL(
+                !dfb.advanced_options.allow_instance_multi_binding,
+                "DFB '{}' sets allow_instance_multi_binding, which is only supported on Gen1 (WH/BH) "
+                "architectures. On Gen2 a DFB instance must have exactly one producer and one consumer.",
+                dfb.unique_id);
+        }
+    }
+
     // Validate local DFB endpoint placement and multi-binding consistency.
     //
     // The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
@@ -1261,11 +1276,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
 
+        // allow_instance_multi_binding (Gen1-only; rejected on Gen2 earlier in this function) turns
+        // the per-node DFB into a plain shared circular buffer, which has no per-role hardware config
+        // to share — no processor mask, DFB scheduler, or credit machinery. Every per-role uniformity
+        // requirement below exists solely to guarantee such a shared config, so none apply under the
+        // flag: the role-uniformity checks are skipped and the per-node census relaxes its "exactly
+        // one" counts to "at least one".
+        const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
+
         // (3) and (4): per-role uniformity of binding-site parameters, plus kernel kind.
         // Kind (compute vs DM) must agree because the DFB's hardware config carries a single
         // processor mask per role, and compute / DM masks live in disjoint bit ranges (bits
         // 0-7 vs 8-15 on Gen2; orthogonal RISC encodings on Gen1) — mismatched kinds cannot
-        // share a mask.
+        // share a mask. (All three are skipped under allow_multi — see above.)
         auto check_role_uniformity = [&](const auto& records, std::string_view role) {
             if (records.size() < 2) {
                 return;
@@ -1306,8 +1329,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     first_is_compute ? "data-movement" : "compute");
             }
         };
-        check_role_uniformity(endpoints.producers, "PRODUCER");
-        check_role_uniformity(endpoints.consumers, "CONSUMER");
+        if (!allow_multi) {
+            check_role_uniformity(endpoints.producers, "PRODUCER");
+            check_role_uniformity(endpoints.consumers, "CONSUMER");
+        }
 
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
         // every node it is instantiated on must run exactly one producer instance and exactly one
@@ -1353,12 +1378,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             return names;
         };
 
+        // Per-node census. Under allow_multi (see top of loop) the "exactly one" upper bound relaxes
+        // to "at least one": a node may host multiple instances of a role, but must still host at
+        // least one producer AND one consumer, or the FIFO is half-wired.
         for (const NodeCoord& node : footprint) {
             auto p_it = producers_on_node.find(node);
             auto c_it = consumers_on_node.find(node);
             const size_t num_producers = p_it == producers_on_node.end() ? 0 : p_it->second.size();
             const size_t num_consumers = c_it == consumers_on_node.end() ? 0 : c_it->second.size();
-            if (num_producers == 1 && num_consumers == 1) {
+            const bool node_ok =
+                allow_multi ? (num_producers >= 1 && num_consumers >= 1) : (num_producers == 1 && num_consumers == 1);
+            if (node_ok) {
                 continue;
             }
             std::string_view guidance;
@@ -2816,11 +2846,9 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
     return processors;
 }
 
-// ============================================================================
-// Public Entry Point
-// ============================================================================
+namespace {
 
-Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
@@ -2849,6 +2877,16 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //   are deterministic from num_threads, which is uniform per role. So on Gen2 the uniformity
     //   property is guaranteed by construction; the check is retained as a defensive assertion.
     for (const auto& dfb : spec.dataflow_buffers) {
+        // Instance-multi-binding (Gen1-only) intentionally binds same-role kernels on distinct RISCs
+        // (e.g. a BRISC producer and an NCRISC producer on one node), so their risc_masks differ by
+        // design and the uniform-mask requirement does not apply. On Gen1 the DFB lowers to a plain
+        // circular buffer where the mask is inert (it never reaches the device blob), so the single
+        // representative mask MakeDataflowBufferConfig takes from the first binding is harmless. (The
+        // flag is rejected on Gen2 in ValidateProgramSpec, so under normal validation any DFB reaching
+        // here with it set is Gen1.)
+        if (dfb.advanced_options.allow_instance_multi_binding) {
+            continue;
+        }
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
         auto check_uniform_mask = [&](const auto& records, std::string_view role) {
             if (records.size() < 2) {
@@ -3190,6 +3228,47 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     }
 
     return Program(std::move(program_impl));
+}
+
+}  // namespace
+
+// ============================================================================
+// Public Entry Points
+// ============================================================================
+
+Program MakeProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+    Program program = BuildProgramFromSpec(mesh_device, spec, skip_validation);
+    program.impl().compile_and_allocate(&mesh_device, false);
+    return program;
+}
+
+distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
+    distributed::MeshDevice& mesh_device,
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
+    bool skip_validation) {
+    const distributed::MeshCoordinateRange mesh_extent(mesh_device.shape());
+    distributed::MeshWorkload workload;
+    TT_FATAL(!program_specs.empty(), "At least one ProgramSpec is required to create a MeshWorkload.");
+    for (const auto& [device_range, program_spec] : program_specs) {
+        TT_FATAL(
+            mesh_extent.contains(device_range),
+            "Device range {} is outside MeshDevice shape {}",
+            device_range,
+            mesh_device.shape());
+        workload.impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
+    }
+    workload.impl().compile(&mesh_device);
+    return workload;
+}
+
+distributed::MeshWorkload MakeMeshWorkloadFromSpec(
+    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation) {
+    distributed::MeshWorkload workload;
+    workload.impl().add_program(
+        distributed::MeshCoordinateRange(mesh_device.shape()),
+        BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
+    workload.impl().compile(&mesh_device);
+    return workload;
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -18,8 +18,8 @@ on:
       sp-config:
         required: false
         type: string
-        default: "spsg"
-        description: "Single pod configuration (spsg)"
+        default: "sc1"
+        description: "Supercluster configuration (sc1)"
       test-type:
         required: false
         type: string
@@ -40,7 +40,7 @@ permissions:
 jobs:
   load-test-matrix:
     name: Load Test Matrix for ${{ inputs.sp-config }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
     env:

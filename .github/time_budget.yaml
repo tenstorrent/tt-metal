@@ -197,11 +197,11 @@ scaleout:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
-    bh_spsg: 20 # single galaxy
-    bh_sp1: 90
-    bh_sp1-blitz: 90 #blitz specific mgd sku
-    bh_sp1-mgd: 90 #general mgd sku
-    bh_sp4: 150
+    bh_sc1: 20 # single galaxy
+    bh_sc4: 90
+    bh_sc4-blitz: 90 #blitz specific mgd sku
+    bh_sc4-mgd: 90 #general mgd sku
+    bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
@@ -292,7 +292,7 @@ models:
     bh_p300: 20
     bh_loudbox: 190
     bh_quietbox_2: 80
-    bh_spsg: 20 # single galaxy MLA chunked prefill
+    bh_sc1: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:
@@ -356,8 +356,8 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 150
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_spsg job timeouts (tightened from 840)
-    bh_spsg: 480
+    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
+    bh_sc1: 480
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

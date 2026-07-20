@@ -1196,9 +1196,9 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 514.0
-              decode_t/s: 18.2
-              decode_t/s/u: 18.2
+              prefill_time_to_first_token: 241.0
+              decode_t/s: 26.0
+              decode_t/s/u: 26.0
               tolerance: 0.2
             accuracy: {}
             owner_id: U08HL8X1ECD # Aniruddha Tupe
