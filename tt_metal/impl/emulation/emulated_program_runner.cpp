@@ -10,7 +10,6 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/resource.h>  // getrlimit(RLIMIT_NOFILE) — bound JIT compile fan-out under the fd limit
 #include <csignal>
 #if defined(__x86_64__) && defined(__linux__)
 #include <ucontext.h>
@@ -20,8 +19,6 @@
 #include <bit>
 #include <atomic>
 #include <cassert>
-#include <cerrno>
-#include <limits>
 #include <tt_stl/assert.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -34,7 +31,6 @@
 #include <memory>
 #include <mutex>
 #include <regex>
-#include <semaphore>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -1853,68 +1849,6 @@ static std::mutex g_compile_inflight_mutex;
 static std::unordered_map<std::string, std::shared_future<std::function<void()>>> g_compile_inflight;
 static std::atomic<uint64_t> g_compile_tmp_seq{0};
 
-// Max jit_compile_kernel calls allowed to run concurrently. Each in-flight compile
-// holds a burst of open file descriptors (patched-header mirror writes, header reads,
-// the clang subprocess pipes — order tens of fds each), so an UNBOUNDED std::async
-// fan-out over every cache-miss makes peak fd use scale with the kernel count.
-// A large mesh program (8-chip loudbox on the full 14x10 grid compiles ~hundreds
-// of distinct kernels) then blows past a container's RLIMIT_NOFILE soft limit
-// (commonly 1024) → open() fails mid-compile → "kernel_patcher: cannot read/write"
-// (and the failing file varies run-to-run with the interleaving). A dev box with a
-// high fd limit (e.g. 65536) never hits it, so this is CI/container-only. Bounding
-// concurrent compiles keeps peak fds (and concurrent clang processes) under the
-// limit. Note this bounds concurrent *compiles*, not the thread count: std::async
-// still spawns one thread per cache-miss which then blocks on the gate — the fd/
-// clang-process footprint is what EMFILE cares about here.
-static unsigned jit_compile_concurrency_cap() {
-    // First, opportunistically raise the soft fd limit to the hard limit — unprivileged
-    // and enough on its own in most containers (large hard limit), so the throttle
-    // rarely engages on well-provisioned hosts. Kept as a floor because some containers
-    // pin the hard limit at 1024 too; derive the cap from the (possibly raised) soft limit.
-    struct rlimit rl {};
-    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != rl.rlim_max) {
-        rl.rlim_cur = rl.rlim_max;
-        setrlimit(RLIMIT_NOFILE, &rl);
-        getrlimit(RLIMIT_NOFILE, &rl);  // re-read the effective soft limit
-    }
-
-    unsigned cap = std::max(1u, std::thread::hardware_concurrency());
-    if (rl.rlim_cur != RLIM_INFINITY) {
-        // Budget the fd limit across concurrent compiles. kReserve covers the process's
-        // baseline fds (libs, python, fibers, the cached kernel .sos); kFdsPerCompile is
-        // an estimate of the fds one compile holds at its peak (patched-header writes +
-        // header reads + clang pipes). Both are conservative estimates, not measured; the
-        // soft→hard raise above and TT_EMULE_JIT_COMPILE_JOBS relieve any over-throttling.
-        constexpr rlim_t kReserve = 512;
-        constexpr rlim_t kFdsPerCompile = 48;
-        rlim_t budget = rl.rlim_cur > kReserve ? (rl.rlim_cur - kReserve) / kFdsPerCompile : 1;
-        cap = std::min<unsigned>(cap, std::max<rlim_t>(1, budget));
-    }
-
-    // Explicit override for tuning/debug. Only a fully-parsed, in-range, nonzero value
-    // wins; anything malformed (sign, trailing junk, overflow, 0) keeps the fd-derived
-    // cap rather than silently disabling the gate (e.g. "-1" must not become UINT_MAX).
-    if (const char* s = std::getenv("TT_EMULE_JIT_COMPILE_JOBS")) {
-        errno = 0;
-        char* end = nullptr;
-        unsigned long v = std::strtoul(s, &end, 10);
-        if (end != s && *end == '\0' && errno == 0 && v > 0 && v <= std::numeric_limits<unsigned>::max()) {
-            cap = static_cast<unsigned>(v);
-        }
-    }
-    return std::max(1u, cap);
-}
-
-// Counting gate limiting concurrently-executing jit_compile_kernel calls to the
-// fd-safe cap above. Process-global so it also bounds the total across the several
-// jit_compile_pending calls a multi-chip mesh setup may run in parallel. Each
-// compile acquires a slot for the duration of its (fd-heavy) work and releases it
-// via RAII, so peak open fds stay bounded regardless of the kernel count.
-static std::counting_semaphore<>& compile_slots() {
-    static std::counting_semaphore<> slots(jit_compile_concurrency_cap());
-    return slots;
-}
-
 static void jit_compile_pending(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
@@ -1946,14 +1880,6 @@ static void jit_compile_pending(
                     std::string cache_path = disk_cache_so_path(key);
                     DeferredCompile dc_copy = dc;  // own a copy: the future may outlive this call's map
                     fut = std::async(std::launch::async, [dc_copy, cache_path]() {
-                              // Bound concurrent compiles to the fd-safe cap: a slot is
-                              // held for the whole (fd-heavy) compile and released even if
-                              // it throws. std::async spawns the thread eagerly, but the
-                              // fd-consuming work waits here until a slot frees.
-                              compile_slots().acquire();
-                              struct SlotGuard {
-                                  ~SlotGuard() { compile_slots().release(); }
-                              } slot_guard;
                               std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid()) + "." +
                                                      std::to_string(g_compile_tmp_seq.fetch_add(1));
                               auto fn = jit_compile_kernel(
