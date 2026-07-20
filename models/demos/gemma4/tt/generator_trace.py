@@ -36,14 +36,35 @@ def _resolve_trace_prefill_seq_lens() -> list[int]:
 
 GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 
-# Prefill trace is disabled above 4k ISL (no perf gain, OOM risk) and at or above 32k
-# batched virtual tokens (batch_size × padded prefill length). Prefills above the
+# Prefill trace is disabled above this ISL (no perf gain, OOM risk) and at or above
+# 32k batched virtual tokens (batch_size × padded prefill length). Prefills above the
 # cap are instead kept safe by generator-level chunking (see
 # resolve_gemma4_prefill_chunk_size): an 8192 prompt runs as 4096-token chunks
 # rather than one full-length op, so it neither wedges the fetch queue (#49083)
-# nor OOMs a whole-length trace.
+# nor OOMs a whole-length trace. This is the default; the per-(device, model)
+# value is resolved by resolve_gemma4_max_trace_prefill_seq_len.
 GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
+
+
+def resolve_gemma4_max_trace_prefill_seq_len(device_name: str = "", base_model_name: str = "") -> int:
+    """Max prefill ISL that may be device-traced, for this (device, model).
+
+    Above the returned length prefill runs non-traced (eager/chunked). This is a
+    genuine per-(device, model) memory limit, so it lives in model code rather
+    than a CI env var: on WH-T3K the 31B model cannot hold the full 128..4096
+    resident prefill-trace sweep — capturing the high buckets OOMs DRAM at
+    warmup (tt-metal #49929) — so the traced length is capped low there and
+    longer prefills run eager. Other boards keep the default. Overridable via
+    ``GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN`` for per-deployment tuning.
+    """
+    override = os.environ.get("GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN")
+    if override:
+        return int(override)
+    if device_name == "T3K" and "gemma-4-31B" in base_model_name:
+        return 128
+    return GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
+
 
 # Default generator-level prefill chunk when GEMMA4_GEN_PREFILL_CHUNK is unset,
 # applied on QB2 ONLY (P150x4 = 1x4 Blackhole / P300X2, the board this was
@@ -118,11 +139,12 @@ def can_gemma4_enable_prefill_trace(
     batch_size: int = 1,
     num_cached_tokens: int = 0,
     uses_pli: bool = False,
+    max_trace_prefill_seq_len: int = GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
 ) -> bool:
     """Return True when Gemma4 prefill device trace may be captured or replayed."""
     if uses_pli or num_cached_tokens != 0:
         return False
-    if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
+    if prefill_seq_len > max_trace_prefill_seq_len:
         return False
     if prefill_seq_len not in GEMMA4_TRACE_PREFILL_SEQ_LENS:
         return False
@@ -136,6 +158,7 @@ def apply_gemma4_prefill_trace_policy(
     prefill_seq_len: int,
     batch_size: int,
     model,
+    max_trace_prefill_seq_len: int = GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
 ) -> bool:
     """Apply Gemma4 prefill trace limits; log and return False when trace is disabled."""
     if not enable_trace:
@@ -144,13 +167,14 @@ def apply_gemma4_prefill_trace_policy(
         prefill_seq_len,
         batch_size=batch_size,
         uses_pli=model_uses_pli(model),
+        max_trace_prefill_seq_len=max_trace_prefill_seq_len,
     ):
         return True
-    if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
+    if prefill_seq_len > max_trace_prefill_seq_len:
         logger.info(
             "Disabling prefill trace for seq_len={}: above {} ISL (no perf gain, OOM risk)",
             prefill_seq_len,
-            GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
+            max_trace_prefill_seq_len,
         )
     elif batch_size * prefill_seq_len >= GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS:
         logger.info(
@@ -190,14 +214,20 @@ def resolve_gemma4_prefill_trace_enable(
         prefill_seq_lens[0],
         trace_batch_size,
         model,
+        max_trace_prefill_seq_len=getattr(model_args, "max_trace_prefill_seq_len", GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN),
     )
 
 
-def patch_gemma4_trace_model_args(model_args, *, prefill_trace_enabled: bool = True) -> None:
+def patch_gemma4_trace_model_args(
+    model_args, *, prefill_trace_enabled: bool = True, max_trace_prefill_seq_len: int = None
+) -> None:
     """Configure trace_prefill_supported_seq_lens and can_enable_trace on model_args."""
+    if max_trace_prefill_seq_len is None:
+        max_trace_prefill_seq_len = GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
+    model_args.max_trace_prefill_seq_len = max_trace_prefill_seq_len
     if prefill_trace_enabled:
         model_args.trace_prefill_supported_seq_lens = [
-            length for length in GEMMA4_TRACE_PREFILL_SEQ_LENS if length <= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
+            length for length in GEMMA4_TRACE_PREFILL_SEQ_LENS if length <= max_trace_prefill_seq_len
         ]
         uses_pli = bool(getattr(model_args, "hidden_size_per_layer_input", 0))
 
@@ -207,6 +237,7 @@ def patch_gemma4_trace_model_args(model_args, *, prefill_trace_enabled: bool = T
                 batch_size=batch_size,
                 num_cached_tokens=num_cached_tokens,
                 uses_pli=uses_pli,
+                max_trace_prefill_seq_len=max_trace_prefill_seq_len,
             )
 
         model_args.can_enable_trace = _can_enable_trace
@@ -349,6 +380,9 @@ def warmup_gemma4_batched_prefill_traces(
                     supported_length,
                     batch_size,
                     generator.model[model_id],
+                    max_trace_prefill_seq_len=getattr(
+                        model_args, "max_trace_prefill_seq_len", GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
+                    ),
                 )
 
                 for param in sampling_params:

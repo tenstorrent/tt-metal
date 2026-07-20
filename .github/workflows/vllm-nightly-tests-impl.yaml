@@ -193,7 +193,7 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 134217728}",
               "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
@@ -569,28 +569,16 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
-          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
-          # single-stream max_num_seqs=1):
-          #   * The prefill trace bucket sweep (128..4096) is the dominant trace
-          #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
-          #     100-token prompt only ever replays the 128 bucket. Limit it so the
-          #     trace region stays small and startup is fast.
-          #   * Decode warmup captures one resident trace per sampling-param
-          #     permutation; the full penalties×logprobs sweep is unused by the
-          #     default-sampling benchmark. Warm only plain/greedy/None.
-          # Both shrink the required trace_region_size (validated to fit <200 MB
-          # on 26B-A4B P150x4, vs >1 GB unbounded).
+          # Gemma4 decode-warmup tuning for this benchmark (default sampling): warm
+          # only plain/greedy/None decode traces instead of the full
+          # penalties×logprobs sweep. (The prefill-trace bucket limit that used to
+          # live here is now derived per (device, model) in model code — see
+          # resolve_gemma4_max_trace_prefill_seq_len; WH-T3K 31B caps it there to
+          # avoid the warmup OOM (tt-metal #49929), while BH-QB2 31B captures the
+          # full sweep with the larger trace_region_size set in its tt-config.)
           case "$HF_MODEL" in
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
-              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
-              # 31B: with hybrid KV groups disabled every layer allocates a
-              # full-length KV buffer, and the default all-user pool OOMs DRAM
-              # on QB2/T3K. Cap the pool (the real DRAM lever, distinct from
-              # --max_model_len). See tt-metal #49257 / #49083.
-              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ]; then
-                export GEMMA4_MAX_TOKENS_ALL_USERS=32768
-              fi
               ;;
           esac
 

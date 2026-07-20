@@ -7,11 +7,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.common import create_tt_model, gemma4_max_tokens_all_users
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator_trace import (
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
+    resolve_gemma4_max_trace_prefill_seq_len,
     resolve_gemma4_prefill_chunk_size,
     resolve_gemma4_prefill_trace_enable,
     warmup_gemma4_model_prefill,
@@ -19,6 +20,7 @@ from models.demos.gemma4.tt.generator_trace import (
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
+from models.tt_transformers.tt.model_config import determine_device_name
 
 
 class _Gemma4VllmOptimizations:
@@ -94,7 +96,18 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_prefill_chunk_size = resolve_gemma4_prefill_chunk_size(
         max_seq_len, mesh_device=mesh_device, non_qb2_default=max_seq_len
     )
-    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=prefill_trace_enabled)
+    # model_path is hf_config._name_or_path (the HF id or a local snapshot dir,
+    # e.g. .../models--google--gemma-4-31B-it/snapshots/<hash>); both contain the
+    # "gemma-4-31B" marker the resolver matches on.
+    max_trace_prefill_seq_len = resolve_gemma4_max_trace_prefill_seq_len(
+        device_name=determine_device_name(mesh_device),
+        base_model_name=model_path,
+    )
+    patch_gemma4_trace_model_args(
+        model_args,
+        prefill_trace_enabled=prefill_trace_enabled,
+        max_trace_prefill_seq_len=max_trace_prefill_seq_len,
+    )
     model_args.optimizations = _Gemma4VllmOptimizations()
     model_args.mesh_device = mesh_device
     model_args._gemma4_model_path = model_path
@@ -162,19 +175,23 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
 
     @classmethod
-    def get_max_tokens_all_users(cls, model_name: str = "", **kwargs) -> int:
-        # The all-user KV-cache pool size is a per-device / per-model tuning knob,
-        # not a model constant: with hybrid KV groups disabled every layer
-        # allocates a full-length KV buffer, so the pool that fits in DRAM is
-        # hardware-specific (e.g. ~49K on QB2/P300x2 for 31B, ~131K for 12B).
-        # Keep that value OUT of the model code — set ``GEMMA4_MAX_TOKENS_ALL_USERS``
-        # from the tt-inference-server model spec's per-device ``env_vars`` block
-        # (gated there by device + model). This generic, value-free hook just
-        # honors that override and otherwise defers to the default.
-        override = os.environ.get("GEMMA4_MAX_TOKENS_ALL_USERS")
-        if override:
-            return int(override)
-        return super().get_max_tokens_all_users(model_name=model_name, **kwargs)
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        capped = gemma4_max_tokens_all_users(model_name, num_devices, tt_data_parallel)
+        if capped is not None:
+            return capped
+
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
