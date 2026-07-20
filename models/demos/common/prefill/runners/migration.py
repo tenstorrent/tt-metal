@@ -22,11 +22,9 @@ scheduler can issue migrations. The ``_migration_client`` extension lives in tt-
 imported LAZILY so the runner still works standalone when migration is opted out.
 """
 
-import glob
 import os
 import socket
 import sys
-import time
 import zlib
 from ctypes import c_int32
 
@@ -90,55 +88,13 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
-def _deliver_local_device_map(device_map, timeout_s=120.0) -> None:
-    """Push THIS rank's local FNID->UMD device map to its co-located host migration worker(s).
-
-    Direct port of tt-blaze's ``_deliver_local_device_map``. The migration endpoint spawns TWO
-    internal device workers per host -- an "A" master/sender and a "B" loopback receiver -- each with
-    its OWN shmem queues named ``/ep_<pid>_{a,b}_{cmd,table,resp}`` (endpoint_orchestrator.cpp::
-    run_loopback); a subordinate rank adds a ``_r<rank>`` suffix. BOTH the A worker and the B receiver
-    need the map, so we deliver to every match.
-
-    The device map does NOT go to the outward control queues (``PREFILL_MIGRATION_*_QUEUE``, e.g.
-    ``/mig_ep1_*``) -- those are a DIFFERENT, master-only channel used for SET_TABLE/WORKER_READY. We
-    discover the worker queues by globbing ``/dev/shm/ep_*_{a,b}_cmd*`` on THIS host (POSIX shm is
-    host-local, so the glob finds exactly the worker(s) co-located with this rank), exactly like blaze
-    -- NOT the ``mig_ep*`` control name, which never matches a device-map queue.
-    """
-    mod = _import_migration_client()
-
-    def _discover():
-        trios = []
-        for side in ("a", "b"):
-            for c in sorted(glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")):
-                name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
-                trios.append(
-                    (
-                        name,
-                        name.replace(f"_{side}_cmd", f"_{side}_table"),
-                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
-                    )
-                )
-        return trios
-
-    deadline = time.monotonic() + timeout_s
-    trios = _discover()
-    while not trios:
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
-                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
-                "master-only control channel, NOT the device-map queues.)"
-            )
-        time.sleep(0.25)
-        trios = _discover()
-
-    for cmd, table, resp in trios:
-        try:
-            mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
-            logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
-        except RuntimeError as e:
-            raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
+def _deliver_local_device_map(device_map) -> None:
+    """Deliver THIS rank's FNID->UMD device map on the static outward table queue
+    (``PREFILL_MIGRATION_*_QUEUE``, passed in by the migration layer); the endpoint orchestrator
+    relays the AssignDevMap/DevMapEntry burst to its internal A/B workers."""
+    client, _cmd_q, table_q, _resp_q = _attach_migration_client()
+    client.send_device_map(device_map)
+    logger.info(f"[migration] delivered {len(device_map)} device-map entries -> {table_q}")
 
 
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
