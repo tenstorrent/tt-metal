@@ -191,6 +191,12 @@ struct PlanResult {
 inline uint32_t rap_cdiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline uint32_t rap_rup(uint32_t x, uint32_t y) { return rap_cdiv(x, y) * y; }
 
+// Width-sharding in1 across 8 banks requires every bank's physical N-interval to intersect logical Nt
+// (else trailing banks are wholly padded/empty). N_band = ceil(Nt/8); infeasible iff 7*N_band >= Nt.
+// SHARED by the planner (build_plan) and the auto-picker (pick_plan) so config=None never selects a shape
+// the planner will later reject — keep this the single source of truth for the bank-interval constraint.
+inline bool nt_width_shard_feasible(uint32_t Nt) { return 7u * rap_cdiv(Nt, 8u) < Nt; }
+
 // Balanced prefix range for owner `i` of `parts` over `[0, total)`:
 //   start = floor(i*total/parts), end = floor((i+1)*total/parts). Disjoint, exact cover, sizes differ
 //   by <= 1. Degenerates to uniform i*(total/parts) when total % parts == 0.
@@ -236,7 +242,7 @@ inline PlanResult build_plan(const PlanInputs& in) {
     // Width-sharding across 8 banks requires every bank's physical N-interval to intersect logical Nt
     // (else the last banks are wholly padded / empty). N_band = ceil(Nt/8); bank b owns [b*N_band, ...).
     const uint32_t N_band = rap_cdiv(in.Nt, 8u);
-    if (7u * N_band >= in.Nt) {
+    if (!nt_width_shard_feasible(in.Nt)) {
         res.error = "Nt too small to width-shard across 8 banks without empty banks (need Nt > 7*ceil(Nt/8))";
         return res;
     }

@@ -546,4 +546,29 @@ TEST_F(RegimeADiagFixture, PlacementCorrectness) {
     }
 }
 
+// Picker/planner parity (host-only, no device): the auto-picker must never accept an (Mt,Kt,Nt) that the
+// planner's bank-interval constraint rejects, else config=None can select a config that FATALs later in
+// build_plan(). Both now share nt_width_shard_feasible(); this guards against future drift. Direction
+// tested: bank-infeasible Nt => auto_select_config must throw (no feasible config).
+TEST(RegimeAPickerPlannerParity, BankFeasibilityShared) {
+    namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
+    // Kt/Mt chosen generously so Nt is the only binding constraint across the sweep.
+    const uint32_t Mt = 1u, Kt = 192u;
+    int checked_infeasible = 0;
+    for (uint32_t Nt = 1u; Nt <= 64u; ++Nt) {
+        const bool bank_feasible = plan::nt_width_shard_feasible(Nt);
+        bool picker_ok = true;
+        try {
+            (void)ttnn::experimental::prim::auto_select_config(Mt, Kt, Nt);
+        } catch (...) {
+            picker_ok = false;
+        }
+        if (!bank_feasible) {
+            ++checked_infeasible;
+            EXPECT_FALSE(picker_ok) << "Nt=" << Nt << " is bank-infeasible but the picker accepted it";
+        }
+    }
+    EXPECT_GT(checked_infeasible, 0) << "expected some bank-infeasible Nt in [1,64]";
+}
+
 }  // namespace ttnn::experimental::regime_a_matmul::diag_test
