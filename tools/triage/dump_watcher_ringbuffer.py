@@ -5,11 +5,15 @@
 
 """
 Usage:
-    dump_watcher_ringbuffer
+    dump_watcher_ringbuffer [--force-watcher-ringbuffer]
+
+Options:
+    --force-watcher-ringbuffer  Dump the ring buffer even if watcher was not enabled in the run.
 
 Description:
     Dump watcher ring buffer contents for all cores, skipping cores with empty buffers. This ringbuffer can be written
     into by using the WATCHER_RING_BUFFER_PUSH macro in a kernel.
+    Skipped by default when watcher was not enabled; use --force-watcher-ringbuffer to run anyway.
 
 Owner:
     jbaumanTT
@@ -109,9 +113,10 @@ def read_ring_buffer_for_block(
 
 def run(args, context: Context):
     """Entry point for triage framework."""
-    config = get_configuration(args, context)
-    if not config.get_bool("watcher_enabled", default=False):
-        return None
+    if not args["--force-watcher-ringbuffer"]:
+        config = get_configuration(args, context)
+        if not config.get_bool("watcher_enabled", default=False):
+            return None
 
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
