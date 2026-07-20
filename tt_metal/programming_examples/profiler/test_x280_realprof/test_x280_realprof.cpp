@@ -163,6 +163,9 @@ int main(int argc, char** argv) {
     int mpmc = 0;              // --mpmc M: real host pipeline -- 2 per-socket flush+demux threads -> record MPMC
                                // -> M consumer threads (0 = old offline capture+demux path)
     int cwork = 0;             // --cwork N: busy-wait N iters/record in each consumer (simulate Tracy-emit load)
+    int mq_cap = 640;          // --mqcap N: depth (in batches) of the record MPMC between flushers and consumers.
+                               // Deeper absorbs consumer bursts before back-pressuring the drain (64->640 took
+                               // --csv from ~438 knee stalls to 0). ~BATCH_RECS*N*sizeof(Rec) max footprint.
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
                                // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
     bool do_csv = false;       // --csv [path]: instead of Tracy, hold decoded records in memory (cheap append on
@@ -230,6 +233,8 @@ int main(int argc, char** argv) {
             mpmc = std::stoi(next());
         } else if (a == "--cwork") {
             cwork = std::stoi(next());
+        } else if (a == "--mqcap") {
+            mq_cap = std::stoi(next());
         } else if (a == "--tracy") {
             do_tracy = true;
         } else if (a == "--csv") {
@@ -512,8 +517,8 @@ int main(int argc, char** argv) {
     };
     // ---- --mpmc pipeline: per-socket flush+demux -> device-record MPMC -> M consumers ----
     const size_t BATCH_RECS = 4096;  // records per batch (amortizes the MPMC lock)
-    BatchQ mq(640);                  // bounded (640 batches, 10x): full -> flusher blocks = back-pressure. Bigger
-                                     // = more slack to absorb consumer bursts (diagnostic: does depth kill stalls?)
+    BatchQ mq((size_t)mq_cap);       // bounded MPMC (--mqcap batches): full -> flusher blocks = back-pressure.
+                                     // Deeper absorbs consumer bursts before stalling the drain (default 640).
     std::atomic<uint64_t> consumed{0}, sink_total{0};
     // per-flusher (per-socket) verify results
     std::vector<uint64_t> fl_mk(ndh, 0), fl_start(ndh, 0), fl_end(ndh, 0), fl_prog_ok(ndh, 0), fl_ts_bad(ndh, 0),
