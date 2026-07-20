@@ -9,7 +9,7 @@ Things to remember:
  - Metal 2.0 is a work in progress; not all legacy API features fully implemented.
  - Not all planned improvements are available yet.
 
-> **Prerequisite**: Before attempting Metal 2.0 migration, complete the [Device 2.0 Data Movement migration](../../kernel_apis/data_movement/device_api_migration_guide.md). All kernel code migration examples in this guide assume Device 2.0 migration is already done.
+> **Prerequisite**: Before attempting Metal 2.0 migration, complete the [Device 2.0 Data Movement migration](../../../../kernel_apis/data_movement/device_api_migration_guide.md). All kernel code migration examples in this guide assume Device 2.0 migration is already done.
 
 ## Table of Contents
 
@@ -453,7 +453,7 @@ The common case (matmul reader + compute reading the same input; reshard reader/
 
 #### What's not covered yet
 
-- **Manual `DistributionSpec` reuse** (the "advanced reuse-bank-coords-across-accessors" path from the [TensorAccessor guide](../../../../../../../tech_reports/tensor_accessor/tensor_accessor.md)). Not commonly used in production ops.
+- **Manual `DistributionSpec` reuse** (the "advanced reuse-bank-coords-across-accessors" path from the [TensorAccessor guide](../../../../../../../../../tech_reports/tensor_accessor/tensor_accessor.md)). Not commonly used in production ops.
 - **Tensor bindings on compute kernels** are out of scope. `TensorAccessor` was never supported for compute kernels (TRISC builds don't compile its NoC-using includes), so migration should not encounter any.
 
 ---
@@ -827,7 +827,7 @@ cb_scaled.wait_front(...);
 #endif
 ```
 
-The full discussion (file-scope ternaries, preprocessor-stage parsing) is in [Pattern: Conditional / optional DFB bindings](ai/metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings). The "always bind and gate only the uses" alternative — wrapper declared unconditionally — is wrong on two counts: it pays L1 unnecessarily for an unused buffer, *and* `if constexpr` doesn't gate name lookup in a non-template kernel even if you reached for it.
+The full discussion (file-scope ternaries, preprocessor-stage parsing) is in [Pattern: Conditional / optional DFB bindings](port_patterns.md#pattern-conditional--optional-dfb-bindings). The "always bind and gate only the uses" alternative — wrapper declared unconditionally — is wrong on two counts: it pays L1 unnecessarily for an unused buffer, *and* `if constexpr` doesn't gate name lookup in a non-template kernel even if you reached for it.
 
 ---
 
@@ -848,7 +848,7 @@ Legacy `ProgramDescriptor` offered a hybrid model: `KernelDescriptor::compile_ti
 - Named CTAs in legacy → named CTAs in Metal 2.0. 1:1 mechanical.
 - Positional CTAs in legacy → named CTAs in Metal 2.0. Explicit naming required during port; pick names that reflect what the kernel actually does with the value.
 
-> **Use varargs only when the kernel reads its arguments in a loop.** Varargs are designed for kernels whose device-side code retrieves arguments via `get_vararg(i)` where `i` is a runtime variable — the canonical case is an N-dimensional shape gated on a CTA-known `rank`. When each argument is referenced by a constant index (`get_vararg(0)`, `get_vararg(1)`, ...), the named form is clearer on both sides. A port from positional RTAs to varargs may compile and run, but it preserves the legacy positional vocabulary instead of upgrading to Metal 2.0's named one. See the [patterns catalog](ai/metal2_port_patterns.md) caution on varargs.
+> **Use varargs only when the kernel reads its arguments in a loop.** Varargs are designed for kernels whose device-side code retrieves arguments via `get_vararg(i)` where `i` is a runtime variable — the canonical case is an N-dimensional shape gated on a CTA-known `rank`. When each argument is referenced by a constant index (`get_vararg(0)`, `get_vararg(1)`, ...), the named form is clearer on both sides. A port from positional RTAs to varargs may compile and run, but it preserves the legacy positional vocabulary instead of upgrading to Metal 2.0's named one. See the [patterns catalog](port_patterns.md) caution on varargs.
 
 ---
 
@@ -860,7 +860,7 @@ TTNN ops integrate with the Metal 2.0 host API through the `ttnn::device_operati
 - **`ProgramDescriptorFactoryConcept`** — the intermediate concept; legacy `ProgramDescriptor`-based factories. Returns a `tt::tt_metal::ProgramDescriptor` from `create_descriptor()`.
 - **`MetalV2FactoryConcept`** — the Metal 2.0 concept. Returns a `ttnn::device_operation::ProgramArtifacts` (the `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors) from `create_program_artifacts()`. **This is the concept ops port to.**
 
-> The porter-facing detail for this concept — the feasibility gate, the device-op-class edits a port forces, and the cache lifecycle in operational terms — lives in [`port_op_to_metal2_ttnn_factory.md`](ai/port_op_to_metal2_ttnn_factory.md). This section is the conceptual overview.
+> The porter-facing detail for this concept — the feasibility gate, the device-op-class edits a port forces, and the cache lifecycle in operational terms — lives in [`ttnn_factory.md`](ttnn_factory.md). This section is the conceptual overview.
 
 ### Factory skeleton
 
