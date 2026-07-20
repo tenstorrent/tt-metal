@@ -49,19 +49,19 @@
  * --------
  *   // Streaming unary — Exp(x) -> out (dfb_* are dataflow-buffer ids, i.e. buffer indices)
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
- *       CopyTile<dfb_in, Dst::D0, input(InputLifecycle::Streaming)>{},
+ *       CopyTile<dfb_in>{},
  *       Exp<>{},
- *       PackTile<dfb_out, OutputLifecycle::Streaming>{});
+ *       PackTile<dfb_out>{});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
  *       BinaryFpu<dfb_a, dfb_b, BinaryFpuOp::Add>{},
- *       PackTile<dfb_out, output(OutputLifecycle::Streaming)>{});
+ *       PackTile<dfb_out>{});
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
- * no per-loop-iteration reconfig path; L1 pack accumulation / pack-relu; and the legacy
- * `acquire_dst/release_dst` macros (modern dst-sync only).
+ * no per-loop-iteration reconfig path; and the legacy `acquire_dst/release_dst` macros
+ * (modern dst-sync only).
  */
 
 #include <cstdint>
@@ -204,6 +204,10 @@ struct OutputLifecycle {
     static const OutputLifecycle CallerManaged;
     // Do not reserve; push the full output window at chain exit.
     static const OutputLifecycle ReserveNonePushEnd;
+    // Reserve one persistent accumulator tile at entry and push it at exit.
+    static const OutputLifecycle L1Accumulation;
+    // Reserve and push one reduced tile per outer row.
+    static const OutputLifecycle DestAccumulation;
 };
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
@@ -245,6 +249,19 @@ enum class TileOffset : bool { Unset = false, Set = true };
 /// Whether the chain updates the data format for an operand.
 enum class DataFormatReconfig : bool { Disabled = false, Enabled = true };
 
+/// Whether a pack adds DEST to the output tile already in L1.
+enum class L1Accumulation : uint8_t {
+    Disabled,
+    Enabled,
+    SeedFirst,
+};
+
+/// Whether an FPU binary accumulates into a persistent DEST tile.
+enum class DestAccumulation : bool { Disabled = false, Enabled = true };
+
+/// ReLU applied by the packer before writing an output tile.
+enum class PackRelu : bool { Disabled = false, Zero = true };
+
 // =============================================================================
 // 1e. Grouped operand configuration
 // =============================================================================
@@ -261,6 +278,9 @@ struct InputSpec {
 struct OutputSpec {
     OutputLifecycle lifecycle;
     DataFormatReconfig reconfig;
+    PackRelu relu;
+    L1Accumulation l1_accumulation;
+    DestAccumulation dest_accumulation;
     TileOffset offset;
 };
 
@@ -274,10 +294,14 @@ constexpr InputSpec input(
 constexpr InputSpec input(InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept;
 
 /// Group one output operand's configuration.
-/// Defaults: Streaming lifecycle, reconfig enabled, and no tile offset.
+/// Defaults: Streaming lifecycle, reconfig enabled, no accumulation, no pack ReLU,
+/// and no tile offset.
 constexpr OutputSpec output(
     OutputLifecycle lifecycle = OutputLifecycle::Streaming,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    PackRelu relu = PackRelu::Disabled,
+    L1Accumulation l1_accumulation = L1Accumulation::Disabled,
+    DestAccumulation dest_accumulation = DestAccumulation::Disabled,
     TileOffset offset = TileOffset::Unset) noexcept;
 
 // =============================================================================
@@ -362,7 +386,7 @@ constexpr uint32_t copy_tile_config_bits(Dst dst, InputSpec input_spec) noexcept
 constexpr uint32_t pack_tile_config_bits(OutputSpec output_spec, Dst dst) noexcept;
 
 constexpr uint32_t binary_fpu_config_bits(
-    BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst) noexcept;
+    BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst, DestAccumulation accumulation) noexcept;
 
 template <uint32_t Cb, uint32_t ConfigBits>
 struct CopyTileImpl;
@@ -383,8 +407,10 @@ template <
     BroadcastDim Bcast = BroadcastDim::None,
     InputSpec AInput = input(),
     InputSpec BInput = input(),
-    Dst DstSlot = Dst::D0>
-using BinaryFpu = detail::BinaryFpuImpl<CbA, CbB, detail::binary_fpu_config_bits(Op, Bcast, AInput, BInput, DstSlot)>;
+    Dst DstSlot = Dst::D0,
+    DestAccumulation Accumulation = DestAccumulation::Disabled>
+using BinaryFpu =
+    detail::BinaryFpuImpl<CbA, CbB, detail::binary_fpu_config_bits(Op, Bcast, AInput, BInput, DstSlot, Accumulation)>;
 
 template <
     uint32_t Cb,

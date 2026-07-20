@@ -8,9 +8,7 @@
 namespace compute_kernel_lib {
 
 template <BroadcastDim Dim, uint32_t Cb, InputLifecycle Policy, UnaryBcastReconfig Reconfig, Dst DstSlot>
-struct UnaryBcast
-    : InputStream<Cb, detail::InputSpecConfig::encode(input(Policy, OperandKind::Block, TileOffset::Unset))>,
-      UnaryBcastTag {
+struct UnaryBcast : InputStream<Cb, detail::InputSpecConfig::encode(input(Policy, OperandKind::Block))>, UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
 
     static constexpr uint32_t dfb_a_id() { return Cb; }

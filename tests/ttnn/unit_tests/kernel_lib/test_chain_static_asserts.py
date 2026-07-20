@@ -76,3 +76,48 @@ def test_setupowner_caller_reconfig_illegal(device, expect_error):
     """SetupOwner::Caller with enabled operand reconfig — under Caller the chain emits no
     reconfig, so the setting is inert/deceptive; the input/output specs must disable it."""
     _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "enabled operand reconfig")
+
+
+def test_l1_lifecycle_without_accumulation_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_lifecycle_without_accumulation.cpp",
+        "OutputLifecycle::L1Accumulation requires L1 accumulation",
+    )
+
+
+def test_l1_wrong_lifecycle_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_wrong_lifecycle.cpp",
+        "L1 accumulation requires OutputLifecycle::L1Accumulation or CallerManaged",
+    )
+
+
+def test_dest_wrong_output_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_wrong_output.cpp",
+        "DEST accumulation must be enabled on both BinaryFpu and output()",
+    )
+
+
+def test_dest_output_without_accumulation_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_output_without_accumulation.cpp",
+        "DEST accumulation must be enabled on both BinaryFpu and output()",
+    )
+
+
+def test_pack_relu_with_l1_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "pack_relu_with_l1.cpp",
+        "pack ReLU cannot be combined with L1 accumulation",
+    )

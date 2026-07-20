@@ -25,8 +25,11 @@ void kernel_main() {
     static_assert(default_input.offset == compute_kernel_lib::TileOffset::Unset);
     static_assert(default_input.reconfig == compute_kernel_lib::DataFormatReconfig::Enabled);
     static_assert(default_output.lifecycle == compute_kernel_lib::OutputLifecycle::Streaming);
-    static_assert(default_output.offset == compute_kernel_lib::TileOffset::Unset);
     static_assert(default_output.reconfig == compute_kernel_lib::DataFormatReconfig::Enabled);
+    static_assert(default_output.relu == compute_kernel_lib::PackRelu::Disabled);
+    static_assert(default_output.l1_accumulation == compute_kernel_lib::L1Accumulation::Disabled);
+    static_assert(default_output.dest_accumulation == compute_kernel_lib::DestAccumulation::Disabled);
+    static_assert(default_output.offset == compute_kernel_lib::TileOffset::Unset);
 
     using SrcAOnly = compute_kernel_lib::BinaryFpu<
         cb_a,
