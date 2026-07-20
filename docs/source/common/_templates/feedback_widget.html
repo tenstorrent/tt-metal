@@ -25,13 +25,13 @@
         </div>
       </div>
 
-      <textarea id="ttfb-text" rows="3" class="ttfb-text" placeholder="Please let us know what was or wasn't helpful about this page."></textarea>
+      <textarea id="ttfb-text" rows="3" class="ttfb-text" aria-label="Your documentation feedback" placeholder="Please let us know what was or wasn't helpful about this page."></textarea>
 
       <div class="ttfb-contact">
         <input id="ttfb-can-contact" type="checkbox"> <label for="ttfb-can-contact">Allow Tenstorrent to contact me about my documentation feedback.</label>
       </div>
       <div id="ttfb-email-wrap" class="ttfb-hidden">
-        <input id="ttfb-email" type="email" class="ttfb-email" placeholder="Enter your email address">
+        <input id="ttfb-email" type="email" class="ttfb-email" aria-label="Your email address" placeholder="Enter your email address">
       </div>
 
       <button id="ttfb-submit" type="submit" class="ttfb-submit">Submit</button>
@@ -134,10 +134,13 @@ document.addEventListener('DOMContentLoaded', function () {
     try {
       if (window.posthog && typeof window.posthog.capture === 'function') {
         window.posthog.capture('docs_feedback', payload);
-      } else {
-        console.log('Feedback submitted:', payload);
+        return true;
       }
-      return true;
+      // No analytics sink available (e.g. PostHog blocked by a privacy
+      // extension): the feedback cannot actually be delivered, so report
+      // failure rather than silently dropping it. Do not log the payload —
+      // it may contain the user's email address.
+      return false;
     } catch (e) {
       console.error('Feedback submit error', e);
       return false;
@@ -178,8 +181,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const reasonEl = root.querySelector('input[name="down_reason"]:checked');
     const reason = reasonEl ? reasonEl.value : null;
 
-    if (canContactVal && emailVal && !validateEmail(emailVal)) {
-      emailInput.setCustomValidity('Please enter a valid email.');
+    // If the user opted in to being contacted, a valid email is required —
+    // otherwise we'd record can_contact:true with no way to reach them.
+    if (canContactVal && !validateEmail(emailVal)) {
+      emailInput.setCustomValidity(
+        emailVal ? 'Please enter a valid email.' : 'Please enter an email address so we can contact you.'
+      );
       emailInput.reportValidity();
       return;
     } else {

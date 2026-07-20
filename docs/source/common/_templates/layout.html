@@ -107,10 +107,12 @@
         <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
           <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
         </svg>
-        Github
+        GitHub
       </a>
     </div>
-    <i data-toggle="wy-nav-top" class="fa fa-bars tt-nav-hamburger" aria-hidden="true"></i>
+    <button type="button" data-toggle="wy-nav-top" class="tt-nav-hamburger" aria-label="Open navigation menu">
+      <i class="fa fa-bars" aria-hidden="true"></i>
+    </button>
   </div>
 </nav>
 
@@ -202,8 +204,8 @@
 
 {%- endblock %}
 
-{#── Suppress RTD built-in version flyout (we have our own switcher) ─#}
-{%- block versions %}{% endblock %}
+{#- Keep the parent theme's version switcher (it renders versions.html, which
+    the docs deploy workflow regenerates on every deploy). -#}
 
 {#── Content: version warning banner + default + feedback widget ─#}
 {%- block content %}
@@ -238,17 +240,16 @@
 
 {#── Footer: inject right-TOC script and global Search / Ask AI ──#}
 {%- block footer %}
+{#- Keep the sphinx-rtd-theme footer and its JS initialization (sidebar/mobile
+    nav behavior) — only append our extra scripts. -#}
+{{ super() }}
 <script src="{{ pathto('_static/docs-toc.js', 1) }}"></script>
 {#-
-  TODO(migration): the Search / "Ask AI" modal depends on assets and a backend
-  that are NOT part of this repository and must be provisioned in production:
-    * https://docs.tenstorrent.com/_static/sidebar-scroll.js
-    * https://docs.tenstorrent.com/_static/tt-search.js
-    * https://docs.tenstorrent.com/_static/kapa.js
-    * search API base: https://csl860x2oj.execute-api.us-east-2.amazonaws.com/prod
-  Confirm/replace the API base, source id, and kapa integration id with the
-  production values before enabling. Until these are served, the modal will
-  render but return no results.
+  The Search / "Ask AI" modal loads its scripts from the shared production root
+  _static, which is already served (HTTP 200) at docs.tenstorrent.com/_static:
+  tt-search.js, sidebar-scroll.js, kapa.js (and tt-kapa-chat.js, derived by
+  tt-search.js). Reviewers: confirm the search API base, source id, and Kapa
+  integration id below match the production values for this site.
 -#}
 {#- Keep the left sidebar from jumping to the top on every navigation -#}
 <script src="https://docs.tenstorrent.com/_static/sidebar-scroll.js"></script>
