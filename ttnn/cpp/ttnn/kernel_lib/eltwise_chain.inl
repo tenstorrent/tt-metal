@@ -17,9 +17,7 @@
 // Impl-only includes (the public eltwise_chain.hpp surface — element decls + enums — needs
 // none of these; they live here, with the implementation that uses them).
 #include "api/compute/bcast.h"
-#include "api/compute/cb_api.h"
 #include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer — chain routes CB sync (wait/pop/reserve/push) through it
-#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -1344,101 +1342,8 @@ struct DestReuseBinary
     // pop_per_block / wait_per_row / pop_per_row inherited from InputStream.
 };
 
-// =============================================================================
-// 6. UnaryBcast chain element
-// =============================================================================
-
-template <BroadcastDim Dim,
-          uint32_t Cb,
-          InputLifecycle Policy,
-          UnaryBcastReconfig Reconfig,
-          Dst DstSlot>
-struct UnaryBcast
-    : InputStream<
-          Cb,
-          detail::InputSpecConfig::encode(input(Policy, OperandKind::Block, TileOffset::Unset))>,
-      UnaryBcastTag {
-    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
-                  "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
-
-    // UnaryBcast reads one CB front (dfb_a); dfb_b is absent -> dfb_b_of defaults to INVALID_DFB.
-    static constexpr uint32_t       dfb_a_id()         { return Cb; }
-    static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr bool           is_upfront        =
-        is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
-
-    // Prev-CB fold: UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
-    // drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb must be reprogrammed too — a
-    // srca-only reconfig leaves ALU_FORMAT_SPEC_REG1_SrcB stale from a preceding two-operand op,
-    // which corrupts the broadcast.
-    // Declaring both CBs lets the chain's reconfig fold (emit_pre_element_transitions) emit the
-    // reconfig before init() AND record Cb as the post-element srca/srcb state for the next
-    // element — so a subsequent srca/srcb reader sees the correct prev-CB and won't wrongly elide.
-    // Pack-side reconfig is owned by the downstream PackTile, exactly
-    // like BinaryFpu — UnaryBcast never configures pack.
-    static constexpr uint32_t       reconfig_srca_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
-    static constexpr uint32_t       reconfig_srcb_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
-    // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
-
-    static ALWI void init() {
-        constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        // Small per-element init only — the caller owns BIG init (compute_kernel_hw_startup /
-        // a boot unary_bcast_init). This does NOT re-run any hw_configure or pack init, and it
-        // does NOT do the srca/srcb format reconfig: that is fold-driven (see reconfig_srca_dfb /
-        // reconfig_srcb_dfb above), emitted by emit_pre_element_transitions() before this init().
-        // init() emits only the bcast datacopy MOP (unpack-A + math datacopy), icb-only — mirrors
-        // the MOP-init portion of `unary_bcast_init`, minus every BIG hw_configure / pack line.
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-        const std::uint32_t dst_format = get_operand_dst_format(Cb);
-#ifndef ARCH_QUASAR
-        const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                           (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                           (dst_format == (std::uint32_t)DataFormat::Int32);
-        if (enable_unpack_to_dest) {
-            UNPACK((llk_unpack_A_init<bt, false, ckernel::EltwiseBinaryReuseDestType::NONE, true>(false, false, Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE, bt>(Cb)));
-        } else {
-            UNPACK((llk_unpack_A_init<bt, false, ckernel::EltwiseBinaryReuseDestType::NONE, false>(false, false, Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, bt>(Cb)));
-        }
-#else
-        const bool enable_unpack_to_dest =
-            (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-        if (enable_unpack_to_dest) {
-            ASSERT(false);  // Quasar unpack_to_dest unary bcast not implemented yet
-            UNPACK((llk_unpack_A_init<false /*TRANSPOSE_EN*/, true /*IS_32b_DEST_EN*/>(Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, true>(Cb)));
-        } else {
-            UNPACK((llk_unpack_A_init<false, false>(Cb)));
-            MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, false>(Cb)));
-        }
-#endif
-#endif
-    }
-
-    ALWI void exec(uint32_t /*i_flat*/, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
-        constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot) + slot_offset);
-    }
-    static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
-
-    // wait_per_tile / wait_per_block / wait_upfront / pop_upfront_end / pop_per_tile /
-    // pop_per_block inherited from InputStream (IndexMode=Block + Offset=Unset → Ht*Wt window).
-    // UnaryBcast always reads tile 0, so it can't be a streamed outer-axis broadcast — the
-    // per-row hooks are explicitly inert, overriding InputStream's OuterStream-gated versions.
-    ALWI void wait_per_row() const {}
-    ALWI void pop_per_row() const {}
-};
-
-// =============================================================================
-// 7. Fill / Rand chain elements — declared in eltwise_chain.hpp; full bodies
-//    live in eltwise_fill.hpp / eltwise_rand.hpp. Keeping the bodies out of this
-//    header keeps the fill/rand LLK headers out of every chain-using kernel's
-//    include cone, while the declarations still satisfy the trait predicates.
-// =============================================================================
-//
-// (FillScalar / FillInt / FillBitcast / RandTile are declared in eltwise_chain.hpp;
-//  eltwise_fill.hpp specializes those templates with full bodies.)
+// Fill and random elements live in their feature headers so their LLK dependencies
+// are absent from the base chain include cone.
 
 // =============================================================================
 // 8. EltwiseChain typed list — defined here, declared in .hpp

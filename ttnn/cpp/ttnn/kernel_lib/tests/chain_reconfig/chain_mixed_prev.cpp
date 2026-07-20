@@ -11,7 +11,7 @@
 // PCC drop. CbA/CbB/CbC carry distinct dtypes, so the reconfig actually fires (not elided).
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
