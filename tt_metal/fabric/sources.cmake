@@ -60,6 +60,8 @@ set(FABRIC_SOURCES
     serialization/physical_system_descriptor_serialization.cpp
     serialization/intermesh_connections_serialization.cpp
     serialization/port_descriptor_serialization.cpp
+    coordination/merge_ops.cpp
+    coordination/collective_coordinator.cpp
     ccl/ccl_common.cpp
     physical_system_discovery.cpp
     physical_system_descriptor.cpp
