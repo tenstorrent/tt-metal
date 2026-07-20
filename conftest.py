@@ -749,10 +749,9 @@ def bh_2d_mesh_device_context(device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
+
+    # TODO #50463: Revisit MGD path handling
     if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
-        # A custom mesh-graph descriptor defines the system-mesh shape (e.g. a 4x4
-        # sub-mesh of the galaxy). Open exactly that shape — the device-count
-        # hardcodes below don't apply when the topology is MGD-defined.
         mesh_shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=mesh_shape,
