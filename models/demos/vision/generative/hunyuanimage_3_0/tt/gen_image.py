@@ -255,6 +255,123 @@ def step_pcc(mesh_device, prompt=DEFAULT_PROMPT, image_size=(1024, 1024), num_la
 
 
 # --------------------------------------------------------------------------
+# e2e prompt->image PCC: run the WHOLE diffusion loop (->VAE->pixels) twice --
+# pure-host (HF layers) vs pure-TT -- and compare the final latent + decoded
+# image. This exercises the REAL image path (loop + CFG + scheduler + VAE), not
+# just one step.
+#
+# Correctness strategy for the FULL 32-layer model (why the default is reduced
+# depth): a full-depth HOST golden image is infeasible (running the 80B MoE on
+# CPU for ~4096 tokens x N steps x 2 CFG is many hours), so this gate runs at
+# REDUCED depth (num_layers, default 2) where the host trajectory is tractable,
+# and the full-image path itself is fully exercised. Full-DEPTH correctness rests
+# on: (a) per-block PCC >= 0.997 (the model's established methodology -- 32
+# identical blocks each validated => the stack is correct), (b) this reduced-depth
+# full-image-path gate, and (c) a full-depth render sanity/CLIP check
+# (generate_image + finite/non-degenerate output, optional CLIP-vs-prompt). Set
+# num_layers=32 to run full depth (slow: host trajectory dominates).
+# --------------------------------------------------------------------------
+def _reset_scheduler(sched, num_steps):
+    sched.set_timesteps(num_steps, device="cpu")
+    # defensive: ensure a clean step counter for a fresh trajectory
+    for attr in ("_step_index", "_begin_index"):
+        if hasattr(sched, attr):
+            setattr(sched, attr, None)
+    return sched.timesteps
+
+
+def _run_trajectory(model, kwargs, attn_mask, sched, timesteps, latents, guidance, cfg):
+    """Advance one full diffusion trajectory with WHATEVER layer stack is
+    currently active (host HF layers, or TT if the monkeypatch is installed).
+    Returns (final_latents, step0_velocity)."""
+    vel0 = None
+    for i, t in enumerate(timesteps):
+        pred = run_velocity_once(model, kwargs, attn_mask, latents, t, cfg)  # [cfg,32,h,w]
+        if i == 0:
+            vel0 = pred
+        if cfg == 2:
+            pc, pu = pred.chunk(2)
+            pred = pu + guidance * (pc - pu)
+        latents = sched.step(pred, t, latents, return_dict=False)[0]
+    return latents, vel0
+
+
+def e2e_image_pcc(
+    mesh_device,
+    prompt=DEFAULT_PROMPT,
+    image_size=(1024, 1024),
+    num_layers=2,
+    num_steps=8,
+    seed=0,
+    pcc_target=0.95,
+    decode=True,
+    out_prefix=None,
+):
+    """Full prompt->image e2e PCC (TT vs pure-host) over the real diffusion loop.
+    Returns pcc_final_latent, pcc_image, pcc_velocity_step0, image_finite, etc."""
+    model = load_model(num_layers=num_layers)
+    kwargs, attn_mask = prepare_gen_image_inputs(model, prompt, list(image_size), seed=seed)
+    cfg = 2
+    guidance = float(model.generation_config.diff_guidance_scale)
+    sched = model.pipeline.scheduler
+    h = kwargs["batch_gen_image_info"][0].token_height
+    w = kwargs["batch_gen_image_info"][0].token_width
+    lc = int(model.config.vae["latent_channels"])
+
+    def latents0():
+        g = torch.Generator("cpu").manual_seed(seed)
+        return torch.randn(1, lc, h, w, generator=g, dtype=torch.float32)
+
+    # pure-host trajectory (HF layers; monkeypatch NOT installed)
+    ts = _reset_scheduler(sched, num_steps)
+    host_lat, host_vel0 = _run_trajectory(model, kwargs, attn_mask, sched, ts, latents0(), guidance, cfg)
+
+    # pure-TT trajectory (TT stubs), same seed/start
+    tt_pipe = ttpipe.HunyuanImage3Pipeline(mesh_device, model, num_layers=num_layers)
+    uninstall = install_tt_layer_stack(model, tt_pipe)
+    try:
+        ts = _reset_scheduler(sched, num_steps)
+        tt_lat, tt_vel0 = _run_trajectory(model, kwargs, attn_mask, sched, ts, latents0(), guidance, cfg)
+    finally:
+        uninstall()
+
+    _, pcc_vel0 = comp_pcc(host_vel0, tt_vel0, pcc_target)  # step-0 velocity (identical start)
+    _, pcc_lat = comp_pcc(host_lat, tt_lat, pcc_target)  # final latent (whole trajectory)
+    result = {
+        "pcc_velocity_step0": pcc_vel0,
+        "pcc_final_latent": pcc_lat,
+        "num_layers": num_layers,
+        "num_steps": num_steps,
+        "token_hw": (h, w),
+    }
+
+    if decode:
+
+        def _dec(lat):
+            lat = lat / model.vae.config.scaling_factor
+            if hasattr(model.vae, "ffactor_temporal"):
+                lat = lat.unsqueeze(2)
+            with torch.no_grad():
+                img = model.vae.decode(lat.float(), return_dict=False)[0]
+            if hasattr(model.vae, "ffactor_temporal"):
+                img = img.squeeze(2)
+            return img
+
+        host_img, tt_img = _dec(host_lat), _dec(tt_lat)
+        _, pcc_img = comp_pcc(host_img, tt_img, pcc_target)
+        result["pcc_image"] = pcc_img
+        result["image_finite"] = bool(torch.isfinite(tt_img).all())
+        result["image_std"] = float(tt_img.float().std())  # non-degenerate sanity
+        if out_prefix:
+            pp = model.pipeline.image_processor.postprocess
+            pp(host_img, output_type="pil", do_denormalize=[True] * host_img.shape[0])[0].save(f"{out_prefix}_host.png")
+            pp(tt_img, output_type="pil", do_denormalize=[True] * tt_img.shape[0])[0].save(f"{out_prefix}_tt.png")
+
+    result["pcc_ok"] = bool(result["pcc_final_latent"] >= pcc_target and (not decode or result["image_finite"]))
+    return result
+
+
+# --------------------------------------------------------------------------
 # Stage 3: full hybrid diffusion loop -> PNG
 # --------------------------------------------------------------------------
 def generate_image(
@@ -289,6 +406,10 @@ def generate_image(
     g = torch.Generator("cpu").manual_seed(seed)
     latents = torch.randn(1, int(model.config.vae["latent_channels"]), h, w, generator=g, dtype=torch.float32)
 
+    # TOTAL end-to-end latency = the diffusion loop + VAE decode + postprocess
+    # (excludes the one-time cold model load). This is the real "s/image"
+    # wall-clock that replaces the earlier projection.
+    t_gen_start = time.time()
     per_step_ms = []
     for i, t in enumerate(timesteps):
         t0 = time.time()
@@ -299,8 +420,10 @@ def generate_image(
         latents = sched.step(pred, t, latents, return_dict=False)[0]
         per_step_ms.append(1000.0 * (time.time() - t0))
         print(f"  step {i + 1}/{steps}  t={float(t):.2f}  {per_step_ms[-1]:.0f} ms")
+    loop_s = time.time() - t_gen_start
 
     # VAE decode (host, fp32) -> pixels
+    t_vae = time.time()
     sf = model.vae.config.scaling_factor
     if sf:
         latents = latents / sf
@@ -311,16 +434,26 @@ def generate_image(
     if hasattr(model.vae, "ffactor_temporal"):
         image = image.squeeze(2)
     image = pipe.image_processor.postprocess(image, output_type="pil", do_denormalize=[True] * image.shape[0])[0]
+    vae_decode_s = time.time() - t_vae
 
     out_path = os.path.abspath(out_path)
     image.save(out_path)
+    total_latency_s = time.time() - t_gen_start
     timing = {
         "steps": steps,
-        "s_per_image": sum(per_step_ms) / 1000.0,
+        "total_latency_s": total_latency_s,  # THE headline: full e2e s/image
+        "loop_s": loop_s,
+        "vae_decode_s": vae_decode_s,
         "ms_per_step_mean": sum(per_step_ms) / len(per_step_ms),
+        "per_step_ms": per_step_ms,
         "token_hw": (h, w),
         "seq_len": int(kwargs["input_ids"].shape[1]),
         "out_path": out_path,
     }
-    print(f"saved {out_path}  ({timing['s_per_image']:.1f} s/image, {timing['ms_per_step_mean']:.0f} ms/step)")
+    # Parseable sentinel (mirrors the manual track's TRACE_PER_TOKEN_MS convention).
+    print(f"E2E_T2I_TOTAL_LATENCY_S={total_latency_s:.4f}")
+    print(
+        f"saved {out_path}  (total {total_latency_s:.1f} s/image | loop {loop_s:.1f} s "
+        f"@ {timing['ms_per_step_mean']:.0f} ms/step x{steps} | vae {vae_decode_s:.1f} s)"
+    )
     return image, timing
