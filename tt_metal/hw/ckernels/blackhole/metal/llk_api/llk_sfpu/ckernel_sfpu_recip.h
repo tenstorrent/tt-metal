@@ -391,7 +391,6 @@ void recip_init() {
     // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
     // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole.
     sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
