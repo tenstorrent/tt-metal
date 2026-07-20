@@ -14,19 +14,19 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
-// Load one row-major gamma/beta stick (TILE_WIDTH datums) into the first row of a tile's two 16x16 faces;
-// byte offsets scale with datum size (2B bf16 / 4B fp32). Read the full row into face 0 (Blackhole DRAM
-// needs 64B-granular reads), then L1->L1-copy its second half-row into face 1.
+// Queue the DRAM read of a gamma/beta row (TILE_WIDTH datums) into face 0; byte offsets scale with
+// datum size (2B bf16 / 4B fp32). Full row goes to face 0 (Blackhole DRAM reads need 64B granularity).
 template <typename AccessorType>
-void async_read_row_to_tile(
+void async_read_row_face0(
     const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t l1_dst_addr, uint32_t element_bytes) {
     const uint32_t row_bytes = tt::constants::TILE_WIDTH * element_bytes;
+    noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), row_bytes, {.page_id = page_id}, {});
+}
+
+// L1->L1-copy the row's second half into face 1. Only legal after the face-0 read barrier.
+void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_t element_bytes) {
     const uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
     const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
-
-    noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), row_bytes, {.page_id = page_id}, {});
-    noc.async_read_barrier();
-
     UnicastEndpoint self;
     noc.async_read(
         self,
@@ -183,11 +183,19 @@ void kernel_main() {
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     cb_gamma.reserve_back(num_cols_tile_gamma_beta);
-                    uint32_t l1_write_addr_gamma = cb_gamma.get_write_ptr();
+                    const uint32_t base_l1_write_addr_gamma = cb_gamma.get_write_ptr();
 
+                    uint32_t l1_write_addr_gamma = base_l1_write_addr_gamma;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        async_read_row_to_tile(
+                        async_read_row_face0(
                             noc, gamma, gamma_tile_start_id + w, l1_write_addr_gamma, gamma_element_bytes);
+                        l1_write_addr_gamma += gamma_tile_bytes;
+                    }
+                    noc.async_read_barrier();
+
+                    l1_write_addr_gamma = base_l1_write_addr_gamma;
+                    for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
+                        copy_row_half_to_face1(noc, l1_write_addr_gamma, gamma_element_bytes);
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
                     noc.async_read_barrier();
@@ -200,11 +208,18 @@ void kernel_main() {
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     cb_beta.reserve_back(num_cols_tile_gamma_beta);
-                    uint32_t l1_write_addr_beta = cb_beta.get_write_ptr();
+                    const uint32_t base_l1_write_addr_beta = cb_beta.get_write_ptr();
 
+                    uint32_t l1_write_addr_beta = base_l1_write_addr_beta;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        async_read_row_to_tile(
-                            noc, beta, beta_tile_start_id + w, l1_write_addr_beta, beta_element_bytes);
+                        async_read_row_face0(noc, beta, beta_tile_start_id + w, l1_write_addr_beta, beta_element_bytes);
+                        l1_write_addr_beta += beta_tile_bytes;
+                    }
+                    noc.async_read_barrier();
+
+                    l1_write_addr_beta = base_l1_write_addr_beta;
+                    for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
+                        copy_row_half_to_face1(noc, l1_write_addr_beta, beta_element_bytes);
                         l1_write_addr_beta += beta_tile_bytes;
                     }
                     noc.async_read_barrier();
