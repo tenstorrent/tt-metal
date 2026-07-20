@@ -307,7 +307,15 @@ def _make_mla(model, config, layer, mesh_device, is_chunked=False):
     config.max_seq_len = SEQ_LEN  # rope-table length (same hack as v3 run_model / test_mla)
     weights = _weights_for(model, config, layer)  # canonical dict — same tensors the CPU truth uses
     return ttMLA(
-        config, weights, mesh_device, layer_idx=0, seq_len=SEQ_LEN, sp_axis=0, tp_axis=1, is_chunked=is_chunked
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=SEQ_LEN,
+        sp_axis=0,
+        tp_axis=1,
+        is_chunked=is_chunked,
+        layer_num=1,
     )
 
 
@@ -350,7 +358,23 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
     xs = _shard_idx_input(x, mesh_device)
     sl = SEQ_LEN // mesh_device.shape[0]
     qr = mla._q_a_latent(xs, sl, mla._get_act_mem_config("q_b_proj", sl))
-    idx = mla._indexer.forward(xs, qr, sl)
+    # The indexer is always block-cyclic now (single-shot = one full-seq chunk at offset 0): feed it the
+    # indexed rope tables + a caller-owned index_kv_cache, matching the MLA forward path.
+    cfg = _config_for(model)
+    idx_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=cfg.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
+    idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
+    )
+    idx = mla._indexer.forward(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
 
     # The indexer is now query-SP-sharded: top-k input is [1,1,S/sp,end_pos] (TP-replicated) and idx is
     # [1,1,S/sp,k]. Reassemble the full S by concatenating the SP shards (tp=0 column) along the query dim.
@@ -379,6 +403,8 @@ def _run_device_forward(model, config, layer, mesh_device):
     ref = load_reference(model, layer)
     mla = _make_mla(model, config, layer, mesh_device)
     sp_axis, tp_axis = 0, 1
+    # Sparse: uncompressed bf16/ROW_MAJOR KVPE cache + indexed rope + a caller-owned indexer key cache.
+    # Single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0).
     kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
         mesh_device=mesh_device,
@@ -386,8 +412,22 @@ def _run_device_forward(model, config, layer, mesh_device):
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors(SEQ_LEN)
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
+    )
 
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
@@ -399,7 +439,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    out = mla.forward(tt_x, rope_tensors, kvpe_cache)
+    out = mla.forward(tt_x, rope_tensors, kvpe_cache, index_kv_cache=index_kv_cache)
     out_t = ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
     ).to(torch.bfloat16)[

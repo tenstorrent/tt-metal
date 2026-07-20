@@ -8,7 +8,7 @@ import copy
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
+from tests.nightly.t3000.ccl.test_all_gather import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 
 from tracy import signpost

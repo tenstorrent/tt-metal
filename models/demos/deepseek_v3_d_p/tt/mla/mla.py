@@ -280,9 +280,22 @@ class ttMLA:
         self.slot_num = slot_num
         self.layer_num = layer_num
 
-        # The RoPE op is fixed by the configured mode: chunked prefill uses the indexed op,
-        # single-shot uses rotary_embedding_llama. Bind once here so forward doesn't re-decide.
-        self._apply_rope = self._apply_rope_padded if is_chunked else self._apply_rope_one_shot
+        # DSA indexer (v3.2 / GLM): resolve sparse mode EXPLICITLY — config DSA fields, then live host
+        # weights, then a complete indexer cache — never from bool(idx_host), which silently went dense
+        # for cache-only construction. Resolved here (before buffer alloc + rope/attention binding) so all
+        # three can key off it. Inert for dense v3.1.
+        self._has_indexer = resolve_has_indexer(
+            config,
+            state_dict=state_dict,
+            explicit=has_indexer,
+            weight_cache_path=self.weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.mla",
+        )
+
+        # The RoPE op is fixed by the configured mode. It is bound AFTER self._has_indexer is resolved
+        # (below), because sparse always runs the block-cyclic path (single-shot is one full-seq chunk at
+        # offset 0) and so needs the indexed op even when not chunked. Dense keeps: chunked -> indexed,
+        # single-shot -> rotary_embedding_llama.
 
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -353,8 +366,10 @@ class ttMLA:
         # every layer's MLA (uniform across layers, scratch / no per-layer state) instead of
         # re-allocated per layer.
         #
-        # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers at all.
-        if kv_only:
+        # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers. Sparse (DSA) uses
+        # sparse_sdpa + the transient _gather_kvpe_prefix gather — neither the ring_mla chunked scratch nor
+        # the ring-joint-SDPA buffers — so it allocates none of these regardless of is_chunked.
+        if kv_only or self._has_indexer:
             pass
         elif self.is_chunked:
             # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
@@ -412,21 +427,13 @@ class ttMLA:
             self.o_proj_weight = weights["o_proj"]
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
 
-        # DSA indexer (v3.2 / GLM): resolve sparse mode EXPLICITLY — config DSA fields, then live host
-        # weights, then a complete indexer cache — never from bool(idx_host), which silently went dense
-        # for cache-only construction. The TtIndexer owns the indexer stems / RoPE tables / device
-        # key-cache and reuses this MLA's q_a stem + collectives. Inert for dense v3.1.
-        self._has_indexer = resolve_has_indexer(
-            config,
-            state_dict=state_dict,
-            explicit=has_indexer,
-            weight_cache_path=self.weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.mla",
-        )
-        # DSA *family* (config carries the indexer fields), independent of whether the indexer is
-        # active this layer. V3.1's dense config lacks them; V3.2's config has them even when a
-        # benchmark forces the attention dense (has_indexer=False). Dense-path tuning gates that must
-        # tell V3.1 from a dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
+        # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
+        # TtIndexer owns the indexer stems / RoPE tables / device key-cache and reuses this MLA's q_a stem
+        # + collectives. Inert for dense v3.1.
+        # DSA *family* (config carries the indexer fields), independent of whether the indexer is active
+        # this layer. V3.1's dense config lacks them; V3.2's config has them even when a benchmark forces
+        # the attention dense (has_indexer=False). Dense-path tuning gates that must tell V3.1 from a
+        # dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
         self._is_dsa_family = TtIndexer.matches_config(config)
         # GLM-5.2 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
@@ -463,17 +470,24 @@ class ttMLA:
                     seq_len=seq_len,
                     slot_num=slot_num,
                     layer_num=self.layer_num,
-                    is_chunked=is_chunked,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
             self._indexer_reuse = False
 
-        # Bind the attention core once, by config — sparsity (self._has_indexer) × chunking
-        # (self.is_chunked) — exactly as self._apply_rope is bound above. forward() then calls
-        # self._attention(...) with no mode ladder: the decision is made here, not per call.
+        # Bind the RoPE op now that self._has_indexer is known: sparse always uses the indexed
+        # (block-cyclic) op — single-shot is folded onto the block-cyclic path as one full-seq chunk at
+        # offset 0 — so its key cache persists layer-stacked (migratable to decode). Dense: chunked ->
+        # indexed, single-shot -> rotary_embedding_llama.
+        self._apply_rope = (
+            self._apply_rope_padded if (self.is_chunked or self._has_indexer) else self._apply_rope_one_shot
+        )
+
+        # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
+        # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
+        # then calls self._attention(...) with no mode ladder: the decision is made here, not per call.
         if self._has_indexer:
-            self._attention = self._sparse_chunked_attn if self.is_chunked else self._sparse_single_attn
+            self._attention = self._sparse_chunked_attn
         else:
             self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
 
@@ -978,7 +992,8 @@ class ttMLA:
         helper). Blocked on the single-chip case: test_prefill_block_loop[mesh-1x1] runs dense single-shot
         on a (1,1) mesh, where fill_cache_for_user_ is mesh-agnostic but update_padded_kv_cache's SP
         cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
-        update_padded handles 1x1 (and sp=1), then switch _dense_single_attn like _sparse_single_attn."""
+        update_padded handles 1x1 (and sp=1), then switch _dense_single_attn onto it too (the sparse path
+        already folded its single-shot onto the block-cyclic update_padded write)."""
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
 
     def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
@@ -1039,6 +1054,12 @@ class ttMLA:
         seq_len_local = hidden_states.shape[2]
         kv_actual_isl = actual_start
         is_chunked = self.is_chunked
+
+        # Sparse always runs the block-cyclic path (indexed rope + kvpe cache read-back), which treats
+        # single-shot as one full-seq chunk at offset 0. Coerce the None single-shot offset to 0 so the
+        # indexed rope op, the cache write, and the indexer all get a concrete kv_actual_global.
+        if self._has_indexer and kv_actual_isl is None:
+            kv_actual_isl = 0
 
         # Sparse attention (sparse_sdpa) reads the KVPE cache natively and only accepts bf16 / fp8_e4m3,
         # ROW_MAJOR. Require the cache to already be in that op-wanted format so the whole path is a single
@@ -1183,33 +1204,6 @@ class ttMLA:
             cache_user_id=cache_user_id,
             seq_len_local=seq_len_local,
         )
-
-    def _sparse_single_attn(
-        self, *, tt_q, tt_kvpe, indices, kvpe_cache, kv_actual_isl, cache_layer_idx, cache_user_id, seq_len_local, **_
-    ):
-        assert indices is not None, "sparse MLA forward requires indexer top-k indices"
-        # Single-shot: write the cache via the SAME op as chunked (update_padded_kv_cache), so the sparse
-        # cache is uniformly bf16/fp8 ROW_MAJOR and the TILE-only fill_cache_for_user_ is avoided. The whole
-        # sequence is one chunk (kv_actual_global=0). The live kvpe IS the whole sequence (natural order,
-        # contiguous SP shard), already in the op's format, so attend on it directly — no cache read-back.
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            kvpe_cache,
-            tt_kvpe,
-            slot_idx=cache_user_id,
-            layer_idx=cache_layer_idx,
-            num_layers=self.layer_num,
-            kv_actual_global=kv_actual_isl or 0,
-            cluster_axis=self.sp_axis,
-        )
-        kvpe_dev = self._all_gather(tt_kvpe, dim=2, cluster_axis=self.sp_axis)  # [1,1,T,576] repl, natural
-
-        # Sparse attention runs over latent V; project to v_head_dim afterwards.
-        attn_out = self._sparse_mla(tt_q, kvpe_dev, indices)
-        if kvpe_dev is not tt_kvpe:  # all_gather made a new buffer (sp>1); else it IS tt_kvpe itself
-            ttnn.deallocate(kvpe_dev)
-        ttnn.deallocate(tt_kvpe)
-        ttnn.deallocate(tt_q)
-        return self._apply_wkv_b2(attn_out, seq_len_local)
 
     def _sparse_chunked_attn(
         self,

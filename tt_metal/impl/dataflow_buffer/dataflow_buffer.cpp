@@ -1767,6 +1767,12 @@ void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, J
         for (const auto& dfb : dfbs_on_core) {
             const CBIndex cb_index = static_cast<CBIndex>(dfb->id);
             const DataFormat data_format = dfb->config.data_format;
+            // Populate this DFB's CB-indexed JIT metadata only when a format was specified.
+            // A format-less DFB has no compute consumer, so its JIT slot is intentionally left
+            // at the defaults instead of deriving a tile size from DataFormat::Invalid.
+            if (data_format == DataFormat::Invalid) {
+                continue;
+            }
             const auto& tile_opt = dfb->config.tile;
             const auto& unpack_geom = dfb->config.unpack_face_geometry;
             build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
