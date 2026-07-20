@@ -61,6 +61,10 @@ class TtPrefillRuntimeConfig:
     first_layer_idx: int = 0
     is_first_rank: bool = True
     is_last_rank: bool = True
+    # Emb-axis sharding of the cross-rank D2D hidden state (must match the runner's D2D_MAPPER_CONFIG and
+    # this model's residual layout): True => emb TP-sharded, False => emb replicated across TP. M3's SP
+    # residual is emb-replicated, so its adapter passes False.
+    pipeline_activation_emb_tp_sharded: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -164,19 +168,25 @@ class TtPrefillRuntime:
         self.rope_indexed = [build(rs.cos_matrix_prefill), build(rs.sin_matrix_prefill)]
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
-        """Zero hidden-state activation matching the decoder-layer-boundary residual: per-chip
-        ``[1, 1, chunk_size // sp, hidden_size]`` bf16 TILE DRAM — sequence SP-sharded across the rows,
-        the full embedding replicated across the TP cols. Warm-up stand-in for a non-first pipeline rank,
-        which receives the real activation over the D2D socket at run time."""
-        chunk_per_chip = self.config.chunk_size // self.config.sp_factor
-        zeros = torch.zeros(1, 1, chunk_per_chip, self.hf_config.hidden_size, dtype=torch.bfloat16)
+        """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
+        backing: global ``[1, 1, chunk_size, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
+        rows and the embedding sharded (or replicated) across the TP cols per
+        ``pipeline_activation_emb_tp_sharded`` — the same layout as the runner's D2D_MAPPER_CONFIG. Warm-up
+        stand-in for a non-first pipeline rank, which receives the real activation over the D2D socket at
+        run time."""
+        cfg = self.config
+        dims = [None, None]
+        dims[cfg.sp_axis] = 2  # seq across SP rows
+        if cfg.pipeline_activation_emb_tp_sharded:
+            dims[cfg.tp_axis] = 3  # emb across TP cols (else replicated on tp -> left None)
+        zeros = torch.zeros(1, 1, cfg.chunk_size, self.hf_config.hidden_size, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=cfg.mesh_shape),
         )
 
     def make_chunk_input(self, token_ids: list) -> ttnn.Tensor:

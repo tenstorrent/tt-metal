@@ -168,7 +168,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
                 f"[minimax_m3] weight cache incomplete at {cache_path}; reading bf16 source from {model_path} "
                 f"(slow — populate the cache once to skip this)."
             )
-            # Read only the shards for the layers this run builds.
+            # Read only the shards for the GLOBAL layer slice this rank builds
+            # ([first_layer_idx, first_layer_idx+num_layers)) so a pipeline rank with first_layer_idx>0
+            # loads its own layers, not layers 0..num_layers-1.
+            os.environ.setdefault("M3_LOAD_LAYER_START", str(params.first_layer_idx))
             os.environ.setdefault("M3_LOAD_NLAYERS", str(params.num_layers))
             state_dict = ModelArgs.load_state_dict(model_path)
 
@@ -185,6 +188,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             first_layer_idx=params.first_layer_idx,
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
+            pipeline_activation_emb_tp_sharded=self.pipeline_activation_emb_tp_sharded,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,
