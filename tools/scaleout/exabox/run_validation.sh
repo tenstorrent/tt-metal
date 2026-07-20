@@ -6,15 +6,21 @@ source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 
 # Prefix every output line with [hostname][time] using the orchestrator host.
-# Lines that already carry a [host][time] tag (e.g. the per-rank tt-smi reset
-# lines, which are tagged with their own remote hostname) are passed through
-# unchanged so they keep their real source attribution and are not double-tagged.
+# Two kinds of lines are emitted with a reduced tag to avoid duplicating a time:
+#   - lines that already carry a [host][time] tag (e.g. the per-rank tt-smi reset
+#     lines, tagged with their own remote hostname) pass through unchanged; and
+#   - lines that already begin with their own "YYYY-MM-DD HH:MM:SS" timestamp
+#     (e.g. Metal/UMD logs) only get [hostname] prepended, so the time is not
+#     printed twice on the same line.
 tag_stream() {
     local line
     local tagged_re='^\[[^]]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]'
+    local ts_re='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
     while IFS= read -r line; do
         if [[ "$line" =~ $tagged_re ]]; then
             printf '%s\n' "$line"
+        elif [[ "$line" =~ $ts_re ]]; then
+            printf '[%s] %s\n' "${HOSTNAME:-$(hostname)}" "$line"
         else
             printf '[%s][%(%H:%M:%S)T] %s\n' "${HOSTNAME:-$(hostname)}" -1 "$line"
         fi
@@ -264,7 +270,9 @@ run_cluster_validation() {
     if [[ $DOCKER_IMAGE == "none" ]]; then
         # Self-tag each rank's output with its own [hostname][time] at the source
         # (mpirun merges all ranks into one stream at the launcher, so tagging must
-        # happen on the rank). pipefail keeps run_cluster_validation's real exit code.
+        # happen on the rank). Lines that already begin with their own timestamp
+        # only get [hostname] prepended so the time is not duplicated. pipefail
+        # keeps run_cluster_validation's real exit code.
         local bin_cmd
         bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
@@ -275,7 +283,7 @@ run_cluster_validation() {
         mpirun --host "$HOSTS" \
             --mca btl_tcp_if_include "$MPI_IF" \
             "${MPI_EXTRA_ARGS[@]}" \
-            bash -c "set -o pipefail; $bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s][%(%H:%M:%S)T] %s\n' \"\$(hostname)\" -1 \"\$l\"; done"
+            bash -c "set -o pipefail; h=\$(hostname); $bin_cmd 2>&1 | while IFS= read -r l; do case \$l in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*) printf '[%s] %s\n' \"\$h\" \"\$l\";; *) printf '[%s][%(%H:%M:%S)T] %s\n' \"\$h\" -1 \"\$l\";; esac; done"
     else
         # mpi-docker tags each rank's output with [hostname][time] at the source
         # by default (real host, replacing mpirun's [jobid,rank] tag).
@@ -320,7 +328,12 @@ script -qefc "tt-smi -glx_reset" /dev/null |
     }
     END { if (seen) print buf }' |
     while IFS= read -r line; do
-        printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line"
+        case $line in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*)
+                printf '[%s] %s\n' "$h" "$line" ;;
+            *)
+                printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line" ;;
+        esac
     done >&2
 ec=${PIPESTATUS[0]}
 echo "RESET_RESULT|$h|$ec"

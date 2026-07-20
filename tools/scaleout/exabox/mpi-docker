@@ -251,10 +251,11 @@ default() {
 
     # Per-rank self-tagger: runs in the remote shell (outside the container), pipes the
     # container's merged stdout/stderr, and stamps each line with the real host + time.
-    # No single quotes (would clash with the bash -c '...' wrapper); $(hostname)/$l are
-    # kept literal here and resolved on the rank at run time. pipefail preserves the
-    # container's exit code through the pipe.
-    local host_tag_pipe='while IFS= read -r l; do printf "[%s][%(%H:%M:%S)T] %s\n" "$(hostname)" -1 "$l"; done'
+    # Lines that already begin with their own "YYYY-MM-DD HH:MM:SS" timestamp only get
+    # [hostname] prepended so the time is not duplicated. No single quotes (would clash
+    # with the bash -c '...' wrapper); $(hostname)/$l are kept literal here and resolved
+    # on the rank at run time. pipefail preserves the container's exit code through the pipe.
+    local host_tag_pipe='while IFS= read -r l; do case $l in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*) printf "[%s] %s\n" "$(hostname)" "$l";; *) printf "[%s][%(%H:%M:%S)T] %s\n" "$(hostname)" -1 "$l";; esac; done'
 
     # Add global MPI args to base
     if [[ ${#global_mpi_args[@]} -gt 0 ]]; then
