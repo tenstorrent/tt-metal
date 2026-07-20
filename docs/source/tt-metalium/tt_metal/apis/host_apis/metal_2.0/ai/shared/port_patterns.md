@@ -1,6 +1,6 @@
 # Metal 2.0 Op Port — Patterns & Anti-Patterns Catalog
 
-This catalog accumulates patterns and anti-patterns observed during Metal 2.0 op ports. It is referenced from the [feasibility audit](../audit/metal2_audit.md) for yellow-tier override guidance, from the [port recipe's planning step](../port/metal2_port.md#plan-the-spec) for structural-decision reference, and from the recipe's verification step for the anti-pattern self-audit checklist.
+This catalog accumulates patterns and anti-patterns observed during Metal 2.0 op ports. It is referenced from the [feasibility audit](../audit/metal2_audit.md) for its varargs caution and demoting-CTA anti-pattern, from the [port recipe's planning step](../port/metal2_port.md#plan-the-spec) for structural-decision reference, and from the recipe's verification step for the anti-pattern self-audit checklist.
 
 Each entry is self-contained. New entries land here as they're discovered during ports.
 
