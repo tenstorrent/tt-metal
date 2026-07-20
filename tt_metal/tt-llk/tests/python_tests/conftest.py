@@ -431,7 +431,10 @@ def pytest_configure(config):
                     port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
-            tt_exalens_init.init_ttexalens(use_4B_mode=False)
+            try:
+                tt_exalens_init.init_ttexalens(use_4B_mode=False)
+            except TypeError:
+                tt_exalens_init.init_ttexalens()
 
 
 def pytest_ignore_collect(collection_path, config):

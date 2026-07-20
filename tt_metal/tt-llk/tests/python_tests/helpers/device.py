@@ -11,9 +11,17 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_tensix import TensixDebug
-from ttexalens.hardware.risc_debug import CallstackEntry
+
+try:
+    from ttexalens.hardware.risc_debug import CallstackEntry
+except ImportError:
+    from ttexalens.elf import CallstackEntry
+try:
+    from ttexalens.elf import ParsedElfFile
+except ImportError:
+    from ttexalens.elf import ElfFile as ParsedElfFile
+
 from ttexalens.tt_exalens_lib import (
-    ParsedElfFile,
     TTException,
     arc_msg,
     callstack,
