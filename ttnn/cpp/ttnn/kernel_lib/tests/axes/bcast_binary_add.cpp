@@ -35,10 +35,9 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::Row,
-                InputLifecycle::Streaming,
-                InputLifecycle::Streaming,
-                BinaryDataFormatReconfig::None>{},
-            PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+                input(InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>{},
+            PackTile<cb_out, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
     } else if constexpr (dim == 1) {
         eltwise_chain(
             EltwiseShape::tiles(n),
@@ -47,10 +46,9 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::Col,
-                InputLifecycle::Streaming,
-                InputLifecycle::Streaming,
-                BinaryDataFormatReconfig::None>{},
-            PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+                input(InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>{},
+            PackTile<cb_out, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
     } else {  // dim == 3 -> Scalar
         eltwise_chain(
             EltwiseShape::tiles(n),
@@ -59,9 +57,8 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::Scalar,
-                InputLifecycle::Streaming,
-                InputLifecycle::Streaming,
-                BinaryDataFormatReconfig::None>{},
-            PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+                input(InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>{},
+            PackTile<cb_out, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
     }
 }

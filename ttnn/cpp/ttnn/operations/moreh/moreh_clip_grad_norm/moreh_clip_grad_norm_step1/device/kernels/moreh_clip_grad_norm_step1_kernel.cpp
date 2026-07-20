@@ -67,21 +67,56 @@ void kernel_main() {
 
     // Compute cb_xpowadd
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        // Comput cb_xabs and mask(optional)
-        // |x|
-        tile_regs_acquire();
-        dfb_x_obj.wait_front(onetile);  // comes from the reader
-        dfb_xabs_obj.reserve_back(onetile);
-
-        copy_tile_init(cb_x);
-        copy_tile(cb_x, 0, dst0);
-
-        if (do_mask_h && need_to_do_mask_h(tile_idx, ht, wt)) {
-            copy_tile_init(cb_mask_h_w);
-            copy_tile(cb_mask_h_w, 0, dst1);
-
-            mask_tile_init();
-            mask_tile(dst0, dst1);
+        const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
+        const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
+        if (mh && mw) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_x>{},
+                ckl::CopyTile<cb_mask_h_w, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                ckl::CopyTile<
+                    cb_mask_h_w,
+                    ckl::Dst::D1,
+                    ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Scalar, ckl::TileOffset::Set)>{
+                    1u},  // mask_w lives at index 1 of cb_mask_h_w
+                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                ckl::Abs<ckl::Dst::D0>{},
+                ckl::PackTile<
+                    cb_xabs,
+                    ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        } else if (mh) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_x>{},
+                ckl::CopyTile<cb_mask_h_w, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                ckl::Abs<ckl::Dst::D0>{},
+                ckl::PackTile<
+                    cb_xabs,
+                    ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        } else if (mw) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_x>{},
+                ckl::CopyTile<
+                    cb_mask_h_w,
+                    ckl::Dst::D1,
+                    ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Scalar, ckl::TileOffset::Set)>{
+                    1u},  // mask_w lives at index 1 of cb_mask_h_w
+                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                ckl::Abs<ckl::Dst::D0>{},
+                ckl::PackTile<
+                    cb_xabs,
+                    ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        } else {
+            ckl::unary<
+                ckl::Abs<ckl::Dst::D0>,
+                cb_x,
+                cb_xabs,
+                ckl::input(ckl::InputLifecycle::Streaming),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(onetile));
         }
 
         if (do_mask_w && ((tile_idx + 1) % wt) == 0) {
@@ -103,48 +138,55 @@ void kernel_main() {
         tile_regs_release();
 
         // |x + decimal|^p
-        power_tile_to_cb(
-            dfb_xabs_obj,
-            dfb_xpow_obj,
-            dfb_logx_obj,
-            dfb_decimal_obj,
-            dfb_exp_lxmd_obj,
-            dfb_correct_xpow_obj,
-            p,
-            p_is_negative);
+        if (p_is_negative) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_xabs, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::PowerIterative<ckl::Dst::D0>{p},
+                ckl::Recip<ckl::Dst::D0>{},
+                ckl::PackTile<cb_xpow>{});
+        } else {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_xabs, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::PowerIterative<ckl::Dst::D0>{p},
+                ckl::PackTile<cb_xpow>{});
+        }
+        ckl::unary<
+            ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
+            cb_xabs,
+            cb_logx,
+            ckl::input(ckl::InputLifecycle::NoWaitPop)>(ckl::EltwiseShape::tiles(onetile));
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
+                cb_logx,
+                cb_decimal,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::input(ckl::InputLifecycle::Streaming),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<cb_exp_lxmd>{});
+        ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
         if (tile_idx == 0) {
-            tile_regs_acquire();
-            dfb_correct_xpow_obj.wait_front(onetile);
-            dfb_xpowadd_obj.reserve_back(onetile);
-
-            copy_tile_init(cb_correct_xpow);
-            copy_tile(cb_correct_xpow, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_xpowadd);
-
-            dfb_correct_xpow_obj.pop_front(onetile);
-            dfb_xpowadd_obj.push_back(onetile);
-            tile_regs_release();
+            ckl::copy<
+                cb_correct_xpow,
+                cb_xpowadd,
+                ckl::input(ckl::InputLifecycle::Streaming),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(onetile));
         } else {
-            tile_regs_acquire();
-            dfb_correct_xpow_obj.wait_front(onetile);
-            dfb_xpowadd_obj.wait_front(onetile);
-            dfb_xpowadd_obj.reserve_back(onetile);
-
-            add_tiles_init(cb_correct_xpow, cb_xpowadd);
-            add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_xpowadd);
-
-            dfb_correct_xpow_obj.pop_front(onetile);
-            dfb_xpowadd_obj.pop_front(onetile);
-            dfb_xpowadd_obj.push_back(onetile);
-            tile_regs_release();
+            ckl::add<
+                cb_correct_xpow,
+                cb_xpowadd,
+                cb_xpowadd,
+                ckl::BroadcastDim::None,
+                ckl::input(ckl::InputLifecycle::Streaming),
+                ckl::input(ckl::InputLifecycle::Streaming),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(onetile));
         }
     }
 

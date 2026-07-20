@@ -33,10 +33,9 @@ void kernel_main() {
             cb_c,
             BinaryFpuOp::Add,
             BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input,
+            input(InputLifecycle::Streaming),
+            input(InputLifecycle::Streaming),
             Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+        PackTile<cb_out, output(OutputLifecycle::Streaming), Dst::D0>{});
 }

@@ -40,36 +40,36 @@ void kernel_main() {
     // Stage 0: Bulk-fill cb_x from the reader; after this cb_x is owned entirely by compute.
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<cb_src, Dst::D0, InputLifecycle::Bulk, CopyTileReconfig::Input, OperandKind::Block>{},
-        PackTile<cb_x, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+        CopyTile<cb_src, Dst::D0, input(InputLifecycle::Bulk, OperandKind::Block)>{},
+        PackTile<cb_x, output(OutputLifecycle::Bulk)>{});
 
     // Stage A: exp(x) IN PLACE on cb_x (read cb_x -> DEST -> exp -> pack cb_x). THE CASE UNDER TEST.
     if constexpr (life == 0) {
         // Front rotation: pop frees the front tile, reserve reuses it. Scalar reads the current front.
         eltwise_chain(
             EltwiseShape::tiles(n),
-            CopyTile<cb_x, Dst::D0, InputLifecycle::BulkDrain, CopyTileReconfig::Input, OperandKind::Scalar>{},
+            CopyTile<cb_x, Dst::D0, input(InputLifecycle::BulkDrain, OperandKind::Scalar)>{},
             Exp<>{},
-            PackTile<cb_x, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+            PackTile<cb_x, output(OutputLifecycle::Streaming)>{});
     } else if constexpr (life == 1) {
         // Chunk lockstep: pop/reserve K per chunk. Block index walks the K-tile front window.
         eltwise_chain(
             EltwiseShape::tiles(n, blk),
-            CopyTile<cb_x, Dst::D0, InputLifecycle::Chunked, CopyTileReconfig::Input, OperandKind::Block>{},
+            CopyTile<cb_x, Dst::D0, input(InputLifecycle::Chunked, OperandKind::Block)>{},
             Exp<>{},
-            PackTile<cb_x, OutputLifecycle::Chunked, PackTileReconfig::Output>{});
+            PackTile<cb_x, output(OutputLifecycle::Chunked)>{});
     } else {  // life == 2
         // Per-tile rotation: like life 0 but the wait is per-tile too.
         eltwise_chain(
             EltwiseShape::tiles(n),
-            CopyTile<cb_x, Dst::D0, InputLifecycle::Streaming, CopyTileReconfig::Input, OperandKind::Scalar>{},
+            CopyTile<cb_x, Dst::D0, input(InputLifecycle::Streaming, OperandKind::Scalar)>{},
             Exp<>{},
-            PackTile<cb_x, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+            PackTile<cb_x, output(OutputLifecycle::Streaming)>{});
     }
 
     // Stage B: copy cb_x -> cb_out (plain Bulk copy) so the DRAM writer drains cb_out, never cb_x.
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<cb_x, Dst::D0, InputLifecycle::Bulk, CopyTileReconfig::Input, OperandKind::Block>{},
-        PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+        CopyTile<cb_x, Dst::D0, input(InputLifecycle::Bulk, OperandKind::Block)>{},
+        PackTile<cb_out, output(OutputLifecycle::Bulk)>{});
 }

@@ -26,8 +26,7 @@ void kernel_main() {
             cb_b,
             BinaryFpuOp::Mul,
             BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+            input(InputLifecycle::Streaming),
+            input(InputLifecycle::Streaming)>{},
+        PackTile<cb_out, output(OutputLifecycle::Streaming)>{});
 }

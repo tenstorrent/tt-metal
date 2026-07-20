@@ -39,23 +39,18 @@ void kernel_main() {
                     cb_b,
                     BinaryFpuOp::Add,
                     BroadcastDim::None,
-                    InputLifecycle::Bulk,
-                    InputLifecycle::Bulk,
-                    BinaryDataFormatReconfig::Input,
-                    Dst::D0,
-                    OperandKind::Block,
-                    OperandKind::Block>{},
+                    input(InputLifecycle::Bulk, OperandKind::Block),
+                    input(InputLifecycle::Bulk, OperandKind::Block),
+                    Dst::D0>{},
                 Exp<>{},
                 DestReuseBinary<
                     cb_c,
                     BinaryFpuOp::Mul,
                     DestReuseType::DEST_TO_SRCA,
-                    InputLifecycle::Bulk,
-                    DestReuseReconfig::Input,
+                    input(InputLifecycle::Bulk, OperandKind::Block),
                     Dst::D0,
-                    Dst::D0,
-                    OperandKind::Block>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+                    Dst::D0>{},
+                PackTile<cb_out, output(OutputLifecycle::Bulk)>{});
         }
     } else {  // Chunked: single call over all N, bounded CB via per-chunk wait/pop
         eltwise_chain(
@@ -65,22 +60,17 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Chunked,
-                InputLifecycle::Chunked,
-                BinaryDataFormatReconfig::Input,
-                Dst::D0,
-                OperandKind::Block,
-                OperandKind::Block>{},
+                input(InputLifecycle::Chunked, OperandKind::Block),
+                input(InputLifecycle::Chunked, OperandKind::Block),
+                Dst::D0>{},
             Exp<>{},
             DestReuseBinary<
                 cb_c,
                 BinaryFpuOp::Mul,
                 DestReuseType::DEST_TO_SRCA,
-                InputLifecycle::Chunked,
-                DestReuseReconfig::Input,
+                input(InputLifecycle::Chunked, OperandKind::Block),
                 Dst::D0,
-                Dst::D0,
-                OperandKind::Block>{},
-            PackTile<cb_out, OutputLifecycle::Chunked, PackTileReconfig::Output>{});
+                Dst::D0>{},
+            PackTile<cb_out, output(OutputLifecycle::Chunked)>{});
     }
 }
