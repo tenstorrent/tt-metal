@@ -1,0 +1,1379 @@
+{
+  "physical_topology": {
+    "asic_descriptors": [
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "14520885691"
+        },
+        "asic_id": "14520885691"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "14520885455"
+        },
+        "asic_id": "14520885455"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "14520885421"
+        },
+        "asic_id": "14520885421"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "14520885329"
+        },
+        "asic_id": "14520885329"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "10225918395"
+        },
+        "asic_id": "10225918395"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "10225918159"
+        },
+        "asic_id": "10225918159"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "10225918125"
+        },
+        "asic_id": "10225918125"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-a",
+          "tray_id": 0,
+          "unique_id": "10225918033"
+        },
+        "asic_id": "10225918033"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "14520885739"
+        },
+        "asic_id": "14520885739"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "14520885629"
+        },
+        "asic_id": "14520885629"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "14520885286"
+        },
+        "asic_id": "14520885286"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 1,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "14520885253"
+        },
+        "asic_id": "14520885253"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "10225918443"
+        },
+        "asic_id": "10225918443"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "10225918333"
+        },
+        "asic_id": "10225918333"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "10225917990"
+        },
+        "asic_id": "10225917990"
+      },
+      {
+        "asic_descriptor": {
+          "asic_location": 0,
+          "board_type": 4,
+          "host_name": "t3k-node-b",
+          "tray_id": 0,
+          "unique_id": "10225917957"
+        },
+        "asic_id": "10225917957"
+      }
+    ],
+    "exit_node_connection_table": [
+      {
+        "exit_connections": [
+          {
+            "dst_exit_node": "10225918443",
+            "eth_conn": {
+              "dst_chan": 1,
+              "is_local": false,
+              "src_chan": 1
+            },
+            "src_exit_node": "10225918033"
+          },
+          {
+            "dst_exit_node": "10225918443",
+            "eth_conn": {
+              "dst_chan": 0,
+              "is_local": false,
+              "src_chan": 0
+            },
+            "src_exit_node": "10225918033"
+          },
+          {
+            "dst_exit_node": "10225918333",
+            "eth_conn": {
+              "dst_chan": 7,
+              "is_local": false,
+              "src_chan": 7
+            },
+            "src_exit_node": "10225918125"
+          },
+          {
+            "dst_exit_node": "10225918333",
+            "eth_conn": {
+              "dst_chan": 6,
+              "is_local": false,
+              "src_chan": 6
+            },
+            "src_exit_node": "10225918125"
+          },
+          {
+            "dst_exit_node": "10225917957",
+            "eth_conn": {
+              "dst_chan": 1,
+              "is_local": false,
+              "src_chan": 1
+            },
+            "src_exit_node": "10225918159"
+          },
+          {
+            "dst_exit_node": "10225917957",
+            "eth_conn": {
+              "dst_chan": 0,
+              "is_local": false,
+              "src_chan": 0
+            },
+            "src_exit_node": "10225918159"
+          },
+          {
+            "dst_exit_node": "10225917990",
+            "eth_conn": {
+              "dst_chan": 7,
+              "is_local": false,
+              "src_chan": 7
+            },
+            "src_exit_node": "10225918395"
+          },
+          {
+            "dst_exit_node": "10225917990",
+            "eth_conn": {
+              "dst_chan": 6,
+              "is_local": false,
+              "src_chan": 6
+            },
+            "src_exit_node": "10225918395"
+          }
+        ],
+        "host_name": "t3k-node-a"
+      },
+      {
+        "exit_connections": [
+          {
+            "dst_exit_node": "10225918159",
+            "eth_conn": {
+              "dst_chan": 1,
+              "is_local": false,
+              "src_chan": 1
+            },
+            "src_exit_node": "10225917957"
+          },
+          {
+            "dst_exit_node": "10225918159",
+            "eth_conn": {
+              "dst_chan": 0,
+              "is_local": false,
+              "src_chan": 0
+            },
+            "src_exit_node": "10225917957"
+          },
+          {
+            "dst_exit_node": "10225918395",
+            "eth_conn": {
+              "dst_chan": 7,
+              "is_local": false,
+              "src_chan": 7
+            },
+            "src_exit_node": "10225917990"
+          },
+          {
+            "dst_exit_node": "10225918395",
+            "eth_conn": {
+              "dst_chan": 6,
+              "is_local": false,
+              "src_chan": 6
+            },
+            "src_exit_node": "10225917990"
+          },
+          {
+            "dst_exit_node": "10225918125",
+            "eth_conn": {
+              "dst_chan": 7,
+              "is_local": false,
+              "src_chan": 7
+            },
+            "src_exit_node": "10225918333"
+          },
+          {
+            "dst_exit_node": "10225918125",
+            "eth_conn": {
+              "dst_chan": 6,
+              "is_local": false,
+              "src_chan": 6
+            },
+            "src_exit_node": "10225918333"
+          },
+          {
+            "dst_exit_node": "10225918033",
+            "eth_conn": {
+              "dst_chan": 1,
+              "is_local": false,
+              "src_chan": 1
+            },
+            "src_exit_node": "10225918443"
+          },
+          {
+            "dst_exit_node": "10225918033",
+            "eth_conn": {
+              "dst_chan": 0,
+              "is_local": false,
+              "src_chan": 0
+            },
+            "src_exit_node": "10225918443"
+          }
+        ],
+        "host_name": "t3k-node-b"
+      }
+    ],
+    "host_to_rank": [
+      {
+        "host_name": "t3k-node-a",
+        "rank": 0
+      },
+      {
+        "host_name": "t3k-node-b",
+        "rank": 1
+      }
+    ],
+    "system_graph": {
+      "asic_connectivity_graph": [
+        {
+          "asic_topologies": [
+            {
+              "asic_id": "10225918033",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918159",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918395",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885329",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918443",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 1,
+                        "is_local": false,
+                        "src_chan": 1
+                      },
+                      {
+                        "dst_chan": 0,
+                        "is_local": false,
+                        "src_chan": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "10225918125",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918159",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918395",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 1
+                      },
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 0
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885421",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918333",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": false,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": false,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "10225918159",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918033",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918125",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885455",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225917957",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 1,
+                        "is_local": false,
+                        "src_chan": 1
+                      },
+                      {
+                        "dst_chan": 0,
+                        "is_local": false,
+                        "src_chan": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "10225918395",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918033",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918125",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885691",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225917990",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": false,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": false,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885329",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918033",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885691",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885421",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918125",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885455",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885455",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918159",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885421",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885691",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918395",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885329",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "host_name": "t3k-node-a"
+        },
+        {
+          "asic_topologies": [
+            {
+              "asic_id": "10225917957",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918333",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918443",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885253",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918159",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 1,
+                        "is_local": false,
+                        "src_chan": 1
+                      },
+                      {
+                        "dst_chan": 0,
+                        "is_local": false,
+                        "src_chan": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "10225917990",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918333",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 1
+                      },
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 0
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918443",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885286",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918395",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": false,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": false,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "10225918333",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225917957",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225917990",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885629",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918125",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": false,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": false,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "10225918443",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225917957",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225917990",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 15,
+                        "is_local": true,
+                        "src_chan": 15
+                      },
+                      {
+                        "dst_chan": 14,
+                        "is_local": true,
+                        "src_chan": 14
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885739",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 0,
+                        "is_local": true,
+                        "src_chan": 8
+                      },
+                      {
+                        "dst_chan": 1,
+                        "is_local": true,
+                        "src_chan": 9
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "10225918033",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 1,
+                        "is_local": false,
+                        "src_chan": 1
+                      },
+                      {
+                        "dst_chan": 0,
+                        "is_local": false,
+                        "src_chan": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885253",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225917957",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885629",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885286",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225917990",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885739",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885629",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918333",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885253",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "asic_id": "14520885739",
+              "topology": {
+                "asic_connections": [
+                  {
+                    "dst_asic_id": "10225918443",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 8,
+                        "is_local": true,
+                        "src_chan": 0
+                      },
+                      {
+                        "dst_chan": 9,
+                        "is_local": true,
+                        "src_chan": 1
+                      }
+                    ]
+                  },
+                  {
+                    "dst_asic_id": "14520885286",
+                    "eth_connections": [
+                      {
+                        "dst_chan": 7,
+                        "is_local": true,
+                        "src_chan": 7
+                      },
+                      {
+                        "dst_chan": 6,
+                        "is_local": true,
+                        "src_chan": 6
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "host_name": "t3k-node-b"
+        }
+      ],
+      "host_connectivity_graph": [
+        {
+          "host_connections": [
+            {
+              "dst_host_name": "t3k-node-b",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225918443",
+                  "eth_conn": {
+                    "dst_chan": 1,
+                    "is_local": false,
+                    "src_chan": 1
+                  },
+                  "src_exit_node": "10225918033"
+                },
+                {
+                  "dst_exit_node": "10225918443",
+                  "eth_conn": {
+                    "dst_chan": 0,
+                    "is_local": false,
+                    "src_chan": 0
+                  },
+                  "src_exit_node": "10225918033"
+                }
+              ]
+            },
+            {
+              "dst_host_name": "t3k-node-b",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225918333",
+                  "eth_conn": {
+                    "dst_chan": 7,
+                    "is_local": false,
+                    "src_chan": 7
+                  },
+                  "src_exit_node": "10225918125"
+                },
+                {
+                  "dst_exit_node": "10225918333",
+                  "eth_conn": {
+                    "dst_chan": 6,
+                    "is_local": false,
+                    "src_chan": 6
+                  },
+                  "src_exit_node": "10225918125"
+                }
+              ]
+            },
+            {
+              "dst_host_name": "t3k-node-b",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225917957",
+                  "eth_conn": {
+                    "dst_chan": 1,
+                    "is_local": false,
+                    "src_chan": 1
+                  },
+                  "src_exit_node": "10225918159"
+                },
+                {
+                  "dst_exit_node": "10225917957",
+                  "eth_conn": {
+                    "dst_chan": 0,
+                    "is_local": false,
+                    "src_chan": 0
+                  },
+                  "src_exit_node": "10225918159"
+                }
+              ]
+            },
+            {
+              "dst_host_name": "t3k-node-b",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225917990",
+                  "eth_conn": {
+                    "dst_chan": 7,
+                    "is_local": false,
+                    "src_chan": 7
+                  },
+                  "src_exit_node": "10225918395"
+                },
+                {
+                  "dst_exit_node": "10225917990",
+                  "eth_conn": {
+                    "dst_chan": 6,
+                    "is_local": false,
+                    "src_chan": 6
+                  },
+                  "src_exit_node": "10225918395"
+                }
+              ]
+            }
+          ],
+          "src_host_name": "t3k-node-a"
+        },
+        {
+          "host_connections": [
+            {
+              "dst_host_name": "t3k-node-a",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225918159",
+                  "eth_conn": {
+                    "dst_chan": 1,
+                    "is_local": false,
+                    "src_chan": 1
+                  },
+                  "src_exit_node": "10225917957"
+                },
+                {
+                  "dst_exit_node": "10225918159",
+                  "eth_conn": {
+                    "dst_chan": 0,
+                    "is_local": false,
+                    "src_chan": 0
+                  },
+                  "src_exit_node": "10225917957"
+                }
+              ]
+            },
+            {
+              "dst_host_name": "t3k-node-a",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225918395",
+                  "eth_conn": {
+                    "dst_chan": 7,
+                    "is_local": false,
+                    "src_chan": 7
+                  },
+                  "src_exit_node": "10225917990"
+                },
+                {
+                  "dst_exit_node": "10225918395",
+                  "eth_conn": {
+                    "dst_chan": 6,
+                    "is_local": false,
+                    "src_chan": 6
+                  },
+                  "src_exit_node": "10225917990"
+                }
+              ]
+            },
+            {
+              "dst_host_name": "t3k-node-a",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225918125",
+                  "eth_conn": {
+                    "dst_chan": 7,
+                    "is_local": false,
+                    "src_chan": 7
+                  },
+                  "src_exit_node": "10225918333"
+                },
+                {
+                  "dst_exit_node": "10225918125",
+                  "eth_conn": {
+                    "dst_chan": 6,
+                    "is_local": false,
+                    "src_chan": 6
+                  },
+                  "src_exit_node": "10225918333"
+                }
+              ]
+            },
+            {
+              "dst_host_name": "t3k-node-a",
+              "exit_node_connections": [
+                {
+                  "dst_exit_node": "10225918033",
+                  "eth_conn": {
+                    "dst_chan": 1,
+                    "is_local": false,
+                    "src_chan": 1
+                  },
+                  "src_exit_node": "10225918443"
+                },
+                {
+                  "dst_exit_node": "10225918033",
+                  "eth_conn": {
+                    "dst_chan": 0,
+                    "is_local": false,
+                    "src_chan": 0
+                  },
+                  "src_exit_node": "10225918443"
+                }
+              ]
+            }
+          ],
+          "src_host_name": "t3k-node-b"
+        }
+      ]
+    }
+  },
+  "physical_topology_size_bytes": 2555,
+  "success": true,
+  "topo_source": "psd",
+  "total_asics": 16,
+  "total_hosts": 2
+}

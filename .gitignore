@@ -170,3 +170,9 @@ models/experimental/petr/resources/*.pth
 tray_to_pcie_device_mapping.yaml
 
 .DS_Store
+
+*/WORKFLOW.md
+*/prompt.md
+*/progress.md
+*/findings.md
+*/prompt.md

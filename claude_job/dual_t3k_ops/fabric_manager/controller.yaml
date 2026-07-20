@@ -1,0 +1,20 @@
+# Fabric Manager CONTROLLER config for the dual-T3K box — kept in the tt-metal
+# repo so the whole topology-UI fix lives in one place (see GUIDE.md §8b).
+# Mounted into the fabric-controller container at /etc/fabric-manager/config.yaml
+# by ./apply.sh.
+#
+# NOTE: the FM *agents* read their own copy of the cluster config at
+# ~/tt-fabric-manager/configs/cluster.yaml (they only use controller.listen_address).
+# That file is left untouched; if you ever change listen_address, change it in both.
+controller:
+  listen_address: 192.168.1.243:50051
+  heartbeat_interval_sec: 10
+  heartbeat_timeout_sec: 30
+  daemon_reconnect_timeout_sec: 60
+  # Built-in topology web UI + JSON API.
+  http_listen_address: 0.0.0.0:8080
+  web_ui_path: /usr/local/share/tt-fabric-manager/web
+  # Factory System Descriptor dir (mounted from this repo's ./fsd). Makes the
+  # UI "FSD (factory)" source render all 16 chips instead of collapsing the
+  # tray-less PSD discovery. See GUIDE.md §8b.
+  factory_system_descriptor_search_path: /etc/fabric-manager/fsd

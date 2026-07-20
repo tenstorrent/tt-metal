@@ -47,10 +47,11 @@ repo path `…/tenstorrent/tt-metal/claude_job` is a symlink to this location, s
 `claude_job/…` still resolves there too.
 
 **Mount setup.** The NFS packages are already installed on both boxes
-(`nfs-kernel-server` on the launcher, `nfs-common` on the remote) and the server is
-enabled, so you only ever need the two steps below. **This is NOT persistent across a
-reboot** — after either box reboots, the export table and the mount are gone and you must
-redo Steps 1–2 (see the fstab note at the end to make it survive reboots).
+(`nfs-kernel-server` on the launcher, `nfs-common` on the remote), the server is `enabled`,
+the export line is in `/etc/exports`, and the remote auto-mounts via a systemd-automount
+`/etc/fstab` line — so **the mount now survives reboots on its own** (see "Persistent across
+reboots" below). Steps 1–2 are the manual bring-up if you ever need to (re)create it from
+scratch or the automount is missing.
 
 **Step 1 — launcher (.243):** add the export line, then re-export.
 ```bash
@@ -82,13 +83,31 @@ Both should list `bigmesh_ops.py`, `multimesh_pipeline.py`, etc.
 > env vars this requires. (The old per-host checkout under `/home/namvu/tenstorrent` is no longer
 > used for these runs.)
 
-**Optional — make the mount survive reboots.** On the remote, add an `/etc/fstab` line so it
-auto-mounts on boot (the server side is already `enabled`, so the export survives if you keep
-the line in `/etc/exports`):
-```bash
-ssh namvu@t3k-node-a "echo '192.168.1.243:/home/namvu/dual-t3k/tt-metal  /home/namvu/dual-t3k/tt-metal  nfs  defaults,_netdev  0  0' | sudo tee -a /etc/fstab"
-ssh namvu@t3k-node-a 'sudo mount -a'
+**Persistent across reboots (already configured).** The server side survives reboots because
+`nfs-server` is `enabled` and the export line lives in `/etc/exports` on the launcher. The remote
+auto-mounts via an `/etc/fstab` line.
+
+> **Don't use a plain `defaults,_netdev` fstab line** — it was tried and it did NOT survive a
+> reboot. If the remote boots while the launcher's NFS export isn't ready yet (both boxes reboot,
+> or .247 comes up first), the one-shot mount attempt fails and systemd never retries, so the
+> folder shows up empty. Use a **systemd automount** line instead: it installs an `autofs`
+> placeholder at boot and mounts NFS lazily on first access, so server-vs-client boot ordering no
+> longer matters, and `nofail` keeps a slow/absent server from blocking boot.
+
+The line now in the remote's `/etc/fstab`:
 ```
+192.168.1.243:/home/namvu/dual-t3k/tt-metal  /home/namvu/dual-t3k/tt-metal  nfs  _netdev,x-systemd.automount,x-systemd.mount-timeout=30,nofail,retry=5,hard,timeo=600  0  0
+```
+To (re)install it and activate without a reboot:
+```bash
+ssh namvu@t3k-node-a 'grep -q "x-systemd.automount.*dual-t3k" /etc/fstab || \
+  echo "192.168.1.243:/home/namvu/dual-t3k/tt-metal  /home/namvu/dual-t3k/tt-metal  nfs  _netdev,x-systemd.automount,x-systemd.mount-timeout=30,nofail,retry=5,hard,timeo=600  0  0" | sudo tee -a /etc/fstab'
+ssh namvu@t3k-node-a 'sudo systemctl daemon-reload && sudo systemctl start "$(systemd-escape -p --suffix=automount /home/namvu/dual-t3k/tt-metal)"'
+# verify: the mountpoint auto-mounts the moment you touch it
+ssh namvu@t3k-node-a 'ls /home/namvu/dual-t3k/tt-metal/claude_job/dual_t3k_ops/scripts/ && findmnt /home/namvu/dual-t3k/tt-metal'
+```
+If it ever regresses again, `findmnt /home/namvu/dual-t3k/tt-metal` on the remote showing an
+`autofs` row means the automount is armed; a second `nfs4` row appears after first access.
 
 ---
 
@@ -346,3 +365,96 @@ Or the **web UI**: <http://192.168.1.243:8080> (served by the controller).
 >
 > A rendered diagram of this topology (real ASIC ids + cables) lives at
 > `claude_job/dual_t3k_ops/topology.html`.
+
+### 8b. Web UI graph shows only 4 chips / "1 tray, 2 devices" — configure an FSD
+
+**Symptom.** `ttfm query-physical-topology` and the CLI correctly report **16 ASICs / 2
+hosts**, but the web UI graph (default **Source = PSD (discovered)**) collapses each T3K to
+**one tray with 2 devices → 4 nodes, ~3 links**.
+
+**Why.** The UI draws one node per *physical slot* = `(hostName, trayId, asicLocation)`
+(`web/app.js` `slotKeyFor`). A T3K (LoudBox = 4× n300 PCIe cards) has no chassis "tray", so
+UMD discovery reports **`tray_id = 0` for all 4 boards**, and `asic_location` is only 0/1 (the
+two chips of one n300). So all 8 chips per host map to just **2 slots**. The per-board identity
+(tray 0..3) is only carried by a **Factory System Descriptor (FSD)**, which was not configured
+(controller logged `FSD aggregation unavailable … falling back to the PSD-only host set`; the
+UI's **FSD (factory)** source returned `Factory system descriptor not configured`). This is a
+UI limitation for tray-less systems, **not** a discovery/hardware fault — the data is all there.
+
+**Fix (done, reboot-persistent). Everything lives in THIS repo — no need to touch the
+`~/tt-fabric-manager` tree.** All the FM controller needs (its config + the FSD) is kept under
+`claude_job/dual_t3k_ops/fabric_manager/` and mounted straight into the container:
+
+```
+claude_job/dual_t3k_ops/
+├─ fabric_manager/
+│  ├─ controller.yaml                 # FM controller config (has the FSD search path)
+│  ├─ fsd/dual_t3k_fsd.textproto      # the generated FSD for THIS dual-T3K
+│  └─ apply.sh                        # recreate the controller to read the two above
+└─ scripts/gen_fsd.py                 # regenerates the FSD from a live PSD dump
+```
+
+The FM *agents* keep using their own `~/tt-fabric-manager/configs/cluster.yaml` (they only read
+`controller.listen_address`); that file is left untouched. Only the **controller** is pointed at
+this repo.
+
+**To (re)apply — one command on the launcher (t3k-node-b / .243):**
+```bash
+bash claude_job/dual_t3k_ops/fabric_manager/apply.sh
+```
+`apply.sh` recreates the `fabric-controller` container mounting `controller.yaml` →
+`/etc/fabric-manager/config.yaml` and `fsd/` → `/etc/fabric-manager/fsd`, waits for both agents
+to re-register, and prints the ASIC count (expect 16). It's **read-only / observability only** —
+does **not** touch the fabric, so no `moreh-lock` needed. `--restart unless-stopped` makes it
+survive reboots.
+
+**Then view it:** open <http://192.168.1.243:8080>, set the **Source** dropdown to **FSD
+(factory)** → 16 devices across 4 trays/host, all links. Tick **Validate** to diff the
+discovered (PSD) topology against this factory (FSD) view.
+
+**To regenerate the FSD** (only needed if the hardware/cabling changes — see the ⚠️ note below):
+```bash
+ttfm query-physical-topology > psd_dualt3k.json
+python3 claude_job/dual_t3k_ops/scripts/gen_fsd.py psd_dualt3k.json \
+  claude_job/dual_t3k_ops/fabric_manager/fsd/dual_t3k_fsd.textproto
+# added/edited *.textproto is re-read per query — no restart needed unless you edit controller.yaml
+```
+The generator assigns each n300 board (found via its loc0↔loc1 internal link) a distinct
+`tray_id` 1..4 and faithfully reproduces every eth channel + the 4 QSFP cross-host cables.
+
+Verify from the CLI (PSD stays collapsed by design; FSD is the full view):
+```bash
+curl -s 'http://192.168.1.243:8080/api/physical-topology?source=fsd' \
+  | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d["asicDescriptors"]),"ASICs")'
+# -> 16 ASICs
+```
+
+> **Notes.** The default **PSD** graph *still* shows 4 collapsed nodes — that's inherent to
+> tray-less T3K discovery; use the **FSD** source for the real 16-chip picture. The FSD's
+> synthesized ASIC ids only remap to real hardware `unique_id`s when the discovered slot
+> `(host, tray_id, asic_location)` matches — since discovery reports `tray_id=0`, the FSD nodes
+> keep synthetic ids and node tooltips omit the PCIe BDF (cosmetic only; connectivity is exact).
+
+> **⚠️ This FSD is specific to THIS dual-T3K cluster — regenerate it for any other topology.**
+> `dual_t3k_fsd.textproto` hard-codes exactly these two hosts (`t3k-node-a`, `t3k-node-b`), 4
+> n300 trays each, and the exact cross-host cabling — it is **not** a generic descriptor. If you
+> run a different system (a single T3K, 4 T3Ks, more/other hosts, non-n300 boards, or the cables
+> get re-plugged), this file no longer matches and the **FSD (factory)** view will be wrong or
+> the controller will report `No FSD covers all hosts`. For any other layout, **re-run the
+> generator against that system's live PSD** and drop the new `.textproto` into
+> `claude_job/dual_t3k_ops/fabric_manager/fsd/` (the controller loads *every* `*.textproto` in
+> that dir and auto-selects the one whose `hosts` match the discovered set, so you can keep
+> several side by side):
+> ```bash
+> ttfm query-physical-topology > psd_<name>.json
+> python3 claude_job/dual_t3k_ops/scripts/gen_fsd.py psd_<name>.json \
+>   claude_job/dual_t3k_ops/fabric_manager/fsd/<name>_fsd.textproto
+> # no controller restart needed for an added file — it's re-read per query;
+> # (restart only if you edit controller.yaml)
+> ```
+> The generator itself is topology-agnostic *for n300-based systems*: it reads hosts from
+> `host_to_rank`, finds each n300 board via its loc0↔loc1 internal link, and reproduces every
+> discovered eth channel + cross-host cable. It asserts on non-n300 layouts (4 loc0 chips/host,
+> one loc1 partner per board) — for Galaxy/Blackhole/other boards, adjust the pairing logic in
+> `gen_fsd.py` or author the FSD by hand (schema:
+> `tt-fabric-manager/.../factory_system_descriptor/schemas/factory_system_descriptor.proto`).

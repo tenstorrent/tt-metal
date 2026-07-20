@@ -17,10 +17,10 @@ running this script under tt-run:
 
 Launch (from the launcher box, repo root, venv active, env per prompt.md):
 
-    tt-run --tcp-interface ens18 \
-      --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto \
-      --hosts t3k-node-a,t3k-node-b \
-      python3 /home/namvu/dual-t3k/tt-metal/claude_job/tt_stack_walkthrough/scripts/stack_workload.py
+tt-run --tcp-interface ens18 \
+    --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto \
+    --hosts t3k-node-a,t3k-node-b \
+    python3 /home/namvu/dual-t3k/tt-metal/claude_job/tt_stack_walkthrough/scripts/stack_workload.py
 
 Verification model (multi-host!): every MPI rank runs this whole script, but each rank
 only physically owns its local 8 chips. There is no host-side float gather across hosts,
@@ -44,6 +44,9 @@ NCOL = 16  # mesh columns == chips along cluster_axis=1 of the (1,16) mesh
 # reduce_scatter re-round in bf16 (or sum in a different order) -> expect ~0.999x.
 PCC_EXACT = 1.0 - 1e-6
 PCC_MIN = float(os.environ.get("STACK_PCC_MIN", "0.99"))
+# Tolerances for the reported torch.allclose bonus check (bf16-appropriate). Override via env.
+ATOL_CHECK = float(os.environ.get("STACK_ATOL", "2e-2"))
+RTOL_CHECK = float(os.environ.get("STACK_RTOL", "2e-2"))
 
 
 # --- tiny standalone PCC (avoid pulling in repo test deps) -------------------
@@ -58,6 +61,26 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     if denom == 0:
         return 1.0
     return float((a @ b) / denom)
+
+
+def error_metrics(golden: torch.Tensor, out: torch.Tensor) -> dict:
+    """Full error picture for one (golden, out) pair (flattened, fp32):
+    pcc      Pearson correlation           — the shape/wiring check
+    mse      mean squared error            — mean((out - golden)^2)
+    atol     max ABSOLUTE error            — max|out - golden|            (the atol needed to pass allclose)
+    rtol     max RELATIVE error            — max(|out - golden| / |golden|) (the rtol needed)
+    allclose torch.allclose(out, golden, rtol=RTOL_CHECK, atol=ATOL_CHECK) — bonus bf16-tolerance bool
+    """
+    g = golden.flatten().to(torch.float32)
+    o = out.flatten().to(torch.float32)
+    diff = (o - g).abs()
+    return {
+        "pcc": pcc(g, o),
+        "mse": (diff * diff).mean().item(),
+        "atol": diff.max().item(),
+        "rtol": (diff / g.abs().clamp_min(1e-9)).max().item(),
+        "allclose": bool(torch.allclose(o, g, rtol=RTOL_CHECK, atol=ATOL_CHECK)),
+    }
 
 
 def local_coords_and_tensors(tt_tensor, mesh_device):
@@ -88,19 +111,19 @@ def full_tensor_to_cpu(tt_replicated):
 
 def check_full(golden_full, out_full, label, rank, threshold):
     """Compare a FULL (all_gather-replicated) tensor to its golden on rank 0. Raise on fail."""
-    p = pcc(golden_full, out_full)
-    ok = p >= threshold
+    m = error_metrics(golden_full, out_full)
+    ok = m["pcc"] >= threshold
     if rank == 0:
-        diff = (out_full.flatten().to(torch.float32) - golden_full.flatten().to(torch.float32)).abs()
-        rel_l2 = (diff.norm() / golden_full.flatten().to(torch.float32).norm().clamp_min(1e-12)).item()
         status = "PASS" if ok else "FAIL"
         print(
             f"[rank 0] {status:4s} {label:13s} full{tuple(out_full.shape)}: "
-            f"pcc={p:.6f} (>= {threshold:.6f})  rel_L2_err={rel_l2 * 100:.4f}%  max_abs={diff.max().item():.3e}",
+            f"pcc={m['pcc']:.6f} (>= {threshold:.6f})  mse={m['mse']:.3e}  "
+            f"atol(max_abs)={m['atol']:.3e}  rtol(max_rel)={m['rtol']:.3e}  "
+            f"allclose(rtol={RTOL_CHECK:g},atol={ATOL_CHECK:g})={m['allclose']}",
             flush=True,
         )
     if not ok:
-        raise AssertionError(f"[rank {rank}] {label} FAILED: pcc={p:.6f} < {threshold:.6f}")
+        raise AssertionError(f"[rank {rank}] {label} FAILED: pcc={m['pcc']:.6f} < {threshold:.6f}")
 
 
 def check_local_shards(tt_tensor, golden_for_index, label, rank, threshold):
@@ -111,20 +134,27 @@ def check_local_shards(tt_tensor, golden_for_index, label, rank, threshold):
         raise RuntimeError(f"{label}: no local device tensors")
     worst = 1.0
     worst_idx = locs[0][0]
+    goldens, outs = [], []
     for idx, dev_t in locs:
         g = golden_for_index(idx)
         p = pcc(g, dev_t)
         if p < worst:
             worst, worst_idx = p, idx
+        goldens.append(g.flatten().to(torch.float32))
+        outs.append(dev_t.flatten().to(torch.float32))
         if p < threshold:
             raise AssertionError(
                 f"[rank {rank}] {label} FAILED at chip index {idx}: pcc={p:.6f} < {threshold:.6f} "
                 f"(shard shape {tuple(dev_t.shape)} vs golden {tuple(g.shape)})"
             )
     if rank == 0:
+        # min_pcc is the worst single shard; mse/atol/rtol/allclose are over ALL local shards pooled.
+        m = error_metrics(torch.cat(goldens), torch.cat(outs))
         print(
             f"[rank 0] PASS {label:13s} {len(locs)} local shards, each{tuple(locs[0][1].shape)}: "
-            f"min_pcc={worst:.6f} (>= {threshold:.6f}) at chip {worst_idx}",
+            f"min_pcc={worst:.6f} (>= {threshold:.6f}) at chip {worst_idx}  mse={m['mse']:.3e}  "
+            f"atol(max_abs)={m['atol']:.3e}  rtol(max_rel)={m['rtol']:.3e}  "
+            f"allclose(rtol={RTOL_CHECK:g},atol={ATOL_CHECK:g})={m['allclose']}",
             flush=True,
         )
 
