@@ -963,6 +963,29 @@ reduce framing overhead, or reclaim the 0.6 GB/s via core-sticky + host-side spl
 absorb the extra raw bytes). Still TODO (Gap 2, for CPU efficiency + real-time, not BW): direct hugepage
 pointer (kills the read_sysmem ~1 µs/call spin) + flusher→MPMC→consumer restructure.
 
+**RAW-BULK reclaim (`PP_BULK_CORE`, 2026-07-19).** Now that the host has headroom, ship raw over-read from
+the device to get back the per-risc-framing cost. Reader bulk path = ONE streaming 2560-word NoC read into a
+`PP_BULK_CORE` frame [hdr 2w: core,rawn][NRISC meta: head_mod|run][pad][2560 RAW]; host demux dispatches on
+packet type and splits per-risc, taking only the valid `[head_mod,head_mod+run)` circular slice of each ring
+via a range `insert` (ignores over-read). Adaptive's MIXED stream (bulk + per-risc) demuxes correctly.
+RESULT: reader 5.3→4.4 cyc/word, reader→relay ~1.22→~1.5 GB/s, end-to-end ~1.26→~1.47 GB/s; BONUS the
+offline demux went 1.34→2.91 GB/s (range-insert vs per-word push). Lossless (all modes). Commit 31c15e25aa4.
+
+**REAL HOST PIPELINE (Gap 2, `--mpmc M`, 2026-07-19, commit 5e0e89cc78b).** Built in the required order:
+per-socket flush+demux → device records BEFORE the MPMC (sticky-src is in-order per stream, so demux MUST be
+on the flusher; records are self-contained → consumers stateless). 2 flush+demux threads (drain in-order,
+dispatch bulk/per-risc, decode + per-lane seq-verify → `Rec{lane,seq,ts,prog}`, batch-push to a BOUNDED MPMC)
+→ M consumers pop + emit (`--cwork N` simulates Tracy-emit cost). Old offline path kept (`--mpmc 0`). Two
+fixes it forced: (1) relay must publish SENT on WHOLE frames (copy the whole frame-aligned snapshot or
+nothing, never `min(avail,hspace)`) — the old partial copy published non-frame-aligned SENT and the streaming
+flusher misparsed a split bulk frame → 1.9M gaps under back-pressure (offline masked it by capture-then-parse);
+(2) authoritative shutdown via `wait_active_fw_returned`→`device_done`→ drain to `hsent==acked`, not a 500 ms
+quiescence timer (quit early under back-pressure → 73k short). RESULT (adaptive+dualrelay 8000mk, all LOSSLESS
+4.4M/4.4M, 0 gaps, 0 overflow): cwork 0 ~1.47 GB/s (reader-bound); cwork 300 (heavy) M=1 253M → M=4 74M
+(3.4×) → M=8 60M (4.2×). **The pipeline BACK-PRESSURES LOSSLESSLY (bounded MPMC) and scales with consumer
+count** — heavy higher stages stall the whole chain without dropping, and M is the lever. Remaining: real
+Tracy-context emit in the consumer (replace the cwork sink); direct hugepage pointer for the SENT poll.
+
 **Direct drain (`--direct`, NONCE bit 8).** ONE hart reads worker-L1 over NoC (coherent) and
 writes the single host ring DIRECTLY, injecting sticky-src inline — no LIM SPSC, no cross-hart
 handoff, no relay. UNCONDITIONALLY LOSSLESS: 550/550 lanes, 0 seq gaps at every rate (proddelay
