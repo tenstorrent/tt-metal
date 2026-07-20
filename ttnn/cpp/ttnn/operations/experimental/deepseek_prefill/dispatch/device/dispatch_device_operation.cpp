@@ -12,6 +12,9 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
+// per_token_cast_to_fp8 block-wise quantization: 128 elements share one fp32 scale.
+constexpr uint32_t numbers_per_scale_block = 128;
+
 void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
@@ -88,8 +91,8 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
             padding_config.logical_shape()[-1]);
     }
 
-    // fp8-scaled-input path: the input is fp8 and each token carries its per-128-block scales
-    // (ROW_MAJOR, last dim emb_dim/128). Those scales are copied into the metadata tail
+    // fp8-scaled-input path: the input is fp8 and each token carries its per-128-block (numbers_per_scale_block) scales
+    // (ROW_MAJOR, last dim emb_dim/numbers_per_scale_block). Those scales are copied into the metadata tail
     // (fields 3..metadata_len-1), so metadata_len must reserve exactly those fields. Only valid on
     // the fp8 row-major (byte-copy) path. The flag and the scales tensor must be supplied together.
     if (operation_attributes.fp8_scaled_input) {
@@ -97,35 +100,46 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
             tensor_args.scales_tensor.has_value(),
             "fp8_scaled_input requires a scales_tensor (per_token_cast_to_fp8 scales)");
         const auto& scales = tensor_args.scales_tensor.value();
+        // scales layout is ROW_MAJOR
         TT_FATAL(scales.layout() == tt::tt_metal::Layout::ROW_MAJOR, "scales tensor must be ROW_MAJOR layout");
+        // scales dtype is fp32 (TBD if other dtypes will be supported)
+        TT_FATAL(scales.dtype() == DataType::FLOAT32, "scales tensor must be FLOAT32, got {}", scales.dtype());
+        // scales is on the same device as the input
+        TT_FATAL(
+            scales.device() == tensor_args.input_tensor.device(),
+            "scales tensor must be on the same device as the input tensor");
+        // input is fp8 (FP8_E4M3) ROW_MAJOR
         TT_FATAL(
             tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                 tensor_args.input_tensor.dtype() == DataType::FP8_E4M3,
             "fp8_scaled_input requires a fp8 (FP8_E4M3) ROW_MAJOR input (the per_token_cast_to_fp8 "
             "compression path)");
         const uint32_t num_scales = scales.logical_shape()[-1];
+        // metadata_len reserves 3 routing fields + one word per scale
         TT_FATAL(
             operation_attributes.metadata_len == 3 + num_scales,
             "metadata_len ({}) must equal 3 routing fields + scales last dim ({}) = {}",
             operation_attributes.metadata_len,
             num_scales,
             3 + num_scales);
-        // Leading (token) dim must match the input so scales line up per token.
-        TT_FATAL(
-            scales.logical_shape()[-2] == tensor_args.input_tensor.logical_shape()[-2],
-            "scales token dim ({}) must match input token dim ({})",
-            scales.logical_shape()[-2],
-            tensor_args.input_tensor.logical_shape()[-2]);
-        // One fp32 scale per 128-block: emb_dim must be divisible by 128, else the scale tail would
-        // silently drop the remainder block (num_scales floor-divides emb_dim/128 on both sides).
+        // total scale rows match total input tokens (flattened over all leading dims, as the reader does)
         const uint32_t input_hidden = tensor_args.input_tensor.logical_shape()[-1];
+        const uint32_t input_tokens = tensor_args.input_tensor.logical_shape().volume() / input_hidden;
+        const uint32_t scale_rows = scales.logical_shape().volume() / num_scales;
         TT_FATAL(
-            input_hidden % 128 == 0 && num_scales == input_hidden / 128,
-            "fp8_scaled_input requires input hidden dim ({}) divisible by 128 with one fp32 scale per "
-            "128-block; got {} scale words (expected {})",
+            scale_rows == input_tokens,
+            "scales row count ({}) must match input token count ({})",
+            scale_rows,
+            input_tokens);
+        // input hidden divisible by the scale block size with one scale per block
+        TT_FATAL(
+            input_hidden % numbers_per_scale_block == 0 && num_scales == input_hidden / numbers_per_scale_block,
+            "fp8_scaled_input requires input hidden dim ({}) divisible by {} with one fp32 scale per "
+            "block; got {} scale words (expected {})",
             input_hidden,
+            numbers_per_scale_block,
             num_scales,
-            input_hidden / 128);
+            input_hidden / numbers_per_scale_block);
     } else {
         TT_FATAL(
             !tensor_args.scales_tensor.has_value(),
