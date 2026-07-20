@@ -9,7 +9,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
-from models.common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -109,19 +108,6 @@ def _int32_input_with_injected_value(input_shape, base_low, base_high, injected_
 )
 def test_int32_reduce_with_extreme_value_in_input(device, input_shape, dim, injected_value, op, base_range):
     base_low, base_high = base_range
-
-    # Blackhole mis-ranks INT32_MIN in the SFPU int32 reduce (issue #49803): it still compares in
-    # sign-magnitude around SFPSWAP, so INT32_MIN (0x80000000) reads as "-0" and ranks as 0. The
-    # Wormhole fix (#49085) added a two's-complement compare-and-swap but wasn't ported to Blackhole.
-    _INT32_MIN = torch.iinfo(torch.int32).min
-    if (
-        is_blackhole()
-        and injected_value == _INT32_MIN
-        and ((op == "min" and base_low < 0) or (op == "max" and dim == -1 and base_high < 0))
-    ):
-        pytest.xfail(
-            "Blackhole SFPU int32 reduce mis-ranks INT32_MIN (0x80000000) as sign-magnitude -0 (issue #49803)."
-        )
 
     torch_input = _int32_input_with_injected_value(input_shape, base_low, base_high, injected_value)
 
