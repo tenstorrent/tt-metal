@@ -48,10 +48,6 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     reference_model = model_args.reference_vision_attention()
     reference_model.eval()
-
-    hidden_size = model_args.vision_dim
-    n_heads = model_args.vision_attn_n_heads
-    head_dim = hidden_size // n_heads
     seq_len = model_args.vision_chunk_ntok
 
     tt_model = TtJanusProImageAttention(
