@@ -18,6 +18,7 @@ Config via env (set in .mcp.json):
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import signal
@@ -688,7 +689,53 @@ def _detect_partial_capture(profiles_dir) -> str | None:
     return None
 
 
+_PROFILE_CACHE_DIR = Path(tempfile.gettempdir()) / "perf_mcp_profile_cache"
+
+
+def _model_source_fingerprint() -> str:
+    h = hashlib.sha256()
+    try:
+        root = _MODEL_ROOT
+        files = sorted(list((root / "_stubs").glob("*.py")) + list((root / "tt").glob("*.py")))
+        if not files:
+            return ""
+        for f in files:
+            h.update(f.name.encode())
+            h.update(f.read_bytes())
+    except Exception:
+        return ""
+    return h.hexdigest()
+
+
+def _profile_cache_get(fp: str):
+    if not fp:
+        return None
+    p = _PROFILE_CACHE_DIR / (fp + ".json")
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return None
+
+
+def _profile_cache_put(fp: str, prof: dict) -> None:
+    if not fp:
+        return
+    try:
+        _PROFILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (_PROFILE_CACHE_DIR / (fp + ".json")).write_text(json.dumps(prof))
+    except Exception:
+        pass
+
+
 def _profile_once(cq=None) -> dict:
+    _cache_on = os.environ.get("PERF_MCP_NO_PROFILE_CACHE") != "1"
+    _fp = _model_source_fingerprint() if _cache_on else ""
+    if _fp:
+        _hit = _profile_cache_get(_fp)
+        if _hit is not None:
+            return _hit
     ctx = _Ctx()
     tmpdir = ctx.run.dir
     _saved_cq = os.environ.get("TT_PERF_NUM_CQ")
@@ -705,6 +752,8 @@ def _profile_once(cq=None) -> dict:
         if partial:
             prof["capture_partial"] = partial
         prof = _persist_artifacts(prof)
+        if _fp and not prof.get("capture_partial"):
+            _profile_cache_put(_fp, prof)
         return prof
     finally:
         if cq is not None:
