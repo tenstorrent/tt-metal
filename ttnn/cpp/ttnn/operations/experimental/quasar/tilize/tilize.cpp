@@ -53,11 +53,6 @@ ttnn::Tensor tilize(
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids,
     tt::tt_metal::Tile tile) {
-    if (tt::tt_metal::is_device_tensor(input_tensor)) {
-        TT_FATAL(
-            tile == tt::tt_metal::Tile{},
-            "ttnn::experimental::quasar::tilize: device tilize only supports the default tile in this PR");
-    }
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
     }
@@ -68,8 +63,11 @@ ttnn::Tensor tilize(
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;
 
-    uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / tt::constants::TILE_HEIGHT;
+    uint32_t input_tile_width = tile.get_width();
+    uint32_t input_tile_height = tile.get_height();
+
+    uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
+    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / input_tile_height;
 
     bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);

@@ -31,6 +31,7 @@ void bind_tilize(nb::module_& mod) {
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
             use_low_perf (bool, optional): Use a low performance version that uses less memory. USE ONLY IF ABSOLUTELY NEEDED IN MODELS. Defaults to `False`.
             sub_core_grids (CoreRangeSet, optional): Used to restrict tilize to a set of cores, Defaults to using the entire device
+            tile (tt.tt_metal.Tile, optional): Geometry of the tile to be tilized to. Defaults to the default tile.
 
         Returns:
             ttnn.Tensor: the output tensor.

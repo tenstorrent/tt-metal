@@ -44,7 +44,7 @@ ttnn::Tensor untilize(
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(
-        !tt::tt_metal::is_device_tensor(input_tensor) || input_tensor.tensor_spec().tile() == Tile{},
+        input_tensor.tensor_spec().tile() == Tile{},
         "ttnn::untilize: device untilize only supports the default tile in this PR");
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
                             input_tensor.dtype() == DataType::FLOAT32;
