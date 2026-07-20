@@ -169,8 +169,9 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
 
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):
-    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    logs_dir = _safe_logs_dir(workflow_outputs_dir, workflow_run_id)
 
+    assert logs_dir is not None, f"Invalid or unsafe workflow_run_id: {workflow_run_id}"
     assert logs_dir.exists(), f"Logs dir does not exist: {logs_dir}"
     assert logs_dir.is_dir(), f"Logs path is not a dir: {logs_dir}"
 
