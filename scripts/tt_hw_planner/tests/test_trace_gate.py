@@ -373,3 +373,54 @@ def test_record_trace_verdict_writes_section(tmp_path):
     assert "<!-- BEGIN trace-gate -->" in txt
     assert "verdict: **FAIL**" in txt
     assert "fix directive:" in txt
+
+
+def test_is_l1_overflow_detects_signature():
+    assert tg.is_l1_overflow("Circular buffer size 2MB grow to beyond max L1") is True
+    assert tg.is_l1_overflow("max l1 size of 1.5MB exceeded") is True
+    assert tg.is_l1_overflow("could not trace at all (path=None)") is False
+    assert tg.is_l1_overflow("trace region overflow") is False
+    assert tg.is_l1_overflow(None) is False
+
+
+def test_l1_overflow_reason_has_shrink_guidance():
+    r = tg.l1_overflow_reason()
+    assert "L1_OVERFLOW" in r and "in0_block_w" in r
+
+
+def test_build_fix_directive_l1_first():
+    res = {"verdict": "FAIL", "l1_overflow": True, "repin_violation": None, "glue_violations": []}
+    d = tg.build_fix_directive(res)
+    assert "Reduce the L1 footprint" in d
+
+
+def test_evaluate_l1_overflow_resets_and_flags(tmp_path, monkeypatch):
+    import scripts.tt_hw_planner.bringup_loop as bl
+
+    monkeypatch.setattr(
+        bl,
+        "_stub_has_graduated_any",
+        lambda p: p.with_suffix(".py.last_good_native").is_file() or p.with_suffix(".py.last_good_sharded").is_file(),
+    )
+    monkeypatch.setattr(bl, "_safe_id", lambda n: n)
+    reset_calls = {"n": 0}
+    monkeypatch.setattr(tg, "reclaim_mesh", lambda: reset_calls.__setitem__("n", reset_calls["n"] + 1) or True)
+    monkeypatch.setattr(
+        tg,
+        "run_fresh_trace_capture",
+        lambda d, timeout_s=900: (
+            {"trace_1cq": False, "trace_2cq": False},
+            "invalid circular buffer grow to beyond max L1",
+        ),
+    )
+    demo = _make_demo(
+        tmp_path,
+        ["a"],
+        {"a": "sharded"},
+        "class P:\n    def _forward_from_hidden(self, h):\n        return ttnn.matmul(h, self.w)\n",
+    )
+    res = tg.evaluate_trace_gate(demo, fresh=True)
+    assert res["l1_overflow"] is True
+    assert reset_calls["n"] == 1
+    assert res["verdict"] == "FAIL"
+    assert any("L1_OVERFLOW" in r for r in res["reasons"])

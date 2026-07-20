@@ -255,6 +255,9 @@ def evaluate_trace_gate(demo_dir, trace_caps=None, allow_no_trace=False, overflo
         glue = glue_trace_violations(src)
         repin = decode_repin_violation(src)
     runtime_glue = glue_from_runtime(demo_dir)
+    l1_overflow = is_l1_overflow(capture_detail)
+    if l1_overflow:
+        reclaim_mesh()
     if verdict == "FAIL":
         reasons.append("G6 trace-gate: " + reason)
         for g in glue:
@@ -266,6 +269,8 @@ def evaluate_trace_gate(demo_dir, trace_caps=None, allow_no_trace=False, overflo
                 "G6 trace-gate: %d runtime glue op(s) outside graduated modules: %s"
                 % (len(runtime_glue), ", ".join(runtime_glue[:6]))
             )
+        if l1_overflow:
+            reasons.append("G6 trace-gate: " + l1_overflow_reason())
     return {
         "verdict": verdict,
         "reason": reason,
@@ -277,6 +282,7 @@ def evaluate_trace_gate(demo_dir, trace_caps=None, allow_no_trace=False, overflo
         "trace_caps": trace_caps,
         "capture_detail": capture_detail,
         "runtime_glue": runtime_glue,
+        "l1_overflow": l1_overflow,
     }
 
 
@@ -347,10 +353,36 @@ def glue_from_runtime(demo_dir):
 _OVERFLOW_MARKERS = ("trace region", "trace_region", "overflow", "out of memory", "oom", "not enough space")
 _DEFAULT_TRACE_REGION = 23887872
 
+_L1_MARKERS_A = ("circular buffer", "max l1", "l1 size")
+_L1_MARKERS_B = ("beyond max l1", "grow to", "l1 size of")
+
 
 def _is_overflow(detail):
     d = (detail or "").lower()
     return any(m in d for m in _OVERFLOW_MARKERS)
+
+
+def is_l1_overflow(detail):
+    d = (detail or "").lower()
+    return any(a in d for a in _L1_MARKERS_A) and any(b in d for b in _L1_MARKERS_B)
+
+
+def reclaim_mesh():
+    try:
+        import subprocess
+
+        subprocess.run(["tt-smi", "-r"], capture_output=True, text=True, timeout=420)
+        return True
+    except Exception:
+        return False
+
+
+def l1_overflow_reason():
+    return (
+        "L1_OVERFLOW: trace capture's circular buffers exceed the per-core L1 budget and crashed the run; "
+        "the mesh was reset. Reduce the L1 footprint (smaller in0_block_w / per_core_N, or spread the op "
+        "over more cores) and retry -- do NOT keep this config."
+    )
 
 
 def overflow_fix_loop(demo_dir, capture_fn=None, max_rounds=3, base_region=_DEFAULT_TRACE_REGION):
@@ -377,6 +409,11 @@ def build_fix_directive(result):
     if not result or result.get("verdict") != "FAIL":
         return None
     parts = []
+    if result.get("l1_overflow"):
+        parts.append(
+            "Reduce the L1 footprint (smaller in0_block_w / per_core_N, or spread the op over more cores) "
+            "so the circular buffers fit per-core L1 with trace+2CQ headroom."
+        )
     if result.get("repin_violation"):
         parts.append(
             "Add a KV-cache single-token decode_step and remove the O(capacity) host re-pin "

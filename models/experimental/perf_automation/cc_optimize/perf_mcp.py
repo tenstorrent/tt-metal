@@ -130,6 +130,45 @@ _L1_OVERFLOW_MSG = (
     "or spread the matmul over more cores) and retry — do NOT keep this config."
 )
 
+_DRAM_TRACE_SIG_A = ("trace region", "trace_region", "trace buffer", "trace_buffer")
+_DRAM_TRACE_SIG_B = ("full", "exceed", "not enough", "out of space", "too small", "ran out", "grow the trace")
+_TRACE_REGION_DEFAULT = 23887872
+_TRACE_REGION_MAX = 512 * 1024 * 1024
+
+
+def _dram_trace_sig(text) -> bool:
+    s = (str(text) or "").lower()
+    return any(a in s for a in _DRAM_TRACE_SIG_A) and any(b in s for b in _DRAM_TRACE_SIG_B)
+
+
+def _is_dram_trace_overflow(msg) -> bool:
+    if _dram_trace_sig(msg):
+        return True
+    import re as _re3
+
+    for lp in _re3.findall(r"(/\S+run\d+_tracy\.log)", str(msg) or ""):
+        try:
+            if _dram_trace_sig(Path(lp).read_text(errors="ignore")):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _grow_trace_region() -> int:
+    cur = int(os.environ.get("TT_PERF_TRACE_REGION", str(_TRACE_REGION_DEFAULT)) or str(_TRACE_REGION_DEFAULT))
+    new = min(cur * 2, _TRACE_REGION_MAX)
+    os.environ["TT_PERF_TRACE_REGION"] = str(new)
+    return new
+
+
+def _dram_overflow_msg(new_region: int) -> str:
+    return (
+        "DRAM_TRACE_OVERFLOW: the captured trace command stream exceeded the reserved trace region; grew "
+        "TT_PERF_TRACE_REGION to %d bytes and reset the mesh — retry (auto-healed, not a config to abandon; "
+        "if it recurs at the %d-byte cap the trace genuinely does not fit)." % (new_region, _TRACE_REGION_MAX)
+    )
+
 
 # ---------------------------------------------------------------------------
 # DETERMINISTIC TERMINATION GATE — the "no reasoning off-ramp" guard
@@ -711,6 +750,10 @@ def profile_model() -> dict:
         prof = _profile_once()
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
+        if _is_dram_trace_overflow(_msg):
+            _new = _grow_trace_region()
+            _reclaim_mesh("profile_model:dram_trace")
+            return {"ok": False, "error": _dram_overflow_msg(_new)}
         if _is_l1_overflow(_msg):
             _reclaim_mesh("profile_model")
             return {"ok": False, "error": _L1_OVERFLOW_MSG}
@@ -768,6 +811,11 @@ def measure_candidate() -> dict:
         prof = _profile_once()
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
+        if _is_dram_trace_overflow(_msg):
+            _new = _grow_trace_region()
+            _reclaim_mesh("measure_candidate:dram_trace")
+            _autorecord_wedge(_dram_overflow_msg(_new))
+            return {"verdict": "REJECTED", "reason": _dram_overflow_msg(_new)}
         if _is_l1_overflow(_msg):
             _reclaim_mesh("measure_candidate")
             _autorecord_wedge(_L1_OVERFLOW_MSG)
