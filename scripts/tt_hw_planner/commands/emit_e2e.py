@@ -1017,6 +1017,12 @@ def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
 
 
 def cmd_emit_e2e(args) -> int:
+    from .optimize import invalid_trace_flag_error
+
+    _tf = invalid_trace_flag_error()
+    if _tf:
+        print("error: " + _tf)
+        return 1
     return _emit_e2e_phase_a(args)
 
 

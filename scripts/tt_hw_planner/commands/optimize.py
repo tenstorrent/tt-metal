@@ -359,7 +359,21 @@ def _out_of_disk_msg(low):
     )
 
 
+def invalid_trace_flag_error():
+    v = os.environ.get("TT_PERF_TRACE")
+    if v is not None and v not in ("0", "1"):
+        return (
+            "TT_PERF_TRACE=%r is invalid: it is a trace on/off flag (0=eager, 1=trace+2CQ), NOT a "
+            "command-queue count. Set it to 0 or 1; control command queues via TT_PERF_NUM_CQ." % v
+        )
+    return None
+
+
 def cmd_optimize(args) -> int:
+    _tf = invalid_trace_flag_error()
+    if _tf:
+        print("error: " + _tf)
+        return 1
     if os.environ.get("PERF_MCP_SUPERVISED") != "1":
         _sweep_stale_perf_mcp()
     _ok, _low, _cul = _disk_gate()
