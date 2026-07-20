@@ -180,6 +180,7 @@ template <
     bool split_reader,
     bool split_reader_cb_shared,
     bool activation_reuse,
+    bool packs_in_place,
     uint32_t in0_block_w_,
     uint32_t in0_cb_id_,
     uint32_t in0_pretilize_cb_id_,
@@ -231,10 +232,17 @@ struct ConvTilizePreKBlock {
                     tilize_in<in0_block_w_, in0_cb_second_reader_id_, tilized_in0_cb_id_, false, true>(
                         in0_num_subblocks_read_last_);
                 }
-                // Matmul-state restore is now the helper's job: matmul_block is invoked with
-                // InitMode::ShortAfterPreKBlock, so it reconfigs srcA/srcB and re-issues
-                // matmul_block_init itself after this functor returns. This functor only
-                // tilizes (plus the relu / packer-l1_acc config above, which it owns).
+                // Matmul-state INPUT reconfig, mirroring main's hand-written loop VERBATIM
+                // (main conv_bmm_tilize.cpp: reconfig_data_format(in0_pretilize_cb_id, in1_cb_id,
+                // in0_pretilize_cb_id, in0_cb_id) — block-sharded mm_in0 == in0_cb_id). This is the
+                // 4-arg CONDITIONAL form: it SKIPS the srcA/srcB cfg-reg writes (UNPACK+MATH) when the
+                // operand format is unchanged (all-bf16 convs) and fires only when it differs (e.g.
+                // bfp8 weights genuinely change srcA between tilize and matmul). matmul_block is
+                // invoked with DataFormatReconfig::None, so it issues ONLY matmul_block_init; this
+                // reconfig replaces the helper's former UNCONDITIONAL 2-arg input reconfig (which
+                // reprogrammed srcB every call even when unchanged). Placed inside the tilize gate so
+                // block-sharded convs reconfig once per tilize, exactly like main (not every K-block).
+                reconfig_data_format(in0_pretilize_cb_id_, in1_cb_id_, in0_pretilize_cb_id_, in0_cb_id_);
             }
         } else {
             // Height-sharded: tilize every K-block.
@@ -278,8 +286,24 @@ struct ConvTilizePreKBlock {
                 }
             }
 
-            // Matmul-state restore is now the helper's job (InitMode::ShortAfterPreKBlock) —
-            // see the block-sharded branch above. This functor only tilizes.
+            // Matmul-state INPUT reconfig, mirroring main's hand-written loop VERBATIM
+            // (main: reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id) — for
+            // height-sharded mm_in0 == tilized_in0_cb_id). 4-arg CONDITIONAL: fires srcA only when
+            // the format differs (bfp8 weights), skips otherwise. See the block-sharded branch above.
+            reconfig_data_format(in0_cb_id_, in1_cb_id_, in0_cb_id_, tilized_in0_cb_id_);
+        }
+
+        // Matmul-side PACK reconfig, mirroring main's hand-written loop (main: `if constexpr
+        // (packer_l1_acc) pack_reconfig_data_format(curr_matmul_out_cb)`) — runs EVERY K-block and is
+        // gated on packer_l1_acc. For packer_l1_acc == false convs (e.g. resnet50 1x1 downsamples with
+        // in0_num_blocks_w == 1, where determine_packer_l1_acc() folds it to false) main issues NO pack
+        // reconfig, so neither do we — this removes the helper's former reconfig-gated pack reconfig
+        // that cost a redundant PACK cfg-reg write. Target is matmul_partials_cb (== the helper's
+        // accum_cb_id); the helper's own last-block reconfig swaps to out_cb on the final K-block.
+        // !packs_in_place: the TileRowMajor in-place path already issues its own per-K-block pack
+        // reconfig inside the helper (matmul_block_helpers.inl), so skip here to avoid double-programming.
+        if constexpr (packer_l1_acc && !packs_in_place) {
+            pack_reconfig_data_format(matmul_partials_cb_);
         }
     }
 };
@@ -531,6 +555,7 @@ void kernel_main() {
         split_reader,
         split_reader_cb_shared,
         activation_reuse,
+        packs_in_place,
         in0_block_w,
         in0_cb_id,
         in0_pretilize_cb_id,
@@ -614,13 +639,16 @@ void kernel_main() {
 
             // init_mode=ShortAfterPreKBlock: the kernel-entry compute_kernel_hw_startup +
             // matmul_block_init at the top of kernel_main cover initial state; thereafter the helper
-            // itself reconfigs srcA/srcB and re-issues matmul_block_init after each per-K-block tilize
-            // (ConvTilizePreKBlock),
-            // so the functor no longer carries the matmul-state restore. The downstream bias-add and
-            // untilize phases reconfig data formats, and the helper's per-iter restore re-establishes
-            // matmul state on the next call. reconfig stays at its InputAndOutput default — the
-            // per-K-block srcA/srcB reconfig matches the old functor restore, and the per-K-block
-            // pack reconfig to interm is the same one the pre-loop path used to issue once.
+            // re-issues ONLY matmul_block_init after each per-K-block tilize (ConvTilizePreKBlock).
+            // reconfig=None: the DATA-FORMAT reconfigs (srcA/srcB input + matmul-side pack) are issued
+            // by the ConvTilizePreKBlock functor itself, mirroring main's hand-written loop VERBATIM —
+            // a 4-arg CONDITIONAL input reconfig (skips srcA/srcB cfg writes when the format is
+            // unchanged; fires only for e.g. bfp8 weights) and a packer_l1_acc-gated pack reconfig
+            // (none on packer_l1_acc==false convs). This matches main's per-K-block reconfig gating
+            // exactly; the helper's former unconditional 2-arg input reconfig + reconfig-gated pack
+            // reconfig had over-programmed all three TRISCs (UNPACK+MATH srcB, PACK) on the all-bf16 /
+            // packer_l1_acc==false convs main skips, a uniform per-call tax. matmul_block_init is
+            // independent of the reconfig gate, so it still fires under None (matmul_block_helpers.inl).
             //
             // matmul_partials_cb is a DEDICATED one-block region (the factory dropped the out_cb
             // alias + sized it to one output block). The helper's FIFO reserves/pushes/pops in
@@ -646,7 +674,7 @@ void kernel_main() {
                 compute_kernel_lib::NoIn0Source,
                 compute_kernel_lib::NoIn1BaseOffset,
                 compute_kernel_lib::NoneActivation,
-                compute_kernel_lib::matmul_config::DataFormatReconfig::InputAndOutput,
+                compute_kernel_lib::matmul_config::DataFormatReconfig::None,
                 // Compile-time block-shape opt-in: fold the helper's loop bounds / derived counts
                 // to immediates (avoids the runtime-MatmulBlockShape pack-thread tax; mirrors the
                 // MatmulBlockShape::of(...) args below). Everything here is a compile-time constant.
