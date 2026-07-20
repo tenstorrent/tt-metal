@@ -38,22 +38,28 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-def print_full_result_tile(res, data_format, tile_width=32):
-    """Dump the entire result buffer read back from L1 (not just the narrow slice),
-    so we can see whether/where any writes actually landed."""
-    t = torch.tensor(res, dtype=format_dict[data_format])
-    nz = (t != 0).nonzero().flatten().tolist()
-    print(f"\n[RV-narrow] result len={len(res)}  nonzero_count={len(nz)}")
+def print_full_tile(data, data_format, label="result", tile_width=32):
+    """Dump a full buffer as tile_width-wide rows (same layout for result and golden),
+    so the device output and the golden can be compared line-by-line."""
+    t = (
+        data
+        if isinstance(data, torch.Tensor)
+        else torch.tensor(data, dtype=format_dict[data_format])
+    )
+    flat = t.flatten()
+    n = flat.numel()
+    nz = (flat != 0).nonzero().flatten().tolist()
+    print(f"\n[RV-narrow] {label} len={n}  nonzero_count={len(nz)}")
     if nz:
-        print(f"[RV-narrow] first 64 nonzero indices: {nz[:64]}")
-        print(f"[RV-narrow] nonzero index range: [{nz[0]} .. {nz[-1]}]")
-    if len(res) % tile_width == 0:
-        rows = t.reshape(-1, tile_width)
+        print(f"[RV-narrow] {label} first 64 nonzero indices: {nz[:64]}")
+        print(f"[RV-narrow] {label} nonzero index range: [{nz[0]} .. {nz[-1]}]")
+    if n % tile_width == 0:
+        rows = flat.reshape(-1, tile_width)
         for r in range(rows.shape[0]):
             vals = " ".join(f"{v:5.2f}" for v in rows[r].tolist())
-            print(f"[RV-narrow] row {r:2d}: {vals}")
+            print(f"[RV-narrow] {label} row {r:2d}: {vals}")
     else:
-        print(f"[RV-narrow] flat: {t.tolist()}")
+        print(f"[RV-narrow] {label} flat: {flat.tolist()}")
 
 
 # Must match ROW_NUM_DATUMS in the C++ kernel.
@@ -134,9 +140,14 @@ def test_pack_untilize_narrow_rv_quasar(formats):
 
     res_from_L1 = configuration.run().result
 
-    # Diagnostic: dump the WHOLE result buffer (not just the narrow slice) to see
-    # whether any RV_PACR write landed anywhere, and at what offset.
-    print_full_result_tile(res_from_L1, formats.output_format, tile_width=TILE_WIDTH)
+    # Diagnostic: dump the full untilized golden and the whole result buffer the SAME
+    # way (tile_width-wide rows), so they can be compared line-by-line.
+    print_full_tile(
+        full_untilized, formats.output_format, label="golden", tile_width=TILE_WIDTH
+    )
+    print_full_tile(
+        res_from_L1, formats.output_format, label="result", tile_width=TILE_WIDTH
+    )
 
     assert (
         len(res_from_L1) >= narrow_len
