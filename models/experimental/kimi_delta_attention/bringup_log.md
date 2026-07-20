@@ -133,6 +133,17 @@ device; only the decay broadcast shape changes. No new *recurrent* ttnn op neede
 (`-exp(A_log)*softplus`), β-sigmoid, L2-norm, short-conv, gated-RMSNorm all already exist as ttnn
 ops in the reference module. First feasibility PCC to be recorded in Progress (Phase 6).
 
+**Short-conv on device — native `ttnn.conv1d` vs FIR (resolved).** First tried native
+`ttnn.conv1d` (Conv1dConfig fused SiLU) mirroring the GDN reference: it **hung the device NOCs at
+T=1** (degenerate `input_length=4`; the reference routes decode through FIR, not native conv1d) and
+gave **PCC 0.0 at T≥2** (output layout/format mismatch). More decisively, native conv1d **overflows
+L1 at D>2048**, and the real KDA `key_dim = num_heads*head_dim = 32*128 = 4096` — so native conv1d
+could not run the production layer regardless. Switched to the reference's **FIR path**
+(`_causal_conv1d_fir`): left-pad by K−1, K shifted multiply/`addcmul` taps, then SiLU — fp32, any T,
+any D, no L1-scratch. Result: `conv1d_op` PCC 1.0; layer PCC byte-identical to the host conv.
+*Lesson: "the existing op" was FIR, not `ttnn.conv1d`; verify an op's shape/dim envelope against the
+**target model dims** before adopting it.*
+
 **Missing/blocked ops (Phase 7 inputs):**
 - Diagonal-gate **chunked** delta-rule kernel. The fused C++ op `ttnn.transformer.chunk_gated_delta_rule`
   assumes scalar per-head gate (cumsum baked in). A KDA chunked prefill needs either a new C++ kernel
@@ -145,7 +156,8 @@ ops in the reference module. First feasibility PCC to be recorded in Progress (P
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
-- [ ] Phase 7: replace any CPU fallback (chunked prefill) with on-device ops; re-validate PCC.
+- [x] ~~short-conv on device~~ DONE — FIR multiply-accumulate (see Learnings; native `ttnn.conv1d`
+      rejected: overflows L1 at D>2048 = the real KDA key_dim=4096, and hung at T=1).
 - [ ] Optional: pull a single KDA layer's real weights from HF to sanity-check real-weight numerics.
 - [ ] Later phases: hybrid 3:1 block wiring, MoE, full model, perf.
 
@@ -167,6 +179,9 @@ ops in the reference module. First feasibility PCC to be recorded in Progress (P
 - **2026-07-20 16:24Z** — Phase 5 ttnn ops + end-to-end layer written; **Phase 6 PASS** on
   LoudBox (device 0, Blackhole p150b). Full suite **12/12 green**. Diagonal-gate recurrence
   correct on device. See validation ledger below.
+- **2026-07-20 17:48Z** — Ported short-conv off the CPU fallback to **on-device FIR** (after native
+  `ttnn.conv1d` hung at T=1 and can't handle D=4096 — see Learnings). Forward path now **fully on
+  device, no CPU fallback**. Full suite **16/16 green**.
 
 ### Phase 5/6 — device validation ledger (LoudBox, 1× Blackhole p150b, fp32)
 
@@ -176,18 +191,21 @@ ops in the reference module. First feasibility PCC to be recorded in Progress (P
 | `recurrent_kda_op` | T∈{1,4,16}, HV=8, K=V=128 (prod dims) | 0.99999966–0.99999978 | ≥0.98 | ✅ |
 | `kda_gate_op` | HV=8, K=64 | pass | ≥0.99 | ✅ |
 | `l2norm_op` | K=128 | 0.99999258 | ≥0.99 | ✅ |
-| `kda_layer` (end-to-end) | T∈{1,8,16}, conv on | 0.99997689–0.99998241 | ≥0.98 | ✅ |
+| `conv1d_op` (FIR short-conv) | T∈{1,2,8,16}, D=256 | 0.9999999997–1.0 | ≥0.98 | ✅ |
+| `kda_layer` (end-to-end) | T∈{1,8,16}, conv on device | 0.99997689–0.99998241 | ≥0.98 | ✅ |
 | `kda_layer` (end-to-end) | T=8, conv off | 0.99998557 | ≥0.98 | ✅ |
 
-**Command:** `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_kda_ttnn.py` → `12 passed`, `SAFE_PYTEST_RESULT: PASS`.
+**Command:** `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_kda_ttnn.py` → `16 passed`, `SAFE_PYTEST_RESULT: PASS`.
 
-**VALIDATED:** diagonal-gate KDA recurrence (op), KDA gate op, L2-norm op, and the full KDA layer
-(projections + gate + recurrence + gated-RMSNorm + o_proj on device), single Blackhole, fp32,
-random-init weights, PCC vs torch reference which is itself bit-exact vs the FLA author reference.
+**VALIDATED:** diagonal-gate KDA recurrence (op), KDA gate op, L2-norm op, depthwise causal
+short-conv+SiLU (FIR, on device), and the full KDA layer **entirely on device — no CPU fallback in
+the forward path** (projections + short-conv + gate + recurrence + gated-RMSNorm + o_proj), single
+Blackhole, fp32, random-init weights, PCC vs torch reference which is itself bit-exact vs the FLA
+author reference. The on-device FIR conv is numerically identical to the host conv (layer PCC
+byte-identical before/after the port).
 
 **NOT VALIDATED (out of scope / Phase 7+):** chunked-prefill *on device* (torch `naive_chunk_kda`
-covers prefill correctness on CPU; device chunk kernel is a Phase 7 requirement); short-conv on
-device (CPU fallback used — allowed at this gate, logged for Phase 7); bf16 numerics (fp32 only);
+covers prefill correctness on CPU; device chunk kernel is a Phase 7 requirement); bf16 numerics (fp32 only);
 multi-device / TP mesh orientations (single-device layer bringup); real-weight numerics (random-init);
 GVA HV>H on device (config uses HV==H; torch ref validates GVA). Determinism across runs and
 performance are not part of Phases 0–6.

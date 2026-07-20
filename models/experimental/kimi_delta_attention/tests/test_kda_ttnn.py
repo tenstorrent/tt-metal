@@ -79,6 +79,25 @@ def test_l2norm_op(device):
     assert ok, f"PCC too low: {pcc}"
 
 
+@pytest.mark.parametrize("T", [1, 2, 8, 16])
+def test_conv1d_op(device, T):
+    """Isolate the on-device depthwise causal conv1d+SiLU (FIR) vs torch reference."""
+    from models.experimental.kimi_delta_attention.torch_functional.kda_layer import causal_short_conv
+
+    D, kernel = 256, 4
+    x = torch.randn(1, T, D)
+    w = torch.randn(D, kernel) * (kernel ** -0.5)
+    y_ref = causal_short_conv(x, w)
+
+    x_t = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    taps = tt.conv_weight_taps(w, device)
+    y_tt = ttnn.to_torch(tt.causal_conv1d_silu_ttnn(x_t, taps, kernel, device))
+
+    ok, pcc = comp_pcc(y_ref, y_tt, pcc=0.98)
+    logger.info(f"[conv1d_op] T={T} PCC={pcc}")
+    assert ok, f"PCC too low: {pcc}"
+
+
 @pytest.mark.parametrize("T,use_conv", [(1, True), (8, True), (16, True), (8, False)])
 def test_kda_layer(device, T, use_conv):
     """End-to-end ttnn KDA layer vs torch reference layer (shared weights)."""

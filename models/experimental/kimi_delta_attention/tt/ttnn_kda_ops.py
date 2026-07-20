@@ -44,8 +44,37 @@ def kda_gate_ttnn(g_pre, A_log, dt_bias=None, lower_bound=None):
     return ttnn.multiply(ttnn.sigmoid(ttnn.multiply(g, expA)), lower_bound)
 
 
-def _bh_last(x, name):
-    return x.shape[-1]
+def conv_weight_taps(weight_dhwk, device):
+    """Pre-slice a depthwise conv weight [D, kernel] into K device taps [1,1,D] (fp32, TILE)."""
+    D, kernel = weight_dhwk.shape
+    import torch
+
+    return [
+        ttnn.from_torch(weight_dhwk[:, k].reshape(1, 1, D).contiguous().to(torch.float32),
+                        dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        for k in range(kernel)
+    ]
+
+
+def causal_conv1d_silu_ttnn(x, weight_taps, kernel_size, device):
+    """Depthwise causal conv1d + SiLU, on device, via K shifted multiply-accumulate slices (FIR).
+
+    Mirrors the in-tree GDN reference (ttnn_gated_deltanet.py::_causal_conv1d_fir) — the path the
+    model uses for D>2048 (KDA's real key_dim=4096). Works for any T and D; no L1-scratch or
+    native-conv1d shape constraints. x: [B,T,D] (TILE, fp32); weight_taps: K tensors [1,1,D].
+    Returns [B,T,D] fp32.
+    """
+    B, T, D = x.shape
+    pad = ttnn.zeros([B, kernel_size - 1, D], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    x_padded = ttnn.concat([pad, x], dim=1)  # [B, T+K-1, D]
+
+    out = None
+    for k in range(kernel_size):
+        x_slice = x_padded[:, k : k + T]
+        if k != 0:  # only k=0 slice is tile-aligned; re-tilize the rest
+            x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
+        out = ttnn.multiply(x_slice, weight_taps[k]) if out is None else ttnn.addcmul(out, x_slice, weight_taps[k])
+    return ttnn.silu(out)
 
 
 def recurrent_kda_ttnn(q, k, v, g, beta, scale=None, initial_state=None, device=None):

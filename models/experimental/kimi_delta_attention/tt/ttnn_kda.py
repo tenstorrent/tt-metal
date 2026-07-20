@@ -4,11 +4,9 @@
 # KDA (Kimi Delta Attention) ttnn layer — end-to-end, layered on the recurrent KDA op.
 # Mirrors torch_functional/kda_layer.py::KimiDeltaAttentionRef param-for-param.
 #
-# On device: q/k/v/f/b/g projections, L2-norm, KDA gate, diagonal-gate recurrence, gated-RMSNorm,
-#            output projection.
-# CPU fallback (allowed at the Phase-6 gate; logged for Phase 7): the depthwise causal short-conv
-#            + SiLU. The in-tree GDN reference (ttnn_gated_deltanet.py causal_conv1d_ttnn) shows the
-#            on-device port; deferred so Phase 6 proves the *algorithm*.
+# Fully on device: q/k/v/f/b/g projections, depthwise causal short-conv + SiLU (FIR),
+#            L2-norm, KDA gate, diagonal-gate recurrence, gated-RMSNorm, output projection.
+# No CPU fallback in the forward path.
 
 from __future__ import annotations
 
@@ -16,8 +14,7 @@ import torch
 import ttnn
 from einops import rearrange
 
-from ..torch_functional.kda_layer import causal_short_conv
-from .ttnn_kda_ops import kda_gate_ttnn, l2norm_ttnn, recurrent_kda_ttnn
+from .ttnn_kda_ops import causal_conv1d_silu_ttnn, conv_weight_taps, kda_gate_ttnn, l2norm_ttnn, recurrent_kda_ttnn
 
 _MM = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -65,11 +62,11 @@ class TtKimiDeltaAttention:
         self.A_log = up(sd["A_log"].reshape(self.HV, 1))
         self.dt_bias = up(sd["dt_bias"].reshape(self.HV, self.K))
         self.o_norm_w = up(sd["o_norm_weight"].reshape(1, 1, 1, self.V))
-        # conv weights kept on host (CPU-fallback conv)
+        # depthwise conv weights -> K device taps [1,1,D] each (FIR conv)
         if self.use_short_conv:
-            self.q_conv = sd["q_conv"]
-            self.k_conv = sd["k_conv"]
-            self.v_conv = sd["v_conv"]
+            self.q_taps = conv_weight_taps(sd["q_conv"], device)
+            self.k_taps = conv_weight_taps(sd["k_conv"], device)
+            self.v_taps = conv_weight_taps(sd["v_conv"], device)
 
     def _proj(self, x, w):
         return ttnn.linear(x, w, compute_kernel_config=_MM)
@@ -82,11 +79,11 @@ class TtKimiDeltaAttention:
         k = self._proj(x, self.w_k)
         v = self._proj(x, self.w_v)
 
-        # --- CPU-fallback short conv + SiLU (Phase 7: port to ttnn.conv1d) ---
+        # --- depthwise causal short conv + fused SiLU, on device (ttnn.conv1d) ---
         if self.use_short_conv:
-            q = ttnn.from_torch(causal_short_conv(ttnn.to_torch(q), self.q_conv), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
-            k = ttnn.from_torch(causal_short_conv(ttnn.to_torch(k), self.k_conv), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
-            v = ttnn.from_torch(causal_short_conv(ttnn.to_torch(v), self.v_conv), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
+            q = causal_conv1d_silu_ttnn(q, self.q_taps, self.conv_size, self.device)
+            k = causal_conv1d_silu_ttnn(k, self.k_taps, self.conv_size, self.device)
+            v = causal_conv1d_silu_ttnn(v, self.v_taps, self.conv_size, self.device)
         else:
             q, k, v = ttnn.silu(q), ttnn.silu(k), ttnn.silu(v)
 
