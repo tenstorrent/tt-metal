@@ -17,12 +17,71 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Safe descriptor path I/O (OWASP path-traversal guidance)
+# ---------------------------------------------------------------------------
+
+# Absolute CLI paths must resolve under one of these roots (plus cwd, the
+# tt-metal checkout that contains this script, and tempfile.gettempdir()).
+# Extend at runtime with EXABOX_DESCRIPTOR_ALLOWED_ROOTS (os.pathsep-separated).
+_DEFAULT_DESCRIPTOR_ALLOWED_ROOTS: tuple[str, ...] = (
+    "/data/scaleout_configs",
+    "/tmp",
+    "/var/tmp",
+)
+
+
+def _descriptor_allowed_roots() -> list[str]:
+    """Return absolute directory roots under which descriptor files may be read."""
+    roots = [os.path.abspath(r) for r in _DEFAULT_DESCRIPTOR_ALLOWED_ROOTS]
+    roots.append(os.path.abspath(os.getcwd()))
+    roots.append(os.path.abspath(tempfile.gettempdir()))
+    # tools/scaleout/exabox/<this file> -> tt-metal repo root
+    roots.append(os.path.abspath(str(Path(__file__).resolve().parents[3])))
+    extra = os.environ.get("EXABOX_DESCRIPTOR_ALLOWED_ROOTS", "")
+    for part in extra.split(os.pathsep):
+        part = part.strip()
+        if part:
+            roots.append(os.path.abspath(part))
+    return roots
+
+
+def _safe_read_text(path_arg: str) -> str:
+    """Read a descriptor file after validating the path stays in an allowed root.
+
+    Uses the OWASP-recommended absolute-path safelist check so dynamic CLI input
+    cannot be used to read files outside the intended scope (path traversal).
+    """
+    if not path_arg or "\x00" in path_arg:
+        raise ValueError(f"invalid descriptor path: {path_arg!r}")
+
+    raw = Path(path_arg)
+    if raw.is_symlink():
+        raise ValueError(f"refusing to read symlink: {path_arg}")
+
+    # Normalize .. / . components before the containment check.
+    abs_path = os.path.abspath(path_arg)
+    if not any(
+        abs_path == root or abs_path.startswith(root + os.sep)
+        for root in _descriptor_allowed_roots()
+    ):
+        raise ValueError(f"refusing path outside allowed descriptor roots: {abs_path}")
+
+    path = Path(abs_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"descriptor is not a regular file: {abs_path}")
+
+    return path.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -374,16 +433,25 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--fsd",
-        help="Path to Factory System Descriptor (.textproto)",
+        help=(
+            "Path to Factory System Descriptor (.textproto). "
+            "Must resolve under an allowed root (see EXABOX_DESCRIPTOR_ALLOWED_ROOTS)."
+        ),
     )
     group.add_argument(
         "--cabling",
-        help="Path to cabling descriptor (.textproto); requires --deployment",
+        help=(
+            "Path to cabling descriptor (.textproto); requires --deployment. "
+            "Must resolve under an allowed root (see EXABOX_DESCRIPTOR_ALLOWED_ROOTS)."
+        ),
     )
 
     parser.add_argument(
         "--deployment",
-        help="Path to deployment descriptor (.textproto); required with --cabling",
+        help=(
+            "Path to deployment descriptor (.textproto); required with --cabling. "
+            "Must resolve under an allowed root (see EXABOX_DESCRIPTOR_ALLOWED_ROOTS)."
+        ),
     )
 
     args = parser.parse_args(argv)
@@ -404,12 +472,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.fsd:
-            text = Path(args.fsd).read_text()
+            text = _safe_read_text(args.fsd)
             fsd = parse_textproto(text)
             host_id_to_name, adjacency = _build_adjacency_from_fsd(fsd)
         else:
-            cabling_text = Path(args.cabling).read_text()
-            deployment_text = Path(args.deployment).read_text()
+            cabling_text = _safe_read_text(args.cabling)
+            deployment_text = _safe_read_text(args.deployment)
             cabling = parse_textproto(cabling_text)
             deployment = parse_textproto(deployment_text)
             host_id_to_name, adjacency = _build_adjacency_from_cabling(cabling, deployment)

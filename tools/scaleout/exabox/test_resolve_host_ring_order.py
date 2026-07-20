@@ -7,6 +7,7 @@
 
 import json
 import os
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 from resolve_host_ring_order import (
     _build_adjacency_from_cabling,
     _build_adjacency_from_fsd,
+    _safe_read_text,
     _walk_ring,
     main,
     parse_textproto,
@@ -253,6 +255,20 @@ class TestCLI(unittest.TestCase):
         with redirect_stdout(buf):
             rc = main(["--hosts", "a,b", "--cabling", "/nonexistent"])
         self.assertEqual(rc, 1)
+
+    def test_safe_read_rejects_path_outside_allowed_roots(self):
+        with self.assertRaises(ValueError) as ctx:
+            _safe_read_text("/etc/passwd")
+        self.assertIn("outside allowed descriptor roots", str(ctx.exception))
+
+    def test_safe_read_allows_temp_descriptor(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".textproto", delete=False) as f:
+            f.write('name: "ok"')
+            path = f.name
+        try:
+            self.assertEqual(_safe_read_text(path), 'name: "ok"')
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":
