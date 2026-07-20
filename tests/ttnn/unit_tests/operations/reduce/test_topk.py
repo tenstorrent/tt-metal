@@ -393,18 +393,16 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device, expect_
 @pytest.mark.parametrize("largest", [True, False])
 def test_topk_multicore_local_write_correctness(largest, device):
     """
-    Guards the multi-core topk local-writer path (input width >= multi_core_min_width=8192,
-    so it routes to TopKMultiCoreProgramFactory + writer_local_topk).
+    Correctness guard for the multi-core topk local-writer path: an input width >= multi_core_min_width
+    (8192) routes to TopKMultiCoreProgramFactory + writer_local_topk, which NoC-writes each local-topk
+    tile from its CB slot to the final core and then cb_pop_front releases the slot back to the compute
+    producer. Correct aggregation at the final core relies on each write being drained before its slot is
+    reused; a regression there -- e.g. a WAR hazard where the producer's next pack_tile overwrites the
+    slot while the NoC write's source-read is still in flight -- would corrupt the landed values and make
+    this check fail.
 
-    writer_local_topk NoC-writes each local-topk tile from its CB slot to the final core, then
-    cb_pop_front releases that slot to the compute producer.  Without a write barrier before the
-    pop, the producer's next pack_tile can overwrite the slot while the NoC write's source-read is
-    still in flight (WAR), corrupting the values landed at the final core.  This checks the
-    multi-core aggregation produces correct top-k values.
-
-    The race is latent (masked by the compute-pack latency), so this does not fail deterministically
-    on the pre-fix code; it is a fast correctness guard for the multi-core write path (a
-    forced-corruption reproducer that clobbers the source slot before the flush is documented in the PR).
+    This is a value-correctness guard, not a deterministic race reproducer: such a WAR is latent (masked
+    by compute-pack latency), so it would not necessarily surface on every run.
     """
     torch.manual_seed(2005)
     W, k = 8192, 32  # W >= 8192 -> multi-core path; k=32 -> Kt=1
