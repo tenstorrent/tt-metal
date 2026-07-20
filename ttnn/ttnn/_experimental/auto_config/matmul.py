@@ -17,7 +17,6 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-
 _DEFAULT_CACHE_DIR = pathlib.Path.home() / ".cache" / "ttnn" / "auto_matmul"
 _L1_BUDGET_KB = 1400
 _MN_BLOCK_MIN = 2
@@ -2959,7 +2958,13 @@ def dispatch_matmul(
     # disabled there too because trace-based benchmarking does not work correctly in
     # slow dispatch mode. Those callers fall back to the default matmul config,
     # identical to pre-auto-config behaviour.
-    if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1" or os.environ.get("TT_METAL_PROFILER_SYNC") == "1":
+    # A functional simulator (TT_METAL_SIMULATOR) has no meaningful timing signal and is far too
+    # slow for candidate benchmarking, so tuning is bypassed there as well.
+    if (
+        os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
+        or os.environ.get("TT_METAL_PROFILER_SYNC") == "1"
+        or os.environ.get("TT_METAL_SIMULATOR")
+    ):
         return _run_base_operation(
             base_operation=base_operation,
             input_tensor_a=prepared.input_tensor_a,
