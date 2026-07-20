@@ -59,6 +59,15 @@ def ace_step_patch_lm_head_narrow_forward(lm_head: Any) -> None:
     def narrow_forward(x, debug_input_torch=None, debug_weight_torch=None):
         lm_head._ace_narrow_forward_used_band = False  # type: ignore[attr-defined]
         lm_head._ace_narrow_forward_col_band = None  # type: ignore[attr-defined]
+        # TP guard: when the LMHead is vocab-sharded across devices (num_devices > 1, e.g. the
+        # 5 Hz LM moved onto the mesh under TP), ``split_sizes`` tile only THIS device's
+        # ``padded_vocab_size // num_devices`` shard, while the narrow band indices are GLOBAL.
+        # Selecting/slicing splits by global columns against per-shard-local ranges is incorrect,
+        # so bypass narrowing and let the stock forward do the correct sharded matmul + all-reduce.
+        # No effect today: ACE-Step runs the LM on a 1×1 preprocess chip, so num_devices == 1.
+        num_devices = int(getattr(getattr(lm_head, "args", None), "num_devices", 1) or 1)
+        if num_devices > 1:
+            return original(x, debug_input_torch=debug_input_torch, debug_weight_torch=debug_weight_torch)
         indices: torch.Tensor | None = getattr(lm_head, "_ace_narrow_vocab_indices", None)
         band = ace_step_narrow_column_band(indices) if indices is not None else None
         if band is None:
