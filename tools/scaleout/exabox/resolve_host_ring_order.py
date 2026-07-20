@@ -53,7 +53,7 @@ def _tokenize(text: str) -> list[str]:
             i = j + 1
         else:
             j = i
-            while j < len(text) and text[j] not in " \t\r\n,;{}:#[]\"":
+            while j < len(text) and text[j] not in ' \t\r\n,;{}:#[]"':
                 j += 1
             tokens.append(text[i:j])
             i = j
@@ -252,14 +252,10 @@ def _collect_connections_recursive(
         graph_ref = child.get("graph_ref", {})
         if isinstance(graph_ref, dict) and "graph_template" in graph_ref:
             sub_template = graph_ref["graph_template"]
-            _collect_connections_recursive(
-                sub_template, templates, path_to_hid, prefix + [name], adjacency
-            )
+            _collect_connections_recursive(sub_template, templates, path_to_hid, prefix + [name], adjacency)
 
 
-def _build_adjacency_from_cabling(
-    cabling: dict, deployment: dict
-) -> tuple[dict[int, str], dict[int, set[int]]]:
+def _build_adjacency_from_cabling(cabling: dict, deployment: dict) -> tuple[dict[int, str], dict[int, set[int]]]:
     """Return (host_id_to_name, adjacency) from cabling + deployment."""
     hosts_raw = deployment.get("hosts", [])
     if not isinstance(hosts_raw, list):
@@ -348,9 +344,7 @@ def _walk_ring(
         current = nxt
 
     if len(visited) != len(requested_hids):
-        raise ValueError(
-            f"Could not walk a complete ring: visited {len(visited)} of {len(requested_hids)} hosts"
-        )
+        raise ValueError(f"Could not walk a complete ring: visited {len(visited)} of {len(requested_hids)} hosts")
 
     last_neighbors = sub_adj[visited[-1]]
     if visited[0] not in last_neighbors:
@@ -368,9 +362,7 @@ def _walk_ring(
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Resolve physical ring order of hosts from descriptor files."
-    )
+    parser = argparse.ArgumentParser(description="Resolve physical ring order of hosts from descriptor files.")
     parser.add_argument(
         "--hosts",
         required=True,
@@ -430,21 +422,29 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _emit_success(ordered: list[str], timestamp: str) -> None:
-    print(json.dumps({
-        "status": "success",
-        "message": "Host ring order resolved successfully",
-        "ordered_hosts": ",".join(ordered),
-        "checked_at": timestamp,
-    }))
+    print(
+        json.dumps(
+            {
+                "status": "success",
+                "message": "Host ring order resolved successfully",
+                "ordered_hosts": ",".join(ordered),
+                "checked_at": timestamp,
+            }
+        )
+    )
 
 
 def _emit_error(error_type: str, message: str, timestamp: str) -> None:
-    print(json.dumps({
-        "status": "error",
-        "error_type": error_type,
-        "message": message,
-        "checked_at": timestamp,
-    }))
+    print(
+        json.dumps(
+            {
+                "status": "error",
+                "error_type": error_type,
+                "message": message,
+                "checked_at": timestamp,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

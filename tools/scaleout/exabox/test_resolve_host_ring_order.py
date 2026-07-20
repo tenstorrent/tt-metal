@@ -38,10 +38,12 @@ class TestTextprotoParser(unittest.TestCase):
         self.assertEqual(result["outer"]["inner"], "val")
 
     def test_repeated_fields(self):
-        text = textwrap.dedent("""\
+        text = textwrap.dedent(
+            """\
             hosts { host: "a" }
             hosts { host: "b" }
-        """)
+        """
+        )
         result = parse_textproto(text)
         self.assertIsInstance(result["hosts"], list)
         self.assertEqual(len(result["hosts"]), 2)
@@ -52,19 +54,22 @@ class TestTextprotoParser(unittest.TestCase):
         self.assertEqual(result["name"], "test")
 
     def test_map_syntax(self):
-        text = textwrap.dedent("""\
+        text = textwrap.dedent(
+            """\
             graph_templates {
               key: "tpl"
               value { children { name: "n1" } }
             }
-        """)
+        """
+        )
         result = parse_textproto(text)
         self.assertIn("graph_templates", result)
 
 
 class TestFSDMode(unittest.TestCase):
     def test_four_host_ring(self):
-        fsd_text = textwrap.dedent("""\
+        fsd_text = textwrap.dedent(
+            """\
             hosts { hostname: "host-a" }
             hosts { hostname: "host-b" }
             hosts { hostname: "host-c" }
@@ -75,16 +80,15 @@ class TestFSDMode(unittest.TestCase):
                 connection { endpoint_a { host_id: 2 tray_id: 2 } endpoint_b { host_id: 3 tray_id: 1 } }
                 connection { endpoint_a { host_id: 3 tray_id: 2 } endpoint_b { host_id: 0 tray_id: 1 } }
             }
-        """)
+        """
+        )
         fsd = parse_textproto(fsd_text)
         hid_to_name, adj = _build_adjacency_from_fsd(fsd)
         self.assertEqual(len(hid_to_name), 4)
         for hid in range(4):
             self.assertEqual(len(adj[hid]), 2)
 
-        ordered = _walk_ring(
-            ["host-a", "host-b", "host-c", "host-d"], hid_to_name, adj
-        )
+        ordered = _walk_ring(["host-a", "host-b", "host-c", "host-d"], hid_to_name, adj)
         self.assertEqual(len(ordered), 4)
         shorts = [h.split(".")[0] for h in ordered]
         idx_a = shorts.index("host-a")
@@ -92,7 +96,8 @@ class TestFSDMode(unittest.TestCase):
         self.assertIn(abs(idx_a - idx_b), [1, 3])
 
     def test_ignores_same_host_connections(self):
-        fsd_text = textwrap.dedent("""\
+        fsd_text = textwrap.dedent(
+            """\
             hosts { hostname: "h1" }
             hosts { hostname: "h2" }
             eth_connections {
@@ -100,7 +105,8 @@ class TestFSDMode(unittest.TestCase):
                 connection { endpoint_a { host_id: 0 tray_id: 2 } endpoint_b { host_id: 1 tray_id: 1 } }
                 connection { endpoint_a { host_id: 1 tray_id: 2 } endpoint_b { host_id: 0 tray_id: 1 } }
             }
-        """)
+        """
+        )
         fsd = parse_textproto(fsd_text)
         _, adj = _build_adjacency_from_fsd(fsd)
         self.assertEqual(adj.get(0), {1})
@@ -122,7 +128,8 @@ class TestCablingMode(unittest.TestCase):
         for hid in range(4):
             self.assertIn(hid, adj, f"host_id {hid} missing from adjacency")
             self.assertEqual(
-                len(adj[hid]), 2,
+                len(adj[hid]),
+                2,
                 f"host_id {hid} ({hid_to_name[hid]}) has {len(adj[hid])} neighbors, expected 2",
             )
 
@@ -148,8 +155,7 @@ class TestCablingMode(unittest.TestCase):
         hid_to_name, adj = _build_adjacency_from_cabling(cabling, deployment)
 
         ordered = _walk_ring(
-            ["wh-glx-1.example.com", "wh-glx-2.example.com",
-             "wh-glx-3.example.com", "wh-glx-4.example.com"],
+            ["wh-glx-1.example.com", "wh-glx-2.example.com", "wh-glx-3.example.com", "wh-glx-4.example.com"],
             hid_to_name,
             adj,
         )
@@ -182,7 +188,8 @@ class TestCLI(unittest.TestCase):
     def test_fsd_cli(self):
         import tempfile
 
-        fsd_text = textwrap.dedent("""\
+        fsd_text = textwrap.dedent(
+            """\
             hosts { hostname: "h1" }
             hosts { hostname: "h2" }
             hosts { hostname: "h3" }
@@ -193,7 +200,8 @@ class TestCLI(unittest.TestCase):
                 connection { endpoint_a { host_id: 2 } endpoint_b { host_id: 3 } }
                 connection { endpoint_a { host_id: 3 } endpoint_b { host_id: 0 } }
             }
-        """)
+        """
+        )
         with tempfile.NamedTemporaryFile(mode="w", suffix=".textproto", delete=False) as f:
             f.write(fsd_text)
             fsd_path = f.name
@@ -223,11 +231,16 @@ class TestCLI(unittest.TestCase):
 
         buf = io.StringIO()
         with redirect_stdout(buf):
-            rc = main([
-                "--hosts", "wh-glx-1,wh-glx-2,wh-glx-3,wh-glx-4",
-                "--cabling", str(cabling_path),
-                "--deployment", str(deployment_path),
-            ])
+            rc = main(
+                [
+                    "--hosts",
+                    "wh-glx-1,wh-glx-2,wh-glx-3,wh-glx-4",
+                    "--cabling",
+                    str(cabling_path),
+                    "--deployment",
+                    str(deployment_path),
+                ]
+            )
         self.assertEqual(rc, 0)
         result = json.loads(buf.getvalue())
         self.assertEqual(result["status"], "success")
