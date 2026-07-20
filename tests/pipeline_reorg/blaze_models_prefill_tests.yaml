@@ -250,7 +250,7 @@
 - name: "Blaze - Kimi Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2.6-Cache/CI
 
     mpirun --pernode --tag-output bash -lc '
@@ -349,7 +349,7 @@
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
     mpirun --pernode --tag-output bash -lc '
