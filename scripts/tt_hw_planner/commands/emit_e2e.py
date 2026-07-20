@@ -885,7 +885,49 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                         + " (set E2E_ALLOW_NO_TRACE=1 to waive for a genuinely non-traceable model)"
                     )
 
+    try:
+        from ..trace_gate import build_fix_directive, evaluate_trace_gate, overflow_fix_loop, record_trace_verdict
+
+        _proof = None
+        _proof_raw = os.environ.get("E2E_TRACE_OVERFLOW_PROOF")
+        if _proof_raw:
+            try:
+                _proof = json.loads(_proof_raw)
+            except Exception:  # noqa: BLE001
+                _proof = None
+        _tg = evaluate_trace_gate(demo_dir, allow_no_trace=_anno, overflow_proof=_proof)
+        if _tg.get("verdict") == "FAIL" and _is_overflow_detail(_tg.get("capture_detail")):
+            _fix = overflow_fix_loop(demo_dir)
+            print("[emit-e2e] trace-gate overflow fix-loop: %s" % _fix.get("detail"))
+            if _fix.get("resolved"):
+                _tg = evaluate_trace_gate(demo_dir, trace_caps=_fix.get("caps"), allow_no_trace=_anno)
+            elif _fix.get("proof"):
+                _tg = evaluate_trace_gate(demo_dir, allow_no_trace=True, overflow_proof=_fix.get("proof"))
+        for _r in _tg.get("reasons") or []:
+            if _r not in reasons:
+                reasons.append(_r)
+        print(
+            "[emit-e2e] trace-gate verdict=%s (%d graduated, %d ungraduated): %s"
+            % (
+                _tg.get("verdict"),
+                len(_tg.get("policy", {}).get("graduated_modules") or []),
+                len(_tg.get("policy", {}).get("eager_eligible_modules") or []),
+                _tg.get("reason"),
+            )
+        )
+        _fd = build_fix_directive(_tg)
+        if _fd:
+            print("[emit-e2e] trace-gate fix directive: %s" % _fd)
+        record_trace_verdict(demo_dir, _tg)
+    except Exception as _tge:  # noqa: BLE001
+        print("[emit-e2e] trace-gate evaluation skipped: %s" % _tge)
+
     return (len(reasons) == 0), reasons
+
+
+def _is_overflow_detail(detail):
+    d = (detail or "").lower()
+    return any(m in d for m in ("trace region", "trace_region", "overflow", "out of memory", "oom", "not enough space"))
 
 
 _TT_ONLY_CONTRACT = """
