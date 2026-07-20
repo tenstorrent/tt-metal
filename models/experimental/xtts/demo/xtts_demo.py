@@ -120,6 +120,7 @@ def _generate_one(tt, wrapped, cond_mel, spk_wav_tt, args):
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
         top_p=args.top_p,
+        min_new_tokens=args.min_tokens_resolved,
     )
     wav_np = ttnn.to_torch(wav_dev).float().reshape(-1).numpy()  # [T_out]
     return _postprocess(wav_np), codes, time.time() - t0
@@ -169,18 +170,28 @@ def main():
     )
     ap.add_argument("--max-tokens", type=int, default=400, help="cap on audio codes (sampling usually stops earlier)")
     ap.add_argument(
+        "--min-tokens",
+        type=int,
+        default=0,
+        help="floor on generated audio codes — STOP is suppressed below it. Default 0 = disabled "
+        "(matches HF; the [SPACE]-token fix removes the early-stop that this used to mask). Set "
+        "-1 for auto (~2x wrapped text len) or an explicit count only if a take still stops short.",
+    )
+    ap.add_argument(
         "--num-outputs",
         type=int,
         default=1,
-        help="coqui gpt_num_outputs: generate N takes and auto-keep the best (lowest CER vs the "
-        "text, or code-diversity if Whisper is unavailable). Tames run-to-run variance; costs Nx time.",
+        help="number of takes to generate; keeps the best (lowest CER vs the text, or code-diversity "
+        "if Whisper is unavailable). Default 1 matches HF/coqui num_gpt_outputs=1; set >1 to tame "
+        "run-to-run variance at Nx time cost.",
     )
     ap.add_argument(
         "--temperature",
         type=float,
-        default=0.75,
-        help="sampling temperature; 0 = greedy. 0.75 (coqui's value) gives natural prosody and "
-        "stays clean with the reference.wav default; drop to ~0.65 if a weaker reference slurs words.",
+        default=0.65,
+        help="sampling temperature; 0 = greedy. 0.65 gives the most reliably-clean SINGLE take "
+        "(lower CER, no tail garble) with num-outputs=1; raise toward coqui's 0.75 for more "
+        "expressive prosody if you use best-of-N (--num-outputs>1) to reject the occasional bad draw.",
     )
     ap.add_argument("--top-k", type=int, default=50, help="top-k sampling cutoff")
     ap.add_argument(
@@ -225,11 +236,23 @@ def main():
     spk_src = wav[0].numpy()[: MEL_SR * args.spk_seconds]
     spk_wav = torch.from_numpy(resample_poly(spk_src, SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
 
-    wrapped = wrap_text_ids(preprocess_text(args.text, lang=args.lang))
+    # Strip trailing sentence-final punctuation: the final "." is its own token (id 9) and the
+    # model tends to VERBALIZE it as "dot" at the tail. Internal commas (prosody) are kept.
+    clean_text = re.sub(r"[.!?]+\s*$", "", args.text.strip())
+    wrapped = wrap_text_ids(preprocess_text(clean_text, lang=args.lang))
     pad = (-wrapped.shape[1]) % TILE
     if pad:
         wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
-    logger.info(f"text: {args.text!r} -> {wrapped.shape[1]} tokens (wrapped/padded)")
+    logger.info(f"text: {clean_text!r} -> {wrapped.shape[1]} tokens (wrapped/padded)")
+
+    # Resolve the STOP-suppression floor. Auto (-1) scales with the text (~2x the wrapped length),
+    # clamped below max-tokens, so a longer prompt is protected from stopping short while a short one
+    # isn't forced to ramble. 0 disables (HF default).
+    if args.min_tokens < 0:
+        args.min_tokens_resolved = min(int(2.0 * wrapped.shape[1]), args.max_tokens - 1)
+    else:
+        args.min_tokens_resolved = min(args.min_tokens, args.max_tokens - 1)
+    logger.info(f"min audio codes before STOP allowed: {args.min_tokens_resolved} (0 = disabled)")
 
     reference = XttsReference(sd)  # supplies decoder/speaker/mel weights (and optional A/B wav)
 

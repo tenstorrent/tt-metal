@@ -42,17 +42,25 @@ def _load_tokenizer():
 
 
 def preprocess_text(text, lang="en"):
-    """XTTS text preprocessing: prepend the ``[lang]`` tag, then BPE-tokenize.
+    """XTTS text preprocessing: prepend the ``[lang]`` tag, convert spaces to the explicit
+    ``[SPACE]`` token, then BPE-tokenize — matching coqui ``VoiceBpeTokenizer.encode``.
 
     Returns token ids as a ``LongTensor`` of shape ``[1, seq]`` — the input the
     text embedding expects.
 
-    NOTE: upstream coqui also expands numbers/abbreviations per language before
-    tokenizing; that normalization source is not vendored here (only ``model.pth``
-    and ``vocab.json`` are used), so pass already-normalized text.
+    CRITICAL: the XTTS ``vocab.json`` uses a Whitespace pre-tokenizer that DISCARDS raw
+    spaces, and ``[SPACE]`` (id 2) is a real vocab token the GPT was trained on as the
+    word delimiter. So coqui does ``txt.replace(" ", "[SPACE]")`` before encoding; without
+    it every word boundary is lost and the GPT receives out-of-distribution run-together
+    subwords (slurred/merged words, wrong prosody, early stops). We replicate that exactly.
+
+    NOTE: upstream coqui also expands numbers/abbreviations/symbols per language
+    (``multilingual_cleaners``) before this; that normalization source is not vendored here
+    (only ``model.pth`` and ``vocab.json``), so pass already-normalized text for numeric prose.
     """
     tokenizer = _load_tokenizer()
-    ids = tokenizer.encode(f"[{lang}]{text.strip().lower()}").ids
+    txt = f"[{lang}]{text.strip().lower()}".replace(" ", "[SPACE]")
+    ids = tokenizer.encode(txt).ids
     return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
 
 
