@@ -221,6 +221,7 @@ tt_metal/tt-llk/tt_llk_wormhole_b0/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkov
 tt_metal/tt-llk/.claude/ @nstamatovicTT @njokovicTT @tenstorrent/codeowner-bypass
 tt_metal/tt-llk/.cursor/ @nstamatovicTT @njokovicTT @tenstorrent/codeowner-bypass
 tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/umd-admins @tenstorrent/codeowner-bypass
+tt_metal/third_party/tracy @mo-tenstorrent @akerteszTT @tenstorrent/codeowner-bypass
 
 # metal tests
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/codeowner-bypass
