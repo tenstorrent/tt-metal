@@ -10,9 +10,16 @@ on:
       docker-image:
         required: true
         type: string
+      # Provide exactly one: wheel-artifact-name (install a wheel) or
+      # ttnn-import-artifact-id (import in-place from a precompiled tree).
       wheel-artifact-name:
-        required: true
+        required: false
         type: string
+        default: ''
+      ttnn-import-artifact-id:
+        required: false
+        type: string
+        default: ''
       build-type:
         description: 'Build type (Release or ASan). ASan builds require LD_PRELOAD of the ASan runtime.'
         required: false
@@ -51,15 +58,33 @@ jobs:
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      # --- ttnn install: wheel mode (release/main docs) OR precompiled-tree mode (PR gate) ---
       - name: ⬇️ Download Wheel
+        if: ${{ inputs.wheel-artifact-name != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: /work
       - name: Install Wheel
+        if: ${{ inputs.wheel-artifact-name != '' }}
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
-          uv pip install $WHEEL_FILENAME
+          uv pip install "$WHEEL_FILENAME"
+      - name: ⬇️ Download precompiled ttnn libs
+        if: ${{ inputs.ttnn-import-artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.ttnn-import-artifact-id }}
+          # merge-multiple keeps contents flat at /work (else artifact-ids nests in a subdir).
+          merge-multiple: true
+          path: /work
+      - name: Install ttnn from precompiled tree
+        # Reuse setup.py's TT_FROM_PRECOMPILED_DIR path: no recompile, no manylinux wheel.
+        # Runtime .so deps (libtt_metal, libtracy, ...) resolve via LD_LIBRARY_PATH=/work/build/lib.
+        if: ${{ inputs.ttnn-import-artifact-id != '' }}
+        env:
+          TT_FROM_PRECOMPILED_DIR: /work
+        run: uv pip install .
       - name: Check TTNN ops are documented
         # Verifies every registered ttnn op has an entry in docs/source/ttnn/ttnn/api.rst.
         # Runs here (no hardware needed) rather than in nightly — catches missing docs on the PR that adds the op.

@@ -191,9 +191,9 @@ _eltwise_bcast_32x16 = (
     "32x16 tiles are not supported for eltwise with column/row broadcast",
 )
 
-_only_32x32_tile = (
-    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
-    "Only (32, 32) tiles are supported for this operation",
+_only_32x32_or_16x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) not in ((32, 32), (16, 32)),
+    "Only (32, 32) or (16, 32) tiles are supported for this operation",
 )
 
 _datacopy_only_32x32 = (
@@ -284,14 +284,18 @@ FPU_MAP = {
     ),
     "ReduceBlockMax": (
         lambda s: ReduceBlockMaxFpu(),
-        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker"), _only_32x32_tile],
+        [
+            _no_reuse_dest,
+            _forced_unpacker("ReduceBlockMaxUnpacker"),
+            _only_32x32_or_16x32_tile,
+        ],
     ),
     "ReduceBlockMaxRuntime": (
         lambda s: ReduceBlockMaxRuntimeFpu(),
         [
             _no_reuse_dest,
             _forced_unpacker("ReduceBlockMaxRuntimeUnpacker"),
-            _only_32x32_tile,
+            _only_32x32_or_16x32_tile,
         ],
     ),
     "SubBcastColCustom": (
@@ -299,7 +303,7 @@ FPU_MAP = {
         [
             _no_reuse_dest,
             _forced_unpacker("SubBcastColCustomUnpacker"),
-            _only_32x32_tile,
+            _only_32x32_or_16x32_tile,
         ],
     ),
 }

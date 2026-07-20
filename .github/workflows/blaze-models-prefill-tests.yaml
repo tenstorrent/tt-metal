@@ -49,7 +49,7 @@ jobs:
   validate-test-type:
     # Fail fast on a bad selection before spending a build on it. Emits the
     # normalized selection (empty/"all" -> "all") consumed by the impl filter.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       test-type: ${{ steps.validate.outputs.selection }}
     env:
@@ -102,8 +102,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_spsg
-      sp-config: spsg
+      enabled-skus: bh_sc1
+      sp-config: sc1
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       # Keep the perf checks in a focused job so the long functional run remains unchanged.
       exclude-test-group: sdpa_perf
@@ -122,8 +122,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_spsg
-      sp-config: spsg
+      enabled-skus: bh_sc1
+      sp-config: sc1
       # Select the perf entry by its test_group so adding more perf checks needs no workflow edit.
       test-type: sdpa_perf
       resource-prefix: sdpa-perf

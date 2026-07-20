@@ -114,7 +114,7 @@ def cleanup_cache():
     report_and_clear()
 
 
-def _forward(mla, mesh_device, rope_tensors, kvpe_cache, hidden):
+def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden):
     """Single-shot sparse MLA forward, mirroring run_mla_inference's SP×TP input sharding."""
     shard_dims = [None, None]
     shard_dims[TP_AXIS], shard_dims[SP_AXIS] = -1, -2
@@ -126,13 +126,17 @@ def _forward(mla, mesh_device, rope_tensors, kvpe_cache, hidden):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    out = mla.forward(hidden_states=tt_hidden, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache)
+    out = mla.forward(
+        hidden_states=tt_hidden, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, index_kv_cache=index_kv_cache
+    )
     return ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
     ).to(torch.bfloat16)
 
 
 def _new_kvpe(config, mesh_device, mesh_shape):
+    # Sparse attention (sparse_sdpa) reads the KVPE cache natively: it must be uncompressed bf16 and
+    # ROW_MAJOR (the sparse forward asserts this), not the init_kvpe_cache bf8/TILE default.
     return init_kvpe_cache(
         kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
         mesh_device=mesh_device,
@@ -140,6 +144,23 @@ def _new_kvpe(config, mesh_device, mesh_shape):
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
         num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+def _new_index_kv(config, mesh_device, mesh_shape):
+    # Caller-owned indexer key cache for the folded single-shot (block-cyclic) path: 1 layer / 1 user, so
+    # update_padded_kv_cache's num_slots = cache_batch / layer_num stays >= 1 with the MLA's layer_num=1.
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=mesh_shape,
+        sp_axis=SP_AXIS,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
     )
 
 
@@ -153,6 +174,10 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=weight_cache_path,
+        # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
+        # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
+        # so layer_num must be 1 (matches test_mla.py) or num_slots collapses to 0 and the write asserts.
+        layer_num=1,
     )
 
 
@@ -182,14 +207,25 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     weights = random_mla_weights(config)  # device-vs-device round-trip: config-shaped weights suffice
     mesh_shape = list(mesh_device.shape)
 
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors(SEQ_LEN)
+    # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0): indexed rope
+    # tables + a caller-owned indexer key cache, exactly like the chunked path.
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
+    )
     torch.manual_seed(42)
     hidden = torch.randn(1, SEQ_LEN, config.hidden_size, dtype=torch.bfloat16)
 
     # === from weights (no cache) ===
     mla_w = _build_mla(config, weights, mesh_device, weight_cache_path=None)
     assert mla_w._has_indexer, f"{variant.name}: from-weights construction must be sparse"
-    out_weights = _forward(mla_w, mesh_device, rope_tensors, _new_kvpe(config, mesh_device, mesh_shape), hidden)
+    out_weights = _forward(
+        mla_w,
+        mesh_device,
+        rope_tensors,
+        _new_kvpe(config, mesh_device, mesh_shape),
+        _new_index_kv(config, mesh_device, mesh_shape),
+        hidden,
+    )
 
     # === offline cache build: dense + indexer tensorbins ===
     init_checker(CACHE_DIR)
@@ -202,7 +238,14 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     mla_c = _build_mla(config, {}, mesh_device, weight_cache_path=CACHE_DIR)
     assert mla_c._has_indexer, f"{variant.name}: cache-only construction must stay sparse, not fall back to dense"
     assert type(mla_c._indexer).__name__ == "TtIndexer", "cache-only must bind TtIndexer, not NullIndexer"
-    out_cache = _forward(mla_c, mesh_device, rope_tensors, _new_kvpe(config, mesh_device, mesh_shape), hidden)
+    out_cache = _forward(
+        mla_c,
+        mesh_device,
+        rope_tensors,
+        _new_kvpe(config, mesh_device, mesh_shape),
+        _new_index_kv(config, mesh_device, mesh_shape),
+        hidden,
+    )
 
     passed, pcc = comp_pcc(out_weights, out_cache, 0.999)
     logger.info(f"[{variant.name}] sparse cache-only vs from-weights PCC: {pcc}")

@@ -433,10 +433,13 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     if console is not None:
         return
 
-    # When redirecting to file, use a larger width to avoid wrapping.
-    # When in a terminal, let Rich auto-detect the terminal width.
-    # Similarly, if verbosity is increased, use larger width to avoid wrapping.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
+    # When redirecting to file (or a zero-width pty), use a larger width to avoid wrapping;
+    # in a real terminal let Rich auto-detect. Higher verbosity also uses the larger width.
+    width = (
+        None
+        if sys.stdout.isatty() and os.get_terminal_size(sys.stdout.fileno()).columns > 0 and _verbose_level == 0
+        else 10000
+    )
     # --llm-output implies no colors: non-table console output (status lines,
     # warnings) needs to stay plain text for cheap LLM consumption.
     disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])

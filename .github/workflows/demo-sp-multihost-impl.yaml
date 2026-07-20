@@ -15,8 +15,8 @@ on:
       sp-config:
         required: false
         type: string
-        default: "sp1"
-        description: "Single pod configuration (sp1, sp4, sp5)"
+        default: "sc4"
+        description: "Supercluster configuration (sc1, sc4, sc16, sp5)"
 
 permissions:
   id-token: write
@@ -25,7 +25,7 @@ permissions:
 jobs:
   load-test-matrix:
     name: Load Test Matrix for ${{ inputs.sp-config }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
     env:
@@ -83,20 +83,9 @@ jobs:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
     env:
-      OMPI_MCA_btl_tcp_if_include: ens5f0np0
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /etc/ttop/hostfile
-      PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      PIP_CACHE_DIR: /home/user/.cache/pip
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      TT_METAL_HOME: /home/user/tt-metal
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-      TT_METAL_CACHE: /home/user/.cache
     strategy:
       fail-fast: false
       matrix:
@@ -191,13 +180,11 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          # Unpack build artifact locally as well. Pipeline config generation runs on the runner
-          # and expects test binaries under /ci/tt-metal/build/test.
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user
-          sudo chown "$(id -u):$(id -g)" /home/user
-          cp -r /ci/tt-metal /home/user/
+          sudo mkdir -p /home/user/tt-metal
+          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
