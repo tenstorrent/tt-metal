@@ -57,10 +57,33 @@ correctness/cache/watcher, no host overhead. Result: **one shape clears ≥2% so
 one is borderline (256×2304×6144 −1.9%), one is marginal (128×15360×768 −1.1%)** — right at the gate
 boundary, and only for C1 on a narrow subclass. Controls clean, correctness bit-identical, watcher clean.
 
-**Decision: keep C1 as an A/B diagnostic; no production change.** The win is real and stable but modest
-(one shape solidly ≥2%, one borderline, one marginal) and confined to the narrow-N nsb3 W≥3 subclass, so it
-does not warrant a production default / picker trigger now. `DIAG_IN0_CHUNK4/2/1` remain committed behind the
-hashed diag mask (mask 0 = the unchanged baseline ring, byte-identical); the public path, picker, placement,
-ring order, compute order, reduction, and in1 reader are all untouched. A narrow-N-W≥3 picker trigger for C1
-is a documented future candidate if the ~2–3% on the deep-K production shapes (e.g. 256×15360×768) becomes
-worth capturing. Recovery commit: `406f13b593b`.
+## Focused confirmation run (2 independent runs × 10 interleaved relaunches) — REVERTED
+
+A tighter re-test (`confirm_chunk.py`, `confirm_chunk.json`) to establish whether the win is a robust
+**structural** effect (trigger keyed on W / N_sub / N_bpc / contiguity, not shape names) or shape-specific
+noise. C1 vs C=W, two independent runs:
+
+| shape | W / N_sub / N_bpc / Mblk | C1 run1 / run2 | verdict |
+|---|---|---|---|
+| 256×15360×768 | 5 / 3 / 1 / 4 | **−2.8% / −2.4%** (spread 1.3%) | stable ≥2% |
+| 128×15360×768 | 5 / 3 / 1 / 4 (**identical profile**) | −0.8% / −0.5% | neutral |
+| 256×2304×6144 | 3 / 3 / 2 / 8 | −1.3% / −1.5% (spread 2.2% > δ) | within noise |
+| 128×15360×1536 | 5 / 3 / 2 / 4 | −1.3% / −1.1% | marginal |
+| 256×15360×1536 (wide-N_sub ctl) | 5 / 6 / 1 / 4 | −1.0% / −0.6% | neutral |
+| 256×2048×512 (W1 ctl) | 1 | −0.5% / +0.6% | neutral |
+| 256×6144×4608 (W1 ctl) | 1 | +0.1% / +0.3% | neutral |
+
+**No clean structural trigger exists.** 256×15360×768 and 128×15360×768 have the **identical** structural
+profile (W5, N_sub3, N_bpc1, Mblk4, same per-block work) yet measure −2.5% vs −0.6% — so W/N_sub/N_bpc/Mblk
+(and block contiguity, which is identical for C=1 anyway) do **not** separate winner from non-winner. Only
+**one** shape clears ~2% stably; the earlier −1.4%/−1.3% on the other two shrank into the relaunch noise
+under 10×2 relaunches. Controls clean.
+
+**Decision: REVERT the diagnostic implementation.** The gate ("≥2 structurally-related shapes clear ~2%
+stably, no control regression") is **not met** — only 256×15360×768 clears it, with no generalizable
+structural predicate, so the C1 win is a single-shape effect (likely a placement/ring-timing coincidence for
+that exact geometry), not a lever worth carrying. `DIAG_IN0_CHUNK4/2/1` and the chunked writer branch +
+`ChunkCorrectness` gtest were reverted to the pre-chunk state (public path unchanged; 20/20 + 6 diag gtests
+pass post-revert). The report + raw data (`regime_a_chunkexp.json`, `confirm_chunk.json`) are retained.
+Recovery commit for the implementation: **`406f13b593b`** (reverted in the follow-up commit). No picker
+change was made or is warranted.
