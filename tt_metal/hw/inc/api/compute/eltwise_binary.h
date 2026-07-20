@@ -42,7 +42,6 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint
     // binary_op_init_common (softmax, moreh_*), so this full-init entry point must also carry the hoisted
     // once-init that self-contained per-op inits (ckernel::sfpu::_init_<op>_) rely on. Idempotent for pure
     // binary kernels.
-    MATH((llk_math_sfpu_init_once()));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
