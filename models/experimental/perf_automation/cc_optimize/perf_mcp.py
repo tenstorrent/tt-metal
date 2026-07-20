@@ -361,16 +361,13 @@ def _rebuild_optimize_report(model_root=None) -> None:
     import time as _t
 
     attempts = _load_attempts()
-    if not attempts:
+    cum_path = Path(str(_KERNEL_LOG_PATH) + ".cumulative")
+    merged = _merge_cumulative(cum_path, attempts)
+    if not merged:
         return
     root = model_root if model_root is not None else _MODEL_ROOT
-    render_path = _KERNEL_LOG_PATH
-    n_attempts = len(attempts)
-    if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
-        cum_path = Path(str(_KERNEL_LOG_PATH) + ".cumulative")
-        merged = _merge_cumulative(cum_path, attempts)
-        render_path = cum_path
-        n_attempts = len(merged)
+    render_path = cum_path
+    n_attempts = len(merged)
     try:
         mod = _summary_mod()
         perf_test = (_MANIFEST.get("perf_test_resolved") or {}).get("path") or ""

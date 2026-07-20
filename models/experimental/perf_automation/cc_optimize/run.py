@@ -1273,6 +1273,36 @@ def _record_wedge_to_log(kernel_log: str, reason: str) -> None:
         pass
 
 
+def _fold_cumulative(kernel_log: str) -> None:
+    cum = str(kernel_log) + ".cumulative"
+
+    def _ld(p):
+        try:
+            v = json.loads(Path(p).read_text())
+            return v if isinstance(v, list) else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    seen, merged = set(), []
+    for a in _ld(cum) + _ld(kernel_log):
+        if not isinstance(a, dict):
+            continue
+        k = (
+            a.get("op_signature") or a.get("op_code") or "",
+            a.get("kernel_kind") or "",
+            (a.get("note") or "")[:200],
+            bool(a.get("wedged")),
+        )
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(a)
+    try:
+        Path(cum).write_text(json.dumps(merged))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
     """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
@@ -1434,35 +1464,34 @@ def _emit_summary(
     except Exception:  # noqa: BLE001
         pass
     render_kernel = kernel_log
-    if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
-        _cum = str(kernel_log) + ".cumulative"
+    _cum = str(kernel_log) + ".cumulative"
 
-        def _load_list(_p):
-            try:
-                _v = json.loads(Path(_p).read_text())
-                return _v if isinstance(_v, list) else []
-            except Exception:
-                return []
-
-        _seen, _merged = set(), []
-        for _a in _load_list(_cum) + _load_list(kernel_log):
-            if not isinstance(_a, dict):
-                continue
-            _k = (
-                _a.get("op_signature") or _a.get("op_code") or "",
-                _a.get("kernel_kind") or "",
-                (_a.get("note") or "")[:200],
-                bool(_a.get("wedged")),
-            )
-            if _k in _seen:
-                continue
-            _seen.add(_k)
-            _merged.append(_a)
+    def _load_list(_p):
         try:
-            Path(_cum).write_text(json.dumps(_merged))
-            render_kernel = _cum
+            _v = json.loads(Path(_p).read_text())
+            return _v if isinstance(_v, list) else []
         except Exception:
-            render_kernel = kernel_log
+            return []
+
+    _seen, _merged = set(), []
+    for _a in _load_list(_cum) + _load_list(kernel_log):
+        if not isinstance(_a, dict):
+            continue
+        _k = (
+            _a.get("op_signature") or _a.get("op_code") or "",
+            _a.get("kernel_kind") or "",
+            (_a.get("note") or "")[:200],
+            bool(_a.get("wedged")),
+        )
+        if _k in _seen:
+            continue
+        _seen.add(_k)
+        _merged.append(_a)
+    try:
+        Path(_cum).write_text(json.dumps(_merged))
+        render_kernel = _cum
+    except Exception:
+        render_kernel = kernel_log
     text = mod.render_summary(
         render_kernel,
         _baseline_ms(),
@@ -1574,6 +1603,7 @@ def optimize_pipeline(
     task = pipe["task"]
     kernel_log = f"/tmp/cc_kernlog_{model_name}_{task}.json"
     try:
+        _fold_cumulative(kernel_log)
         os.path.exists(kernel_log) and os.remove(kernel_log)  # fresh ladder state per pipeline
     except OSError:
         pass
