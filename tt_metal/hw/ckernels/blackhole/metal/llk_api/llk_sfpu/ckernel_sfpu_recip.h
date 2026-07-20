@@ -393,7 +393,6 @@ void recip_init() {
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
         if constexpr (APPROXIMATION_MODE) {
             _init_reciprocal_fast_7b_();
