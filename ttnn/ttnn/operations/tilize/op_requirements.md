@@ -128,7 +128,7 @@ in `validate()`, never a hang / wrong output): multi-shard-per-core, interleaved
 crossover, and cross-spec resharding — these are what keep `test_tilize_nd_sharded` /
 `test_tilize_nd_sharded_to_legacy_sharded` from fully passing.
 
-### [ ] Refinement 2b — Sharded I/O remainder (multi-shard-per-core, crossover, cross-spec reshard)
+### [~] Refinement 2b — Sharded I/O remainder (multi-shard-per-core, crossover, cross-spec reshard)
 
 **Goal**: extend the sharded path beyond same-spec one-shard-per-core to the cases
 Refinement 2 refuses (`test_tilize_nd_sharded` / `test_tilize_nd_sharded_to_legacy_sharded`
@@ -159,3 +159,62 @@ difficulty — land them in this order:
 
 **Done when**: `test_tilize_nd_sharded` and `test_tilize_nd_sharded_to_legacy_sharded` pass;
 no regression on the Refinement 2 same-spec cells; no hangs.
+
+**Landed [~] (2026-07-20)**: two of the three sub-levers, for the tractable
+(contiguous-mapping) cases:
+- **Sub-lever 1 — multi-shard-per-core, same-spec, even, no-padding (nd)**: a core
+  owns k = n_shards/n_cores contiguous FULL shards, tilized as one k*shard_h x
+  shard_w bank straight into the concatenated output bank (identity preserved
+  because both sides use the IDENTICAL nd spec). `num_blocks` is now derived from
+  the physical per-core bank (`buffer_num_pages/num_cores/32`). Legacy
+  HEIGHT/WIDTH/BLOCK cannot be multi-shard-per-core (`from_torch` rejects
+  `n_shards > n_cores`), so this is nd-only. Cliff/padded shards stay refused.
+- **Sub-lever 2 — interleaved↔sharded crossover, BOTH directions, split
+  reader/writer**, for legacy HEIGHT_SHARDED, ROW_MAJOR, tile-aligned,
+  one-shard-per-core (each shard = a CONTIGUOUS global tile-row range, so the
+  split reader/writer REUSE the interleaved reader/compute/writer kernels with a
+  per-core row/tile offset — the exact mapping the native optimized factory uses):
+  * DRAM-interleaved RM in → HEIGHT-sharded TILE out (split reader; write is an L1
+    loopback into the aliased output shard — no DRAM write).
+  * HEIGHT-sharded RM in → DRAM-interleaved TILE out (split writer; read is the
+    aliased input shard — no DRAM read).
+  Verified identity (max_diff=0) bf16/fp32/uint32, rank 2/3/4, on-device.
+
+Golden target movement: `test_tilize_nd_sharded` + `_to_legacy` 8→9 passing (+1:
+nd `[4,128,128]/[2,64,64]` same-spec multi-shard). The rest of the golden crossover
+cases are **nd + DRAM interleaved** and the `_to_legacy` cases are **cross-spec**
+(nd→legacy) — both the general cross-core NoC path (sub-lever 3), deferred to 2c.
+No regression (golden responsible 86/86, sharded unit 25/25, acceptance 35/35), no
+hangs. Deferred to **Refinement 2c** (all refused cleanly in `validate()`):
+WIDTH/BLOCK crossover, nd crossover, cross-spec resharding, cliff/padded multi-shard.
+
+### [ ] Refinement 2c — Sharded I/O general cross-core NoC path (nd/WIDTH/BLOCK crossover, cross-spec reshard, cliff cores)
+
+**Goal**: the sharded cases Refinement 2b still refuses — all requiring a shard's
+data to redistribute across cores via NoC (no contiguous per-core mapping), which
+is the native's general `TilizeMultiCoreDefaultProgramFactory` path. Concretely:
+`test_tilize_nd_sharded` crossover cases (nd sharded ↔ DRAM interleaved),
+`test_tilize_nd_sharded_to_legacy_sharded` (nd→legacy cross-spec), cross-spec
+reshard (input spec ≠ output spec), WIDTH/BLOCK↔interleaved crossover
+(column-chunked, non-contiguous tile↔page mapping), and cliff/padded multi-shard
+(`[3,160,160]`, `[23,96,160]`, `[5,4,160,160]` — uneven split and/or partial shards).
+
+**Verifier notes / concrete levers for the next implementer**:
+1. **The tile↔page mapping is no longer contiguous** for nd/WIDTH/BLOCK, so the
+   split reader/writer cannot reuse the interleaved kernels with a single row
+   offset. Compute per-core, per-tile the global interleaved page index (writer)
+   or the per-shard RM (start_row, col_byte_offset) (reader) on the HOST and pass
+   as runtime args — the kernel then needs no sharding knowledge. The host must
+   match ttnn's shard→core→region enumeration exactly (ROW_MAJOR shard-grid order;
+   probe the physical bank via `buffer_num_pages`/`buffer_page_size` as
+   `probes/probe_014.py` did — genuine-nd multi-dim shards padded per bank).
+2. **Cross-spec (nd→legacy, or different in/out spec)** needs cross-core NoC: a
+   shard's data lands on a different core's output shard. Keep zero-DRAM by moving
+   through L1 (semaphore handshake). This is the largest lift.
+3. **cb_descriptor_from_sharded_tensor** on genuinely-nd tensors requires
+   `core_ranges=grid` passed explicitly (no legacy `shard_spec()` to deref) — see
+   Refinement 2b's fix; reuse it.
+4. **Wide-W HEIGHT crossover perf**: the 2b crossover CBs are sized `2*Wt*tile`
+   with `Wt = full W/32` (not chunked), so a wide HEIGHT shard is L1-unbounded.
+   Add the interleaved path's `Wt_chunk` chunking to the crossover reader/writer
+   (they already accept `num_chunks`/`Wt_chunk` CT args).

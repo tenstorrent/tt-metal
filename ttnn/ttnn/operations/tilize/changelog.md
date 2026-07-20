@@ -1,5 +1,97 @@
 # tilize — changelog
 
+## Refinement 2b — Sharded I/O remainder (crossover + multi-shard same-spec)  [~ partial]
+
+- **Date**: 2026-07-20
+- **What was done**: Landed two of the three 2b sub-levers, for the tractable
+  contiguous-mapping cases, with **no kernel changes** — the crossover reuses the
+  interleaved reader/compute/writer kernels, only the host program-descriptor
+  wiring is new (exactly the native optimized factory's HEIGHT↔interleaved
+  approach).
+  1. **Multi-shard-per-core, same-spec, even, no-padding (nd)**: a core owns
+     k = n_shards/n_cores contiguous FULL shards. `_create_sharded_program_descriptor`
+     now derives `num_blocks` from the physical per-core bank
+     (`buffer_num_pages/num_cores/32`) instead of a single shard, so it tilizes the
+     whole k-shard bank as k*(shard_h/32) tile-rows of Wt tiles straight into the
+     concatenated output bank. Identity holds because in/out use the IDENTICAL nd
+     spec (output shard j ← input shard j, per-core-local). Legacy
+     HEIGHT/WIDTH/BLOCK cannot be multi-shard-per-core (`from_torch` asserts
+     `n_shards <= n_cores`), so this is nd-only.
+  2. **Interleaved↔sharded crossover, BOTH directions (split reader / split
+     writer)** for legacy HEIGHT_SHARDED, ROW_MAJOR, tile-aligned,
+     one-shard-per-core:
+     - `_create_crossover_to_sharded` (split READER): DRAM-interleaved RM input →
+       HEIGHT-sharded TILE output. Each core reads its output shard's contiguous
+       global RM row range from DRAM (reused `tilize_reader.cpp`, per-core
+       `start_stick = i*shard_h`), tilizes (reused `tilize_compute.cpp`), lands
+       tiles in its resident output shard (aliased output CB). The "write" is an L1
+       loopback — no DRAM write.
+     - `_create_crossover_from_sharded` (split WRITER): HEIGHT-sharded RM input →
+       DRAM-interleaved TILE output. Each core tilizes its resident input shard
+       (aliased input CB, reused `tilize_compute_sharded.cpp`) and scatters tiles
+       to their contiguous interleaved page range (reused `tilize_writer.cpp`,
+       per-core `start_tile_row = i*shard_h/32`). The "read" is the aliased input
+       shard — no DRAM read.
+  3. **Bug fix**: `cb_descriptor_from_sharded_tensor` threw
+     `std::bad_array_new_length` on genuinely-nd tensors (3+ dim shard with no
+     legacy 2D equivalent) because its default `core_ranges` dereferences the
+     null legacy `tensor.shard_spec()->grid`. Fixed by passing `core_ranges=grid`
+     explicitly (from `nd_shard_spec.grid`) at all three aliased-CB sites. This is
+     what unblocked the nd multi-shard path.
+  - **validate()** restructured: the both-sharded branch now allows even/no-pad
+    multi-shard (relaxed `n_shards != n_cores` → `n_shards % n_cores != 0` +
+    `_has_padding` gate); a new crossover branch allows HEIGHT-legacy one-shard
+    crossover and refuses WIDTH/BLOCK/nd crossover, cross-spec, cliff/padded — all
+    cleanly (UnsupportedAxisValue, never a hang).
+- **SUPPORTED delta**: **none** — the axes (shard_api nd/legacy_2d, out_scheme
+  HEIGHT/…, buffer dram_to_l1/l1_to_dram) were already in SUPPORTED from
+  Refinement 2. 2b widens which *combinations within* the existing rectangle
+  validate() accepts (multi-shard, crossover), gated by the physical shard
+  geometry — not the categorical axes. No XPASS drift (golden responsible 86/86,
+  0 fail).
+- **Accuracy achieved**: bit-exact identity (torch.equal, max_diff=0) for
+  bf16/fp32/uint32 on both crossover directions (rank 2/3/4) and nd multi-shard
+  same-spec ([4,128,128]/[2,64,64] 8sh/4co; [1,1,512,64] nd 4sh/2co).
+- **Golden test progress**: target `test_tilize_nd_sharded` +
+  `test_tilize_nd_sharded_to_legacy_sharded` = **9 passed / 36 failed / 28
+  skipped** (was 8/37 — the nd `[4,128,128]/[2,64,64]` same-spec multi-shard case
+  moved to passing). The remaining 36 are all clean `UnsupportedAxisValue`/
+  `ExcludedCell` refusals of the general cross-core NoC cases (nd↔DRAM crossover,
+  nd→legacy cross-spec, cliff/padded) deferred to Refinement 2c — none a hang,
+  none a regression. `test_golden.py` responsible + `test_regression.py` = **86
+  passed, 0 failed** (no regression, no XPASS drift). Acceptance `test_tilize.py`
+  35/35. Sharded unit `test_tilize_sharded.py` **25/25** (both --dev and
+  production timing — no race).
+- **Perf gate**: bound classification — (a) **multi-shard same-spec = zero
+  transfer** (compute-bound by construction, like Refinement 2: both CBs aliased,
+  no DRAM/NoC on either side); (b) **crossover = single-DRAM-side DM-bound** — each
+  direction touches DRAM on exactly ONE side (the other is an L1 loopback into the
+  aliased shard), so the roofline is HALF the interleaved↔interleaved floor:
+  dir2 = read_bytes/288GB/s, dir1 = write_bytes/288GB/s. DM checklist: reader/writer
+  are the already-optimized interleaved kernels (one barrier per block, coalesced
+  whole-tile transactions, depth-2 read/write overlap). **Caveat / 2c perf
+  follow-up**: the crossover CBs are sized `2*Wt*tile` with `Wt = full W/32` (not
+  chunked), so a wide HEIGHT shard is L1-unbounded — add the interleaved path's
+  `Wt_chunk` chunking (the reused reader/writer already take the CT args). Clean
+  device Tracy duration deferred (device profiler not enabled in this
+  pre-compiled-firmware build — same caveat every prior phase recorded); the golden/
+  unit shapes are tiny correctness gates, not bandwidth-bound.
+- **Issues encountered**: (1) `cb_descriptor_from_sharded_tensor` nd null-deref
+  (fixed via `core_ranges=grid`, see above). (2) Legacy HEIGHT/WIDTH/BLOCK reject
+  `n_shards > n_cores` at `from_torch` — multi-shard-per-core is structurally
+  nd-only; the initial probe's legacy multi-shard case was invalid and removed.
+  (3) Padded/cliff nd shapes ([5,4,160,160] etc.) have per-core banks that are not
+  a whole number of shards — genuinely the general NoC path; gated out via
+  `_has_padding` and deferred to 2c.
+- **Tests added**: extended `test_tilize_sharded.py` (+10 cases): crossover both
+  directions × 3 shapes, crossover fp32/uint32, nd multi-shard same-spec × 2, and
+  retargeted refusal contracts to the still-deferred 2c cases (WIDTH crossover,
+  padded nd multi-shard). Probes `probe_014` (placement inspection), `probe_015`/
+  `probe_016`/`probe_017` (crossover + multi-shard identity).
+- **Deferred to Refinement 2c** (filed in op_requirements.md with concrete levers):
+  nd/WIDTH/BLOCK crossover (non-contiguous tile↔page mapping → host page-list),
+  cross-spec resharding (cross-core NoC through L1), cliff/padded multi-shard.
+
 ## Refinement 2 — Sharded I/O (legacy_2d HEIGHT/WIDTH/BLOCK + nd)  [~ partial]
 
 - **Date**: 2026-07-17
