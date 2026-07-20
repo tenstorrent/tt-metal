@@ -1502,9 +1502,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 #if USE_RELAY
     // Relay RT args = the fabric endpoint's args. Order the relay kernel reads:
     //   output_addr, init_sem_addr, exit_sem_addr, sender pipe args (sender NOC x/y + 3 sem ids),
-    //   combine_window_index, then the fabric-connection args (FABRIC_1D per-target unicast). output_addr is
-    //   promoted to a Buffer* below for the cache-hit fast path.
-    TT_FATAL(!is_2d_fabric, "USE_RELAY relay endpoint is FABRIC_1D only.");
+    //   combine_window_index, then the fabric-connection args (FABRIC_2D: num_connections +
+    //   RoutingPlaneConnectionManager args; FABRIC_1D: per-target unicast). output_addr is promoted to a
+    //   Buffer* below for the cache-hit fast path. Matches the sender's connection-append branch above.
     for (uint32_t s = 0; s < num_cores; s++) {
         const CoreCoord& relay_core = relay_cores[s];
         std::vector<uint32_t> relay_rt_raw = {
@@ -1534,9 +1534,25 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
             }
             const uint32_t core_link = s % num_links;
-            for (const auto& dst_node : dst_nodes) {
-                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                    src_fabric_node_id, dst_node, core_link, desc, relay_core, relay_rt_raw);
+            if (is_2d_fabric) {
+                // Portable RoutingPlaneConnectionManager path (mirrors the sender branch above): one
+                // connection per combine-axis neighbor so traffic forwards across MULTIPLE hops. The relay
+                // reads num_connections first, then builds the manager from the appended args.
+                relay_rt_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));
+                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    src_fabric_node_id, dst_nodes, {core_link}, desc, relay_writer_kernel_id, relay_core, relay_rt_raw);
+                log_debug(
+                    tt::LogOp,
+                    "FABRIC_2D combine relay: src={} num_connections={} core_link={}",
+                    src_fabric_node_id,
+                    dst_nodes.size(),
+                    core_link);
+            } else {
+                // Legacy per-direction array connection (FABRIC_1D linear/ring).
+                for (const auto& dst_node : dst_nodes) {
+                    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                        src_fabric_node_id, dst_node, core_link, desc, relay_core, relay_rt_raw);
+                }
             }
         }
 
