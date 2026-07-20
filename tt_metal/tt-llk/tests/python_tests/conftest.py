@@ -34,9 +34,11 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
-from ttexalens import umd_device as _umd_device
+# TEMPORARY
+os.environ.setdefault("TT_LOGGER_LEVEL", "debug")
+from ttexalens import util as _exalens_util
 
-_umd_device.UmdDevice.can_use_dma = False
+_exalens_util.Verbosity.set(_exalens_util.Verbosity.DEBUG)
 
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
