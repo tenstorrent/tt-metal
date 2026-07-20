@@ -54,8 +54,8 @@ struct SparseSDPAMsaOperation {
     // buffer addresses), since the hash excludes interleaved K/V T and cache_batch_idx. See the .cpp.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const operation_attributes_t& attrs,
+        const tensor_args_t& t,
         tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
