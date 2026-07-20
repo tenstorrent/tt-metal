@@ -33,12 +33,15 @@ def _load_golden():
     return inp, latents
 
 
-def run_decode_pcc(device):
+def run_decode_pcc(device, max_seq_request=None):
     inputs_embeds, golden_latents = _load_golden()
     S = inputs_embeds.shape[1]
 
+    # max_seq_request lets the caller exercise the BUG-1 path (odd tile counts). When None,
+    # size tightly to S. The decoder rounds max_seq up to a multiple of 64 internally.
+    req = max_seq_request if max_seq_request is not None else ((S + 31) // 32) * 32
     params = preprocess_gpt_parameters(device, dtype=ttnn.bfloat16)
-    decoder = TTNNGPTDecoder(device, params, max_seq=((S + 31) // 32) * 32)
+    decoder = TTNNGPTDecoder(device, params, max_seq=req)
 
     latents = []
     for t in range(S):
@@ -62,6 +65,14 @@ def test_gpt_decode_pcc(device):
     assert passed, f"GPT decode PCC below {TARGET_PCC}: {pcc_msg}"
 
 
+def test_gpt_decode_pcc_large_odd_max_seq(device):
+    """BUG-1 regression: requesting an odd-tile max_seq (736 = 23 tiles) used to collapse
+    decode to PCC ~0.63. The decoder now rounds up to an even tile count (768), so PCC
+    must stay above target."""
+    passed, pcc_msg = run_decode_pcc(device, max_seq_request=736)
+    assert passed, f"BUG-1 regression: odd-tile max_seq decode PCC below {TARGET_PCC}: {pcc_msg}"
+
+
 if __name__ == "__main__":
     import sys
 
@@ -69,7 +80,9 @@ if __name__ == "__main__":
     try:
         dev.enable_program_cache()
         ok, msg = run_decode_pcc(dev)
+        ok2, msg2 = run_decode_pcc(dev, max_seq_request=736)
     finally:
         ttnn.close_device(dev)
     print(("PASSED " if ok else "FAILED ") + str(msg))
-    sys.exit(0 if ok else 1)
+    print(("PASSED " if ok2 else "FAILED ") + " [odd-max_seq regression] " + str(msg2))
+    sys.exit(0 if (ok and ok2) else 1)
