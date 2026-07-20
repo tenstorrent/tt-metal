@@ -39,9 +39,17 @@ _EXPERT_FP32_FULL_SYNC_CFG_CACHE = {}
 
 
 def default_sparse_moe_compute_kernel_config():
-    """HiFi2 matches the dense sparse_matmul numerics (PCC 0.9997 vs dense at bf16)."""
+    """HiFi2 matches the dense sparse_matmul numerics (PCC 0.9997 vs dense at bf16).
+
+    DG_SPARSE_MOE_HIFI4 (default off) raises the fidelity to HiFi4 to MATCH the gemma4 dense
+    reference (models/demos/gemma4/tt/experts/prefill.py uses HiFi4, fp32_dest_acc_en=False):
+    the sparse path's HiFi2 vs the dense HiFi4 is a real contributor to the pcc-vs-dense gap, and
+    the expert matmuls are weight-bound so the extra math passes are largely hidden behind the DRAM
+    read. fp32_dest_acc_en stays False so the tuned out_subblock (product up to 8) remains legal
+    (fp32_dest_acc caps the subblock at 4). Flag off -> byte-identical HiFi2 config."""
+    fidelity = ttnn.MathFidelity.HiFi4 if os.environ.get("DG_SPARSE_MOE_HIFI4", "0") != "0" else ttnn.MathFidelity.HiFi2
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -69,6 +77,49 @@ def expert_compute_kernel_config(tensor, fallback):
         )
         _EXPERT_FP32_FULL_SYNC_CFG_CACHE[key] = config
     return config
+
+
+# DG_MOE_EXPERT_BFP8 (default OFF): cast the (bf16-on-disk) expert gate/up/down weight banks to
+# bfloat8_b ONCE (cached) so the weight-bound batched expert matmuls read ~53% of the bytes
+# (~415 MB -> ~220 MB), directly attacking the ~68%-of-runtime expert cost. gemma4 is NOT mutated —
+# these are cached bfp8 COPIES built from experts.weights and consumed only inside this module. bfp8
+# is lower precision than bf16, so this is pcc-risky against the thin 0.98 floor; gated + measured.
+# Flag off -> the bf16 weights are used unchanged (byte-identical).
+_BFP8_WEIGHTS_CACHE = {}
+
+
+def expert_weight_bfp8_enabled():
+    return os.environ.get("DG_MOE_EXPERT_BFP8", "0") != "0"
+
+
+class _Bfp8Weights:
+    """Minimal shim exposing gate_proj/up_proj/down_proj as bfp8; other attrs proxy to the original."""
+
+    __slots__ = ("gate_proj", "up_proj", "down_proj", "_orig")
+
+    def __init__(self, gate_proj, up_proj, down_proj, orig):
+        self.gate_proj = gate_proj
+        self.up_proj = up_proj
+        self.down_proj = down_proj
+        self._orig = orig
+
+    def __getattr__(self, name):
+        return getattr(self._orig, name)
+
+
+def _bfp8_expert_weights(weights):
+    """Cached bfp8_b copies of the expert weight banks (built once per weights object)."""
+    key = id(weights)
+    shim = _BFP8_WEIGHTS_CACHE.get(key)
+    if shim is None:
+        shim = _Bfp8Weights(
+            ttnn.clone(weights.gate_proj, dtype=ttnn.bfloat8_b),
+            ttnn.clone(weights.up_proj, dtype=ttnn.bfloat8_b),
+            ttnn.clone(weights.down_proj, dtype=ttnn.bfloat8_b),
+            weights,
+        )
+        _BFP8_WEIGHTS_CACHE[key] = shim
+    return shim
 
 
 # Constant/scratch tensors for the dispatch (independent of the routing VALUES) are allocated ONCE
@@ -1926,7 +1977,7 @@ def sparse_experts_forward(
             "DG_MOE_FUSED_GATHER: in-reader gather kernel not implemented yet (increment-3 scaffold "
             "only). See models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md."
         )
-    weights = experts.weights
+    weights = _bfp8_expert_weights(experts.weights) if expert_weight_bfp8_enabled() else experts.weights
     cfg = experts.config
     mesh_config = experts.mesh_config
     ccl = experts.ccl_manager
