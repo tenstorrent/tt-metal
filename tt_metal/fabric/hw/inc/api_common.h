@@ -439,12 +439,16 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
  * | rt_arg_idx                            | Runtime-args cursor (advanced as parsed)| size_t&                                        | True     |
  */
 // clang-format on
+// noc must be a non-type template param: the handshake open path takes
+// WORKER_HANDSHAKE_NOC as a compile-time template argument on the adapter.
+template <uint8_t noc = get_fabric_worker_noc()>
 FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
     size_t& rt_arg_idx) {
     connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
-        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx, num_connections_to_build);
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION, noc>(
+        rt_arg_idx, num_connections_to_build);
 }
 
 // clang-format off
