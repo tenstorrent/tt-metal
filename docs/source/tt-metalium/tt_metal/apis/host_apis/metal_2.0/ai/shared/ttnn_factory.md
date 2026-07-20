@@ -1,6 +1,6 @@
 # Porting an Op to Metal 2.0 — TTNN Integration
 
-> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the two device-op-class edits the port forces (custom-hash deletion, pybind cleanup). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](../port/metal2_port.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
+> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the three device-op-class edits the port forces (custom-hash deletion, pybind cleanup, and dropping a pybind-hook-only factory parameter). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](../port/metal2_port.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
 
 ## Read this first
 
