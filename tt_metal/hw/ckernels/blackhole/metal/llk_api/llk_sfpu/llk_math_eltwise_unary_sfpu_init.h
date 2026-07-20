@@ -11,8 +11,10 @@
 
 namespace ckernel {
 
-// Kernel-invariant SFPU init: the SFPU config register + invariant ADDR_MOD_7, run once per kernel by the metal
-// "full init" entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common / binary_op_init_common).
+// Kernel-invariant SFPU init (SFPU config register + invariant ADDR_MOD_7). Retained for the standalone tt-llk
+// SFPU test harness, which bypasses the metal "full init" entry points and runs this itself. The metal compute
+// path no longer hoists this: each per-op init below is self-contained (#50381), running the invariant per-op
+// rather than once-per-kernel.
 inline void llk_math_sfpu_init_once() { _llk_math_eltwise_unary_sfpu_init_once_(); }
 
 namespace sfpu {
@@ -65,9 +67,9 @@ void unary_le_init();
 void unary_lt_init();
 void unary_ne_init();
 
-// Self-contained per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). config_reg + ADDR_MOD_7
-// are handled once per kernel by llk_math_sfpu_init_once(); these program only the op's residual state
-// (op-specific ADDR_MOD_6 where needed + reset the RWC counters).
+// Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). config_reg + ADDR_MOD_7 are
+// run per-op by the bare delegate below (_llk_math_eltwise_unary_sfpu_init_once_()), so these program only the
+// op's residual state (op-specific ADDR_MOD_6 where needed + reset the RWC counters).
 inline void fill_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void isfinite_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
@@ -101,6 +103,11 @@ inline constexpr bool _sfpu_bare_op_unhandled_ = false;
 // Bare init entry point: delegates per SFPU op to its self-contained sfpu::<op>_init().
 template <SfpuType sfpu_op>
 inline void llk_math_eltwise_unary_sfpu_init() {
+    // Per-op common SFPU init (config reg + invariant ADDR_MOD_7), formerly hoisted once-per-kernel via
+    // llk_math_sfpu_init_once(). Consolidated back per-op (#50381) so each init is fully self-contained and
+    // never depends on a separate once-init having run first. The co-located sfpu::<op>_init() below then
+    // programs only the op's residual state (op-specific ADDR_MOD_6 where needed + counter reset).
+    _llk_math_eltwise_unary_sfpu_init_once_();
     if constexpr (sfpu_op == SfpuType::abs) {
         sfpu::abs_init();
     } else if constexpr (sfpu_op == SfpuType::acos) {
@@ -222,10 +229,14 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     }
 }
 
-// Callback init entry point (SFPU_UNARY_INIT_FN / _FN_ARGS / two-arg SFPU_UNARY_INIT): the op-specific init_func
-// is itself self-contained (it programs its own ADDR_MOD_6 if needed + resets counters). No generic prefix.
+// Callback init entry point (SFPU_UNARY_INIT_FN / _FN_ARGS / two-arg SFPU_UNARY_INIT). The per-op common init
+// (config reg + ADDR_MOD_7 + counter reset) runs first, then the op-specific init_func. Consolidated per-op
+// (#50381) rather than hoisted: re-asserting the shared SFPU config/addrmod state on every init -- on both the
+// MATH and PACK threads -- keeps the exp(PACK)/fp32-reciprocal(MATH) shared macro/replay programming from
+// interleaving destructively, which was the #50381 fp32 SDPA accuracy regression.
 template <SfpuType sfpu_op, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
+    _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
     init_func(std::forward<ARGS>(args)...);
 }
 
