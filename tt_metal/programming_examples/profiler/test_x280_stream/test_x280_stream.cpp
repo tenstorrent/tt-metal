@@ -622,6 +622,7 @@ int main(int argc, char** argv) {
     // ---- offline demux: each drain hart's stream is independent (its own sticky-src sequence over a
     // disjoint lane slice), so walk each capture separately and bind markers to the current STICKY-SRC ----
     size_t cap_words = 0;
+    auto demux_t0 = std::chrono::steady_clock::now();
     for (auto& cap : caps) {
         cap_words += cap.size();
         uint32_t cur_lane = 0xFFFFFFFF;
@@ -635,7 +636,16 @@ int main(int argc, char** argv) {
             }
         }
     }
-    printf("  [capture] %zu raw words drained across %llu ring(s)\n", cap_words, (unsigned long long)ndh);
+    uint64_t demux_us =
+        (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - demux_t0)
+            .count();
+    double demux_gbs = demux_us ? (double)cap_words * 4.0 / 1e3 / (double)demux_us : 0.0;
+    printf(
+        "  [capture] %zu raw words across %llu ring(s); OFFLINE demux %llu ms = %.2f GB/s (1 thread, post-run)\n",
+        cap_words,
+        (unsigned long long)ndh,
+        (unsigned long long)(demux_us / 1000),
+        demux_gbs);
 
     // ---- verify each DEMUXED lane is complete + gap-free ----
     uint32_t active_lanes = num_cores * active_riscs;
