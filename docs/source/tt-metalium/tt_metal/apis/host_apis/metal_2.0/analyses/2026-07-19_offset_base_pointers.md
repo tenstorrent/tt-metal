@@ -21,7 +21,7 @@ So any legacy op that produces an *offset* base pointer is a porting considerati
 | **3** | Offset **borrowed-memory CB** (`address_offset`) | No — Python ops, out of current scope | framework note |
 | **4** | In-place op **`MeshTensor` offset trick** (`narrow`) | **No action** — ports correctly | none |
 
-> How ops are detected (grep signatures per type) will live in the **audit recipe**, which flags these at audit time. This document is the findings + per-op tables the recipe references.
+> How ops are detected (grep signatures per type) lives in the **audit recipe**: the [Offset base pointers](../ai/audit/metal2.md#offset-base-pointers) gate flags these at audit time, using this document's per-op tables as its checked-in triage (a lookup + staleness check against current code). This document is the findings + per-op tables the recipe references.
 
 *Factory paths in Types 1–2 and 4 are relative to `ttnn/cpp/ttnn/operations/`; Type 3 paths are relative to `models/demos/deepseek_v3_b1/`. Arguments are named by their receiving kernel + role rather than a numeric slot, since roles survive edits (indices and line numbers do not).*
 
@@ -47,7 +47,7 @@ So any legacy op that produces an *offset* base pointer is a porting considerati
 
 ## Type 2 — Offset pointer passed as an argument, used in a `TensorAccessor` ⚠
 
-**What it is.** Same host-side fold, but the kernel feeds the offset address into a **`TensorAccessor` as its base**. Because Metal 2.0 auto-builds the accessor's args from the *base* binding, there is no seam to inject a pre-offset base — the offset is entangled in the accessor's addressing, not a trailing `+`.
+**What it is.** Same host-side fold, but the kernel feeds the offset address into a **`TensorAccessor` as its base**. In legacy the op constructs the accessor explicitly — assembling the `TensorAccessorArgs` *and* passing the base pointer — so it can hand over `base + offset` as that base. Metal 2.0 builds the accessor straight from the binding token, which rolls the (auto-built) args and the base-only address together implicitly: there is **no seam to inject a pre-offset base**. The offset was the accessor's base, not a relocatable trailing `+` (as in Type 1) — and that base is now the framework's to supply.
 
 **How to recognize it.** An offset address (`…->address() + <offset>`) in an RTA whose receiving kernel constructs `TensorAccessor(args, that_addr, …)`.
 
