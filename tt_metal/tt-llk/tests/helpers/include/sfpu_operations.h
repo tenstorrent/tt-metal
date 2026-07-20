@@ -422,7 +422,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::atan)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(atan_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(atan_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::sinh)
     {
@@ -625,9 +625,18 @@ void call_unary_sfpu_operation_init()
     else if constexpr (
         OPERATION == SfpuType::floor || OPERATION == SfpuType::ceil || OPERATION == SfpuType::trunc || OPERATION == SfpuType::frac ||
         OPERATION == SfpuType::round || OPERATION == SfpuType::add1 || OPERATION == SfpuType::silu || OPERATION == SfpuType::relu_max ||
-        OPERATION == SfpuType::relu_min)
+        OPERATION == SfpuType::relu_min || OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp ||
+        OPERATION == SfpuType::identity || OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::tanh_derivative ||
+        OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::rsqrt_compat || OPERATION == SfpuType::expm1_cw || OPERATION == SfpuType::equal_zero ||
+        OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero || OPERATION == SfpuType::greater_than_zero ||
+        OPERATION == SfpuType::less_than_equal_zero || OPERATION == SfpuType::greater_than_equal_zero)
     {
-        // These ops execute via the self-contained tt-llk primitives
+        // These ops execute via self-contained tt-llk primitives that need only the generic per-op init (SFPU config
+        // reg + ADDR_MOD_7 from llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
+        // the bare `unused` init. Their production/metal <op>_init() all reduce to math::reset_counters, but the
+        // OPERATION-keyed bare init here either has no delegate branch (add1/identity/cast_fp32_to_fp16a/tanh_derivative/
+        // sqrt_custom/rsqrt_compat/expm1_cw) or no linkable definition in this test build, since only the tt-llk common
+        // (not the metal llk_api) header is included (relu_max/relu_min/lrelu/hardtanh/clamp/zero-comparisons).
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
     }
     else
@@ -792,16 +801,22 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
     // with SCALE_EN=true. The bf16 scale 0x3F00 == 0.5 selects base b = e^0.5, so the
     // golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding error is added.
+    //
+    // The bf16-accurate path (_sfpu_exp_21f_bf16_tti_) lowers the scale via TTI_SFPMULI,
+    // whose immediate operand must be a compile-time constant. Forwarding the scale as a
+    // runtime arg through the generic SFPU_UNARY_CALL wrapper drops constness at -O3 and
+    // trips the "impossible asm constraint" error, so bake the literal into a direct call.
     else if constexpr (OPERATION == SfpuType::exp_with_base)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_exponential,
-            (APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
+        ::ckernel::_sfpu_check_<DST_SYNC_MODE, DST_ACCUM_MODE>(dst_index, vector_mode);
+        _llk_math_eltwise_unary_sfpu_params_(
+            []()
+            {
+                ::ckernel::sfpu::calculate_exponential<APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, ITERATIONS, CLAMP_NEGATIVE>(
+                    0x3F00u /* bf16(0.5) exp base scale */);
+            },
             dst_index,
-            vector_mode,
-            0x3F00u /* bf16(0.5) exp base scale */);
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::fill)
     {
@@ -1256,29 +1271,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::fmod)
     {
-        // calculate_fmod takes (value, recip); the bodies read vConstFloatPrgm0/1 set by init,
-        // so the runtime args are inert but the signature still requires them. Mirror init.
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_fmod,
-            (APPROX_MODE, ITERATIONS),
-            dst_index,
-            vector_mode,
-            0x40000000u /* value = 2.0f */,
-            0x3f000000u /* recip = 0.5f */);
+        // calculate_fmod() takes no runtime args: it reads vConstFloatPrgm0/1 programmed by
+        // init_fmod() (see call_unary_sfpu_operation_init above), so no value/recip is passed.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::remainder)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_remainder,
-            (APPROX_MODE, ITERATIONS),
-            dst_index,
-            vector_mode,
-            0x40000000u /* value = 2.0f */,
-            0x3f000000u /* recip = 0.5f */);
+        // Unlike calculate_fmod, calculate_remainder() takes no runtime args: it reads vConstFloatPrgm0/1 programmed
+        // by init_remainder() (see call_unary_sfpu_operation_init above), so the call must not pass value/recip.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::unary_gt)
     {
