@@ -64,10 +64,27 @@ def _read_section(demo_dir, key: str):
 
 
 _OPT_STATE_NAME = ".module_optimize_state.json"
+_WEDGE_GIVEUP = int(os.environ.get("PERF_MCP_MODULE_WEDGE_GIVEUP", "3") or "3")
 
 
 def _opt_state_path(demo_dir):
     return Path(demo_dir) / _OPT_STATE_NAME
+
+
+def _bump_started(demo_dir, module) -> int:
+    p = _opt_state_path(demo_dir)
+    try:
+        data = json.loads(p.read_text()) if p.is_file() else {}
+    except Exception:
+        data = {}
+    started = data.get("started") or {}
+    started[module] = int(started.get(module, 0)) + 1
+    data["started"] = started
+    try:
+        p.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+    return started[module]
 
 
 def _load_optimized(demo_dir) -> dict:
@@ -162,6 +179,15 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         if node is None:
             print("  [optimize/module] %s %s: no PCC test node — skipped" % (idx, m))
             rows.append((m, "no-pcc-test", None))
+            continue
+        n_started = _bump_started(demo_dir, m)
+        if n_started > _WEDGE_GIVEUP:
+            print(
+                "  [optimize/module] %s %s: GIVEUP — attempted %d× without completing (repeated wedge); "
+                "marking skip and advancing" % (idx, m, n_started - 1)
+            )
+            _mark_optimized(demo_dir, m, "wedged", None)
+            rows.append((m, "wedged", None))
             continue
         print("\n  [optimize/module] === %s module: %s (pcc %s) ===" % (idx, m, node))
         os.environ["PERF_MCP_REPORT_KEY"] = "module:%s" % m
