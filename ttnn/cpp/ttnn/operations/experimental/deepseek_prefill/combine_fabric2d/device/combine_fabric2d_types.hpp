@@ -31,12 +31,36 @@ struct CombineFabric2dParams {
     uint32_t chunk_size_bytes = 14336;  // 7168 bf16 elements = one token
     uint32_t num_slots = 32;            // ring depth; also the producer's initial write_up_to credit
     uint32_t axis = 0;                  // mesh axis along which the neighbors are chosen
+    // Fine-grained stall attribution in the producer (wait-for-slot / issue / credit-starved / credit
+    // buckets). Off by default: it costs ~3 wall-clock register reads per token, which is a few percent
+    // of the very number being measured. Turn it on to explain a result, off to quote one.
+    uint32_t stall_telemetry = 0;
+    // Producer loop variant bitmask, so alternatives can be A/B'd without re-plumbing the op:
+    //   bit0 (1)  BATCH_CREDITS   forward credits only once a batch has built up (or when blocked)
+    //   bit1 (2)  SLOT_HEADERS    one prebuilt packet header per ring slot, non-blocking header send
+    //   bit2 (4)  RELAXED_READY   data-ready atomic-inc without the flush ordering (DIAGNOSTIC: the
+    //                             receiver may observe the flag before the payload has landed)
+    //   bit3 (8)  NO_FLOW_CONTROL producer ignores the credit gate (DIAGNOSTIC: prices the gate; the
+    //                             receiver ring is overwritten in flight)
+    //   bit4 (16) SINGLE_SRC      producer sends the same source chunk every token instead of rotating
+    //                             through num_slots of them. The payload is garbage either way, and it
+    //                             frees the L1 that a deep receiver ring needs.
+    uint32_t variant = 0;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("device", "num_links", "num_tokens", "chunk_size_bytes", "num_slots", "axis", "topology");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "device",
+        "num_links",
+        "num_tokens",
+        "chunk_size_bytes",
+        "num_slots",
+        "axis",
+        "stall_telemetry",
+        "variant",
+        "topology");
     auto attribute_values() const {
-        return std::forward_as_tuple(device, num_links, num_tokens, chunk_size_bytes, num_slots, axis, topology);
+        return std::forward_as_tuple(
+            device, num_links, num_tokens, chunk_size_bytes, num_slots, axis, stall_telemetry, variant, topology);
     }
 };
 

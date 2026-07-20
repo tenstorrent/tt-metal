@@ -11,6 +11,7 @@ Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
 from dataclasses import dataclass
+import os
 
 import pytest
 import torch
@@ -616,6 +617,119 @@ def test_externally_owned_cases(
 # Not a PCC test: it runs the new op and we inspect Tracy zones from the run.
 # Select the config with: -k 'fabric2d-torus-xy-8x4-2link'
 # ---------------------------------------------------------------------------
+CMBF2D_BWINFO_PATH = "generated/cmbf2d/bwinfo.txt"
+
+# Sweep knobs. The op's own defaults live in C++; these let a sweep driver vary one axis per pytest
+# invocation (one device open per point) without touching the test body. CMBF2D_TAG, when set, moves
+# the report to bwinfo_<tag>.txt so a sweep's points don't overwrite each other.
+CMBF2D_NUM_TOKENS = int(os.environ.get("CMBF2D_NUM_TOKENS", "100"))
+CMBF2D_NUM_SLOTS = int(os.environ.get("CMBF2D_NUM_SLOTS", "32"))
+CMBF2D_CHUNK_BYTES = int(os.environ.get("CMBF2D_CHUNK_BYTES", "14336"))
+CMBF2D_TAG = os.environ.get("CMBF2D_TAG", "")
+# 1 => producer records the fine-grained stall buckets (costs a few percent of the bandwidth
+# it is measuring). Off for headline numbers, on to explain them.
+CMBF2D_STALL = int(os.environ.get("CMBF2D_STALL", "0"))
+# Producer loop variant bitmask; see CombineFabric2dParams::variant for the bit meanings.
+CMBF2D_VARIANT = int(os.environ.get("CMBF2D_VARIANT", "0"))
+
+
+def _cmbf2d_bwinfo_path():
+    return f"generated/cmbf2d/bwinfo_{CMBF2D_TAG}.txt" if CMBF2D_TAG else CMBF2D_BWINFO_PATH
+
+
+def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, num_tokens, path=CMBF2D_BWINFO_PATH):
+    """Read each worker's L1 telemetry record and write a bandwidth report.
+
+    Bandwidth is measured over first-token-send -> credit-for-last-token-returned, i.e. an upper bound
+    on when the last token had actually landed and been consumed by the peer. Nothing here needs to
+    know where the worker cores are — the binding recomputes placement from (num_links, axis).
+    """
+    # Plain diagnostic function rather than a registered ttnn operation, so it lives on the raw
+    # nanobind module instead of under ttnn.experimental.deepseek_prefill.* like the op itself.
+    telem = ttnn._ttnn.operations.experimental.combine_fabric2d_read_telemetry(
+        mesh_device, num_links=num_links, axis=axis
+    )
+    clock_mhz = telem["clock_mhz"]
+    workers = telem["workers"]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    rows, bad = [], []
+    for w in workers:
+        if not w["valid"]:
+            bad.append(w)
+            continue
+        cycles = w["t_last_credit"] - w["t_first_send"]
+        us = cycles / clock_mhz if clock_mhz else 0.0
+        payload = w["tokens_sent"] * w["chunk_size_bytes"]
+        gbps = (payload / (us * 1e-6)) / 1e9 if us > 0 else 0.0
+        # Send window: first send -> last send. Excludes the tail credit round-trip, so it is the
+        # "how fast can this producer push" number; the credit-window one above is the end-to-end.
+        send_cycles = w["t_last_send"] - w["t_first_send"]
+        send_us = send_cycles / clock_mhz if clock_mhz else 0.0
+        send_gbps = (payload / (send_us * 1e-6)) / 1e9 if send_us > 0 else 0.0
+        # Stall shares of the send window: wait_slot = eth side cannot drain us, starve = credit
+        # round-trip, issue = our own packet issue, credit = the extra credit packets we forward.
+        denom = send_cycles if send_cycles > 0 else 1
+        shares = {k: 100.0 * w[f"{k}_cycles"] / denom for k in ("wait_slot", "issue", "starve", "credit")}
+        rows.append((w, cycles, us, payload, gbps, send_us, send_gbps, shares))
+
+    def _stats(vals):
+        v = sorted(vals)
+        return v[0], v[len(v) // 2], v[-1], sum(v) / len(v)
+
+    with open(path, "w") as f:
+        edm_slots = rows[0][0]["edm_slots"] if rows else 0
+        f.write(
+            f"# CombineFabric2D bandwidth telemetry\n"
+            f"# mesh={tuple(mesh_device.shape)} num_links={num_links} axis={axis} "
+            f"num_tokens={num_tokens} num_slots={CMBF2D_NUM_SLOTS} chunk={CMBF2D_CHUNK_BYTES}B "
+            f"clock={clock_mhz}MHz edm_sender_slots={edm_slots} stall_telemetry={CMBF2D_STALL} "
+            f"variant={CMBF2D_VARIANT}\n"
+            f"# GB/s   = payload / (first token send -> credit for last token returned)  [end to end]\n"
+            f"# sGB/s  = payload / (first token send -> last token send)                 [push rate]\n"
+            f"# wait%/iss%/strv%/crd% = share of the send window spent waiting for an EDM slot (eth\n"
+            f"#   side is the limiter) / issuing payload packets / credit-starved (round-trip is the\n"
+            f"#   limiter) / forwarding credit packets. Remainder is loop overhead + polling.\n"
+            f"# workers: {len(rows)} valid, {len(bad)} missing/invalid records\n"
+            f"#\n"
+            f"{'dev':>4} {'coord':>8} {'worker_l':>9} {'worker_p':>9} {'eth':>7} {'ex':>3} {'lnk':>4}"
+            f" {'reloc':>6} {'peer':>5} {'tok':>6} {'cred':>6} {'cpkt':>5} {'wut':>6}"
+            f" {'us':>9} {'GB/s':>7} {'sus':>9} {'sGB/s':>7}"
+            f" {'wait%':>6} {'iss%':>6} {'strv%':>6} {'crd%':>6}\n"
+        )
+        for w, _cycles, us, _payload, gbps, send_us, send_gbps, sh in sorted(
+            rows, key=lambda r: (r[0]["device_id"], r[0]["eth_phys_x"])
+        ):
+            f.write(
+                f"{w['device_id']:>4} {str(tuple(w['mesh_coord'])):>8}"
+                f" {str(tuple(w['worker_logical'])):>9} {str(tuple(w['worker_physical'])):>9}"
+                f" {str(tuple(w['eth_logical'])):>7} {w['eth_phys_x']:>3} {w['link_idx']:>4}"
+                f" {'Y' if w['relocated'] else '':>6} {w['peer_chip_id']:>5}"
+                f" {w['tokens_sent']:>6} {w['credits_forwarded']:>6} {w['credit_packets']:>5}"
+                f" {w['write_up_to_final']:>6}"
+                f" {us:>9.2f} {gbps:>7.2f} {send_us:>9.2f} {send_gbps:>7.2f}"
+                f" {sh['wait_slot']:>6.1f} {sh['issue']:>6.1f} {sh['starve']:>6.1f} {sh['credit']:>6.1f}\n"
+            )
+        for w in bad:
+            f.write(
+                f"# NO RECORD: dev {w['device_id']} coord {tuple(w['mesh_coord'])} "
+                f"worker_logical {tuple(w['worker_logical'])} eth {tuple(w['eth_logical'])}\n"
+            )
+        if rows:
+            g_min, g_p50, g_max, g_mean = _stats([r[4] for r in rows])
+            s_min, s_p50, s_max, s_mean = _stats([r[6] for r in rows])
+            total = sum(r[3] for r in rows)
+            mean_sh = {k: sum(r[7][k] for r in rows) / len(rows) for k in ("wait_slot", "issue", "starve", "credit")}
+            f.write(
+                f"#\n# per-producer GB/s: min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} mean {g_mean:.2f}\n"
+                f"# per-producer sGB/s: min {s_min:.2f} p50 {s_p50:.2f} max {s_max:.2f} mean {s_mean:.2f}\n"
+                f"# mean send-window shares: wait_slot {mean_sh['wait_slot']:.1f}% issue {mean_sh['issue']:.1f}% "
+                f"starve {mean_sh['starve']:.1f}% credit {mean_sh['credit']:.1f}%\n"
+                f"# aggregate payload across the mesh: {total / 1e6:.1f} MB over {len(rows)} producers\n"
+            )
+    return rows, bad, clock_mhz
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     ALL_MESH_CONFIGS,
@@ -629,14 +743,33 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
     )
     ttnn.visualize_mesh_device(mesh_device)
 
-    num_tokens = 100
+    num_tokens = CMBF2D_NUM_TOKENS
+    num_slots = CMBF2D_NUM_SLOTS
+    chunk_size_bytes = CMBF2D_CHUNK_BYTES
     signpost(f"combine_fabric2d start num_links={num_links} num_tokens={num_tokens}")
     output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
         mesh_device,
         num_links=num_links,
         num_tokens=num_tokens,
+        num_slots=num_slots,
+        chunk_size_bytes=chunk_size_bytes,
+        stall_telemetry=CMBF2D_STALL,
+        variant=CMBF2D_VARIANT,
     )
     ttnn.synchronize_device(mesh_device)
     signpost("combine_fabric2d end")
 
     logger.debug(f"✅ combine_fabric2d ran, output shape={tuple(output.shape)}")
+
+    bwinfo_path = _cmbf2d_bwinfo_path()
+    rows, bad, clock_mhz = _dump_combine_fabric2d_bwinfo(
+        mesh_device, num_links, axis=0, num_tokens=num_tokens, path=bwinfo_path
+    )
+    gbps = sorted(r[4] for r in rows)
+    logger.info(
+        f"combine_fabric2d telemetry -> {bwinfo_path}: {len(rows)} producers "
+        f"({len(bad)} missing), clock {clock_mhz}MHz, per-producer GB/s min {gbps[0]:.2f} "
+        f"p50 {gbps[len(gbps) // 2]:.2f} max {gbps[-1]:.2f}"
+    )
+    assert not bad, f"{len(bad)} worker(s) produced no telemetry record"
+    assert all(r[0]["tokens_sent"] == num_tokens for r in rows), "a producer did not send every token"

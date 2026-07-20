@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -36,8 +37,48 @@ namespace {
 // ---------------------------------------------------------------------------------------------
 constexpr uint32_t PKT_HDR_PAYLOAD_OFF = 0x0000;  // packet header for the payload sends
 constexpr uint32_t PKT_HDR_CREDIT_OFF = 0x0400;   // separate header for credit-return sends
-constexpr uint32_t PROD_BUF_OFF = 0x1000;         // producer's rotating source data
-constexpr uint32_t L1_SLACK = 0x1000;             // keep clear of the global-semaphore region at the L1 top
+// 1 kB of per-worker telemetry, in the gap the two packet headers leave before the buffers, so it
+// costs the payload rings nothing. Sized for expansion; the current record is 12 words.
+constexpr uint32_t TELEMETRY_OFF = 0x0800;
+constexpr uint32_t TELEMETRY_SIZE = 0x0400;
+constexpr uint32_t PROD_BUF_OFF = 0x1000;  // producer's rotating source data
+constexpr uint32_t L1_SLACK = 0x1000;      // keep clear of the global-semaphore region at the L1 top
+static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the producer buffer");
+static_assert(PKT_HDR_CREDIT_OFF <= TELEMETRY_OFF, "telemetry region overlaps the credit packet header");
+
+// Telemetry record word layout, shared with the producer kernel. Kept explicit (rather than a struct)
+// because the kernel writes it by index and the host reads it by index.
+enum TelemetryWord : uint32_t {
+    TELEM_MAGIC = 0,  // written LAST by the kernel; zeroed at kernel entry
+    TELEM_TOKENS_SENT = 1,
+    TELEM_CREDITS_FORWARDED = 2,
+    TELEM_CHUNK_SIZE = 3,
+    TELEM_NUM_SLOTS = 4,
+    TELEM_T_FIRST_SEND_LO = 5,
+    TELEM_T_FIRST_SEND_HI = 6,
+    TELEM_T_LAST_SEND_LO = 7,
+    TELEM_T_LAST_SEND_HI = 8,
+    TELEM_T_LAST_CREDIT_LO = 9,
+    TELEM_T_LAST_CREDIT_HI = 10,
+    TELEM_WRITE_UP_TO_FINAL = 11,
+    // Stall attribution: where the producer's cycles actually go. Four disjoint buckets measured with
+    // the same wall clock as the timestamps above, so they are directly comparable to the send window.
+    TELEM_EDM_SLOTS = 12,        // EDM sender-channel buffer slots (the send pipeline's depth)
+    TELEM_CREDIT_PACKETS = 13,   // credit PACKETS sent (<= credits forwarded, they batch)
+    TELEM_WAIT_SLOT_CY_LO = 14,  // blocked in wait_for_empty_write_slot before a payload => the eth
+    TELEM_WAIT_SLOT_CY_HI = 15,  //   side (eRISC/link) is the bottleneck
+    TELEM_ISSUE_CY_LO = 16,      // issuing the payload: header build + 2 NoC writes + flush
+    TELEM_ISSUE_CY_HI = 17,
+    TELEM_STARVE_CY_LO = 18,  // credit-starved: sent == write_up_to with tokens left to send
+    TELEM_STARVE_CY_HI = 19,  //   => the credit round-trip is the bottleneck
+    TELEM_CREDIT_CY_LO = 20,  // forwarding the receiver's credits (a whole extra packet)
+    TELEM_CREDIT_CY_HI = 21,
+    TELEM_LOOP_ITERS = 22,  // producer loop trips, for a per-iteration cost estimate
+    TELEM_NUM_WORDS = 23,
+};
+// Bumped whenever the record layout changes, so a stale record from an older kernel reads as invalid
+// instead of being misparsed.
+constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0002u;
 
 // ---------------------------------------------------------------------------------------------
 // Physical-column geometry
@@ -258,23 +299,42 @@ private:
 struct L1Layout {
     uint32_t pkt_hdr_payload;
     uint32_t pkt_hdr_credit;
+    uint32_t telemetry;
     uint32_t prod_buf;
     uint32_t recv_buf;
+    uint32_t pkt_hdr_ring;  // num_slots prebuilt payload headers (SLOT_HEADERS variant)
 };
 
-L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t num_slots, uint32_t chunk_size_bytes, uint32_t sem_floor) {
+// The telemetry address depends only on the L1 base, so the readback path can resolve it without any
+// of the run's semaphores or sizing.
+uint32_t telemetry_addr(ttnn::MeshDevice* mesh) {
+    return static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1)) +
+           TELEMETRY_OFF;
+}
+
+L1Layout compute_l1_layout(
+    ttnn::MeshDevice* mesh, uint32_t num_slots, uint32_t chunk_size_bytes, uint32_t sem_floor, uint32_t variant) {
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
     l.pkt_hdr_payload = base + PKT_HDR_PAYLOAD_OFF;
     l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
+    l.telemetry = base + TELEMETRY_OFF;
     l.prod_buf = base + PROD_BUF_OFF;
-    l.recv_buf = l.prod_buf + num_slots * chunk_size_bytes;
-    const uint32_t end = l.recv_buf + num_slots * chunk_size_bytes;
+    // SINGLE_SRC needs only one source chunk, which is what makes a receiver ring deeper than ~50 slots
+    // fit at all (both rings at num_slots would need 2 x num_slots x 14 kB).
+    const uint32_t prod_slots = (variant & 16u) != 0 ? 1u : num_slots;
+    l.recv_buf = l.prod_buf + prod_slots * chunk_size_bytes;
+    // One prebuilt header per ring slot, past the rings. Only the SLOT_HEADERS variant reads it, but it
+    // is always reserved so the L1 fatal check does not depend on the variant.
+    l.pkt_hdr_ring = l.recv_buf + num_slots * chunk_size_bytes;
+    const uint32_t hdr_ring_bytes =
+        num_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    const uint32_t end = l.pkt_hdr_ring + hdr_ring_bytes;
     TT_FATAL(
         end + L1_SLACK <= sem_floor,
         "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at 0x{:x}. "
-        "Reduce num_slots ({}) or chunk_size_bytes ({}).",
+        "Reduce num_slots ({}) or chunk_size_bytes ({}) (or set the SINGLE_SRC variant bit).",
         end - base,
         end,
         sem_floor,
@@ -357,6 +417,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             write_up_to_addr,
             data_ready_addr,
             credits_addr,
+            l1.telemetry,
+            args.stall_telemetry,
+            args.variant,
+            l1.pkt_hdr_ring,
         };
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -431,6 +495,69 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
 }  // namespace
 
+CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t num_links, uint32_t axis) {
+    TT_FATAL(mesh_device != nullptr, "combine_fabric2d read_telemetry: mesh_device is null");
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(axis < mesh_shape.dims(), "combine_fabric2d: axis {} out of range for mesh shape {}", axis, mesh_shape);
+
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    const uint32_t addr = telemetry_addr(mesh_device);
+
+    CombineFabric2dTelemetry out;
+    out.clock_mhz = static_cast<uint32_t>(mesh_device->get_devices().front()->get_clock_rate_mhz());
+
+    for (const auto& coord : ttnn::MeshCoordinateRange(mesh_shape)) {
+        auto* dev = mesh_device->get_device(coord);
+        // Placement is a pure function of (device, axis, num_links), so recomputing it here reproduces
+        // exactly the cores the op programmed — no state has to survive from the run.
+        const auto placement = decide_placement(mesh_device, coord, axis, num_links, grid);
+        for (const auto& [eth_logical, wp] : placement.by_eth_logical) {
+            CombineFabric2dWorkerTelemetry w;
+            w.device_id = static_cast<uint32_t>(dev->id());
+            w.mesh_coord.assign(coord.coords().begin(), coord.coords().end());
+            w.worker_logical = wp.worker_logical;
+            w.worker_physical = wp.worker_physical;
+            w.eth_logical = eth_logical;
+            w.eth_phys_x = wp.eth_phys_x;
+            w.link_idx = wp.link_idx;
+            w.relocated = !wp.in_eth_column;
+            w.peer_mesh_id = *wp.peer_node.mesh_id;
+            w.peer_chip_id = static_cast<uint32_t>(wp.peer_node.chip_id);
+
+            std::vector<uint32_t> words;
+            const bool ok = tt::tt_metal::detail::ReadFromDeviceL1(
+                dev, wp.worker_logical, addr, TELEM_NUM_WORDS * sizeof(uint32_t), words);
+            if (ok && words.size() >= TELEM_NUM_WORDS && words[TELEM_MAGIC] == TELEMETRY_MAGIC) {
+                w.valid = true;
+                w.tokens_sent = words[TELEM_TOKENS_SENT];
+                w.credits_forwarded = words[TELEM_CREDITS_FORWARDED];
+                w.chunk_size_bytes = words[TELEM_CHUNK_SIZE];
+                w.num_slots = words[TELEM_NUM_SLOTS];
+                w.write_up_to_final = words[TELEM_WRITE_UP_TO_FINAL];
+                w.t_first_send = static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_LO]) |
+                                 (static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_HI]) << 32);
+                w.t_last_send = static_cast<uint64_t>(words[TELEM_T_LAST_SEND_LO]) |
+                                (static_cast<uint64_t>(words[TELEM_T_LAST_SEND_HI]) << 32);
+                w.t_last_credit = static_cast<uint64_t>(words[TELEM_T_LAST_CREDIT_LO]) |
+                                  (static_cast<uint64_t>(words[TELEM_T_LAST_CREDIT_HI]) << 32);
+                w.edm_slots = words[TELEM_EDM_SLOTS];
+                w.credit_packets = words[TELEM_CREDIT_PACKETS];
+                w.loop_iters = words[TELEM_LOOP_ITERS];
+                w.wait_slot_cycles = static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_LO]) |
+                                     (static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_HI]) << 32);
+                w.issue_cycles = static_cast<uint64_t>(words[TELEM_ISSUE_CY_LO]) |
+                                 (static_cast<uint64_t>(words[TELEM_ISSUE_CY_HI]) << 32);
+                w.starve_cycles = static_cast<uint64_t>(words[TELEM_STARVE_CY_LO]) |
+                                  (static_cast<uint64_t>(words[TELEM_STARVE_CY_HI]) << 32);
+                w.credit_cycles = static_cast<uint64_t>(words[TELEM_CREDIT_CY_LO]) |
+                                  (static_cast<uint64_t>(words[TELEM_CREDIT_CY_HI]) << 32);
+            }
+            out.workers.push_back(std::move(w));
+        }
+    }
+    return out;
+}
+
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(
     const CombineFabric2dParams& operation_attributes,
     const CombineFabric2dInputs& /*tensor_args*/,
@@ -473,15 +600,21 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const uint32_t credits_addr = static_cast<uint32_t>(credits_to_return_sem.address());
     const uint32_t sem_floor = std::min({write_up_to_addr, data_ready_addr, credits_addr});
     const auto l1 = compute_l1_layout(
-        mesh_device, operation_attributes.num_slots, operation_attributes.chunk_size_bytes, sem_floor);
-    log_info(
-        tt::LogOp,
-        "combine_fabric2d L1: prod_buf 0x{:x} recv_buf 0x{:x} ({} slots x {} B), sems write_up_to 0x{:x} (init {}) "
-        "data_ready 0x{:x} credits_to_return 0x{:x}",
-        l1.prod_buf,
-        l1.recv_buf,
+        mesh_device,
         operation_attributes.num_slots,
         operation_attributes.chunk_size_bytes,
+        sem_floor,
+        operation_attributes.variant);
+    log_info(
+        tt::LogOp,
+        "combine_fabric2d L1: prod_buf 0x{:x} recv_buf 0x{:x} hdr_ring 0x{:x} ({} slots x {} B), variant {}, sems "
+        "write_up_to 0x{:x} (init {}) data_ready 0x{:x} credits_to_return 0x{:x}",
+        l1.prod_buf,
+        l1.recv_buf,
+        l1.pkt_hdr_ring,
+        operation_attributes.num_slots,
+        operation_attributes.chunk_size_bytes,
+        operation_attributes.variant,
         write_up_to_addr,
         operation_attributes.num_slots,
         data_ready_addr,
