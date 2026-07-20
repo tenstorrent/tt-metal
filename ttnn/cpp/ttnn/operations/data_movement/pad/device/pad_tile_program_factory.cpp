@@ -33,7 +33,8 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const auto& tile = a.tensor_spec().tile();
+    uint32_t single_tile_size = tile.get_tile_size(cb_data_format);
 
     log_debug(tt::LogOp, "pad_tile");
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
@@ -53,6 +54,7 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -65,6 +67,7 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src1_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -77,11 +80,11 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
-    uint32_t num_unpadded_Xt = a.padded_shape()[3] / TILE_WIDTH;
-    uint32_t num_total_Xt = output_shape[3] / TILE_WIDTH;
+    uint32_t num_unpadded_Xt = a.padded_shape()[3] / tile.get_width();
+    uint32_t num_total_Xt = output_shape[3] / tile.get_width();
     uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
-    uint32_t num_unpadded_Yt = a.padded_shape()[2] / TILE_HEIGHT;
-    uint32_t num_total_Yt = output_shape[2] / TILE_HEIGHT;
+    uint32_t num_unpadded_Yt = a.padded_shape()[2] / tile.get_height();
+    uint32_t num_total_Yt = output_shape[2] / tile.get_height();
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
     uint32_t num_unpadded_Z = a.padded_shape()[1];
     uint32_t num_total_Z = output_shape[1];
@@ -90,7 +93,7 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
     uint32_t num_total_W = output_shape[0];
     uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
 
-    uint32_t num_unpadded_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_unpadded_tiles = a.physical_volume() / tile.get_tile_hw();
 
     // Reader compile-time args
     // Data is 32 byte aligned
