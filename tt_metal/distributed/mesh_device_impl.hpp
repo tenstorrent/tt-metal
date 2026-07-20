@@ -318,8 +318,10 @@ public:
 
     // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
     // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
-    // safe for a DRISC kernel to occupy. Throws if no free subchannel exists, or
-    // TT_FATALs if bank_id is out of range. Used by the DRAM-sender GCB factory.
+    // safe for a DRISC kernel to occupy. The device overload resolves against that
+    // device's harvested DRAM topology; the compatibility overload uses reference_device().
+    // Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range.
+    CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
     CoreCoord pick_unused_dram_logical_core(uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
@@ -327,9 +329,10 @@ public:
     // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
     // pair lets two DRISC cores share a bank's receiver set. Indices are derived
-    // per-bank from the SOC descriptor (they are not fixed across banks). Used by both
-    // the DRAM-sender GCB factory and the TensorPrefetcherManager so their sender
-    // cores always agree.
+    // per-bank and per-device from the SOC descriptor (they are not fixed across banks
+    // or devices with different DRAM harvest masks). The compatibility overload uses
+    // reference_device() to produce the canonical public GCB mapping.
+    std::vector<CoreCoord> dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const;
     std::vector<CoreCoord> dram_sender_logical_cores(uint32_t bank_id) const;
 
     bool close() override;

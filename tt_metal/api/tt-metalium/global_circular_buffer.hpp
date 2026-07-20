@@ -64,7 +64,10 @@ public:
     }
 
 private:
-    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    void setup_cb_buffers(
+        BufferType buffer_type,
+        uint32_t max_num_receivers_per_sender,
+        distributed::MeshDevice* dram_sender_mesh_device = nullptr);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
     void initialize_dram_sender_state_block(
         distributed::MeshDevice* mesh_device, uint32_t max_num_receivers_per_sender);
