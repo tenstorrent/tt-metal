@@ -55,6 +55,7 @@ from loguru import logger
 import ttnn
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_dit.parallel.manager import CCLManager
+from models.common.modules.tt_ccl import get_num_links
 
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
 from models.experimental.hunyuan_image_3_0.tt.attention.mask import build_attention_mask_tt
@@ -92,7 +93,7 @@ def _build_workload(mesh_device):
     + LM head + a padded ids tensor, and return a (prefill closure, ids, seq_len)."""
     num_layers = int(os.environ.get("HY_NUM_LAYERS", str(_full_num_layers())))
     c = h.model_cfg()
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=max(1, get_num_links(mesh_device)), topology=ttnn.Topology.Linear)
 
     tok = HunyuanTokenizer.from_model_dir(h.I2I_WEIGHTS, sequence_template=SEQUENCE_TEMPLATE)
     bundle = prepare_recaption_inputs(tok, PROMPT, bot_task=BOT_TASK, sequence_template=SEQUENCE_TEMPLATE)
