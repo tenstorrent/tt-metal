@@ -1,0 +1,36 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
+  "layers": 40,
+  "batch": 32,
+  "context_tokens": 32768,
+  "page_block_tokens": 32,
+  "pages_per_user": 1024,
+  "physical_cache_blocks": 32768,
+  "cache_dtype": "BFP8_B paged, one local KV head/rank",
+  "baseline": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 0,
+    "free_bytes_per_device": 30082731008,
+    "largest_contiguous_free_per_bank": 3760341376
+  },
+  "after_weights": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 3143638528,
+    "free_bytes_per_device": 26939092480,
+    "largest_contiguous_free_per_bank": 3367386496
+  },
+  "after_batch32_full_context_cache": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 25960652288,
+    "free_bytes_per_device": 4122078720,
+    "largest_contiguous_free_per_bank": 515259776
+  },
+  "measured_weight_bytes_per_device": 3143638528,
+  "measured_kv_cache_bytes_per_device": 22817013760,
+  "measured_weight_plus_kv_bytes_per_device": 25960652288,
+  "measured_remaining_bytes_per_device": 4122078720,
+  "passed": true
+}

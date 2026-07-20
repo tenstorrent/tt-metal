@@ -1,0 +1,107 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4, two links",
+  "num_layers": 40,
+  "prompt_tokens": 128,
+  "workload": {
+    "batch": 1,
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "standard_128_128": true
+  },
+  "context_tokens": 32768,
+  "cache_dtype": "BFP8_B paged, one KV head/rank",
+  "memory_after_weights": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 3141523968,
+    "free_bytes_per_device": 26941207040,
+    "largest_contiguous_free_per_bank": 3367650880
+  },
+  "memory_after_full_context_cache": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 3854555648,
+    "free_bytes_per_device": 26228175360,
+    "largest_contiguous_free_per_bank": 3278521920
+  },
+  "samplers": {
+    "split_greedy_token": 2107,
+    "force_argmax_token": 2107,
+    "ttsampling_token": 2107,
+    "semantic_match": true,
+    "iterations": 20,
+    "split_greedy_ms_per_call": 0.8035387145355344,
+    "force_argmax_ms_per_call": 1.0053826961666346,
+    "ttsampling_ms_per_call": 1.009106752462685,
+    "selected": "Sampling1D exact local argmax plus packed FP32 rank-candidate gather",
+    "rejected": "TTSampling exact greedy full-vocabulary all-gather plus argmax; broader mutable request state and explicit request seeds disable SamplingGenerator internal tracing"
+  },
+  "trace": {
+    "generated_tokens": [
+      2107,
+      2027,
+      4422,
+      6247,
+      2303
+    ],
+    "stats_after_five_tokens": {
+      "captures": 1,
+      "replays": 4,
+      "releases": 0,
+      "decode_warmups": 1,
+      "token_host_copies": 0,
+      "token_device_copies": 4,
+      "position_host_copies": 4,
+      "rotary_position_host_copies": 4,
+      "page_table_host_copies": 4,
+      "sampling_param_host_copies": 0,
+      "caller_token_readbacks": 5,
+      "explicit_synchronizations": 9,
+      "resets": 2,
+      "rng_checkpoints": 0,
+      "rng_restores": 0,
+      "ccl_capture_epoch_resets": 1
+    },
+    "expected_position_after_four_decode_replays": 132,
+    "position_after_generation": 132,
+    "rotary_position_after_generation": 132,
+    "feedback_token_matches_last_output": true,
+    "unchanged_page_table_host_copy_delta": 0,
+    "expanded_page_table_host_copy_delta": 1,
+    "changed_page_table_host_copy_delta": 1,
+    "changed_page_table_persistent_input_matches": true,
+    "changed_page_table_logits_max_abs_delta": 1.0,
+    "changed_page_table_output_token": 2278,
+    "original_page_table_output_token": 2278,
+    "restored_page_table_output_token": 2278,
+    "unchanged_replay_page_table_host_copy_delta": 0,
+    "unchanged_replay_logits_exact_match": true,
+    "unchanged_replay_token_match": true,
+    "restored_page_table_logits_exact_match": true,
+    "restored_page_table_token_match": true,
+    "replay_iterations": 128,
+    "position_after_pair_replays": 256,
+    "rotary_position_after_pair_replays": 256,
+    "final_feedback_token": 2226,
+    "steady_state_host_copy_deltas": {
+      "token_host_copies": 0,
+      "position_host_copies": 0,
+      "rotary_position_host_copies": 0,
+      "page_table_host_copies": 0,
+      "sampling_param_host_copies": 0
+    }
+  },
+  "performance": {
+    "cold_ttft_ms": 2444.0769545035437,
+    "warm_ttft_ms": 34.99379300046712,
+    "trace_pair_elapsed_s": 2.4566233353689313,
+    "device_only_trace_pair_t_s_u": 52.10403978385119,
+    "caller_visible_token_out_elapsed_s": 2.4623624812811613,
+    "caller_visible_token_out_t_s_u": 51.98259840825787,
+    "teacher_forcing_trace_t_s_u": 52.10149692713312,
+    "model_trace_ms_per_token": 18.39837828083546,
+    "sampling_trace_ms_per_token": 0.7938990638649557,
+    "sampling_fraction": 0.04136554769432695
+  },
+  "passed": true
+}

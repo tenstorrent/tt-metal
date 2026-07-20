@@ -1,0 +1,8 @@
+
+Data points align,
+Algorithms learn from past,
+Future predictions shine.
+
+Machine learning is a powerful tool that allows computers to learn from data and make predictions or decisions without being explicitly programmed. It is a subset of artificial intelligence (AI) that focuses on developing algorithms that can improve over time by learning from experience.
+
+In the context of the extract, machine learning is used to analyze and interpret data related to the spread of COVID-19. By training a machine learning

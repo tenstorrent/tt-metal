@@ -1,0 +1,132 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
+  "workload": {
+    "batch": 1,
+    "prompt_tokens": 128,
+    "replay_tokens": 128,
+    "max_context_len": 32768,
+    "matches_official_128_128": true
+  },
+  "depths": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    40
+  ],
+  "points": [
+    {
+      "layers": 1,
+      "iterations": 128,
+      "model_trace_ms_per_token": 0.7477477156498935,
+      "sampling_trace_ms_per_token": 0.794074800069211,
+      "device_only_pair_ms_per_token": 1.5433704684255645,
+      "device_only_pair_t_s_u": 647.9325738428364,
+      "caller_visible_pair_ms_per_token": 1.5690700492996257,
+      "caller_visible_pair_t_s_u": 637.3201760153173,
+      "caller_token_readbacks": 130,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input",
+      "max_context_len": 32768
+    },
+    {
+      "layers": 2,
+      "iterations": 128,
+      "model_trace_ms_per_token": 1.2199712182336953,
+      "sampling_trace_ms_per_token": 0.7942269003251567,
+      "device_only_pair_ms_per_token": 2.016433390963357,
+      "device_only_pair_t_s_u": 495.92513419064494,
+      "caller_visible_pair_ms_per_token": 2.044901055342052,
+      "caller_visible_pair_t_s_u": 489.0212156659723,
+      "caller_token_readbacks": 130,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input",
+      "max_context_len": 32768
+    },
+    {
+      "layers": 4,
+      "iterations": 128,
+      "model_trace_ms_per_token": 2.1647473149641883,
+      "sampling_trace_ms_per_token": 0.7942930606077425,
+      "device_only_pair_ms_per_token": 2.9601609421661124,
+      "device_only_pair_t_s_u": 337.81946979823505,
+      "caller_visible_pair_ms_per_token": 2.9960731844766997,
+      "caller_visible_pair_t_s_u": 333.77021802445125,
+      "caller_token_readbacks": 130,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input",
+      "max_context_len": 32768
+    },
+    {
+      "layers": 8,
+      "iterations": 128,
+      "model_trace_ms_per_token": 4.052738142490853,
+      "sampling_trace_ms_per_token": 0.7942293887026608,
+      "device_only_pair_ms_per_token": 4.848917880735826,
+      "device_only_pair_t_s_u": 206.2315808590781,
+      "caller_visible_pair_ms_per_token": 4.884871461399598,
+      "caller_visible_pair_t_s_u": 204.71367729980824,
+      "caller_token_readbacks": 130,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input",
+      "max_context_len": 32768
+    },
+    {
+      "layers": 16,
+      "iterations": 128,
+      "model_trace_ms_per_token": 7.8359983053815085,
+      "sampling_trace_ms_per_token": 0.7942331321828533,
+      "device_only_pair_ms_per_token": 8.632059303636197,
+      "device_only_pair_t_s_u": 115.84721151982316,
+      "caller_visible_pair_ms_per_token": 8.672119070979534,
+      "caller_visible_pair_t_s_u": 115.31206984304563,
+      "caller_token_readbacks": 130,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input",
+      "max_context_len": 32768
+    },
+    {
+      "layers": 40,
+      "iterations": 128,
+      "model_trace_ms_per_token": 19.16196120873792,
+      "sampling_trace_ms_per_token": 0.7937658883747645,
+      "device_only_pair_ms_per_token": 19.957687669375446,
+      "device_only_pair_t_s_u": 50.10600509268787,
+      "caller_visible_pair_ms_per_token": 20.003249275760027,
+      "caller_visible_pair_t_s_u": 49.99187813010968,
+      "caller_token_readbacks": 130,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input",
+      "max_context_len": 32768
+    }
+  ],
+  "model_trace_linear_fit": {
+    "slope_ms_per_layer": 0.47217765290501273,
+    "intercept_ms": 0.2764250915336923,
+    "r_squared": 0.99999988750566
+  },
+  "like_for_like_effective_decoder_slope_ms": 0.47217765290501273,
+  "fixed_embedding_terminal_trace_intercept_ms": 0.2764250915336923,
+  "full_depth_fit": {
+    "layers": 40,
+    "measured_model_trace_ms": 19.16196120873792,
+    "fitted_model_trace_ms": 19.163531207734202,
+    "fit_residual_ms": -0.0015699989962811856,
+    "sampling_trace_ms": 0.7937658883747645,
+    "caller_visible_ms": 20.003249275760027
+  },
+  "inherited_decoder_reference": {
+    "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/optimized_multichip_decoder/results/final_default_batch1_perf.json",
+    "batch": 1,
+    "sequence_length": 17,
+    "real_layer": 20,
+    "trace_ms_per_layer": 0.3182423207908869,
+    "projected_40_layer_ms": 12.729692831635475,
+    "comparison_class": "provisional non-like-for-like reference: sequence 17 and isolated layer; the depth-regression slope above is the like-for-like 128--255 position control",
+    "effective_slope_delta_percent": 48.370478109752995
+  },
+  "policy": {
+    "tensor_parallel": 4,
+    "topology": "1x4 FABRIC_1D_RING, two links",
+    "weight_and_math": "BFP4_B/LoFi decoder and LM-head matmuls",
+    "activation_residual_and_ccl": "BF16",
+    "kv_cache": "BFP8_B paged, one local KV head per rank",
+    "inter_layer_residual": "BF16 TILE L1 width-sharded, replicated values across TP ranks"
+  },
+  "passed": true
+}

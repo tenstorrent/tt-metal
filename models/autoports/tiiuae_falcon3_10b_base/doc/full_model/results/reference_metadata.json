@@ -1,0 +1,27 @@
+{
+  "hf_model": "tiiuae/Falcon3-10B-Base",
+  "revision": "34bb99a889fe0426412da3dd2b46e6f64c8fd003",
+  "local_snapshot": "/home/mvasiljevic/hf-cache/hub/models--tiiuae--Falcon3-10B-Base/snapshots/34bb99a889fe0426412da3dd2b46e6f64c8fd003",
+  "reference": "aime24_plain_100.refpt",
+  "reference_sha256": "9e732fd90c69dc523cebeae62570c57725a22a24ad257888b8ed35495129b1f0",
+  "format": "readiness_v1",
+  "source_dataset": "AIME24",
+  "prompt_tokens": 155,
+  "generated_tokens": 100,
+  "top_k": 100,
+  "tokenizer_class": "TokenizersBackend",
+  "bos_token_id": null,
+  "eos_token_id": 11,
+  "pad_token_id": 2023,
+  "chat_template_present": false,
+  "chat_template_probe": {
+    "method": "tokenizer.apply_chat_template([{\"role\": \"user\", \"content\": prompt}], tokenize=false, add_generation_prompt=true)",
+    "result": "ValueError: tokenizer.chat_template is not set"
+  },
+  "prompt_rendering_decision": "Use the exact base tokenizer's native completion format. No chat template was invented because this checkpoint does not publish one.",
+  "failed_chat_generation_command": "TRANSFORMERS_OFFLINE=1 python -m models.common.readiness_check.generate --hf-model <exact-local-snapshot> --prompt-source aime24 --chat-template --aime24-prompt-index 0 --gen-len 100 --top-k 100 --output <reference>",
+  "successful_generation_command": "TRANSFORMERS_OFFLINE=1 python -m models.common.readiness_check.generate --hf-model <exact-local-snapshot> --prompt-source aime24 --aime24-prompt-index 0 --gen-len 100 --top-k 100 --output <reference>",
+  "prompt_text": "Every morning Aya goes for a $9$-kilometer-long walk and stops at a coffee shop afterwards. When she walks at a constant speed of $s$ kilometers per hour, the walk takes her 4 hours, including $t$ minutes spent in the coffee shop. When she walks $s+2$ kilometers per hour, the walk takes her 2 hours and 24 minutes, including $t$ minutes spent in the coffee shop. Suppose Aya walks at $s+\\frac{1}{2}$ kilometers per hour. Find the number of minutes the walk takes her, including the $t$ minutes spent in the coffee shop.\nPlease reason step by step, and put your final answer within\\boxed\nAnswer:",
+  "generated_utc": "2026-07-20",
+  "offline_exact_revision": true
+}

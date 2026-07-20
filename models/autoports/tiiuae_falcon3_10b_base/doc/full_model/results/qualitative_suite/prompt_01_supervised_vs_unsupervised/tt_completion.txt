@@ -1,0 +1,4 @@
+ in supervised learning, the algorithm is given a set of labeled data (input-output pairs) and is trained to predict the correct output for new, unseen data. In contrast, in unsupervised learning, the algorithm is given a set of unlabeled data and must find patterns or structure in the data on its own, without any explicit guidance on what the correct output should be.
+
+#### 2. **Explain the K-means Clustering Algorithm and Its Steps.**
+**Answer:**

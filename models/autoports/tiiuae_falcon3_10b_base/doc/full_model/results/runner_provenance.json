@@ -1,0 +1,30 @@
+{
+  "date_utc": "2026-07-20",
+  "model_revision": "34bb99a889fe0426412da3dd2b46e6f64c8fd003",
+  "environment": {
+    "TTNN_CONFIG_OVERRIDES": "{\"throw_exception_on_fallback\": true}",
+    "mesh_device": "P300X2",
+    "fabric_config": "FABRIC_1D_RING"
+  },
+  "canonical_results": {
+    "prefill_log_sha256": "1712a562f1acffa68b9a8e12e5c4b97a7551ff5a2f4f8e94eb42a7aed8d0fa6c",
+    "teacher_forcing_log_sha256": "453e4f9cac70a7e001fc904a8829131b6031653f37fd997323a830715cea2755",
+    "autoregressive_log_sha256": "ed8bb7417ca3a4f98c53c4ee7d1cabb8c309af174536a9ef21545fc042c4030b"
+  },
+  "artifact_sha256": {
+    "reference": "9e732fd90c69dc523cebeae62570c57725a22a24ad257888b8ed35495129b1f0",
+    "full_model_evidence": "d1ee1926ae4805079828197fb89a6c734327d786a1d7d64be0103ab1cbd4aa93",
+    "contract_coverage": "84efe2396e0277b69919e62ac93782ffd1f5936d252ff7b0dcdb35b41c1da551",
+    "batch32": "d0b7389ea37398d170cc5d82ecaa7f94857ed5e8bbfc038e443a9cbea6043eb3",
+    "full_context": "3e7133fc4debb822a5dbf4dd9c874b6d9bf3eccea9a558bd1a3ea5fdfe47d352",
+    "capacity": "6d67646d8ae7db3ba84d05881f0708c948cd0e3346a26543a5b01715f5b94c52",
+    "watcher": "280b153e44c0695498223026146d2b0eee56d6e7b79b8d008b922a3789486d07",
+    "depth_sweep": "25e7dd227dd046a00ac7bf73b0af02a1a6ee3690dfd1026236241ae728efe177",
+    "depth_sweep_log": "03d96aeb88a9555d97267ab434be97ea88d8469a335384018e9806985373c9d2",
+    "depth_sweep_runner": "51292f3db7e8fd3f3bdafadfd3a45828efd43dc88bfcadf364250f6514bd4435",
+    "autoregressive_degeneracy_report": "731813b22e8bbe40e78c00965d4b090fbd22b91badb34ac92548f6003634732a",
+    "raw_profile_csv": "ec0f082c8a3c55037018871c74f858b9469c02cb0da56ff7ad9a5cb83a49bd8a",
+    "model_py": "ed0f376768f4c17045bc4efea1f2c945508c8c017aade12bb621bed7318624c1",
+    "generator_py": "f2b879fe4f1c8de4a2cc713d06d34f80b24886811884c27d529ead66f3c211f1"
+  }
+}

@@ -1,0 +1,5 @@
+.logs/
+reports/*/profile_log_device.csv
+reports/*/tracy_profile_log_host.tracy
+*.csv.csv
+*.csv.png

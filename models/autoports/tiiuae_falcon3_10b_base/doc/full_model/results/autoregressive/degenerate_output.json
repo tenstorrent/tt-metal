@@ -1,0 +1,20 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/autoregressive/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 77,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.039
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/autoregressive/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 5,
+      "compared_tokens": 100
+    }
+  ],
+  "exit_code": 0
+}

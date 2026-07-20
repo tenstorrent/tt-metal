@@ -1,0 +1,38 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
+  "layers_executed": 1,
+  "weights": "real Falcon3 checkpoint embedding, layer 0, final norm, untied TP LM head",
+  "prompt_tokens": 128,
+  "prefill_wall_ms": 4.48266277089715,
+  "prefill_greedy_token": 8751,
+  "trace_generated_tokens": [
+    8751,
+    59708
+  ],
+  "decode_profile_iterations": 3,
+  "decode_wall_total_ms": 4.379956983029842,
+  "decode_wall_ms_per_token": 1.4599856610099475,
+  "position_before_profile": 129,
+  "position_after_profile": 132,
+  "feedback_token_after_profile": 108500,
+  "profile_replay_delta": 3,
+  "trace_stats": {
+    "captures": 1,
+    "replays": 4,
+    "releases": 0,
+    "decode_warmups": 1,
+    "token_host_copies": 0,
+    "token_device_copies": 4,
+    "position_host_copies": 4,
+    "rotary_position_host_copies": 4,
+    "page_table_host_copies": 4,
+    "sampling_param_host_copies": 0,
+    "caller_token_readbacks": 2,
+    "explicit_synchronizations": 9,
+    "resets": 2,
+    "rng_checkpoints": 0,
+    "rng_restores": 0,
+    "ccl_capture_epoch_resets": 1
+  },
+  "passed": true
+}

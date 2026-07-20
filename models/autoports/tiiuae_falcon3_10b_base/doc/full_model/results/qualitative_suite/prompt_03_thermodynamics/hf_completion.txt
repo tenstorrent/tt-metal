@@ -1,0 +1,6 @@
+ **First Law of Thermodynamics (Conservation of Energy):**
+   - **Statement:** Energy cannot be created or destroyed, only converted from one form to another.
+   - **Mathematical Form:** \( \Delta U = Q - W \)
+     - \( \Delta U \) is the change in internal energy of the system.
+     - \( Q \) is the heat added to the system.
+     -

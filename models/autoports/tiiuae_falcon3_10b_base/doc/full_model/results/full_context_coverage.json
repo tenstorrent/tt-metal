@@ -1,0 +1,1030 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
+  "layers_executed": 40,
+  "public_prompt_tokens": 32767,
+  "requested_tokens": 2,
+  "padded_tokens_owned_by_generator": 32768,
+  "prefill_chunks": 16,
+  "prefill_internal_row_chunks_per_layer": 32,
+  "prefill_internal_row_chunks_total": 1280,
+  "chunk_tokens": 2048,
+  "page_block_tokens": 32,
+  "mapped_pages": 1024,
+  "expected_pages": 1024,
+  "final_physical_page": 1023,
+  "all_layer_rank_final_page_checks": [
+    {
+      "layer": 0,
+      "rank": 0,
+      "key_page_abs_sum": 5004.46875,
+      "value_page_abs_sum": 308.2430419921875
+    },
+    {
+      "layer": 0,
+      "rank": 1,
+      "key_page_abs_sum": 7122.8984375,
+      "value_page_abs_sum": 268.5242919921875
+    },
+    {
+      "layer": 0,
+      "rank": 2,
+      "key_page_abs_sum": 6942.90625,
+      "value_page_abs_sum": 245.037109375
+    },
+    {
+      "layer": 0,
+      "rank": 3,
+      "key_page_abs_sum": 5370.0234375,
+      "value_page_abs_sum": 245.451904296875
+    },
+    {
+      "layer": 1,
+      "rank": 0,
+      "key_page_abs_sum": 14993.703125,
+      "value_page_abs_sum": 2414.91796875
+    },
+    {
+      "layer": 1,
+      "rank": 1,
+      "key_page_abs_sum": 11270.265625,
+      "value_page_abs_sum": 3418.359375
+    },
+    {
+      "layer": 1,
+      "rank": 2,
+      "key_page_abs_sum": 14600.625,
+      "value_page_abs_sum": 2212.77734375
+    },
+    {
+      "layer": 1,
+      "rank": 3,
+      "key_page_abs_sum": 13260.09375,
+      "value_page_abs_sum": 2392.3984375
+    },
+    {
+      "layer": 2,
+      "rank": 0,
+      "key_page_abs_sum": 3023.2255859375,
+      "value_page_abs_sum": 409.82568359375
+    },
+    {
+      "layer": 2,
+      "rank": 1,
+      "key_page_abs_sum": 3014.3525390625,
+      "value_page_abs_sum": 427.3544921875
+    },
+    {
+      "layer": 2,
+      "rank": 2,
+      "key_page_abs_sum": 3477.34375,
+      "value_page_abs_sum": 315.27392578125
+    },
+    {
+      "layer": 2,
+      "rank": 3,
+      "key_page_abs_sum": 5152.20703125,
+      "value_page_abs_sum": 712.60546875
+    },
+    {
+      "layer": 3,
+      "rank": 0,
+      "key_page_abs_sum": 5281.470703125,
+      "value_page_abs_sum": 537.41796875
+    },
+    {
+      "layer": 3,
+      "rank": 1,
+      "key_page_abs_sum": 4084.2392578125,
+      "value_page_abs_sum": 347.84423828125
+    },
+    {
+      "layer": 3,
+      "rank": 2,
+      "key_page_abs_sum": 3780.7265625,
+      "value_page_abs_sum": 545.0439453125
+    },
+    {
+      "layer": 3,
+      "rank": 3,
+      "key_page_abs_sum": 5932.234375,
+      "value_page_abs_sum": 621.45703125
+    },
+    {
+      "layer": 4,
+      "rank": 0,
+      "key_page_abs_sum": 6767.9228515625,
+      "value_page_abs_sum": 666.513671875
+    },
+    {
+      "layer": 4,
+      "rank": 1,
+      "key_page_abs_sum": 4579.7421875,
+      "value_page_abs_sum": 459.1640625
+    },
+    {
+      "layer": 4,
+      "rank": 2,
+      "key_page_abs_sum": 4893.9111328125,
+      "value_page_abs_sum": 396.20556640625
+    },
+    {
+      "layer": 4,
+      "rank": 3,
+      "key_page_abs_sum": 2915.71630859375,
+      "value_page_abs_sum": 990.421875
+    },
+    {
+      "layer": 5,
+      "rank": 0,
+      "key_page_abs_sum": 5145.8134765625,
+      "value_page_abs_sum": 548.6728515625
+    },
+    {
+      "layer": 5,
+      "rank": 1,
+      "key_page_abs_sum": 3635.6650390625,
+      "value_page_abs_sum": 449.91455078125
+    },
+    {
+      "layer": 5,
+      "rank": 2,
+      "key_page_abs_sum": 3999.0263671875,
+      "value_page_abs_sum": 545.71875
+    },
+    {
+      "layer": 5,
+      "rank": 3,
+      "key_page_abs_sum": 3800.23974609375,
+      "value_page_abs_sum": 545.1416015625
+    },
+    {
+      "layer": 6,
+      "rank": 0,
+      "key_page_abs_sum": 4322.158203125,
+      "value_page_abs_sum": 422.3271484375
+    },
+    {
+      "layer": 6,
+      "rank": 1,
+      "key_page_abs_sum": 4424.2373046875,
+      "value_page_abs_sum": 394.75146484375
+    },
+    {
+      "layer": 6,
+      "rank": 2,
+      "key_page_abs_sum": 4569.76123046875,
+      "value_page_abs_sum": 448.1962890625
+    },
+    {
+      "layer": 6,
+      "rank": 3,
+      "key_page_abs_sum": 3393.3359375,
+      "value_page_abs_sum": 624.458984375
+    },
+    {
+      "layer": 7,
+      "rank": 0,
+      "key_page_abs_sum": 5338.19091796875,
+      "value_page_abs_sum": 551.064453125
+    },
+    {
+      "layer": 7,
+      "rank": 1,
+      "key_page_abs_sum": 3072.6376953125,
+      "value_page_abs_sum": 866.6943359375
+    },
+    {
+      "layer": 7,
+      "rank": 2,
+      "key_page_abs_sum": 3939.2587890625,
+      "value_page_abs_sum": 1069.091796875
+    },
+    {
+      "layer": 7,
+      "rank": 3,
+      "key_page_abs_sum": 3004.6044921875,
+      "value_page_abs_sum": 588.7724609375
+    },
+    {
+      "layer": 8,
+      "rank": 0,
+      "key_page_abs_sum": 4017.7314453125,
+      "value_page_abs_sum": 476.728515625
+    },
+    {
+      "layer": 8,
+      "rank": 1,
+      "key_page_abs_sum": 3567.9833984375,
+      "value_page_abs_sum": 462.51953125
+    },
+    {
+      "layer": 8,
+      "rank": 2,
+      "key_page_abs_sum": 2927.001953125,
+      "value_page_abs_sum": 545.7080078125
+    },
+    {
+      "layer": 8,
+      "rank": 3,
+      "key_page_abs_sum": 5245.904296875,
+      "value_page_abs_sum": 1616.810546875
+    },
+    {
+      "layer": 9,
+      "rank": 0,
+      "key_page_abs_sum": 2762.5087890625,
+      "value_page_abs_sum": 449.0078125
+    },
+    {
+      "layer": 9,
+      "rank": 1,
+      "key_page_abs_sum": 3595.8779296875,
+      "value_page_abs_sum": 591.037109375
+    },
+    {
+      "layer": 9,
+      "rank": 2,
+      "key_page_abs_sum": 2756.7626953125,
+      "value_page_abs_sum": 668.7939453125
+    },
+    {
+      "layer": 9,
+      "rank": 3,
+      "key_page_abs_sum": 5872.625,
+      "value_page_abs_sum": 665.6953125
+    },
+    {
+      "layer": 10,
+      "rank": 0,
+      "key_page_abs_sum": 2428.23876953125,
+      "value_page_abs_sum": 386.86962890625
+    },
+    {
+      "layer": 10,
+      "rank": 1,
+      "key_page_abs_sum": 3283.25341796875,
+      "value_page_abs_sum": 611.767578125
+    },
+    {
+      "layer": 10,
+      "rank": 2,
+      "key_page_abs_sum": 2181.27197265625,
+      "value_page_abs_sum": 553.4091796875
+    },
+    {
+      "layer": 10,
+      "rank": 3,
+      "key_page_abs_sum": 3512.2841796875,
+      "value_page_abs_sum": 1072.720703125
+    },
+    {
+      "layer": 11,
+      "rank": 0,
+      "key_page_abs_sum": 3821.765625,
+      "value_page_abs_sum": 1052.994140625
+    },
+    {
+      "layer": 11,
+      "rank": 1,
+      "key_page_abs_sum": 3453.2744140625,
+      "value_page_abs_sum": 536.5029296875
+    },
+    {
+      "layer": 11,
+      "rank": 2,
+      "key_page_abs_sum": 2988.6240234375,
+      "value_page_abs_sum": 532.576171875
+    },
+    {
+      "layer": 11,
+      "rank": 3,
+      "key_page_abs_sum": 3254.52197265625,
+      "value_page_abs_sum": 1061.3359375
+    },
+    {
+      "layer": 12,
+      "rank": 0,
+      "key_page_abs_sum": 3970.416015625,
+      "value_page_abs_sum": 930.37890625
+    },
+    {
+      "layer": 12,
+      "rank": 1,
+      "key_page_abs_sum": 2783.84521484375,
+      "value_page_abs_sum": 550.97802734375
+    },
+    {
+      "layer": 12,
+      "rank": 2,
+      "key_page_abs_sum": 2466.59130859375,
+      "value_page_abs_sum": 787.2509765625
+    },
+    {
+      "layer": 12,
+      "rank": 3,
+      "key_page_abs_sum": 2044.4541015625,
+      "value_page_abs_sum": 940.85546875
+    },
+    {
+      "layer": 13,
+      "rank": 0,
+      "key_page_abs_sum": 2393.49951171875,
+      "value_page_abs_sum": 529.5244140625
+    },
+    {
+      "layer": 13,
+      "rank": 1,
+      "key_page_abs_sum": 3046.96875,
+      "value_page_abs_sum": 665.0263671875
+    },
+    {
+      "layer": 13,
+      "rank": 2,
+      "key_page_abs_sum": 4214.60107421875,
+      "value_page_abs_sum": 1069.19140625
+    },
+    {
+      "layer": 13,
+      "rank": 3,
+      "key_page_abs_sum": 3069.62158203125,
+      "value_page_abs_sum": 657.53515625
+    },
+    {
+      "layer": 14,
+      "rank": 0,
+      "key_page_abs_sum": 3063.484375,
+      "value_page_abs_sum": 597.025390625
+    },
+    {
+      "layer": 14,
+      "rank": 1,
+      "key_page_abs_sum": 2793.78125,
+      "value_page_abs_sum": 413.04150390625
+    },
+    {
+      "layer": 14,
+      "rank": 2,
+      "key_page_abs_sum": 2596.0009765625,
+      "value_page_abs_sum": 735.1396484375
+    },
+    {
+      "layer": 14,
+      "rank": 3,
+      "key_page_abs_sum": 2815.05810546875,
+      "value_page_abs_sum": 646.990234375
+    },
+    {
+      "layer": 15,
+      "rank": 0,
+      "key_page_abs_sum": 2803.88427734375,
+      "value_page_abs_sum": 389.0732421875
+    },
+    {
+      "layer": 15,
+      "rank": 1,
+      "key_page_abs_sum": 2903.3896484375,
+      "value_page_abs_sum": 551.7802734375
+    },
+    {
+      "layer": 15,
+      "rank": 2,
+      "key_page_abs_sum": 2883.46728515625,
+      "value_page_abs_sum": 444.7978515625
+    },
+    {
+      "layer": 15,
+      "rank": 3,
+      "key_page_abs_sum": 3424.1328125,
+      "value_page_abs_sum": 654.87060546875
+    },
+    {
+      "layer": 16,
+      "rank": 0,
+      "key_page_abs_sum": 2269.23583984375,
+      "value_page_abs_sum": 404.9599609375
+    },
+    {
+      "layer": 16,
+      "rank": 1,
+      "key_page_abs_sum": 2999.265625,
+      "value_page_abs_sum": 636.751953125
+    },
+    {
+      "layer": 16,
+      "rank": 2,
+      "key_page_abs_sum": 2335.78955078125,
+      "value_page_abs_sum": 587.8544921875
+    },
+    {
+      "layer": 16,
+      "rank": 3,
+      "key_page_abs_sum": 3140.5888671875,
+      "value_page_abs_sum": 580.646484375
+    },
+    {
+      "layer": 17,
+      "rank": 0,
+      "key_page_abs_sum": 3724.48046875,
+      "value_page_abs_sum": 534.212890625
+    },
+    {
+      "layer": 17,
+      "rank": 1,
+      "key_page_abs_sum": 5209.703125,
+      "value_page_abs_sum": 1131.78125
+    },
+    {
+      "layer": 17,
+      "rank": 2,
+      "key_page_abs_sum": 2550.22412109375,
+      "value_page_abs_sum": 486.849609375
+    },
+    {
+      "layer": 17,
+      "rank": 3,
+      "key_page_abs_sum": 2309.25048828125,
+      "value_page_abs_sum": 414.5205078125
+    },
+    {
+      "layer": 18,
+      "rank": 0,
+      "key_page_abs_sum": 4106.8564453125,
+      "value_page_abs_sum": 776.4931640625
+    },
+    {
+      "layer": 18,
+      "rank": 1,
+      "key_page_abs_sum": 5014.4755859375,
+      "value_page_abs_sum": 1224.359375
+    },
+    {
+      "layer": 18,
+      "rank": 2,
+      "key_page_abs_sum": 2383.23583984375,
+      "value_page_abs_sum": 521.2626953125
+    },
+    {
+      "layer": 18,
+      "rank": 3,
+      "key_page_abs_sum": 2698.36572265625,
+      "value_page_abs_sum": 408.80859375
+    },
+    {
+      "layer": 19,
+      "rank": 0,
+      "key_page_abs_sum": 3212.8359375,
+      "value_page_abs_sum": 909.2822265625
+    },
+    {
+      "layer": 19,
+      "rank": 1,
+      "key_page_abs_sum": 2189.83154296875,
+      "value_page_abs_sum": 602.76416015625
+    },
+    {
+      "layer": 19,
+      "rank": 2,
+      "key_page_abs_sum": 2845.96337890625,
+      "value_page_abs_sum": 340.0498046875
+    },
+    {
+      "layer": 19,
+      "rank": 3,
+      "key_page_abs_sum": 3021.6015625,
+      "value_page_abs_sum": 663.1103515625
+    },
+    {
+      "layer": 20,
+      "rank": 0,
+      "key_page_abs_sum": 2128.62841796875,
+      "value_page_abs_sum": 769.314453125
+    },
+    {
+      "layer": 20,
+      "rank": 1,
+      "key_page_abs_sum": 1492.7236328125,
+      "value_page_abs_sum": 566.974609375
+    },
+    {
+      "layer": 20,
+      "rank": 2,
+      "key_page_abs_sum": 2381.64404296875,
+      "value_page_abs_sum": 361.79296875
+    },
+    {
+      "layer": 20,
+      "rank": 3,
+      "key_page_abs_sum": 2328.7177734375,
+      "value_page_abs_sum": 528.0166015625
+    },
+    {
+      "layer": 21,
+      "rank": 0,
+      "key_page_abs_sum": 2081.46337890625,
+      "value_page_abs_sum": 432.11865234375
+    },
+    {
+      "layer": 21,
+      "rank": 1,
+      "key_page_abs_sum": 2275.400390625,
+      "value_page_abs_sum": 363.67333984375
+    },
+    {
+      "layer": 21,
+      "rank": 2,
+      "key_page_abs_sum": 2204.462890625,
+      "value_page_abs_sum": 503.720703125
+    },
+    {
+      "layer": 21,
+      "rank": 3,
+      "key_page_abs_sum": 2622.68408203125,
+      "value_page_abs_sum": 500.31591796875
+    },
+    {
+      "layer": 22,
+      "rank": 0,
+      "key_page_abs_sum": 1754.0078125,
+      "value_page_abs_sum": 396.06103515625
+    },
+    {
+      "layer": 22,
+      "rank": 1,
+      "key_page_abs_sum": 2261.516357421875,
+      "value_page_abs_sum": 366.28173828125
+    },
+    {
+      "layer": 22,
+      "rank": 2,
+      "key_page_abs_sum": 2347.771484375,
+      "value_page_abs_sum": 467.9716796875
+    },
+    {
+      "layer": 22,
+      "rank": 3,
+      "key_page_abs_sum": 2455.63134765625,
+      "value_page_abs_sum": 404.28857421875
+    },
+    {
+      "layer": 23,
+      "rank": 0,
+      "key_page_abs_sum": 2690.6552734375,
+      "value_page_abs_sum": 638.87109375
+    },
+    {
+      "layer": 23,
+      "rank": 1,
+      "key_page_abs_sum": 2056.99853515625,
+      "value_page_abs_sum": 503.2685546875
+    },
+    {
+      "layer": 23,
+      "rank": 2,
+      "key_page_abs_sum": 3503.9501953125,
+      "value_page_abs_sum": 957.203125
+    },
+    {
+      "layer": 23,
+      "rank": 3,
+      "key_page_abs_sum": 2724.5458984375,
+      "value_page_abs_sum": 351.6591796875
+    },
+    {
+      "layer": 24,
+      "rank": 0,
+      "key_page_abs_sum": 2771.59375,
+      "value_page_abs_sum": 759.2421875
+    },
+    {
+      "layer": 24,
+      "rank": 1,
+      "key_page_abs_sum": 1647.0458984375,
+      "value_page_abs_sum": 390.98828125
+    },
+    {
+      "layer": 24,
+      "rank": 2,
+      "key_page_abs_sum": 2369.33349609375,
+      "value_page_abs_sum": 571.9287109375
+    },
+    {
+      "layer": 24,
+      "rank": 3,
+      "key_page_abs_sum": 2516.806640625,
+      "value_page_abs_sum": 317.6357421875
+    },
+    {
+      "layer": 25,
+      "rank": 0,
+      "key_page_abs_sum": 2412.1259765625,
+      "value_page_abs_sum": 370.61865234375
+    },
+    {
+      "layer": 25,
+      "rank": 1,
+      "key_page_abs_sum": 3097.736328125,
+      "value_page_abs_sum": 765.447265625
+    },
+    {
+      "layer": 25,
+      "rank": 2,
+      "key_page_abs_sum": 2040.21044921875,
+      "value_page_abs_sum": 1108.51171875
+    },
+    {
+      "layer": 25,
+      "rank": 3,
+      "key_page_abs_sum": 1948.04296875,
+      "value_page_abs_sum": 311.3974609375
+    },
+    {
+      "layer": 26,
+      "rank": 0,
+      "key_page_abs_sum": 2781.4892578125,
+      "value_page_abs_sum": 439.7919921875
+    },
+    {
+      "layer": 26,
+      "rank": 1,
+      "key_page_abs_sum": 2451.5546875,
+      "value_page_abs_sum": 590.6572265625
+    },
+    {
+      "layer": 26,
+      "rank": 2,
+      "key_page_abs_sum": 1603.89453125,
+      "value_page_abs_sum": 978.806640625
+    },
+    {
+      "layer": 26,
+      "rank": 3,
+      "key_page_abs_sum": 2550.13818359375,
+      "value_page_abs_sum": 330.359375
+    },
+    {
+      "layer": 27,
+      "rank": 0,
+      "key_page_abs_sum": 2637.951171875,
+      "value_page_abs_sum": 697.4970703125
+    },
+    {
+      "layer": 27,
+      "rank": 1,
+      "key_page_abs_sum": 1892.3681640625,
+      "value_page_abs_sum": 351.59423828125
+    },
+    {
+      "layer": 27,
+      "rank": 2,
+      "key_page_abs_sum": 2424.19970703125,
+      "value_page_abs_sum": 349.4912109375
+    },
+    {
+      "layer": 27,
+      "rank": 3,
+      "key_page_abs_sum": 2621.35888671875,
+      "value_page_abs_sum": 389.60595703125
+    },
+    {
+      "layer": 28,
+      "rank": 0,
+      "key_page_abs_sum": 2014.47705078125,
+      "value_page_abs_sum": 496.955078125
+    },
+    {
+      "layer": 28,
+      "rank": 1,
+      "key_page_abs_sum": 1874.002685546875,
+      "value_page_abs_sum": 350.89599609375
+    },
+    {
+      "layer": 28,
+      "rank": 2,
+      "key_page_abs_sum": 2395.2197265625,
+      "value_page_abs_sum": 401.8505859375
+    },
+    {
+      "layer": 28,
+      "rank": 3,
+      "key_page_abs_sum": 2335.37841796875,
+      "value_page_abs_sum": 353.57861328125
+    },
+    {
+      "layer": 29,
+      "rank": 0,
+      "key_page_abs_sum": 2506.9912109375,
+      "value_page_abs_sum": 456.59765625
+    },
+    {
+      "layer": 29,
+      "rank": 1,
+      "key_page_abs_sum": 2465.142578125,
+      "value_page_abs_sum": 420.00927734375
+    },
+    {
+      "layer": 29,
+      "rank": 2,
+      "key_page_abs_sum": 1792.7607421875,
+      "value_page_abs_sum": 426.87646484375
+    },
+    {
+      "layer": 29,
+      "rank": 3,
+      "key_page_abs_sum": 2484.67431640625,
+      "value_page_abs_sum": 374.34375
+    },
+    {
+      "layer": 30,
+      "rank": 0,
+      "key_page_abs_sum": 2435.9189453125,
+      "value_page_abs_sum": 428.0263671875
+    },
+    {
+      "layer": 30,
+      "rank": 1,
+      "key_page_abs_sum": 2407.91650390625,
+      "value_page_abs_sum": 382.58544921875
+    },
+    {
+      "layer": 30,
+      "rank": 2,
+      "key_page_abs_sum": 1688.22607421875,
+      "value_page_abs_sum": 358.88623046875
+    },
+    {
+      "layer": 30,
+      "rank": 3,
+      "key_page_abs_sum": 2378.3330078125,
+      "value_page_abs_sum": 389.8818359375
+    },
+    {
+      "layer": 31,
+      "rank": 0,
+      "key_page_abs_sum": 2608.79638671875,
+      "value_page_abs_sum": 526.8359375
+    },
+    {
+      "layer": 31,
+      "rank": 1,
+      "key_page_abs_sum": 2235.7783203125,
+      "value_page_abs_sum": 444.3115234375
+    },
+    {
+      "layer": 31,
+      "rank": 2,
+      "key_page_abs_sum": 2131.62109375,
+      "value_page_abs_sum": 616.5244140625
+    },
+    {
+      "layer": 31,
+      "rank": 3,
+      "key_page_abs_sum": 2112.00439453125,
+      "value_page_abs_sum": 393.517578125
+    },
+    {
+      "layer": 32,
+      "rank": 0,
+      "key_page_abs_sum": 2271.7919921875,
+      "value_page_abs_sum": 542.1904296875
+    },
+    {
+      "layer": 32,
+      "rank": 1,
+      "key_page_abs_sum": 1967.69775390625,
+      "value_page_abs_sum": 458.873046875
+    },
+    {
+      "layer": 32,
+      "rank": 2,
+      "key_page_abs_sum": 1890.4892578125,
+      "value_page_abs_sum": 854.6083984375
+    },
+    {
+      "layer": 32,
+      "rank": 3,
+      "key_page_abs_sum": 2143.17919921875,
+      "value_page_abs_sum": 416.7431640625
+    },
+    {
+      "layer": 33,
+      "rank": 0,
+      "key_page_abs_sum": 1863.22265625,
+      "value_page_abs_sum": 960.16796875
+    },
+    {
+      "layer": 33,
+      "rank": 1,
+      "key_page_abs_sum": 2647.72998046875,
+      "value_page_abs_sum": 524.916015625
+    },
+    {
+      "layer": 33,
+      "rank": 2,
+      "key_page_abs_sum": 2109.17919921875,
+      "value_page_abs_sum": 440.6259765625
+    },
+    {
+      "layer": 33,
+      "rank": 3,
+      "key_page_abs_sum": 1981.3662109375,
+      "value_page_abs_sum": 1246.84765625
+    },
+    {
+      "layer": 34,
+      "rank": 0,
+      "key_page_abs_sum": 2203.6328125,
+      "value_page_abs_sum": 441.0380859375
+    },
+    {
+      "layer": 34,
+      "rank": 1,
+      "key_page_abs_sum": 2875.98876953125,
+      "value_page_abs_sum": 608.8095703125
+    },
+    {
+      "layer": 34,
+      "rank": 2,
+      "key_page_abs_sum": 2870.5078125,
+      "value_page_abs_sum": 661.37109375
+    },
+    {
+      "layer": 34,
+      "rank": 3,
+      "key_page_abs_sum": 2090.30322265625,
+      "value_page_abs_sum": 689.7109375
+    },
+    {
+      "layer": 35,
+      "rank": 0,
+      "key_page_abs_sum": 2220.140625,
+      "value_page_abs_sum": 907.13671875
+    },
+    {
+      "layer": 35,
+      "rank": 1,
+      "key_page_abs_sum": 2500.18603515625,
+      "value_page_abs_sum": 1077.90625
+    },
+    {
+      "layer": 35,
+      "rank": 2,
+      "key_page_abs_sum": 2250.515625,
+      "value_page_abs_sum": 566.0283203125
+    },
+    {
+      "layer": 35,
+      "rank": 3,
+      "key_page_abs_sum": 2539.3740234375,
+      "value_page_abs_sum": 583.474609375
+    },
+    {
+      "layer": 36,
+      "rank": 0,
+      "key_page_abs_sum": 2441.05859375,
+      "value_page_abs_sum": 520.775390625
+    },
+    {
+      "layer": 36,
+      "rank": 1,
+      "key_page_abs_sum": 2893.05322265625,
+      "value_page_abs_sum": 3066.1328125
+    },
+    {
+      "layer": 36,
+      "rank": 2,
+      "key_page_abs_sum": 2078.56201171875,
+      "value_page_abs_sum": 659.42578125
+    },
+    {
+      "layer": 36,
+      "rank": 3,
+      "key_page_abs_sum": 2249.50048828125,
+      "value_page_abs_sum": 606.771484375
+    },
+    {
+      "layer": 37,
+      "rank": 0,
+      "key_page_abs_sum": 2360.818359375,
+      "value_page_abs_sum": 709.08203125
+    },
+    {
+      "layer": 37,
+      "rank": 1,
+      "key_page_abs_sum": 2887.537109375,
+      "value_page_abs_sum": 697.837890625
+    },
+    {
+      "layer": 37,
+      "rank": 2,
+      "key_page_abs_sum": 2545.93359375,
+      "value_page_abs_sum": 980.69921875
+    },
+    {
+      "layer": 37,
+      "rank": 3,
+      "key_page_abs_sum": 2282.1240234375,
+      "value_page_abs_sum": 705.755859375
+    },
+    {
+      "layer": 38,
+      "rank": 0,
+      "key_page_abs_sum": 1715.02734375,
+      "value_page_abs_sum": 3067.55859375
+    },
+    {
+      "layer": 38,
+      "rank": 1,
+      "key_page_abs_sum": 2093.86865234375,
+      "value_page_abs_sum": 919.2939453125
+    },
+    {
+      "layer": 38,
+      "rank": 2,
+      "key_page_abs_sum": 3111.2607421875,
+      "value_page_abs_sum": 2117.91796875
+    },
+    {
+      "layer": 38,
+      "rank": 3,
+      "key_page_abs_sum": 3463.291015625,
+      "value_page_abs_sum": 1059.931640625
+    },
+    {
+      "layer": 39,
+      "rank": 0,
+      "key_page_abs_sum": 8625.0625,
+      "value_page_abs_sum": 25240.5625
+    },
+    {
+      "layer": 39,
+      "rank": 1,
+      "key_page_abs_sum": 3942.28515625,
+      "value_page_abs_sum": 2182.609375
+    },
+    {
+      "layer": 39,
+      "rank": 2,
+      "key_page_abs_sum": 3442.783203125,
+      "value_page_abs_sum": 2068.3125
+    },
+    {
+      "layer": 39,
+      "rank": 3,
+      "key_page_abs_sum": 2994.146484375,
+      "value_page_abs_sum": 1634.474609375
+    }
+  ],
+  "checked_cache_tensors": 320,
+  "all_layer_rank_final_pages_nonzero": true,
+  "generated_tokens": [
+    12,
+    115728
+  ],
+  "trace_stats": {
+    "captures": 1,
+    "replays": 1,
+    "releases": 0,
+    "decode_warmups": 1,
+    "token_host_copies": 0,
+    "token_device_copies": 4,
+    "position_host_copies": 4,
+    "rotary_position_host_copies": 4,
+    "page_table_host_copies": 4,
+    "sampling_param_host_copies": 0,
+    "caller_token_readbacks": 2,
+    "explicit_synchronizations": 7,
+    "resets": 0,
+    "rng_checkpoints": 0,
+    "rng_restores": 0,
+    "ccl_capture_epoch_resets": 1
+  },
+  "current_positions_after_decode": [
+    32768
+  ],
+  "rotary_positions_after_decode": [
+    32768
+  ],
+  "memory_after_weights": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 3141523968,
+    "free_bytes_per_device": 26941207040,
+    "largest_contiguous_free_per_bank": 3367650880
+  },
+  "memory_after_cache": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 3854555648,
+    "free_bytes_per_device": 26228175360,
+    "largest_contiguous_free_per_bank": 3278521920
+  },
+  "memory_after_execution": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 3857621504,
+    "free_bytes_per_device": 26225109504,
+    "largest_contiguous_free_per_bank": 3278138688
+  },
+  "elapsed_s": 5.4907395420596,
+  "passed": true
+}

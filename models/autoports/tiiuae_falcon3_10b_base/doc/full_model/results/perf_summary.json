@@ -1,0 +1,72 @@
+{
+  "hardware": "4x Blackhole p300c",
+  "topology": "1x4 FABRIC_1D_RING, TP4, two links",
+  "layers": 40,
+  "standard_workload": {
+    "batch": 1,
+    "prompt_tokens": 128,
+    "output_tokens": 128
+  },
+  "ttft_ms": {
+    "cold": 2444.0769545035437,
+    "warm": 34.99379300046712
+  },
+  "trace_decode_t_s_u": {
+    "device_only": 52.10403978385119,
+    "teacher_forcing": 52.10149692713312,
+    "caller_visible_token_out": 51.98259840825787
+  },
+  "trace_components_ms_per_token": {
+    "model": 18.39837828083546,
+    "sampling": 0.7938990638649557,
+    "sampling_fraction": 0.04136554769432695
+  },
+  "layer_stack_attribution": {
+    "inherited_sequence17_layer_ms": 0.3182423207908869,
+    "inherited_provisional_40_layer_ms": 12.729692831635475,
+    "inherited_comparison_class": "Non-like-for-like provisional reference: isolated layer at sequence 17.",
+    "same_workload": {
+      "batch": 1,
+      "prompt_tokens": 128,
+      "replay_tokens": 128,
+      "max_context_len": 32768,
+      "depths": [
+        1,
+        2,
+        4,
+        8,
+        16,
+        40
+      ]
+    },
+    "effective_decoder_slope_ms_per_layer": 0.47217765290501273,
+    "fixed_embedding_terminal_and_model_trace_intercept_ms": 0.2764250915336923,
+    "r_squared": 0.99999988750566,
+    "full_40_layer_measured_model_trace_ms": 19.16196120873792,
+    "full_40_layer_fitted_model_trace_ms": 19.163531207734202,
+    "full_40_layer_fit_residual_ms": -0.0015699989962811856,
+    "sampling_trace_ms": 0.7937658883747645,
+    "queued_trace_orchestration_ms": 0.0019605722627629165,
+    "caller_token_observation_ms": 0.04556160638458073,
+    "conclusion": "The sequence-17 projection gap is explained by a like-for-like longer-position per-layer slope. Fixed full-model-only cost is 0.2764 ms and there is no depth-growing wrapper boundary."
+  },
+  "canonical_readiness_runner": {
+    "ttft_ms": 4219.68,
+    "decode_t_s_u": 44.56,
+    "end_to_end_t_s_u": 15.52,
+    "note": "Canonical runner timing includes its untraced boundary and is reported separately from the paired trace benchmark."
+  },
+  "reduced_tracy_profile": {
+    "scope": "real embedding, decoder layer 0, final norm, untied TP LM head, split sampler",
+    "prefill_wall_ms": 4.48266277089715,
+    "decode_profile_wall_ms_per_token": 1.4599856610099475,
+    "prefill_modeled_dram_roofline_percent": 10.7,
+    "prefill_dram_gb_s": 55,
+    "decode_modeled_dram_roofline_percent": 11.9,
+    "decode_dram_gb_s": 61,
+    "official_full_model_number": false
+  },
+  "source": "full_model_evidence.json",
+  "attribution_source": "full_model_depth_sweep.json",
+  "passed": true
+}

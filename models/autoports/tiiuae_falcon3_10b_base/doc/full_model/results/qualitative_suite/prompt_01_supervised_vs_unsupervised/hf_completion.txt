@@ -1,0 +1,7 @@
+ supervised learning requires labeled data, while unsupervised learning does not.
+
+### Supervised Learning
+
+Supervised learning is a type of machine learning where the model is trained on labeled data. Labeled data is data that has been tagged with the correct answer. For example, if we wanted to build a model that could recognize cats in pictures, we would need a dataset of pictures that have been labeled as either "cat" or "not cat".
+
+Here is an example of how

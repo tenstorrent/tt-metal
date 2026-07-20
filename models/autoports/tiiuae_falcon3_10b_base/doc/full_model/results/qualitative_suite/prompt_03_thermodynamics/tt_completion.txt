@@ -1,0 +1,6 @@
+ **Zeroth Law of Thermodynamics:**
+   - **Statement:** If two systems are in thermal equilibrium with a third system, then they are in thermal equilibrium with each other.
+   - **Significance:** It provides a basis for the concept of temperature and the use of thermometers. It ensures that temperature is a transitive property.
+
+2. **First Law of Thermodynamics (Conservation of Energy):**
+   - **Statement:** The change in internal

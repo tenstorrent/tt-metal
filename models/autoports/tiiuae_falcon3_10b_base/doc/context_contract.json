@@ -78,7 +78,7 @@
       },
       "validation": "two independently materialized decoder instances share one pool and preserve the residual contract at PCC 1.0 with zero inter-layer collectives"
     },
-    "batch32_full_stack_memory_projection": {
+    "decoder_stage_batch32_full_stack_memory_projection_superseded": {
       "allocator_dram_grid_per_device": [8, 1],
       "allocator_dram_bytes_per_bank": 4272341376,
       "allocator_dram_bytes_per_device": 34178731008,
@@ -109,12 +109,64 @@
         "projected_not_executed_in_this_stage": "40-layer batch-32 32768-token persistent K/V allocation and full-model decode",
         "scope_reason": "Allocating and scheduling the 40-layer stack is the later full-model goal. This decoder stage proves the rank-local cache shape/bytes and uses the measured TTNN allocator capacity plus conservative non-decoder reservations to establish fit without claiming a full-model execution. Full-context batch-32 prefill activation scheduling is also not claimed."
       },
-      "explanation": "TP4 removes three quarters of projection and KV-head storage from every device. The 40-layer batch-32 HF-context KV projection is 22.817 GB per device. Projection residency uses the physical padded local MLP width 6,144: one prefill or decode copy is 35,389,440 bytes/layer, and the separate prefill plus decode copies total 2.831 GB across 40 layers. A direct TTNN allocator query reports 34.179 GB usable DRAM/device; known K/V plus both physical projection copies consume 25.648 GB, leaving 8.531 GB. A conservative itemized non-decoder/trace/activation/CCL/allocator budget reserves 6.577 GB of that headroom and leaves 1.954 GB uncommitted. The layer API uses internal 1,024-row MLP chunks and local KV heads; full-model scheduling of residual buffers remains a later-stage responsibility."
+      "explanation": "Historical decoder-stage projection retained for provenance only and superseded by full_model_capacity_evidence below. The full-model stage measured the complete terminal, all decoder weights, generator staging allocations, and the batch-32 full-context KV cache against the current allocator."
     },
     "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/optimized_multichip_decoder/results/max_context_batch1.json",
     "explanation": "The target mesh executes the full HF-advertised logical context with paged local-head cache, nontrivial page-table mapping, sampled HF K/V correctness through the final page, and decode at the final valid position. No aligned-only public contract is introduced. The supported context is therefore extended to the HF model limit rather than carrying forward the single-chip DRAM boundary."
   },
-  "notes": "The 6,528-token result remains the measured batch-32 single-device boundary, not a Falcon3 architecture limit. The fixed TP4 multichip decoder restores the compiler mesh plan, defaults to the HF limit of 32,768, and validates logical lengths 17, 31, 1,025, and 32,768 plus decode positions 17, 31, 32, and 32,767. The full-context execution is batch 1; batch-32 full-stack KV and weight storage is projected per device here, while full-model residual-buffer scheduling belongs to the later full-model stage.",
+    "full_model_capacity_evidence": {
+        "target_mesh": "four Blackhole p300c devices in a fixed 1x4 FABRIC_1D_RING mesh",
+        "tensor_parallel_degree": 4,
+        "hf_limit_tokens": 32768,
+        "advertised_context_tokens": 32768,
+        "advertised_full_context_batch": 1,
+        "largest_physically_executed_non_aligned_prompt_tokens": 32767,
+        "full_context_execution": {
+            "layers": 40,
+            "public_prompt_tokens": 32767,
+            "generator_owned_padded_tokens": 32768,
+            "prefill_chunks": 16,
+            "internal_row_chunks_total": 1280,
+            "mapped_pages": 1024,
+            "checked_final_kv_rank_tensors": 320,
+            "all_final_pages_nonzero": true,
+            "decode_position_after_replay": 32768,
+            "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/full_context_coverage.json"
+        },
+        "batch32_hf_context_allocation": {
+            "layers": 40,
+            "batch": 32,
+            "context_tokens_per_user": 32768,
+            "page_block_tokens": 32,
+            "pages_per_user": 1024,
+            "physical_cache_blocks": 32768,
+            "cache_dtype_layout": "BFP8_B TILE DRAM, one local KV head per rank",
+            "allocator_dram_grid_per_device": [
+                8,
+                1
+            ],
+            "measured_allocator_bytes_per_device": 30082731008,
+            "measured_full_model_weight_and_generator_static_bytes_per_device": 3143638528,
+            "measured_batch32_full_context_kv_bytes_per_device": 22817013760,
+            "measured_weight_plus_kv_bytes_per_device": 25960652288,
+            "measured_remaining_bytes_per_device": 4122078720,
+            "largest_contiguous_free_bytes_per_bank": 515259776,
+            "allocation_passed": true,
+            "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/full_model_capacity.json",
+            "scope": "Physical allocation proof for simultaneous batch-32 persistent capacity. Full 32K prefill execution is advertised and exercised at batch 1; mixed active-32 execution is exercised separately at logical lengths 33 through 64."
+        },
+        "active32_execution": {
+            "prompt_lengths": "33 through 64",
+            "fixed_slots": 32,
+            "slot_permutation_exact": true,
+            "physical_page_remap_exact": true,
+            "inactive_rows_unchanged": true,
+            "split_greedy_matches_host_argmax_all_rows": true,
+            "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/full_model_batch32.json"
+        },
+        "decision": "No reduction. The largest feasible context equals the HF architectural limit of 32768 tokens. The complete batch-1 path executes the non-aligned 32767-token boundary plus decode, and all 32 users' full persistent weight/KV allocation fits with 4.122 GB per-device DRAM headroom."
+    },
+    "notes": "The 6,528-token result remains the historical measured batch-32 single-device boundary, not a Falcon3 architecture limit. The fixed TP4 full model preserves the optimized decoder plan and supports the HF limit of 32,768. The public generator physically executes a non-aligned 32,767-token prompt through all 40 layers, owns padding/chunking/cache fill/positions/output slicing, and decodes at the boundary. Batch-32 full-context weights plus KV cache are physically allocated on every rank, and active-32 mixed non-aligned prompts are executed with exact slot/page/reset controls. No context reduction is necessary.",
   "paths": {
     "prefill": {
       "status": "translated_and_validated",

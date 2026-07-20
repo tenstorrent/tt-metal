@@ -1,0 +1,27 @@
+{
+  "reference": "aime24_plain_100.refpt",
+  "reference_revision": "34bb99a889fe0426412da3dd2b46e6f64c8fd003",
+  "generated_tokens": 100,
+  "prefill": {
+    "top1_matches": 91,
+    "top5_matches": 99,
+    "top100_matches": 100,
+    "total": 100,
+    "passed": true
+  },
+  "traced_teacher_forcing_decode": {
+    "top1_matches": 91,
+    "top5_matches": 99,
+    "top100_matches": 100,
+    "total": 100,
+    "ttft_ms": 4219.68,
+    "decode_t_s_u": 44.56,
+    "end_to_end_t_s_u": 15.52,
+    "passed": true
+  },
+  "required_bar": {
+    "top5_minimum": 0.98,
+    "top100_minimum": 1.0
+  },
+  "passed": true
+}

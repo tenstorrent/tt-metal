@@ -1,0 +1,90 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_00_machine_learning_haiku/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 66,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0909
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_00_machine_learning_haiku/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 5,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_01_supervised_vs_unsupervised/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 75,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.08
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_01_supervised_vs_unsupervised/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 1,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_02_inventor_story/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 66,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0455
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_02_inventor_story/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 2,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_03_thermodynamics/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 61,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0984
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_03_thermodynamics/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 2,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_04_english_to_french/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 57,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0526
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_04_english_to_french/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 25,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_05_fibonacci_python/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 32,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0938
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/full_model/results/qualitative_suite/prompt_05_fibonacci_python/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 57,
+      "compared_tokens": 100
+    }
+  ],
+  "exit_code": 0
+}

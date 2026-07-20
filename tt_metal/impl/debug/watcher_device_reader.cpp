@@ -278,7 +278,7 @@ private:
     void DumpPauseStatus() const;
     void DumpEthLinkStatus() const;
     void DumpRingBuffer(bool to_stdout = false) const;
-    void DumpRunState(uint32_t state) const;
+    void DumpRunState(uint32_t state, bool is_go_message) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
     void DumpSyncRegs() const;
@@ -893,7 +893,7 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     }
 }
 
-void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
+void WatcherDeviceReader::Core::DumpRunState(uint32_t state, bool is_go_message) const {
     char code = 'U';
     if (state == dev_msgs::RUN_MSG_INIT) {
         code = 'I';
@@ -901,26 +901,45 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'G';
     } else if (state == dev_msgs::RUN_MSG_DONE) {
         code = 'D';
-    } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
+    } else if (is_go_message && state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
         code = 'R';
-    } else if (state == dev_msgs::RUN_SYNC_MSG_LOAD) {
+    } else if (is_go_message && state == dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+        code = 'H';
+    } else if (is_go_message && state == dev_msgs::RUN_MSG_REPLAY_TRACE) {
+        code = 'T';
+    } else if (!is_go_message && state == dev_msgs::RUN_SYNC_MSG_LOAD) {
         code = 'L';
-    } else if (state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
+    } else if (!is_go_message && state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
         code = 'W';
-    } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+    } else if (!is_go_message && state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
     }
     if (code == 'U') {
         LogRunningKernels();
+        if (is_go_message) {
+            TT_THROW(
+                "Watcher data corruption, unexpected go-message state on core{}: {} "
+                "(expected {}, {}, {}, {}, {}, or {})",
+                virtual_coord_.str(),
+                state,
+                dev_msgs::RUN_MSG_INIT,
+                dev_msgs::RUN_MSG_GO,
+                dev_msgs::RUN_MSG_DONE,
+                dev_msgs::RUN_MSG_RESET_READ_PTR,
+                dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST,
+                dev_msgs::RUN_MSG_REPLAY_TRACE);
+        }
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
+            "Watcher data corruption, unexpected subordinate-sync state on core{}: {} "
+            "(expected {}, {}, {}, {}, {}, or {})",
             virtual_coord_.str(),
             state,
-            dev_msgs::RUN_MSG_INIT,
-            dev_msgs::RUN_MSG_GO,
-            dev_msgs::RUN_MSG_DONE,
+            dev_msgs::RUN_SYNC_MSG_INIT,
+            dev_msgs::RUN_SYNC_MSG_GO,
+            dev_msgs::RUN_SYNC_MSG_DONE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
-            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET);
+            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
     } else {
         fprintf(reader_.f, "%c", code);
     }
@@ -999,7 +1018,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             launch_msg_.kernel_config().brisc_noc_id());
     }
     if (mbox_data_.go_message_index() < dev_msgs::go_message_num_entries) {
-        DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal());
+        DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal(), true);
     } else {
         LogRunningKernels();
         TT_THROW(
@@ -1039,7 +1058,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             if (skip_padding && (i == dm_subordinates)) {
                 continue;
             }
-            DumpRunState(subordinate_sync.map()[i]);
+            DumpRunState(subordinate_sync.map()[i], false);
             dumped++;
         }
         fprintf(reader_.f, " ");
