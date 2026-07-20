@@ -115,7 +115,7 @@ def run(args, context: Context):
     """Entry point for triage framework."""
     if not args["--skip-watcher-enabled-check"]:
         config = get_configuration(args, context)
-        if not config.get_bool("watcher_enabled", default=False):
+        if not config.get_bool("watcher_enabled"):
             return None
 
     run_checks = get_run_checks(args, context)
