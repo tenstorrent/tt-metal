@@ -281,6 +281,7 @@ def _build_adjacency_from_cabling(cabling: dict, deployment: dict) -> tuple[dict
 # Ring walk
 # ---------------------------------------------------------------------------
 
+
 def _short_name(fqdn: str) -> str:
     return fqdn.split(".")[0]
 
@@ -360,6 +361,7 @@ def _walk_ring(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Resolve physical ring order of hosts from descriptor files.")
