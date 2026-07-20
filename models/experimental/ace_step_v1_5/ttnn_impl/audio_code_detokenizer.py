@@ -218,14 +218,25 @@ class TtAceStepAudioCodeDetokenizer:
         # Precomputed FSQ codebook for on-device unpack. Replaces ``fsq_codes_from_indices_np``
         # in the hot path: per call we only upload a [1, N] uint32 index tensor and run
         # ``ttnn.embedding(idx, codebook)`` to materialize [1, N, 6] codes on device.
-        self._fsq_mapper = mapper
-        self.fsq_codebook_tt = ttnn.as_tensor(
+        # Pad vocab rows for TP-4 tile alignment; keep replicated (not vocab-TP) under DiT TP.
+        from models.experimental.ace_step_v1_5.utils.ace_step_tp import (
+            ace_step_pad_embedding_rows,
+            ace_step_vocab_mesh_mapper,
+        )
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips
+
+        self._fsq_mapper = ace_step_vocab_mesh_mapper(device) if ace_step_device_num_chips(device) > 1 else mapper
+        fsq_np = ace_step_pad_embedding_rows(
             _build_fsq_codebook_np(),
+            num_devices=max(1, ace_step_device_num_chips(device)),
+        )
+        self.fsq_codebook_tt = ttnn.as_tensor(
+            fsq_np,
             device=device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.mem,
-            mesh_mapper=mapper,
+            mesh_mapper=self._fsq_mapper,
         )
         self._detok_trace_id: Optional[Any] = None
         self._detok_n_codes: Optional[int] = None

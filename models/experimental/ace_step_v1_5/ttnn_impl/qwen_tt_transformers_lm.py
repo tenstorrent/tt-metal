@@ -73,6 +73,9 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
   (see :mod:`qwen_decode_sdpa_layout`; currently no-op — stock ``[32, 32]`` users grid).
 - ``ACE_STEP_LM_NARROW_AUDIO_VOCAB=1`` (default): narrow ``LMHead`` column band in codes phase (see :mod:`ace_step_lm_head_narrow`).
 - ``ACE_STEP_LM_LM_HEAD_SHARDED_NORM=1`` (default): sharded prefill final RMSNorm before ``LMHead`` (see :mod:`qwen_lm_head_sharded_norm`).
+- ``ACE_STEP_LM_TP=1``: multi-device LM — pass a multi-chip mesh into this wrapper (demo:
+  ``open_preprocess_device`` opens the full mesh). ``ModelArgs.num_devices`` and the
+  ``all_gather`` after ``LMHead`` (below) activate automatically. Default remains 1×1 preprocess.
 
 **Caveats**
 

@@ -789,7 +789,18 @@ class TtQwen3EmbeddingEncoder:
         )
         self.mlp_weight_dtype = mlp_weight_dtype if mlp_weight_dtype is not None else _w8
         self.mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        from models.experimental.ace_step_v1_5.utils.ace_step_tp import (
+            ace_step_pad_embedding_rows,
+            ace_step_vocab_mesh_mapper,
+        )
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips
+
+        _n_chips = max(1, ace_step_device_num_chips(device))
+        mapper = (
+            ace_step_vocab_mesh_mapper(device)
+            if _n_chips > 1
+            else (ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None)
+        )
         self._attn_bias_cache: dict[tuple, ttnn.Tensor] = {}
 
         weights_np = load_qwen3_weights_np(str(qwen_safetensors_path))
@@ -833,7 +844,7 @@ class TtQwen3EmbeddingEncoder:
         )
 
         self.embed_weight = ttnn.as_tensor(
-            weights_np["embed_tokens.weight"],
+            ace_step_pad_embedding_rows(weights_np["embed_tokens.weight"], num_devices=_n_chips),
             device=device,
             dtype=self.dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,

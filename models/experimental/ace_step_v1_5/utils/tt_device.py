@@ -72,8 +72,21 @@ def ace_step_mesh_use_host_preprocess(mesh_sku: str | None) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def ace_step_mesh_use_lm_tp(mesh_sku: str | None) -> bool:
+    """True when ``ACE_STEP_LM_TP=1`` and the SKU is multi-chip (LM on full mesh)."""
+    if not ace_step_needs_split_device(mesh_sku):
+        return False
+    from models.experimental.ace_step_v1_5.utils.ace_step_tp import ace_step_lm_tp_env_enabled
+
+    return ace_step_lm_tp_env_enabled()
+
+
 def ace_step_mesh_use_split_ttnn_preprocess(mesh_sku: str | None) -> bool:
-    """Run LM + Qwen + condition on a 1×1 TTNN device before opening the DiT mesh (BH_QB Phase A)."""
+    """Run LM + Qwen + condition on TTNN before DiT (BH_QB Phase A).
+
+    Default: 1×1 preprocess chip. With ``ACE_STEP_LM_TP=1``, Phase A opens the **full**
+    mesh so ``ModelArgs.num_devices`` enables tt_transformers TP + LMHead ``all_gather``.
+    """
     if ace_step_mesh_use_host_preprocess(mesh_sku):
         return False
     return ace_step_needs_split_device(mesh_sku)
@@ -142,7 +155,10 @@ def _restrict_cluster_to_preprocess_chip(mesh_sku: str | None, device_id: int) -
     :func:`_ensure_full_cluster_env_for_dit`).
 
     Set ``ACE_STEP_PREPROCESS_SINGLE_CHIP=0`` to disable (not recommended on BH_QB).
+    With ``ACE_STEP_LM_TP=1``, skip restriction so Phase A opens the full mesh for LM TP.
     """
+    if ace_step_mesh_use_lm_tp(mesh_sku):
+        return None
     if os.environ.get("ACE_STEP_PREPROCESS_SINGLE_CHIP", "").strip().lower() in (
         "0",
         "false",
@@ -555,13 +571,28 @@ def open_preprocess_device(
     num_command_queues: int = 1,
     mesh_sku: str | None = None,
 ) -> Any:
-    """Open a 1×1 device for Qwen / 5 Hz LM / detokenizer (never a multi-device mesh).
+    """Open device for Qwen / 5 Hz LM / detokenizer.
 
-    When ``mesh_sku`` is a multi-device SKU (e.g. ``BH_QB``), sets ``TT_VISIBLE_DEVICES`` to
-    ``device_id`` for this open so UMD does not start all chips during Phase A.
+    Default: 1×1 (never a multi-device mesh). With ``ACE_STEP_LM_TP=1`` on a multi-chip
+    SKU, opens the **full** DiT mesh so LM TP / ``all_gather`` can run.
+
+    When ``mesh_sku`` is a multi-device SKU (e.g. ``BH_QB``) and LM TP is off, sets
+    ``TT_VISIBLE_DEVICES`` to ``device_id`` for this open so UMD does not start all chips
+    during Phase A.
 
     Use :func:`ace_step_preprocess_num_command_queues` when trace replay is enabled.
     """
+    if ace_step_mesh_use_lm_tp(mesh_sku):
+        print(
+            f"[ace_step_v1_5] ACE_STEP_LM_TP=1: opening full mesh for preprocess/LM ({mesh_sku})",
+            flush=True,
+        )
+        return open_dit_device(
+            ttnn_mod,
+            mesh_sku=mesh_sku,
+            device_id=device_id,
+            num_command_queues=num_command_queues,
+        )
     return open_single_tt_device(
         ttnn_mod,
         device_id=device_id,

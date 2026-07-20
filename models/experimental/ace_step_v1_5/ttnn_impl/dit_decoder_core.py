@@ -119,6 +119,18 @@ from models.experimental.ace_step_v1_5.utils.tt_device import (
     ace_step_dit_weight_mesh_mapper,
     ace_step_synchronize_device,
 )
+from models.experimental.ace_step_v1_5.utils.ace_step_tp import (
+    ace_step_as_tensor_tp_column,
+    ace_step_as_tensor_tp_column_fused,
+    ace_step_as_tensor_tp_row,
+    ace_step_dit_tp_all_reduce,
+    ace_step_dit_tt_ccl,
+    ace_step_local_heads,
+    ace_step_replicate_or_none_mapper,
+    ace_step_tp_enabled,
+    ace_step_tp_size,
+    ace_step_validate_dit_tp_dims,
+)
 
 import ttnn
 from .math_perf_env import (
@@ -609,6 +621,7 @@ class TtAceStepAttentionSDPA:
         linear_compute_kernel_config=None,
         activation_l1_memory_config=None,
         linear_output_l1_memory_config=None,
+        tt_ccl=None,
     ):
         transformer = getattr(ttnn, "transformer", None)
         sdpa = getattr(transformer, "scaled_dot_product_attention", None) if transformer is not None else None
@@ -618,6 +631,7 @@ class TtAceStepAttentionSDPA:
         self.ttnn = ttnn
         self._sdpa = sdpa
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
@@ -626,69 +640,83 @@ class TtAceStepAttentionSDPA:
         self.n_heads = int(cfg.num_attention_heads)
         self.n_kv = int(cfg.num_key_value_heads)
         self.d_head = int(cfg.head_dim)
+        self.tp_size = ace_step_tp_size(mesh_device)
+        ace_step_validate_dit_tp_dims(
+            num_attention_heads=self.n_heads,
+            num_key_value_heads=self.n_kv,
+            hidden_size=self.d_model,
+            intermediate_size=self.d_model,  # hidden always ÷ tp; MLP validates intermediate separately
+            tp_size=self.tp_size,
+        )
+        self.n_local_heads = ace_step_local_heads(num_heads=self.n_heads, tp_size=self.tp_size)
+        self.n_local_kv = ace_step_local_heads(num_heads=self.n_kv, tp_size=self.tp_size)
+        self.d_local_q = int(self.n_local_heads * self.d_head)
         self.scale = 1.0 / math.sqrt(float(self.d_head))
         self._rotary = rotary_embedding
 
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
+        # Norms / masks stay replicated; projections use TP mappers when enabled.
+        mapper_rep = (
+            ace_step_replicate_or_none_mapper(mesh_device)
+            if ace_step_tp_enabled(mesh_device)
+            else ace_step_dit_weight_mesh_mapper(mesh_device)
+        )
 
         w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
         qo_dtype = ace_step_attn_qo_weight_dtype(ttnn, self.dtype)
 
-        def as_w(suffix: str, *, dtype: Any | None = None):
-            return ttnn.as_tensor(
-                _maybe_get(state_dict, f"{base_address}.{suffix}.weight"),
-                device=mesh_device,
-                dtype=dtype if dtype is not None else w_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
-            )
-
-        def as_b(suffix: str):
-            # Biases are optional (AceStepConfig.attention_bias defaults to False).
+        def as_b_col(suffix: str):
             key = f"{base_address}.{suffix}.bias"
             b = state_dict.get(key, None)
             if b is None:
                 return None
+            b_np = _to_numpy_host_array(b).reshape(1, 1, 1, -1)
+            mapper_b = (
+                ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+                if self.tp_size > 1 and hasattr(ttnn, "ShardTensorToMesh")
+                else mapper_rep
+            )
             return ttnn.as_tensor(
-                b.reshape(1, 1, 1, -1),
+                b_np,
                 device=mesh_device,
                 dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
-                mesh_mapper=mapper,
+                mesh_mapper=mapper_b,
             )
 
         wq_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.q_proj.weight"))
-        self.wq, self.bq = as_w("q_proj", dtype=qo_dtype), as_b("q_proj")
-        # Fused KV projection: identical K/V sequence length + one DRAM read of activations.
         wk_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.k_proj.weight"))
         wv_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.v_proj.weight"))
-        wkv_host = np.concatenate([wk_host, wv_host], axis=0)
-        self.wkv = ttnn.as_tensor(
-            wkv_host,
-            device=mesh_device,
-            dtype=w_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
-            mesh_mapper=mapper,
+
+        self.wq = ace_step_as_tensor_tp_column(
+            wq_host, mesh_device=mesh_device, dtype=qo_dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem
         )
-        # Self-attn: fuse Q+WKV into one matmul (cross-attn keeps separate Q / WKV inputs).
-        w_qwkv_host = np.concatenate([wq_host, wkv_host], axis=0)
-        self.w_qwkv = ttnn.as_tensor(
-            w_qwkv_host,
-            device=mesh_device,
+        self.bq = as_b_col("q_proj")
+
+        # Fused KV / QKV: re-interleave per TP rank (cannot naive-shard the concat).
+        self.wkv = ace_step_as_tensor_tp_column_fused(
+            [wk_host, wv_host],
+            mesh_device=mesh_device,
             dtype=w_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
-            mesh_mapper=mapper,
+            tp_size=self.tp_size,
+        )
+        self.w_qwkv = ace_step_as_tensor_tp_column_fused(
+            [wq_host, wk_host, wv_host],
+            mesh_device=mesh_device,
+            dtype=w_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            tp_size=self.tp_size,
         )
 
         bk_host = state_dict.get(f"{base_address}.k_proj.bias", None)
         bv_host = state_dict.get(f"{base_address}.v_proj.bias", None)
         bq_host = state_dict.get(f"{base_address}.q_proj.bias", None)
-        if bk_host is not None and bv_host is not None:
+        # Biases uncommon (attention_bias=False). Under TP skip fused bias upload.
+        if bk_host is not None and bv_host is not None and self.tp_size <= 1:
             bk_np = _to_numpy_host_array(bk_host)
             bv_np = _to_numpy_host_array(bv_host)
             bkv_host = np.concatenate([bk_np, bv_np], axis=0).reshape(1, 1, 1, -1)
@@ -698,11 +726,11 @@ class TtAceStepAttentionSDPA:
                 dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
-                mesh_mapper=mapper,
+                mesh_mapper=mapper_rep,
             )
         else:
             self.bkv = None
-        if bq_host is not None and self.bkv is not None:
+        if bq_host is not None and self.bkv is not None and self.tp_size <= 1:
             bq_np = _to_numpy_host_array(bq_host).reshape(-1)
             bkv_flat = _to_numpy_host_array(bkv_host).reshape(-1)
             b_qwkv_host = np.concatenate([bq_np, bkv_flat], axis=0).reshape(1, 1, 1, -1)
@@ -712,14 +740,28 @@ class TtAceStepAttentionSDPA:
                 dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
-                mesh_mapper=mapper,
+                mesh_mapper=mapper_rep,
             )
         else:
             self.b_qwkv = None
 
-        self.wo, self.bo = as_w("o_proj", dtype=qo_dtype), as_b("o_proj")
+        wo_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.o_proj.weight"))
+        self.wo = ace_step_as_tensor_tp_row(
+            wo_host, mesh_device=mesh_device, dtype=qo_dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem
+        )
+        bo = state_dict.get(f"{base_address}.o_proj.bias", None)
+        if bo is None:
+            self.bo = None
+        else:
+            self.bo = ttnn.as_tensor(
+                _to_numpy_host_array(bo).reshape(1, 1, 1, -1),
+                device=mesh_device,
+                dtype=w_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=mapper_rep,
+            )
 
-        # Per-head RMSNorm weights (shape [Dh]).
         qn = _maybe_get(state_dict, f"{base_address}.q_norm.weight")
         kn = _maybe_get(state_dict, f"{base_address}.k_norm.weight")
         self.q_norm_w = ttnn.as_tensor(
@@ -728,7 +770,7 @@ class TtAceStepAttentionSDPA:
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
-            mesh_mapper=mapper,
+            mesh_mapper=mapper_rep,
         )
         self.k_norm_w = ttnn.as_tensor(
             kn,
@@ -736,22 +778,16 @@ class TtAceStepAttentionSDPA:
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
-            mesh_mapper=mapper,
+            mesh_mapper=mapper_rep,
         )
         self.eps = float(cfg.rms_norm_eps)
 
         self._linear_ck = linear_compute_kernel_config
         self._act_l1 = activation_l1_memory_config
         self._linear_out_l1 = linear_output_l1_memory_config
-        self._fused_kv_dim = int(self.n_kv * self.d_head) * 2
+        self._fused_kv_dim = int(self.n_local_kv * self.d_head) * 2
         self._wkv_pc_cache: dict = {}
         self._qwkv_pc_cache: dict = {}
-        # Per-call mask uploads (additive tail/pad masks) used to rebuild the same NumPy zeros tensor
-        # and call ttnn.as_tensor on every forward, every layer, every step. Cache them by shape so
-        # they stay device-resident across denoise steps and become trace+2CQ friendly.
-        # Keys:
-        #   - self-attn pad mask:  (B, s_rope, target_sdpa)        value broadcasts over S_q==S_k==target_sdpa
-        #   - cross-attn tail mask:(B, S_q0, W, s_enc_log)         pads keys past s_enc_log up to W
         self._self_pad_mask_cache: dict[tuple[int, int, int], "ttnn.Tensor"] = {}
         self._cross_tail_mask_cache: dict[tuple[int, int, int, int], "ttnn.Tensor"] = {}
         self._sliding_window_mask_cache: dict[tuple[int, int, int], "ttnn.Tensor"] = {}
@@ -770,7 +806,11 @@ class TtAceStepAttentionSDPA:
         pad_np = np.zeros((int(batch), 1, int(target_sdpa), int(target_sdpa)), dtype=np.float32)
         pad_np[:, :, :, int(s_rope) :] = np.float32(-1e9)
         mem_m = ace_step_sdpa_mask_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper_m = ace_step_dit_weight_mesh_mapper(self.mesh_device)
+        mapper_m = (
+            ace_step_replicate_or_none_mapper(self.mesh_device)
+            if ace_step_tp_enabled(self.mesh_device)
+            else ace_step_dit_weight_mesh_mapper(self.mesh_device)
+        )
         pad_m = ttnn.as_tensor(
             pad_np,
             device=self.mesh_device,
@@ -792,7 +832,11 @@ class TtAceStepAttentionSDPA:
         pad_np = np.zeros((int(batch), 1, int(s_q0), int(w)), dtype=np.float32)
         pad_np[:, :, :, int(s_enc_log) : int(w)] = np.float32(-1e9)
         mem_m = ace_step_sdpa_mask_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper_m = ace_step_dit_weight_mesh_mapper(self.mesh_device)
+        mapper_m = (
+            ace_step_replicate_or_none_mapper(self.mesh_device)
+            if ace_step_tp_enabled(self.mesh_device)
+            else ace_step_dit_weight_mesh_mapper(self.mesh_device)
+        )
         pad_m = ttnn.as_tensor(
             pad_np,
             device=self.mesh_device,
@@ -813,7 +857,11 @@ class TtAceStepAttentionSDPA:
             return cached
         sw_np = _sliding_window_attn_bias_np(seq_len=int(seq_len), window=int(window), batch=int(batch))
         mem_m = ace_step_sdpa_mask_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper_m = ace_step_dit_weight_mesh_mapper(self.mesh_device)
+        mapper_m = (
+            ace_step_replicate_or_none_mapper(self.mesh_device)
+            if ace_step_tp_enabled(self.mesh_device)
+            else ace_step_dit_weight_mesh_mapper(self.mesh_device)
+        )
         sw_m = ttnn.as_tensor(
             sw_np,
             device=self.mesh_device,
@@ -870,7 +918,7 @@ class TtAceStepAttentionSDPA:
                 self.mesh_device,
                 seq_len=int(seq_len),
                 in_dim=int(in_dim),
-                hidden_size=self.d_model,
+                hidden_size=self.d_local_q,
                 fused_kv_dim=self._fused_kv_dim,
                 batch_size=int(batch_size),
             )
@@ -946,7 +994,7 @@ class TtAceStepAttentionSDPA:
             lin_qwkv = self._qwkv_linear_kwargs(batch_size=b_x, seq_len=s_q, in_dim=d_in)
             x_qwkv = ace_step_matmul_activation(ttnn, x, lin_qwkv, l1_fn=self._l1_activation, dram_mc=_dram_mc)
             qwkv = ttnn.linear(x_qwkv, self.w_qwkv, bias=self.b_qwkv, transpose_b=True, **lin_qwkv)
-            d_q = int(self.d_model)
+            d_q = int(self.d_local_q)
             kv_end = d_q + int(self._fused_kv_dim)
             s_lin = int(qwkv.shape[2])
             q = ttnn.slice(qwkv, (0, 0, 0, 0), (b_x, 1, s_lin, d_q))
@@ -959,7 +1007,7 @@ class TtAceStepAttentionSDPA:
                 batch_size=b_x,
                 seq_len=s_q,
                 in_dim=d_in,
-                out_dim=self.d_model,
+                out_dim=self.d_local_q,
             )
             x_q = ace_step_matmul_activation(ttnn, x, lin_q, l1_fn=self._l1_activation, dram_mc=_dram_mc)
             q = ttnn.linear(x_q, self.wq, bias=self.bq, transpose_b=True, **lin_q)
@@ -973,12 +1021,13 @@ class TtAceStepAttentionSDPA:
 
         B = int(q.shape[0])
         S = int(q.shape[2])
-        H = self.n_heads
+        H = self.n_local_heads
         Dh = self.d_head
         if _trace:
             print(
                 f"[ace_step_v1_5][attn_trace][ttnn] {debug_prefix}enter "
-                f"B={B} S_q_linear={S} H={H} Dh={Dh} cross={encoder_hidden_states is not None} "
+                f"B={B} S_q_linear={S} H={H} (global={self.n_heads}) Dh={Dh} tp={self.tp_size} "
+                f"cross={encoder_hidden_states is not None} "
                 f"scale={self.scale:.6g} attn_mask={'set' if attn_mask is not None else 'None'}",
                 flush=True,
             )
@@ -1042,7 +1091,7 @@ class TtAceStepAttentionSDPA:
             q,
             kv,
             num_heads=H,
-            num_kv_heads=self.n_kv,
+            num_kv_heads=self.n_local_kv,
             l1_mc=_head_mc,
         )
 
@@ -1055,7 +1104,7 @@ class TtAceStepAttentionSDPA:
             v = _pad_seq_dim2_bh_sd(v, target)
 
         S_k = int(k.shape[2])
-        kv_h = self.n_kv
+        kv_h = self.n_local_kv
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_reshape_BHSD", q, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
@@ -1064,9 +1113,9 @@ class TtAceStepAttentionSDPA:
             debug[f"{debug_prefix}v_lin"] = v
 
         if kv_h != H:
-            # Grouped-query attention: repeat kv heads to match q heads.
+            # Grouped-query attention: repeat kv heads to match q heads (local ranks).
             if H % kv_h != 0:
-                raise ValueError(f"num_attention_heads {H} not divisible by num_key_value_heads {kv_h}")
+                raise ValueError(f"local num_attention_heads {H} not divisible by local num_key_value_heads {kv_h}")
             rep = H // kv_h
             # HF GQA semantics: kv0 -> q0,q1 ; kv1 -> q2,q3 ; ...
             #
@@ -1298,6 +1347,13 @@ class TtAceStepAttentionSDPA:
         )
         ctx_o = ace_step_matmul_activation(ttnn, ctx, lin_o, l1_fn=self._l1_activation, dram_mc=_dram_mc)
         out = ttnn.linear(ctx_o, self.wo, bias=self.bo, transpose_b=True, **lin_o)
+        if self.tp_size > 1 and self.tt_ccl is not None:
+            out = ace_step_dit_tp_all_reduce(
+                out,
+                mesh_device=self.mesh_device,
+                tt_ccl=self.tt_ccl,
+                memory_config=_op_mc or _dram_mc,
+            )
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}attn_out_B1SD", out, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
@@ -1308,6 +1364,9 @@ class TtAceStepAttentionSDPA:
 class TtQwen3MLP:
     """
     Qwen3-style gated MLP: down_proj(silu(gate_proj(x)) * up_proj(x))
+
+    Under ``ACE_STEP_DIT_TP=1``, gate/up are column-parallel (local intermediate),
+    down is row-parallel, then ``all_reduce`` restores full hidden.
     """
 
     def __init__(
@@ -1322,42 +1381,49 @@ class TtQwen3MLP:
         linear_compute_kernel_config=None,
         activation_l1_memory_config=None,
         linear_output_l1_memory_config=None,
+        tt_ccl=None,
     ):
         self.ttnn = ttnn
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
 
-        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
-        w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
+        self.tp_size = ace_step_tp_size(mesh_device)
+        self.hidden_size = int(hidden_size)
+        self.intermediate_size_global = int(intermediate_size)
+        if self.tp_size > 1:
+            if self.intermediate_size_global % self.tp_size != 0:
+                raise ValueError(
+                    f"ACE-Step DiT TP-{self.tp_size} requires intermediate_size % {self.tp_size} == 0, "
+                    f"got {self.intermediate_size_global}"
+                )
+            if self.hidden_size % self.tp_size != 0:
+                raise ValueError(
+                    f"ACE-Step DiT TP-{self.tp_size} requires hidden_size % {self.tp_size} == 0, "
+                    f"got {self.hidden_size}"
+                )
+        # Local intermediate width after column-parallel split.
+        self.intermediate_size = self.intermediate_size_global // max(1, self.tp_size)
 
-        def as_w(name: str):
-            return ttnn.as_tensor(
-                _maybe_get(state_dict, f"{base_address}.{name}.weight"),
-                device=mesh_device,
-                dtype=w_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper,
-            )
+        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
 
         w_gate_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.gate_proj.weight"))
         w_up_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.up_proj.weight"))
-        w_gate_up_host = np.concatenate([w_gate_host, w_up_host], axis=0)
-        self.w_gate_up = ttnn.as_tensor(
-            w_gate_up_host,
-            device=mesh_device,
+        self.w_gate_up = ace_step_as_tensor_tp_column_fused(
+            [w_gate_host, w_up_host],
+            mesh_device=mesh_device,
             dtype=w_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
-            mesh_mapper=mapper,
+            tp_size=self.tp_size,
         )
-        self.w_down = as_w("down_proj")
-
-        self.hidden_size = int(hidden_size)
-        self.intermediate_size = int(intermediate_size)
+        w_down_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.down_proj.weight"))
+        self.w_down = ace_step_as_tensor_tp_row(
+            w_down_host, mesh_device=mesh_device, dtype=w_dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem
+        )
 
         self._linear_ck = linear_compute_kernel_config
         self._act_l1 = activation_l1_memory_config
@@ -1467,6 +1533,13 @@ class TtQwen3MLP:
             h = _act_fn(h)
         h_lin = ace_step_matmul_activation(ttnn, h, lin_down, l1_fn=self._l1_activation, dram_mc=_dram_mc)
         out = ttnn.linear(h_lin, self.w_down, bias=None, transpose_b=True, **lin_down)
+        if self.tp_size > 1 and self.tt_ccl is not None:
+            out = ace_step_dit_tp_all_reduce(
+                out,
+                mesh_device=self.mesh_device,
+                tt_ccl=self.tt_ccl,
+                memory_config=_elt_mc or _dram_mc,
+            )
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}mlp_raw_out"] = out
         return out
@@ -1489,17 +1562,23 @@ class TtAceStepDiTLayer:
         linear_compute_kernel_config=None,
         activation_l1_memory_config=None,
         linear_output_l1_memory_config=None,
+        tt_ccl=None,
     ) -> None:
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.layer_idx = int(layer_idx)
+        self.tt_ccl = tt_ccl
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
 
         d = int(cfg.hidden_size)
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
+        mapper = (
+            ace_step_replicate_or_none_mapper(mesh_device)
+            if ace_step_tp_enabled(mesh_device)
+            else ace_step_dit_weight_mesh_mapper(mesh_device)
+        )
 
         # Norm weights stay DRAM (small); rms_norm outputs use ``memory_config=_el_mc`` for activations.
         self.self_norm_w = ttnn.as_tensor(
@@ -1542,6 +1621,7 @@ class TtAceStepDiTLayer:
             linear_compute_kernel_config=linear_compute_kernel_config,
             activation_l1_memory_config=activation_l1_memory_config,
             linear_output_l1_memory_config=linear_output_l1_memory_config,
+            tt_ccl=tt_ccl,
         )
         # Attention modules
         self.self_attn = TtAceStepAttentionSDPA(
@@ -1773,8 +1853,17 @@ class TtAceStepDiTCore:
         if self.dtype is None:
             raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
 
+        self.tp_size = ace_step_tp_size(mesh_device)
+        self.tt_ccl = ace_step_dit_tt_ccl(mesh_device)
+        if self.tp_size > 1:
+            print(f"[ace_step_v1_5] DiT core: TP-{self.tp_size} enabled (ACE_STEP_DIT_TP)", flush=True)
+
         mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
+        mapper = (
+            ace_step_replicate_or_none_mapper(mesh_device)
+            if ace_step_tp_enabled(mesh_device)
+            else ace_step_dit_weight_mesh_mapper(mesh_device)
+        )
 
         print("[ace_step_v1_5] DiT core: condition embedder …", flush=True)
         _w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
@@ -1835,6 +1924,7 @@ class TtAceStepDiTCore:
                     linear_compute_kernel_config=linear_ck,
                     activation_l1_memory_config=l1_mc,
                     linear_output_l1_memory_config=l1_mc,
+                    tt_ccl=self.tt_ccl,
                 )
             )
             if _init_sync or (i == 0 and ace_step_device_num_chips(mesh_device) > 1):

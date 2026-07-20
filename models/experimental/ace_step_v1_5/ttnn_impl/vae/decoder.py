@@ -57,6 +57,8 @@ class TtOobleckDecoder:
         self.channels = int(channels)
         self.input_channels = int(input_channels)
         self.audio_channels = int(audio_channels)
+        # Stereo head (audio_channels=2) is not TP-4 column-shardable; VAE weights stay
+        # device-local / replicated — never use ShardTensorToMesh on out_channels here.
         self.upsampling_ratios = list(upsampling_ratios)
         cm = [1] + list(channel_multiples)
         assert (

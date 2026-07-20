@@ -416,10 +416,14 @@ def repetition_penalty_apply(
     batch = int(scores.shape[0])
     vocab = int(scores.shape[-1])
     max_batch = _penalties_max_batch_size(batch)
-    # ``Penalties1D`` expects vocab to be divisible by num_devices; for the 1x1 mesh ACE-Step
-    # uses, num_devices==1 so any vocab works. We pad-up to the next 32 multiple anyway so
-    # the TILE math is happy; callers see the original ``vocab`` columns sliced back.
-    pad_to = ((vocab + 31) // 32) * 32
+    # ``Penalties1D`` expects vocab to be divisible by num_devices. Pad to
+    # ``TILE_SIZE * num_devices`` (TP-4 → 128) so multi-device LM sampling stays even;
+    # callers see the original ``vocab`` columns sliced back.
+    from models.experimental.ace_step_v1_5.utils.ace_step_tp import ace_step_padded_vocab_size
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips
+
+    n_dev = max(1, ace_step_device_num_chips(device))
+    pad_to = ace_step_padded_vocab_size(vocab, n_dev)
     if pad_to != vocab:
         padded = torch.full((batch, pad_to), float("-inf"), dtype=scores.dtype, device=scores.device)
         padded[:, :vocab] = scores
@@ -455,7 +459,11 @@ def apply_penalty_filter_sample(
     batch = int(scores.shape[0])
     vocab = int(scores.shape[-1])
     max_batch = _penalties_max_batch_size(batch)
-    pad_to = ((vocab + 31) // 32) * 32
+    from models.experimental.ace_step_v1_5.utils.ace_step_tp import ace_step_padded_vocab_size
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips
+
+    n_dev = max(1, ace_step_device_num_chips(device))
+    pad_to = ace_step_padded_vocab_size(vocab, n_dev)
 
     if pad_to != vocab:
         padded = torch.full((batch, pad_to), float("-inf"), dtype=scores.dtype, device=scores.device)

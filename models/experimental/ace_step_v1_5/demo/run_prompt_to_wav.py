@@ -1089,11 +1089,20 @@ def main() -> None:
         print(f"[ace_step_v1_5] mesh SKU={mesh_sku} split_preprocess={split_device}", flush=True)
     if host_only_preprocess:
         if mesh_ttnn_preprocess:
-            print(
-                "[ace_step_v1_5] multi-device mesh: split TTNN preprocess on 1×1 "
-                "(5 Hz LM + Qwen + condition encoder), then DiT/VAE on full mesh.",
-                flush=True,
-            )
+            from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_mesh_use_lm_tp
+
+            if ace_step_mesh_use_lm_tp(mesh_sku):
+                print(
+                    "[ace_step_v1_5] multi-device mesh: ACE_STEP_LM_TP=1 — TTNN preprocess/LM on full mesh "
+                    "(tt_transformers TP + LMHead all_gather), then DiT/VAE on same mesh.",
+                    flush=True,
+                )
+            else:
+                print(
+                    "[ace_step_v1_5] multi-device mesh: split TTNN preprocess on 1×1 "
+                    "(5 Hz LM + Qwen + condition encoder), then DiT/VAE on full mesh.",
+                    flush=True,
+                )
         else:
             print(
                 "[ace_step_v1_5] multi-device mesh: host PyTorch preprocess (DiT/VAE on full mesh after preprocess).",
@@ -1842,13 +1851,29 @@ def main() -> None:
         dev_opened_for_ttnn_text_encoder = True
     else:
         _preprocess_dev_for_handoff = dev if dev is not None else demo_session.preprocess_dev
+        from models.experimental.ace_step_v1_5.utils.ace_step_tp import ace_step_lm_tp_env_enabled
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips
+
+        _lm_tp_same_mesh = bool(ace_step_lm_tp_env_enabled()) and (
+            _preprocess_dev_for_handoff is not None and ace_step_device_num_chips(_preprocess_dev_for_handoff) > 1
+        )
         _should_reexec_dit_mesh = (
             split_device
             and not dit_handoff_mode
+            and not _lm_tp_same_mesh
             and _preprocess_dev_for_handoff is not None
             and (payload_for_mesh_condition is not None or not condition_tensors_on_device)
         )
-        if _should_reexec_dit_mesh:
+        if _lm_tp_same_mesh:
+            print(
+                "[ace_step_v1_5] ACE_STEP_LM_TP=1: reusing preprocess mesh for DiT/VAE (skip re-exec handoff)",
+                flush=True,
+            )
+            dev = _preprocess_dev_for_handoff
+            demo_session.dit_dev = dev
+            demo_session.preprocess_dev = None
+            dev_opened_for_ttnn_text_encoder = True
+        elif _should_reexec_dit_mesh:
             import sys
 
             _preprocess_handoff_perf = ace_step_build_preprocess_handoff_perf(
