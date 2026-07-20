@@ -18,21 +18,13 @@ triage flags.
 For single-rank usage, call `tt-triage` directly — `tt-run-triage` only wraps
 multi-rank runs (just like `tt-run` itself requires a binding flag).
 
-v1 supports the two legacy-mode tt-run binding flags:
-    * `--rank-binding=<yaml>` (single rank-bindings file)
-    * `--rank-bindings-mapping=<yaml>` (sub-context overlays merged into one
-      global rank list)
-
-New mode (`--mesh-graph-descriptor`) is deferred to v2. As a workaround, launch
-your workload once with tt-run new mode (Phase 1 caches the rank bindings under
-`generated/ttrun/<fingerprint>/`), then point tt-run-triage at that file:
-
-    tt-run --mesh-graph-descriptor=mesh.textproto --hosts=host0,host1 ./build/test/my_test
-    tt-run-triage --rank-binding=generated/ttrun/<fingerprint>/rank_bindings.yaml -- --run=check_arc
+The rank count is discovered at runtime with a
+`tt-run ... printenv OMPI_COMM_WORLD_SIZE`, so every tt-run mode works with no
+binding-specific parsing.
 
 Examples:
     tt-run-triage --rank-binding=foo.yaml -- --run=check_arc
-    tt-run-triage --rank-bindings-mapping=mapping.yaml -- --llm-output
+    tt-run-triage --mesh-graph-descriptor=mesh.textproto --hosts=h0,h1 -- --llm-output
 """
 
 from __future__ import annotations
@@ -58,70 +50,18 @@ _HEADER_LINE_RE = re.compile(r"^([A-Za-z_]\w*\.py)(?:\s+\[[\d.]+s\])?\s*:\s*$")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _extract_flag_value(tt_run_args: list[str], flag: str) -> Optional[str]:
-    """Return the value of `--flag VALUE` or `--flag=VALUE` from `tt_run_args`, else None."""
-    for i, a in enumerate(tt_run_args):
-        if a == flag and i + 1 < len(tt_run_args):
-            return tt_run_args[i + 1]
-        if a.startswith(flag + "="):
-            return a.split("=", 1)[1]
-    return None
-
-
-def _count_rank_binding_yaml(path: str | Path) -> int:
-    import yaml
-
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
-        raise ValueError(f"{path}: expected a YAML mapping with 'rank_bindings'")
-    bindings = data.get("rank_bindings") or []
-    if not bindings:
-        raise ValueError(f"{path}: 'rank_bindings' is missing or empty")
-    return len(bindings)
-
-
-def _count_rank_bindings_mapping_yaml(path: str) -> int:
-    import yaml
-
-    p = Path(path).resolve()
-    with open(p) as f:
-        data = yaml.safe_load(f)
-    if data is not None and not isinstance(data, dict):
-        raise ValueError(f"{path}: expected a YAML mapping with 'subcontext_id_to_rank_bindings'")
-    raw_map = (data or {}).get("subcontext_id_to_rank_bindings")
-    if not raw_map:
-        raise ValueError(f"{path}: missing or empty 'subcontext_id_to_rank_bindings'")
-    total = 0
-    for overlay_value in raw_map.values():
-        overlay_path = Path(overlay_value)
-        if not overlay_path.is_absolute():
-            candidate = (p.parent / overlay_path).resolve()
-            overlay_path = candidate if candidate.is_file() else overlay_path
-        total += _count_rank_binding_yaml(overlay_path)
-    return total
-
-
-def _discover_rank_count(tt_run_args: list[str]) -> int:
-    rb = _extract_flag_value(tt_run_args, "--rank-binding")
-    if rb is not None:
-        return _count_rank_binding_yaml(rb)
-    rbm = _extract_flag_value(tt_run_args, "--rank-bindings-mapping")
-    if rbm is not None:
-        return _count_rank_bindings_mapping_yaml(rbm)
-    if _extract_flag_value(tt_run_args, "--mesh-graph-descriptor") is not None:
-        print(
-            "Error: --mesh-graph-descriptor (tt-run new mode) is not supported in v1 of tt-run-triage.\n"
-            "Run `tt-run --mesh-graph-descriptor=...` once to populate the Phase 1 cache,\n"
-            "then point tt-run-triage at the generated bindings file:\n"
-            "    tt-run-triage --rank-binding=generated/ttrun/<fingerprint>/rank_bindings.yaml -- ...",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    print(
-        "Error: tt-run-triage requires one of --rank-binding=<yaml> or --rank-bindings-mapping=<yaml>.\n"
-        "For single-rank triage, call `tt-triage` directly.",
-        file=sys.stderr,
+def _probe_rank_count(tt_run_args: list[str]) -> int:
+    """Discover the rank count by launching a `tt-run ... printenv OMPI_COMM_WORLD_SIZE`"""
+    cmd = ["tt-run", *tt_run_args, "printenv", "OMPI_COMM_WORLD_SIZE"]
+    print("[tt-run-triage] counting ranks...", file=sys.stderr)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    for raw in proc.stdout.splitlines():
+        m = _TAG_RE.match(raw.strip())
+        val = (m.group(3) if m else raw).strip()
+        if val.isdigit():
+            return int(val)
+    sys.stderr.write(
+        f"[tt-run-triage] rank count probe failed (exit {proc.returncode}); output:\n{proc.stdout}{proc.stderr}\n"
     )
     raise SystemExit(2)
 
@@ -245,7 +185,8 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
     scripts = triage.TriageScript.discover_all_in_directory(str(TRIAGE_PY.parent))
     triage.parse_arguments(scripts, argv=["--disable-progress", *passthrough])
 
-    rank_count = _discover_rank_count(tt_run_args)
+    rank_count = _probe_rank_count(tt_run_args)
+    print(f"[tt-run-triage] found {rank_count} ranks", file=sys.stderr)
 
     triage_cmd = [
         sys.executable,
@@ -254,8 +195,8 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
     ] + passthrough
 
     cmd = ["tt-run"] + tt_run_args + triage_cmd
+    print(f"[tt-run-triage] running triage on {rank_count} ranks", file=sys.stderr)
     print(f"[tt-run-triage] launching: {' '.join(cmd)}", file=sys.stderr)
-    print(f"[tt-run-triage] expecting {rank_count} ranks", file=sys.stderr)
 
     renderer = TextStreamingRenderer(expected_ranks=rank_count, scripts=scripts)
 
