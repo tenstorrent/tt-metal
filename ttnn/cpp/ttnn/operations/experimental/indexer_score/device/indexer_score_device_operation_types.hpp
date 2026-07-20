@@ -11,7 +11,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
+#include "ttnn/operations/ccl/ccl_host_types.hpp"  // ttnn::ccl::Topology
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::indexer_score {
 
@@ -32,6 +35,24 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 // Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp; the
 // indexer reader reads K in logical order via this invP (reader_indexer_score.cpp).
 using ttnn::prim::BlockCyclicLayout;
+
+// Ring-fused indexer: the op subsumes the SP all-gather. Instead of the caller pre-gathering K, it hands the
+// per-chip LOCAL K shard (tensor_args.k_local) as the all-gather INPUT and the full [B,1,T,D] persistent buffer
+// (tensor_args.k) as the all-gather OUTPUT; the fused program factory co-schedules the ring_attention all-gather
+// (the only Linear+fuse-capable AG) into the SAME program as the indexer compute, wiring a producer->consumer
+// semaphore handshake so the reader starts scoring once the gather lands. Scalar AG config only (tensors live in
+// tensor_args); NOT hashed (the fused path is selected by has_value(), and these carry no binary-shaping info the
+// reader's FUSED_RING define + block-cyclic defines don't already cover). ring_size/ring_index are DERIVED from
+// the mesh + coordinate (cluster_axis), not stored.
+struct FusedRingConfig {
+    uint32_t num_links{1};  // fabric links for the gather
+    ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};
+    std::vector<tt::tt_metal::GlobalSemaphore> ag_semaphore;  // the all-gather's own out-ready semaphores
+    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id{std::nullopt};
+    // NOTE: the all-gather concat dim is structurally fixed to seq (dim 2) -- the reader's block-cyclic
+    // permutation assumes it -- so it is a named constant at the AG call site, not a configurable field. The AG
+    // workers' grid offset is likewise computed by the factory (reserved-column math), not carried here.
+};
 
 struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
@@ -85,12 +106,18 @@ struct operation_attributes_t {
     // (which is also what sp == 1 resolves to, since that is the identity permutation).
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    // Ring-fused all-gather config (see FusedRingConfig). nullopt = the classic unfused path (caller pre-gathers
+    // K), which selects the classic program factory and stays byte-identical.
+    std::optional<FusedRingConfig> fused_ring{std::nullopt};
+    bool has_fused_ring() const { return fused_ring.has_value(); }
 };
 
 struct tensor_args_t {
     const Tensor& q;
-    const Tensor& k;
+    const Tensor& k;  // fused: the [B,1,T,D] persistent all-gather OUTPUT buffer the reader scores against
     const Tensor& weights;
+    // Fused only: this device's per-chip LOCAL K shard [B,1,sll,D] = the all-gather INPUT. nullopt unfused.
+    std::optional<Tensor> k_local{std::nullopt};
 };
 
 using tensor_return_value_t = Tensor;
