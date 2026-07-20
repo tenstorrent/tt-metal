@@ -361,9 +361,14 @@ static void relay_run(
      * all readers). With a relay PER READER ([k,k+1)), the two chip halves are fully decoupled -> the single
      * relay stops being the bottleneck. Each ring carries one reader's self-framed stream (no cross-reader
      * interleave); a per-ring host consumer thread drains it. */
+    /* Each ring's sysmem region is [hring_words*4 data][64 B trailer], the trailer holding the SENT pointer
+     * IN HOST SYSMEM. The relay publishes SENT through the SAME posted window as the data (ordered after it by
+     * the fence + PCIe posted-write ordering), so the host polls its OWN RAM (~ns) instead of reading the
+     * pointer from device LIM (~18 us/poll -- the old 215 MB/s wall). HACKED stays in LIM (host->device write
+     * is posted/fast). SENT slot @ hbase[h] + hring_words*4. */
     uint64_t hbase[4];
     for (uint64_t h = rlo; h < rhi; h++) {
-        uint64_t mhb = host_base + h * hring_words * 4;
+        uint64_t mhb = host_base + h * ((uint64_t)hring_words * 4 + 64);
         uint32_t win_p = WRITE_WIN_BASE + (uint32_t)h;
         noc_tlb_2m_t wt;
         wt.data[0] = 0;
@@ -385,7 +390,7 @@ static void relay_run(
     uint32_t hsent[4] = {0, 0, 0, 0}; /* per-ring published word count */
     uint32_t cons[4] = {0, 0, 0, 0};  /* LOCAL per-reader cons; only WRITTEN to LIM for the reader */
     for (uint64_t h = rlo; h < rhi; h++) {
-        w32(HSENT(h), 0);
+        w32(hbase[h] + (uint64_t)hring_words * 4, 0); /* SENT pointer in host sysmem (trailer) */
         w32(CONS(h), 0);
     }
     fence_();
@@ -441,9 +446,9 @@ static void relay_run(
             cons[h] = cn;
             hsent[h] += run;
             total += run;
-            fence_();                /* host writes issued before we publish the pointers */
-            w32(CONS(h), cn);        /* free the reader SPSC */
-            w32(HSENT(h), hsent[h]); /* publish to consumer thread h */
+            fence_();         /* ring payload lands (same posted window) before SENT is published */
+            w32(CONS(h), cn); /* free the reader SPSC (LIM) */
+            w32(hbase[h] + (uint64_t)hring_words * 4, hsent[h]); /* publish SENT to host sysmem (fast poll) */
             (void)breach;
         }
         if (!pending) {
@@ -498,7 +503,8 @@ static void drain_direct(
     if (lo > num_cores) {
         lo = num_cores;
     }
-    uint64_t my_host_base = host_base + (uint64_t)hartid * hring_words * 4; /* this hart's ring in sysmem */
+    uint64_t my_host_base =
+        host_base + (uint64_t)hartid * ((uint64_t)hring_words * 4 + 64); /* ring + 64 B SENT trailer */
     uint64_t ctrl_off = prof_l1 & (NOC_2M_WINDOW_STRIDE - 1ULL);
     uint64_t off_w = my_host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
     volatile uint32_t* coords = (volatile uint32_t*)MBOX_COORDS;
@@ -544,7 +550,7 @@ static void drain_direct(
         }
     }
     uint32_t hsent = 0;
-    w32(HSENT(hartid), 0);
+    w32(hbase + (uint64_t)hring_words * 4, 0); /* SENT pointer in host sysmem (trailer) */
     fence_();
     uint64_t total = 0, t_copy = 0, t_wait = 0;
     uint64_t t0 = rdcycle();
@@ -595,9 +601,9 @@ static void drain_direct(
                 hsent += run;
                 total += run;
                 heads[L] = tail;
-                w32(cbase + r * 4, tail);  /* advance worker head -> producer unblocks */
-                fence_();                  /* ring payload issued before the sent notify */
-                w32(HSENT(hartid), hsent); /* publish to the host */
+                w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks */
+                fence_();                 /* ring payload lands (same posted window) before SENT is published */
+                w32(hbase + (uint64_t)hring_words * 4, hsent); /* publish SENT to host sysmem (fast poll) */
                 t_copy += rdcycle() - tc;
             }
         }

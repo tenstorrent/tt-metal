@@ -50,9 +50,8 @@ using tt::tt_metal::profiler::X280Driver;
 static constexpr uint64_t MBOX_PARAMS = 0x08011000ULL;
 static constexpr uint64_t MBOX_COORDS = 0x08011200ULL;
 static constexpr uint64_t SRCLUT_BASE = 0x08014000ULL;
-static constexpr uint64_t HSENT_BASE = 0x08017000ULL;   // per-hart, X280 writes, host reads (stride 0x40)
+// SENT pointer now lives in HOST SYSMEM (ring trailer), not LIM -- see sent_off(). Only HACKED stays in LIM.
 static constexpr uint64_t HACKED_BASE = 0x08017200ULL;  // per-hart, host writes, X280 reads (stride 0x40)
-static uint64_t HSENT_ADDR_H(uint64_t h) { return HSENT_BASE + h * 0x40; }
 static uint64_t HACKED_ADDR_H(uint64_t h) { return HACKED_BASE + h * 0x40; }
 static constexpr uint64_t P_STOP = MBOX_PARAMS + 0x28;
 static uint64_t harthb(int h) { return 0x08011040ULL + 0x100 + (uint64_t)h * 8; }
@@ -225,14 +224,17 @@ int main(int argc, char** argv) {
     uint64_t data_off = (chan_sz / 2) & ~(WIN_STRIDE - 1);
     uint64_t host_base = pcie_base + data_off;
     uint64_t hring_bytes = (uint64_t)hring_words * 4;
-    uint64_t ndh = direct ? ndrain : nread;  // # host rings: direct = 1/drain hart; split = 1/reader (relay
-                                             // writes reader h -> ring h), each drained by its own host thread
-    if (hring_bytes * ndh > WIN_STRIDE) {
+    uint64_t ring_stride = hring_bytes + 64;  // ring data + 64 B trailer (SENT pointer in host sysmem)
+    uint64_t ndh = direct ? ndrain : nread;   // # host rings: direct = 1/drain hart; split = 1/reader (relay
+                                              // writes reader h -> ring h), each drained by its own host thread
+    // SENT pointer for ring h lives in sysmem at data_off + h*ring_stride + hring_bytes (the trailer).
+    auto sent_off = [&](uint64_t h) { return data_off + h * ring_stride + hring_bytes; };
+    if (ring_stride * ndh > WIN_STRIDE) {
         fprintf(stderr, "[d2h] %llu host rings exceed 2 MB window\n", (unsigned long long)ndh);
         std::_Exit(2);
     }
-    {  // zero all host rings
-        std::vector<uint8_t> z(hring_bytes * ndh, 0);
+    {  // zero all host rings + their SENT trailers
+        std::vector<uint8_t> z(ring_stride * ndh, 0);
         cluster.write_sysmem(z.data(), (uint32_t)z.size(), data_off, device_id, 0);
     }
 
@@ -243,11 +245,11 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[boot] idle FW not up (half_broken=%d) -- needs `tt-smi -r %d`\n", half_broken, device_id);
         std::_Exit(1);
     }
-    {  // zero HACKED + HSENT (per drain hart) + STAGECTL (PROD/CONS) BEFORE boot -- no init race
+    {  // zero HACKED (LIM) + STAGECTL (PROD/CONS) BEFORE boot -- no init race. SENT now lives in host sysmem
+       // (zeroed with the rings above), so nothing to zero in LIM for it.
         std::vector<uint8_t> z(512, 0);
         for (uint64_t h = 0; h < ndh; h++) {
             drv.write_block(z.data(), 8, HACKED_ADDR_H(h));
-            drv.write_block(z.data(), 8, HSENT_ADDR_H(h));
         }
         drv.write_block(z.data(), 512, 0x08018000ULL);  // STAGECTL
     }
@@ -330,15 +332,17 @@ int main(int argc, char** argv) {
     auto us = [](auto a, auto b) {
         return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
     };
-    // Drain ONE ring h to quiescence. Ring h touches only disjoint sysmem (data_off+h*hring_bytes) and
-    // disjoint LIM (HSENT/HACKED_H(h)) + writes only caps[h]/counters[h] -> N of these run concurrently,
-    // one host thread each, with no shared mutable state (UMD sysmem reads are memcpy from the hugepage).
+    // Drain ONE ring h to quiescence. Ring h touches only disjoint sysmem (ring @ data_off+h*ring_stride,
+    // SENT @ sent_off(h)) and disjoint LIM HACKED_H(h) + writes only caps[h]/counters[h] -> N run concurrently,
+    // one host thread each. The SENT pointer is now in HOST SYSMEM (read via read_sysmem = a memcpy from the
+    // hugepage, ~ns) instead of device LIM (drv.read_block ~18 us/poll) -- that was the host-drain wall.
     auto drain_ring = [&](uint64_t h) {
-        uint64_t hoff = data_off + h * hring_bytes;
+        uint64_t hoff = data_off + h * ring_stride;
+        uint64_t soff = sent_off(h);
         uint32_t acked = 0;
-        int empty = 0;
         auto start = std::chrono::steady_clock::now();
         auto next_log = start + std::chrono::seconds(1);
+        auto last_data = start;  // for the quiescence-based exit (we SPIN now, no sleep)
         for (;;) {
             auto now = std::chrono::steady_clock::now();
             if (h == 0 && now > next_log) {
@@ -354,16 +358,18 @@ int main(int argc, char** argv) {
             }
             uint32_t hsent;
             auto ta = std::chrono::steady_clock::now();
-            drv.read_block(reinterpret_cast<uint8_t*>(&hsent), 4, HSENT_ADDR_H(h));
+            cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, soff, device_id, 0);  // SENT from sysmem
             h_us_hsent_v[h] += us(ta, std::chrono::steady_clock::now());
             if (hsent == acked) {
-                if (producers_done.load() && ++empty >= 2500) {
+                // SPIN (no sleep): the sent read is a cheap sysmem poll now, so keep the relay fed -- the old
+                // 200us sleep-on-empty was the throttle (relay spun on hostfull while the host slept). Exit
+                // once producers are done and the ring has been quiet ~500 ms.
+                if (producers_done.load() && us(last_data, now) > 500000) {
                     break;
                 }
-                std::this_thread::sleep_for(std::chrono::microseconds(200));
                 continue;
             }
-            empty = 0;
+            last_data = now;
             uint32_t avail = hsent - acked;
             if (avail > hring_words) {
                 overflow.fetch_add(1);
@@ -425,10 +431,10 @@ int main(int argc, char** argv) {
                 }
                 bool any = false;
                 for (uint64_t h = 0; h < ndh; h++) {
-                    uint64_t hoff = data_off + h * hring_bytes;
+                    uint64_t hoff = data_off + h * ring_stride;
                     uint32_t hsent;
                     auto ta = std::chrono::steady_clock::now();
-                    drv.read_block(reinterpret_cast<uint8_t*>(&hsent), 4, HSENT_ADDR_H(h));
+                    cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, sent_off(h), device_id, 0);
                     h_us_hsent_v[h] += us(ta, std::chrono::steady_clock::now());
                     if (hsent == acked[h]) {
                         continue;
