@@ -45,13 +45,11 @@ void left_shift_init();
 void less_than_equal_zero_init();
 void less_than_zero_init();
 void logical_not_unary_init();
-void lrelu_init();
 void mask_init();
 void not_equal_zero_init();
 void power_init();
 void prelu_init();
 void relu_max_init();
-void relu_min_init();
 void reshuffle_rows_init();
 void right_shift_init();
 void selu_init();
@@ -94,11 +92,6 @@ inline void typecast_init() {
 inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 }  // namespace sfpu
-
-// Dependent-false helper so the delegate's else-branch static_assert only fires when an uncategorized bare op is
-// instantiated (a plain static_assert(false) in an if-constexpr else is ill-formed pre-C++23).
-template <SfpuType>
-inline constexpr bool _sfpu_bare_op_unhandled_ = false;
 
 // Bare init entry point: delegates per SFPU op to its self-contained sfpu::<op>_init().
 template <SfpuType sfpu_op>
@@ -166,8 +159,6 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::less_than_zero_init();
     } else if constexpr (sfpu_op == SfpuType::logical_not_unary) {
         sfpu::logical_not_unary_init();
-    } else if constexpr (sfpu_op == SfpuType::lrelu) {
-        sfpu::lrelu_init();
     } else if constexpr (sfpu_op == SfpuType::mask) {
         sfpu::mask_init();
     } else if constexpr (sfpu_op == SfpuType::negative) {
@@ -180,8 +171,6 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::prelu_init();
     } else if constexpr (sfpu_op == SfpuType::relu_max) {
         sfpu::relu_max_init();
-    } else if constexpr (sfpu_op == SfpuType::relu_min) {
-        sfpu::relu_min_init();
     } else if constexpr (sfpu_op == SfpuType::reshuffle_rows) {
         sfpu::reshuffle_rows_init();
     } else if constexpr (sfpu_op == SfpuType::right_shift) {
@@ -222,10 +211,11 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         // preceding compute_kernel_hw_startup, so route it to the full generic init.
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::exponential>();
     } else {
-        static_assert(
-            _sfpu_bare_op_unhandled_<sfpu_op>,
-            "Bare SFPU_UNARY_INIT(OP) used for an op with no sfpu::<op>_init(). Add its self-contained init and a "
-            "delegate branch in llk_math_eltwise_unary_sfpu_init.h.");
+        // Generic fallback (pre-restructuring behavior): ops without a self-contained sfpu::<op>_init()
+        // get the full generic unary SFPU init (config reg + ADDR_MOD_7 + op-specific ADDR_MOD_6 via
+        // eltwise_unary_sfpu_configure_addrmod<OP>, which has a default valid for any SfpuType + counter
+        // reset). Keeps the bare no-arg delegate instantiable across the whole SfpuType set.
+        _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
     }
 }
 
