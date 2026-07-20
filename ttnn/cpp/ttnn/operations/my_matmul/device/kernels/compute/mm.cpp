@@ -19,6 +19,7 @@ void kernel_main() {
     uint32_t dst_size = get_arg_val<uint32_t>(6);
     uint32_t k_block_A = get_arg_val<uint32_t>(7);
     uint32_t k_block_B = get_arg_val<uint32_t>(8);
+    uint32_t out_block_tiles = get_arg_val<uint32_t>(8);
 
     constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
@@ -26,6 +27,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
     matmul_init(cb_in0, cb_in1);
+
+    cb_reserve_back(cb_out, out_block_tiles);
 
     for (uint32_t block_iter_k = 0; block_iter_k < num_blocks_k; block_iter_k++) {
         cb_wait_front(cb_in0, k_block_A);
@@ -59,7 +62,6 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
 
-                cb_reserve_back(cb_out, dst_size);
                 pack_tile_block(0, cb_out, dst_size);
 
                 tile_regs_release();
@@ -70,7 +72,7 @@ void kernel_main() {
         cb_pop_front(cb_in1, k_block_B);
     }
 
-    cb_push_back(cb_out, dst_size);
+    cb_push_back(cb_out, out_block_tiles);
 
     // for (uint32_t y = top; y < bot; y++) {
     //     for (uint32_t x = left; x < right; x++) {

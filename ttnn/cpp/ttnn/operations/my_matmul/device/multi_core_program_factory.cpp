@@ -199,19 +199,30 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
 
             CoreCoord core{core_x, core_y};
 
-            uint32_t block_size_A = (bot - top) * Kt;
-            uint32_t block_size_B = Kt * (right - left);
-
             // sub_block_* / num_blocks_* are computed once above (identical for every core) and reused here.
             uint32_t dst_size = sub_block_m * sub_block_n;
 
-            uint32_t k_block_A = num_blocks_m * sub_block_m * sub_block_k;  // Mt * sub_block_k
-            uint32_t k_block_B = sub_block_k * num_blocks_n * sub_block_n;  // sub_block_k * Nt
+            uint32_t k_block_A = num_blocks_m * sub_block_m * sub_block_k;  // per_core_Mt * sub_block_k
+            uint32_t k_block_B = sub_block_k * num_blocks_n * sub_block_n;  // sub_block_k * per_core_Nt
+            uint32_t out_block_tiles =
+                num_blocks_m * sub_block_m * num_blocks_n * sub_block_n;  // per_core_Mt * per_core_Nt
 
             reader_desc.emplace_runtime_args(
-                core, {src0_buffer, src1_buffer, Mt, Kt, Nt, top, left, bot, right, block_size_A, block_size_B});
+                core,
+                {src0_buffer,
+                 src1_buffer,
+                 Mt,
+                 Kt,
+                 Nt,
+                 top,
+                 left,
+                 bot,
+                 right,
+                 num_blocks_k,
+                 sub_block_k,
+                 k_block_A,
+                 k_block_B});
 
-            // compute_desc.emplace_runtime_args(core, {top, left, bot, right, k_block_A, k_block_B});
             compute_desc.emplace_runtime_args(
                 core,
                 {num_blocks_m,
@@ -222,9 +233,11 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
                  sub_block_n,
                  dst_size,
                  k_block_A,
-                 k_block_B});
+                 k_block_B,
+                 out_block_tiles});
 
-            writer_desc.emplace_runtime_args(core, {dst_buffer, Mt, Nt, top, left, bot, right});
+            writer_desc.emplace_runtime_args(
+                core, {dst_buffer, Nt, top, left, num_blocks_m, num_blocks_n, sub_block_m, sub_block_n});
         }
     }
 
