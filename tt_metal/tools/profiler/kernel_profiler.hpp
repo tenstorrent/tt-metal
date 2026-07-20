@@ -450,7 +450,11 @@ struct profileScopeGuaranteed {
             if constexpr (index == 0) {
                 init_profiler();
             }
-            mark_time(get_const_id(timer_id, ZONE_START));
+            // FW/KER wrapper zone emission DISABLED for the X280 real-profiler runs: keep the
+            // init_profiler/finish_profiler lifecycle (ring init, zoneValid publish gate, RUN_COUNTER) but
+            // drop the "<RISC>-FW" (index 0) / "<RISC>-KERNEL" (index 1) START/END markers, so only the user
+            // DeviceZoneScopedN zones (profileScope) reach the capture. Re-enable by uncommenting.
+            // mark_time(get_const_id(timer_id, ZONE_START));
         }
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
@@ -459,7 +463,7 @@ struct profileScopeGuaranteed {
                 mark_time(get_const_id(timer_id, ZONE_END));
             }
         } else {
-            mark_time(get_const_id(timer_id, ZONE_END));
+            // mark_time(get_const_id(timer_id, ZONE_END));  // FW/KER wrapper zone disabled -- see ctor
             if constexpr (index == 0) {
                 finish_profiler();
             }
