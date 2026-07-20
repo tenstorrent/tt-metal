@@ -173,12 +173,11 @@ private:
     // write and the WAIT_CQ request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
-    // sender_logical_cores_[s] is the canonical (reference-device) logical DRAM
-    // core for stable sender slot s. sender_logical_cores_by_device_[d][s] resolves
-    // that same (bank, primary/secondary role) slot against device d's harvested
-    // DRAM topology. Each queued GCB maps canonical senders to stable slots; all
-    // device-bound socket, program, and NOC operations use the per-device table.
-    std::vector<CoreCoord> sender_logical_cores_;
+    // sender_logical_cores_by_device_[d][s] is the logical DRAM core that plays stable
+    // sender slot s (a (bank, primary/secondary role) pair) on device d's harvested DRAM
+    // topology. Row [0] is the canonical (reference-device) mapping that queued GCBs match
+    // their sender coordinates against; all device-bound socket, program, and NOC operations
+    // use the per-device row.
     std::vector<std::vector<CoreCoord>> sender_logical_cores_by_device_;
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;

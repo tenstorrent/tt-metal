@@ -211,11 +211,10 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
 }
 
 // A DRAM-sender GCB exposes the reference device's logical sender coordinates for API
-// compatibility. Resolve that canonical coordinate to its stable sender role within the
-// bank, then select the corresponding logical core from the target device's harvested
-// topology.
-CoreCoord resolve_dram_sender_for_device(
-    distributed::MeshDevice* mesh_device, const IDevice* device, const CoreCoord& canonical_sender) {
+// compatibility. `canonical_sender_role` recovers a canonical coordinate's stable role
+// (its index within the bank's ordered sender list). It depends only on the reference
+// device, so callers resolve it once per sender rather than once per (sender, device).
+size_t canonical_sender_role(distributed::MeshDevice* mesh_device, const CoreCoord& canonical_sender) {
     const uint32_t bank_id = static_cast<uint32_t>(canonical_sender.x);
     const std::vector<CoreCoord> canonical_senders = mesh_device->impl().dram_sender_logical_cores(bank_id);
     const auto canonical_it = std::find(canonical_senders.begin(), canonical_senders.end(), canonical_sender);
@@ -225,8 +224,13 @@ CoreCoord resolve_dram_sender_for_device(
         canonical_sender.x,
         canonical_sender.y,
         bank_id);
-    const size_t sender_role = std::distance(canonical_senders.begin(), canonical_it);
+    return static_cast<size_t>(std::distance(canonical_senders.begin(), canonical_it));
+}
 
+// Selects the logical DRAM core that plays `sender_role` for `bank_id` on `device`'s
+// harvested topology.
+CoreCoord device_sender_for_role(
+    distributed::MeshDevice* mesh_device, const IDevice* device, uint32_t bank_id, size_t sender_role) {
     const std::vector<CoreCoord> device_senders = mesh_device->impl().dram_sender_logical_cores(device, bank_id);
     TT_FATAL(
         sender_role < device_senders.size(),
@@ -301,6 +305,10 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
         hdr->num_receivers_and_remote_pages_sent_ptr =
             remote_cb_pack(this_num_receivers, static_cast<uint32_t>(pages_sent_worker_l1_base_));
 
+        // The canonical sender role is device-independent; resolve it once per sender.
+        const uint32_t bank_id = static_cast<uint32_t>(canonical_sender.x);
+        const size_t sender_role = canonical_sender_role(mesh_device, canonical_sender);
+
         for (IDevice* dev : devices) {
             for (uint32_t i = 0; i < max_num_receivers_per_sender; ++i) {
                 if (i < this_num_receivers) {
@@ -312,7 +320,7 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
                     noc_xy_words[2 * i + 1] = 0;
                 }
             }
-            const CoreCoord sender_logical = resolve_dram_sender_for_device(mesh_device, dev, canonical_sender);
+            const CoreCoord sender_logical = device_sender_for_role(mesh_device, dev, bank_id, sender_role);
             const CoreCoord virtual_core = dev->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
             cluster.write_core(
                 dev->id(),
@@ -384,9 +392,23 @@ void GlobalCircularBuffer::setup_cb_buffers(
         pages_sent_worker_l1_base_ = pages_sent_address;
     }
 
+    // The canonical (reference-device) sender role for each mapping entry is device-independent;
+    // resolve it once here so the per-device config build only performs the target-device index lookup.
+    std::vector<std::pair<uint32_t, size_t>> canonical_roles;  // {bank_id, role}
+    if (sender_core_type == experimental::SenderCoreType::Dram) {
+        TT_FATAL(dram_sender_mesh_device != nullptr, "DRAM-sender GCB config requires its MeshDevice");
+        canonical_roles.reserve(sender_receiver_core_mapping_.size());
+        for (const auto& [canonical_sender, _receivers] : sender_receiver_core_mapping_) {
+            canonical_roles.emplace_back(
+                static_cast<uint32_t>(canonical_sender.x),
+                canonical_sender_role(dram_sender_mesh_device, canonical_sender));
+        }
+    }
+
     const auto make_config_host_buffer = [&](IDevice* config_device) {
         std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
-        for (const auto& [canonical_sender, receiver_cores] : sender_receiver_core_mapping_) {
+        for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
+            const auto& [canonical_sender, receiver_cores] = sender_receiver_core_mapping_[s];
             const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
             uint32_t num_receivers = receiver_cores.num_cores();
 
@@ -416,7 +438,8 @@ void GlobalCircularBuffer::setup_cb_buffers(
             // DRAM virtual coord for the canonical sender's stable bank/role.
             const CoreCoord sender_logical =
                 (sender_core_type == experimental::SenderCoreType::Dram)
-                    ? resolve_dram_sender_for_device(dram_sender_mesh_device, config_device, canonical_sender)
+                    ? device_sender_for_role(
+                          dram_sender_mesh_device, config_device, canonical_roles[s].first, canonical_roles[s].second)
                     : canonical_sender;
             CoreCoord sender_physical_coord =
                 (sender_core_type == experimental::SenderCoreType::Worker)
@@ -453,7 +476,6 @@ void GlobalCircularBuffer::setup_cb_buffers(
 
     auto mesh_buffer = cb_config_buffer_.get_mesh_buffer();
     if (sender_core_type == experimental::SenderCoreType::Dram) {
-        TT_FATAL(dram_sender_mesh_device != nullptr, "DRAM-sender GCB config requires its MeshDevice");
         for (IDevice* config_device : dram_sender_mesh_device->get_devices()) {
             std::vector<uint32_t> cb_config_host_buffer = make_config_host_buffer(config_device);
             const distributed::MeshCoordinate device_coord =

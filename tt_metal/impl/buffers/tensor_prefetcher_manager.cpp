@@ -407,7 +407,6 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     num_banks_ = num_banks;
 
-    sender_logical_cores_.clear();
     sender_logical_cores_by_device_.assign(devices_.size(), {});
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         const uint32_t device_num_banks = cluster.get_soc_desc(devices_[d]->id()).get_num_dram_views();
@@ -436,8 +435,7 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
         }
     }
 
-    sender_logical_cores_ = sender_logical_cores_by_device_.front();
-    num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
+    num_senders_ = static_cast<uint32_t>(sender_logical_cores_by_device_.front().size());
 }
 
 std::vector<uint32_t> TensorPrefetcherManager::sender_indices_for_gcb(
@@ -445,17 +443,19 @@ std::vector<uint32_t> TensorPrefetcherManager::sender_indices_for_gcb(
     const auto& mapping = gcb.sender_receiver_core_mapping();
     TT_FATAL(!mapping.empty(), "Tensor prefetcher: GCB sender mapping must not be empty");
 
+    // GCB sender coordinates are the canonical (reference-device) mapping; match against it.
+    const std::vector<CoreCoord>& canonical_senders = sender_logical_cores_by_device_.front();
     std::vector<uint32_t> sender_indices;
     sender_indices.reserve(mapping.size());
     for (const auto& [sender, _receivers] : mapping) {
-        const auto it = std::find(sender_logical_cores_.begin(), sender_logical_cores_.end(), sender);
+        const auto it = std::find(canonical_senders.begin(), canonical_senders.end(), sender);
         TT_FATAL(
-            it != sender_logical_cores_.end(),
+            it != canonical_senders.end(),
             "Tensor prefetcher: GCB sender core ({}, {}) is not one of the {} provisioned DRAM sender cores",
             sender.x,
             sender.y,
             num_senders_);
-        sender_indices.push_back(static_cast<uint32_t>(std::distance(sender_logical_cores_.begin(), it)));
+        sender_indices.push_back(static_cast<uint32_t>(std::distance(canonical_senders.begin(), it)));
     }
     return sender_indices;
 }
@@ -653,7 +653,8 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     if (krow_compatible_mapping) {
         for (const auto& [sender, _receivers] : mapping) {
             const uint32_t bank = static_cast<uint32_t>(sender.x);
-            if (bank >= num_banks_ || primary_bank_seen[bank] || sender != sender_logical_cores_[2 * bank]) {
+            if (bank >= num_banks_ || primary_bank_seen[bank] ||
+                sender != sender_logical_cores_by_device_.front()[2 * bank]) {
                 krow_compatible_mapping = false;
                 break;
             }
@@ -1227,7 +1228,6 @@ void TensorPrefetcherManager::stop() {
     programs_.clear();
     devices_.clear();
     device_index_by_coord_.clear();
-    sender_logical_cores_.clear();
     sender_logical_cores_by_device_.clear();
     trace_requests_.clear();
     num_senders_ = 0;
