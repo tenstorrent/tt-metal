@@ -283,22 +283,66 @@ void run_kernel(RUNTIME_PARAMETERS params)
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
 
-    for (std::uint32_t row = 0; row < 48; row++)
+    // Multi-tile, row-major. FULL_CT_DIM tiles per tile-row; tiles 0..N-2 are packed
+    // full-width (32 cols, all faces), the LAST tile is narrow (skip face 1 -> faces 0,2
+    // = cols 0-15). Each op writes one DEST face-row (16 datums) to the output, and the
+    // per-row advance is the MATRIX width W (not one tile), with tile t at column t*32.
+    //
+    //   output datum(tile t, out-row R, col-group g) = R*W + t*32 + g*16
+    //   W = (FULL_CT_DIM-1)*32 + LAST_TILE_W_DATUMS
+    //
+    // A Quasar tile is 32x32 = 4 faces of 16x16 -> 64 DEST rows; tile t starts at DEST
+    // row t*64 (src_z_stride). l1_addr is 16B-granular = 8 datums (bf16), so >>3.
+    // LAST_TILE_W_DATUMS (16 or 8) is build-injected.
+    constexpr std::uint32_t TILE_W_DATUMS = 32; // full tile width
+    const std::uint32_t matrix_w_datums   = (FULL_CT_DIM - 1) * TILE_W_DATUMS + LAST_TILE_W_DATUMS;
+    const std::uint32_t base_16B          = params.buffer_Res[0] / 16;
+    const std::uint32_t last_t            = FULL_CT_DIM - 1;
+
+    // Pack one DEST face-row (16 datums) of tile t to its untilized output slot.
+    auto pack_row = [&](std::uint32_t t, std::uint32_t row)
     {
-        if (row == 16)
-        {
-            row += 16; // skip face 1
-        }
-        g0.f.input_addr = row;
+        g0.f.input_addr = t * 64 + row; // DEST row of tile t
 
-        std::uint32_t lo5                = row & 0x1F;                       // low 5 bits
-        std::uint32_t rol                = ((lo5 << 1) | (lo5 >> 4)) & 0x1F; // rotate those left by 1
-        std::uint32_t l1_offset_in_bytes = (row & 0x20) | rol;               // keep bit 5
+        const std::uint32_t lo5  = row & 0x1F;
+        const std::uint32_t rol  = ((lo5 << 1) | (lo5 >> 4)) & 0x1F;
+        const std::uint32_t slot = (row & 0x20) | rol; // remap(row): output slot 0..63
+        const std::uint32_t R    = slot >> 1;          // output tile-row 0..31
+        const std::uint32_t g    = slot & 1;           // col group (0: cols0-15, 1: cols16-31)
 
-        g0.f.l1_addr = params.buffer_Res[0] / 16 + (l1_offset_in_bytes << 1);
+        const std::uint32_t l1_datum = R * matrix_w_datums + t * TILE_W_DATUMS + g * 16;
+        g0.f.l1_addr                 = base_16B + (l1_datum >> 3); // datums -> 16B units (bf16)
 
         volatile std::uint32_t rv_res = do_rv_pacr(g0.val, g1.val, g2.val);
         (void)rv_res;
+    };
+
+    // PASS 1: narrow last tile FIRST. Column group g=0 (faces 0,2 -> cols 0-15) is always
+    // needed; column group g=1 (faces 1,3 -> cols 16-31) is only needed when the kept width
+    // exceeds 16. So skip faces 1,3 iff LAST_TILE_W_DATUMS <= 16 (reads only faces 0,2).
+    // Each op writes a full 16-datum face-row; when the kept width is not a multiple of 16
+    // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
+    // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
+    // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned: no spill).
+    constexpr bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
+    constexpr std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
+    for (std::uint32_t row = 0; row < last_row_end; row++)
+    {
+        if (!last_needs_g1 && row == 16)
+        {
+            row += 16; // width<=16: g=0 only -> skip faces 1,3 (rows 16-31) -> jump to face 2
+        }
+        pack_row(last_t, row);
+    }
+
+    // PASS 2: full tiles 0..N-2 (all four faces, 32 cols each). These overwrite any spill
+    // the narrow tile left in the leading columns.
+    for (std::uint32_t t = 0; t < last_t; t++)
+    {
+        for (std::uint32_t row = 0; row < 64; row++)
+        {
+            pack_row(t, row);
+        }
     }
 
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

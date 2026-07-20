@@ -984,6 +984,20 @@ class TILE_DST_CT_OFFSET(TemplateParameter):
 
 
 @dataclass
+class LAST_TILE_W_DATUMS(TemplateParameter):
+    """Kept width (in datums) of the narrow last tile in the RV_PACR narrow-row test.
+
+    16 packs the whole skip-face-1 face-row (cols 0-15); 8 keeps only the lower half
+    (cols 0-7), relying on the next output row / tile 0 overwriting the spilled upper 8.
+    """
+
+    width: int = 16
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t LAST_TILE_W_DATUMS = {self.width};"
+
+
+@dataclass
 class CONFIGURE_TEST_RUN_IDX(RuntimeParameter):
     configure_test_run_idx: int = 0
 
