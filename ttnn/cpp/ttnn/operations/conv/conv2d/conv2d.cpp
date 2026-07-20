@@ -159,8 +159,8 @@ Result conv2d_L1(
         auto_shard,
         block_sharded_1d_depthwise);
     TT_FATAL(
-        parallel_config.shard_scheme == selected_shard_layout,
-        "Conv2D effective input shard layout changed unexpectedly during resharding");
+        !conv_is_1d_depthwise || parallel_config.shard_scheme == selected_shard_layout,
+        "1D depthwise convolution input shard layout changed unexpectedly during resharding");
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
