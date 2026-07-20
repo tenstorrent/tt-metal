@@ -266,7 +266,7 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         repo_root / PERF_DIR,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        _measure_backstop(repo_root),
         "termination_check",
         stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
@@ -309,7 +309,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
         repo_root / PERF_DIR,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        _measure_backstop(repo_root),
         f"full-pipeline ({label})",
         stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
@@ -367,7 +367,7 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
         repo_root,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        _measure_backstop(repo_root),
         "coverage probe",
         stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
@@ -1303,14 +1303,7 @@ def _fold_cumulative(kernel_log: str) -> None:
         pass
 
 
-def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
-    floor = max(stall_sec * 4, 2400)
-    override = os.environ.get("PERF_MCP_ROUND_MAX_SEC")
-    if override:
-        try:
-            return int(override)
-        except ValueError:
-            pass
+def _baseline_ceiling(repo_root: Path) -> tuple[float, int]:
     ceil = 10800
     base = 0.0
     mani = _latest_manifest(repo_root / PERF_DIR)
@@ -1329,9 +1322,34 @@ def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
                     base = float(e["seconds"])
         except Exception:  # noqa: BLE001
             pass
+    return base, ceil
+
+
+def _adaptive_cap(repo_root: Path, floor: int, mult: int = 3) -> int:
+    base, ceil = _baseline_ceiling(repo_root)
     if ceil < floor:
         ceil = floor
-    return min(ceil, max(floor, int(3 * base)))
+    return min(ceil, max(floor, int(mult * base)))
+
+
+def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
+    override = os.environ.get("PERF_MCP_ROUND_MAX_SEC")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    return _adaptive_cap(repo_root, max(stall_sec * 4, 2400))
+
+
+def _measure_backstop(repo_root: Path) -> int:
+    override = os.environ.get("PERF_MCP_MEASURE_BACKSTOP")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    return _adaptive_cap(repo_root, 3600)
 
 
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:

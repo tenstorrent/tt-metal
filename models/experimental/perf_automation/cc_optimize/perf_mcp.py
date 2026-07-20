@@ -1035,7 +1035,12 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     import time as _t
 
     stall_s = int(stall_s if stall_s is not None else os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600")
-    backstop = int(backstop if backstop is not None else os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600")
+    if backstop is None:
+        from agent.probes import adaptive_backstop as _abs
+
+        backstop = _abs(3600)
+    else:
+        backstop = int(backstop)
     proc = _sp.Popen(
         list(cmd), cwd=str(cwd), env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, start_new_session=True
     )
