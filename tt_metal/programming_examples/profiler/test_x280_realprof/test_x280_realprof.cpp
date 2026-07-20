@@ -708,8 +708,17 @@ int main(int argc, char** argv) {
     // before draining (creation is ~ms; keep it off the hot path). ----
     std::unique_ptr<tt::tt_metal::RealtimeProfilerTracyHandler> tracy_handler;
     std::unordered_map<uint32_t, std::string> zone_names;  // hash -> name (stable storage backing name views)
-    const double tracy_freq = (double)pll * 1e6;           // pll is MHz -> Hz (pll=1000 -> 1e9; 1 cyc = 1 ns)
+    // Tracy's TT "frequency" is device cycles per NANOSECOND (GHz), NOT Hz. The handler does
+    // gpuTime = round(ts / frequency) to turn the raw timestamp into ns-ticks (the context period is
+    // 1 ns/tick). get_device_aiclk() is MHz -> /1000 = GHz (~1.0). Passing Hz (1e9) collapsed every marker's
+    // ns to integer SECONDS -> all zones stacked on one tick with 0 duration. This is the Tensix wall-clock
+    // rate (markers come from RISCV_DEBUG_REG_WALL_CLOCK); matches realtime_profiler_manager's sync_frequency.
+    double tracy_freq = cluster.get_device_aiclk(device_id) / 1000.0;
+    if (tracy_freq <= 0.0) {
+        tracy_freq = 1.0;
+    }
     if (do_tracy) {
+        printf("[tracy] device aiclk = %.4f GHz (cyc/ns)\n", tracy_freq);
         tracy_handler = std::make_unique<tt::tt_metal::RealtimeProfilerTracyHandler>();
         // host_start must be in TRACY's clock domain (tracy::Profiler::GetTime()), NOT system_clock epoch --
         // otherwise the device zones land on a bogus multi-hour timeline. Provisional here; the first marker
