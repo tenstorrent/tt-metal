@@ -47,6 +47,8 @@ ttnn::Tensor combine_fabric2d(
     uint32_t chunk_size_bytes,
     uint32_t num_slots,
     uint32_t axis,
+    uint32_t stall_telemetry,
+    uint32_t variant,
     tt::tt_fabric::Topology topology) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation;
@@ -58,6 +60,8 @@ ttnn::Tensor combine_fabric2d(
             .chunk_size_bytes = chunk_size_bytes,
             .num_slots = num_slots,
             .axis = axis,
+            .stall_telemetry = stall_telemetry,
+            .variant = variant,
             .topology = topology},
         OperationType::tensor_args_t{});
 }
