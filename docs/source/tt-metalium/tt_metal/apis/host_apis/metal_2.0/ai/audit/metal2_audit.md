@@ -47,7 +47,7 @@ Which features are unsupported is settled by Appendix A — treat that list as *
 - A **RED** report feeds the **prereq-migration efforts**. The `ProgramDescriptor` migration team and the Device 2.0 migration team consume RED audits to scope and sequence the work that unblocks the Metal 2.0 port. A RED isn't a dead end — it's evidence routed to the team that resolves the gap.
 - A **GREEN** report feeds the **Metal 2.0 port recipe** at [`port/metal2_port.md`](../port/metal2_port.md). The porter loads the audit as context when performing the port itself.
 
-Your tier assignment, your subset suggestions, and the specificity of your finding details all carry weight in these downstream uses. Too-conservative RED misroutes work to a prereq team that doesn't need it; too-lenient GREEN sends a port attempt into a fail. The single strongest thing you can do is **be specific**: name files and lines; quote the construct you saw; describe what triggered the rule. Vague findings are the hardest to use downstream.
+Your RED/GREEN verdict, your subset suggestions, and the specificity of your finding details all carry weight in these downstream uses. Too-conservative RED misroutes work to a prereq team that doesn't need it; too-lenient GREEN sends a port attempt into a fail. The single strongest thing you can do is **be specific**: name files and lines; quote the construct you saw; describe what triggered the rule. Vague findings are the hardest to use downstream.
 
 **About this recipe.** This recipe is the product of iteration — earlier auditors' observations have already shaped it, and yours can too. If during your audit a step feels unclear, a rule contradicts itself, the recipe doesn't anticipate a case you're hitting, or guidance conflicts with what you observe in the code, **write it down in the audit report's "Recipe notes" section** rather than silently picking an interpretation. Treat the recipe as your guide, not your shackle. The recipe maintainer reads every report; the friction you log makes the next auditor's job easier.
 
@@ -403,7 +403,7 @@ The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2
 | Shape | Status | Notes |
 |---|---|---|
 | `Semaphore` / `Semaphore&` / `const Semaphore&` | ✓ excellent | Device 2.0 native. |
-| `uint32_t sem_id` | ⚠ suboptimal | `sem::name`'s constexpr cast to `uint32_t (sem_id)` handles once landed. Workable today. |
+| `uint32_t sem_id` | ⚠ not workable today | `sem::name` has **no** implicit `uint32_t` conversion (only `dfb::name` does), so there is no bridge today; a constexpr `sem_id` cast could add one later. A call site outside the op that needs it is an [assumption-violation stop](../port/metal2_port.md#kernel-side-whitelist) for the porter, not a fix. |
 | `uint32_t sem_addr` (L1) or `uint64_t` NOC-encoded sem | ✗ not OK | No clean Metal-2.0 → donor bridge today. A backdoor could be added. |
 | `TensorAccessor<DSpec>` / ref (Shape 1) | ✓ excellent | Porter constructs `TensorAccessor(tensor::name)` and passes. |
 | `TensorAccessorArgs<N>` (Shape 2) | ✗ not OK | Porter can pass `tensor::name.args`. Workable, but suboptimal. |
@@ -578,7 +578,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 
 ## Recipe notes  *(omit if none)*
 
-<Friction with *this audit recipe itself*, not findings about the op — a step that was unclear or contradictory, a recognition rule that false-fired (name the guard that should cover it), a case the recipe didn't anticipate, a tier boundary that forced an unacknowledged judgment call. Be concrete: cite the section, quote the line. The recipe maintainer reads these.>
+<Friction with *this audit recipe itself*, not findings about the op — a step that was unclear or contradictory, a recognition rule that false-fired (name the guard that should cover it), a case the recipe didn't anticipate, a RED/GREEN boundary that forced an unacknowledged judgment call. Be concrete: cite the section, quote the line. The recipe maintainer reads these.>
 ````
 
 #### `METAL2_PORT_BRIEF.md` — porter-facing (emitted only on an all-GREEN audit)
@@ -733,7 +733,7 @@ Do not invent a workaround. Do not propose an alternative implementation. Do not
 
 **Examples in the wild** (for ground-truthing your match):
 
-`address_offset` was introduced recently and has limited adoption in checked-in code today. Likely paths to a non-zero usage:
+`address_offset` has limited adoption in checked-in code today. Likely paths to a non-zero usage:
 - Direct `CBDescriptor` literal with `.address_offset = <non-zero>`.
 - Helper `cb_descriptor_from_sharded_tensor(cb_index, tensor, address_offset, ...)` in `ttnn/api/ttnn/tensor/tensor_utils.hpp` — inspect callers for non-zero third arguments.
 - Python op authors using the nanobind-exposed `address_offset` parameter on `CBDescriptor` (`ttnn/cpp/ttnn-nanobind/program_descriptors.cpp`).
