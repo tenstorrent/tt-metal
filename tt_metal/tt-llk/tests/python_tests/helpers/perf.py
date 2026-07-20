@@ -21,7 +21,7 @@ from .logger import logger
 from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
-from .test_config import BuildMode, ProfilerBuild, TestConfig
+from .test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig, TestOutcome
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 
@@ -152,6 +152,25 @@ class PerfReport:
         for s in sigs[1:]:
             common = common & s
 
+        # Metric columns named after a PerfRunType, e.g. mean(PACK_ISOLATE),
+        # TEXT_SIZE(UNPACK_ISOLATE), mean(L1_CONGESTION[PACK]).
+        _run_type_names = {rt.name for rt in PerfRunType}
+        _metric_prefixes = ("mean(", "std(", "TEXT_SIZE(")
+
+        def _is_run_type_metric_col(col: str) -> bool:
+            for prefix in _metric_prefixes:
+                if col.startswith(prefix) and col.endswith(")"):
+                    inner = col[len(prefix) : -1]
+                    return inner.split("[", 1)[0] in _run_type_names
+            return False
+
+        all_unique: list[str] = []
+        for info in schemas.values():
+            all_unique.extend(sorted(frozenset(info["columns"]) - common))
+        run_type_only = bool(all_unique) and all(
+            _is_run_type_metric_col(c) for c in all_unique
+        )
+
         lines = [
             f"Perf report schema contamination in {context or 'report'}: "
             f"{len(schemas)} incompatible column schemas were appended to a single CSV.",
@@ -173,15 +192,26 @@ class PerfReport:
                 )
             )
             lines.append(f"    example params: {info['sample']}")
-        lines += [
-            "",
-            "Fix one of two ways:",
-            "  (a) One test emitting different columns across parametrizations — usually a "
-            "template/runtime param that is None for some sweep values and set for others "
-            "(e.g. MATH_OP's pool_type). Make the param set consistent across the sweep.",
-            "  (b) Two genuinely different ops/families share the same py file — split them "
-            "into separate test files, one schema per file.",
-        ]
+        if run_type_only:
+            lines += [
+                "",
+                "These schemas differ only by PerfRunType metric columns (mean/std/TEXT_SIZE).",
+                "PERF_RUN_TYPES_QUASAR uses one PerfRunType per pytest case, so a module "
+                "report is valid for only one isolate mode at a time.",
+                "  - Likely cause: pytest -k PACK_ISOLATE also matches UNPACK_ISOLATE "
+                "(substring). Use -k PerfRunType.PACK_ISOLATE instead.",
+                "  - Or run a single PerfRunType per pytest session / suite invocation.",
+            ]
+        else:
+            lines += [
+                "",
+                "Fix one of two ways:",
+                "  (a) One test emitting different columns across parametrizations — usually a "
+                "template/runtime param that is None for some sweep values and set for others "
+                "(e.g. MATH_OP's pool_type). Make the param set consistent across the sweep.",
+                "  (b) Two genuinely different ops/families share the same py file — split them "
+                "into separate test files, one schema per file.",
+            ]
         raise PerfSchemaError("\n".join(lines))
 
     def frame(self) -> pd.DataFrame:
@@ -529,6 +559,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        boot_mode: BootMode = BootMode.DEFAULT,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -553,7 +584,7 @@ class PerfConfig(TestConfig):
             templates,
             runtimes,
             variant_stimuli,
-            BootMode.DEFAULT,
+            boot_mode,
             ProfilerBuild.Yes,
             1,  # L1_2_L1s
             unpack_to_dest,
@@ -570,10 +601,20 @@ class PerfConfig(TestConfig):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
-    def run(self, perf_report: PerfReport, run_count=1):
+    @staticmethod
+    def _skip_perf_report(perf_report: PerfReport | list[None] | None) -> bool:
+        return perf_report is None or (
+            isinstance(perf_report, list)
+            and len(perf_report) == 1
+            and perf_report[0] is None
+        )
+
+    def run(self, perf_report: PerfReport | list[None] | None, run_count=1):
         results = []
         counter_results_list = []
         code_sizes = {}
+        skip_perf_report = PerfConfig._skip_perf_report(perf_report)
+        collected_result = None
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
@@ -611,7 +652,9 @@ class PerfConfig(TestConfig):
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
-            components = _CODE_SIZE_COMPONENTS.get(run_type)
+            components = (
+                None if skip_perf_report else _CODE_SIZE_COMPONENTS.get(run_type)
+            )
             if components is not None:
                 code_sizes[run_type] = sum(
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
@@ -622,8 +665,25 @@ class PerfConfig(TestConfig):
             variant_counter_results = []
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
+                if self.variant_stimuli:
+                    if TestConfig.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
+                        self.variant_stimuli.save_to_cache()
+                        pytest.skip(TestConfig.SKIP_JUST_FOR_STIMULI_MARKER)
+                    elif TestConfig.STIMULI_MODE == StimuliMode.LOAD_CACHED:
+                        self.variant_stimuli.load_from_cache()
+
+                    self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+                if skip_perf_report and self.variant_stimuli:
+                    collected_result = self.variant_stimuli.collect_results(
+                        TestConfig.TENSIX_LOCATION
+                    )
+
+                if skip_perf_report:
+                    continue
+
                 # Counter config is written by BRISC from built-in array (local L1 write).
                 # Python NOC write is skipped to avoid L1 controller state change that
                 # causes ~7 cycle overhead on Float16 unpack operations.
@@ -650,6 +710,9 @@ class PerfConfig(TestConfig):
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
+
+            if skip_perf_report:
+                continue
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
@@ -691,6 +754,9 @@ class PerfConfig(TestConfig):
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
 
+        if skip_perf_report:
+            return TestOutcome(result=collected_result)
+
         # Merge results with validation
         # how="outer" keeps all markers (some may not appear in all run types)
         # validate="1:1" catches duplicate markers within each run type
@@ -701,9 +767,17 @@ class PerfConfig(TestConfig):
             results,
         )
 
-        # Setting header fields that are always there
+        # Setting header fields that are always there.
+        # register_format_hint is always emitted when formats are present (None when
+        # unused) so tests that share a CSV keep one schema — e.g. reduce vs
+        # reduce mxfp4_2x_gapool, which only differ by this hint.
         names = (
-            ["formats.input_A", "formats.input_B", "formats.output"]
+            [
+                "formats.input_A",
+                "formats.input_B",
+                "formats.output",
+                "register_format_hint",
+            ]
             if self.formats_config
             else []
         )
@@ -712,6 +786,7 @@ class PerfConfig(TestConfig):
                 self.formats_config[0].unpack_A_src,
                 self.formats_config[0].unpack_B_src,
                 self.formats_config[0].output_format,
+                self.register_format_hint,
             ]
             if self.formats_config[0]
             else []
@@ -749,3 +824,5 @@ class PerfConfig(TestConfig):
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
+
+        return TestOutcome()

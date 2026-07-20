@@ -633,6 +633,11 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        # Opt-in SrcA/SrcB register format (e.g. MxFp4_2x_A/B). Stored so perf
+        # reports can distinguish L1-identical sweeps that differ only by hint.
+        self.register_format_hint = (
+            getattr(formats, "register_format_hint", None) if formats else None
+        )
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -1239,6 +1244,11 @@ class TestConfig:
             )
 
             def build_kernel_part(name: str):
+                # Defensive: parallel compiles must not race a missing output dir
+                # (seen as ld "cannot open output file .../elf/<name>.elf").
+                os.makedirs(VARIANT_OBJ_DIR, exist_ok=True)
+                os.makedirs(VARIANT_ELF_DIR, exist_ok=True)
+
                 optional_kernel_flags = ""
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
                     optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(

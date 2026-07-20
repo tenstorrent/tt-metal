@@ -51,13 +51,22 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
         constexpr static std::uint32_t set_opposite_dvalid_instrn = TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, set_opposite_dvalid_instrn, unpack_tile_instrn);
-        temp.set_last_outer_loop_instr(reset_src_reg_instrn);
+        // When inner loop len == 1, last_outer replaces the only loop op — skip it so the
+        // real tilize (+ opposite dvalid) still runs. Counters are re-set in `_llk_unpack_tilize_`.
+        if (block_ct_dim > 1)
+        {
+            temp.set_last_outer_loop_instr(reset_src_reg_instrn);
+        }
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
     else
     {
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
-        temp.set_last_outer_loop_instr(reset_src_reg_instrn);
+        // Same: with block_ct_dim==1, last_outer would replace the sole UNPACR_TILIZE.
+        if (block_ct_dim > 1)
+        {
+            temp.set_last_outer_loop_instr(reset_src_reg_instrn);
+        }
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }

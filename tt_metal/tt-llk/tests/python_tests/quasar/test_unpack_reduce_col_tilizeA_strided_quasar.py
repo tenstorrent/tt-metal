@@ -22,6 +22,7 @@ from helpers.llk_params import (
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
+    PerfRunType,
     ReduceDimension,
     ReducePool,
     format_dict,
@@ -31,15 +32,18 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
+    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
@@ -49,6 +53,8 @@ from helpers.utils import passed_test
 
 def generate_unpack_reduce_col_tilizeA_strided_combinations(
     formats_list: List[FormatConfig],
+    *,
+    is_perf=False,
 ):
     """
     Generate unpack_reduce_col_tilizeA_strided test combinations for Quasar.
@@ -96,6 +102,12 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         ],
     }
 
+    if is_perf:
+        unpack_reduce_col_tilizeA_strided_dims = {
+            (DestSync.Half, DestAccumulation.No): [[32, 32]],
+            (DestSync.Half, DestAccumulation.Yes): [[32, 32]],
+        }
+
     combinations = []
 
     for fmt in get_valid_data_format_conversions(formats_list):
@@ -110,7 +122,9 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                 and acc == DestAccumulation.No
             ):
                 continue
-            for dest_sync in (DestSync.Half, DestSync.Full):
+            for dest_sync in (
+                (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+            ):
                 for dimensions in unpack_reduce_col_tilizeA_strided_dims[
                     (dest_sync, acc)
                 ]:
@@ -143,18 +157,39 @@ ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
         UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
     )
 )
+PERF_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
+    generate_unpack_reduce_col_tilizeA_strided_combinations(
+        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
+        is_perf=True,
+    )
+)
+
+
+def unpack_reduce_col_tilizeA_strided_implied_math_formats(*, is_perf=False):
+    return [ImpliedMathFormat.No]
 
 
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
+    implied_math_format=lambda: unpack_reduce_col_tilizeA_strided_implied_math_formats(
+        is_perf=False
+    ),
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
+    implied_math_format,
+    run_types,
+    loop_factor,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
     (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
-        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
+        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
     )
 
     num_faces = 4
@@ -186,15 +221,16 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         golden_src_A, input_dimensions, formats.input_format, num_faces=num_faces
     )
 
-    reduce_gen = get_golden_generator(ReduceGolden)
-    golden_tensor = reduce_gen(
-        golden_A,
-        reduce_dim,
-        pool_type,
-        formats.output_format,
-        tile_cnt_A,
-        input_format=input_fmt,
-    )
+    if not is_perf:
+        reduce_gen = get_golden_generator(ReduceGolden)
+        golden_tensor = reduce_gen(
+            golden_A,
+            reduce_dim,
+            pool_type,
+            formats.output_format,
+            tile_cnt_A,
+            input_format=input_fmt,
+        )
 
     mathop = {
         ReduceDimension.Row: MathOperation.ReduceRow,
@@ -202,22 +238,26 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         ReduceDimension.Scalar: MathOperation.ReduceScalar,
     }[reduce_dim]
 
-    configuration = TestConfig(
-        "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
-        formats,
-        templates=[
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
+            IMPLIED_MATH_FORMAT(implied_math_format),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync_mode),
         ],
-        runtimes=[
+        "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
             NUM_FACES(),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -228,11 +268,23 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
-        boot_mode=boot_mode,
-    )
+        "unpack_to_dest": False,
+        "dest_acc": dest_acc,
+        "boot_mode": boot_mode,
+    }
 
+    if is_perf:
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        configuration.run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
