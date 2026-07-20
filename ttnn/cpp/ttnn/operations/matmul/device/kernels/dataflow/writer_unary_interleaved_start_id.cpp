@@ -8,9 +8,11 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
+    // Core-invariant output tensor base address is a common runtime arg (idx 0).
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
+    // Per-core runtime args.
+    const uint32_t num_pages = get_arg_val<uint32_t>(0);
+    const uint32_t start_id = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr auto dst_args = TensorAccessorArgs<0>();

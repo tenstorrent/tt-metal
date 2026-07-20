@@ -457,18 +457,19 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         uint32_t in1_start_tile_id =
             (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);
 
-        reader_kernel_desc.emplace_runtime_args(core, {in0_buffer, in0_start_tile_id, num_output_blocks_per_core});
+        // in0 base address is core-invariant -> COMMON runtime arg (see below). Per-core args are
+        // the variant tile offset and block count only.
+        reader_kernel_desc.emplace_runtime_args(core, {in0_start_tile_id, num_output_blocks_per_core});
 
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
+        // in1/out/bias base addresses are core-invariant -> COMMON runtime args (see below).
+        // Per-core args keep only the variant tile offsets and block count.
         KernelDescriptor::RTArgList rw_args;
-        rw_args.push_back(in1_buffer);
         rw_args.push_back(in1_start_tile_id);
         rw_args.push_back(num_output_blocks_per_core);
-        rw_args.push_back(output);
         rw_args.push_back(out_start_tile_id);
         if (bias.has_value()) {
-            rw_args.push_back(*bias);
             // Broadcast over batch, single block per element (start_m_block == start_n_block == 0
             // under the bias FATAL): the whole [M, N] bias starts at tile 0.
             rw_args.push_back(0u);  // bias_start_tile_id
@@ -483,6 +484,29 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         }
 
         num_blocks_written += num_output_blocks_per_core;
+    }
+
+    // Core-invariant tensor base addresses -> COMMON runtime args (registered once, not per core).
+    // The framework auto-patches these common tensor bindings each dispatch.
+    // Reader (in0): common idx 0 = in0 base address.
+    {
+        KernelDescriptor::RTArgList reader_common_args;
+        reader_common_args.push_back(in0_buffer);
+        reader_kernel_desc.emplace_common_runtime_args(reader_common_args);
+    }
+    // Reader/Writer (in1/out/bias): common idx 0 = in1, 1 = out, 2 = bias.
+    // Always register a common idx 2: the bias tensor when present, else a placeholder 0.
+    // The kernel only reads common idx 2 under its FUSE_BIAS compile-time guard.
+    {
+        KernelDescriptor::RTArgList rw_common_args;
+        rw_common_args.push_back(in1_buffer);
+        rw_common_args.push_back(output);
+        if (bias.has_value()) {
+            rw_common_args.push_back(*bias);
+        } else {
+            rw_common_args.push_back(0u);
+        }
+        reader_writer_kernel_desc.emplace_common_runtime_args(rw_common_args);
     }
 
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
