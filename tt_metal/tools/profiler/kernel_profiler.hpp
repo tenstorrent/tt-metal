@@ -268,12 +268,11 @@ inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_
 // end), keeping every lane's stream monotonic. Reserve worst case (a TIMER sticky + the marker) so the room
 // check -- and any stall -- happens once, up front, not between the two writes.
 inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
-    ring_ensure_room(2 * SPSC_MARKER_WORDS);
+    ring_ensure_room(SPSC_MARKER_WORDS + 1);  // worst case: 1-word TIMER sticky + 2-word marker
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     if (hi != g_prev_timer_hi) {
-        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: word0 = type | timer_hi
-        ring_write_word(0);
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: 1 word (type | timer_hi)
         g_prev_timer_hi = hi;
     }
     ring_write_word(ppfmt::marker_w0(timer_id));  // word0: type | zone srcloc (16-bit hash)
@@ -499,14 +498,13 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
         expected_size == 0 || total_data_count == expected_size,
         "Number of arguments does not match expected size for this PacketType");
 
-    // Reserve worst case (a TIMER sticky + the timing marker + 2 words/datum) BEFORE reading the clock, so a
-    // full-ring stall does not backdate the marker (see mark_time's ordering note).
-    ring_ensure_room(2 * SPSC_MARKER_WORDS + 2 * total_data_count);
+    // Reserve worst case (a 1-word TIMER sticky + the timing marker + 2 words/datum) BEFORE reading the clock,
+    // so a full-ring stall does not backdate the marker (see mark_time's ordering note).
+    ring_ensure_room(SPSC_MARKER_WORDS + 1 + 2 * total_data_count);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     if (hi != g_prev_timer_hi) {
-        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: word0 = type | timer_hi
-        ring_write_word(0);
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: 1 word (type | timer_hi)
         g_prev_timer_hi = hi;
     }
     uint32_t marker_id = get_const_id(data_id, packet_type);

@@ -295,7 +295,7 @@ static void reader_run(
                 }
                 pending = 1;
                 visits++;
-                uint32_t need = 2u + run; /* sticky + data */
+                uint32_t need = 1u + run; /* 1-word sticky-src + data */
                 /* wait for room in our LIM SPSC. We read the RELAY's cons fresh from LIM each spin; our own
                  * prod stays local (only written to LIM for the relay) -- the proven profcons_split pattern. */
                 uint64_t tw = rdcycle();
@@ -304,11 +304,10 @@ static void reader_run(
                 }
                 t_wait += rdcycle() - tw;
                 uint64_t tc = rdcycle();
-                /* inject the precomputed STICKY-SRC (2 words) for this lane */
+                /* inject the 1-word STICKY-SRC for this lane (type|lane in word0; host reads identity from it) */
                 uint64_t lut = SRCLUT_BASE + L * 8;
                 w32(sbase + (uint64_t)(prod & swm) * 4, r32(lut));
-                w32(sbase + (uint64_t)((prod + 1) & swm) * 4, r32(lut + 4));
-                prod += 2;
+                prod += 1;
                 /* copy the worker ring words [head,tail) into the SPSC in contiguous chunks (split at BOTH
                  * the worker-ring and SPSC wraps), each chunk copied with ILP flits. */
                 uint64_t wl1 = rbufs + (uint64_t)r * 2048;
@@ -583,18 +582,17 @@ static void drain_direct(
                 }
                 pending = 1;
                 uint32_t run = tail - head;
-                uint32_t need = 2u + run;
+                uint32_t need = 1u + run;
                 uint64_t tw = rdcycle();
                 while ((uint32_t)((uint32_t)hring_words - (hsent - r32(HACKED(hartid)))) < need) {
                     cpu_pause();
                 }
                 t_wait += rdcycle() - tw;
                 uint64_t tc = rdcycle();
-                /* inject the STICKY-SRC (2 words) into the host ring, then the worker data */
+                /* inject the 1-word STICKY-SRC into the host ring, then the worker data */
                 uint64_t lut = SRCLUT_BASE + L * 8;
                 w32(hbase + (uint64_t)(hsent % (uint32_t)hring_words) * 4, r32(lut));
-                w32(hbase + (uint64_t)((hsent + 1) % (uint32_t)hring_words) * 4, r32(lut + 4));
-                hsent += 2;
+                hsent += 1;
                 uint64_t wl1 = rbufs + (uint64_t)r * 2048;
                 uint32_t si = head, di = hsent, leftw = run;
                 while (leftw) {

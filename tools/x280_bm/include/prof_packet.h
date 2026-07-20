@@ -48,13 +48,18 @@
  * from the last-seen value of each sticky (all three are "sticky": they persist until the next update).
  *
  *   STICKY_PROG  : the runtime host-id (per-program unique id ttnn assigns; same value the DRAM
- *                  profiler uses). Emitted ONCE at BRISC FW start (and on program change). Carried in
- *                  payload32; low27 unused (0).
+ *                  profiler uses). Emitted ONCE at BRISC FW start (and on program change). 2 WORDS:
+ *                  payload32 = host-id (needs a full 32 bits); low27 unused (0).
  *   STICKY_TIMER : timer_hi -- the high half of the device wall-clock. Emitted by ANY risc at a marker
- *                  record whenever its high half ticks over. Carried in low27; payload32 unused (0).
- *   STICKY_SRC   : (core,risc) lane identity -- injected by the X280 reader hart (see above).
+ *                  record whenever its high half ticks over. 1 WORD: low27 = timer_hi (fits 27 bits, no
+ *                  payload word).
+ *   STICKY_SRC   : (core,risc) lane identity -- injected by the X280 reader hart. 1 WORD: low27 = lane.
  *
- * A marker (ZONE_START/END) is then minimal: low27 = zone srcloc (16-bit hash for now, room to 27),
+ * The real linearized stream is therefore VARIABLE-LENGTH: SRC/TIMER are 1 word, markers + PROG are 2.
+ * The decoder advances by pp_packet_words(); SENT is always published on a packet boundary. (The frozen
+ * synthetic bench predates this and uses a fixed 2-word SRC -- it never calls pp_packet_words.)
+ *
+ * A marker (ZONE_START/END) is minimal: low27 = zone srcloc (16-bit hash for now, room to 27),
  * payload32 = timer_low. Host binds each marker to the last-seen PROG (prog), TIMER (timer_hi) and
  * SRC (lane) to reconstruct the full record. */
 #define PP_STICKY_PROG 8u
@@ -110,6 +115,15 @@ static inline int pp_is_prog(uint32_t w0) { return pp_type(w0) == PP_STICKY_PROG
 static inline int pp_is_timer(uint32_t w0) { return pp_type(w0) == PP_STICKY_TIMER; }
 static inline uint32_t pp_prog_id(uint32_t w1) { return w1; }
 static inline uint32_t pp_timer_hi(uint32_t w0) { return pp_low27(w0); }
+
+/* Wire length (32-bit words) of a real-path packet from its type: SRC/TIMER are 1 word (identity/timer_hi
+ * fit in low27, no payload), markers + PROG + META are 2. BULK_CORE has its own framing -- do NOT pass it
+ * here (the decoder special-cases it first). SENT is always published on a packet boundary, so a decoder
+ * that advances by this length stays in sync. */
+static inline uint32_t pp_packet_words(uint32_t w0) {
+    uint32_t t = pp_type(w0);
+    return (t == PP_STICKY_SRC || t == PP_STICKY_TIMER) ? 1u : 2u;
+}
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */
 static inline uint32_t pp_src_w0(uint32_t lane_id) { return pp_word0(PP_STICKY_SRC, lane_id); }

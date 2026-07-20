@@ -564,7 +564,9 @@ int main(int argc, char** argv) {
                 drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
                 continue;
             }
-            uint32_t drain = avail & ~1u;  // sent is always a frame boundary -> buf holds whole frames
+            // sent is always published on a packet boundary, so avail is a whole number of packet-words;
+            // drain all of it (packets are now VARIABLE length -- SRC/TIMER are 1 word -- so no even-align).
+            uint32_t drain = avail;
             buf.resize(drain);
             uint32_t st = acked % hring_words;
             if (st + drain <= hring_words) {
@@ -580,11 +582,15 @@ int main(int argc, char** argv) {
             acked += drain;
             total_words.fetch_add(drain);
             drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
-            // decode buf (whole frames): dispatch bulk vs per-risc
+            // decode buf (whole frames): variable-length walk. SRC/TIMER are 1 word; PROG/markers 2; BULK
+            // has its own framing. Advance by the decoded length so packet boundaries stay in sync.
             size_t p = 0, sz = buf.size();
-            while (p + 1 < sz) {
+            while (p < sz) {
                 uint32_t w0 = buf[p];
                 if (pp_is_bulkcore(w0)) {
+                    if (p + 1 >= sz) {
+                        break;
+                    }
                     uint32_t core = pp_bulkcore_core(w0), rawn = buf[p + 1];
                     uint32_t prefix = 2u + (uint32_t)NRISC;
                     if (prefix & 1u) {
@@ -599,15 +605,38 @@ int main(int argc, char** argv) {
                         uint32_t head_mod = pp_bulk_head(meta[r]), run = pp_bulk_run(meta[r]);
                         uint32_t lane = core * (uint32_t)NRISC + r;
                         const uint32_t* ring = raw + (size_t)r * RING_CAP;
-                        for (uint32_t i = 0; i + 1 < run; i += 2) {
-                            emit(lane, ring[(head_mod + i) % RING_CAP], ring[(head_mod + i + 1) % RING_CAP]);
+                        // worker ring holds variable-length packets too (1-word TIMER, 2-word marker/PROG);
+                        // SRC never appears here (reader-injected). Walk by length.
+                        uint32_t i = 0;
+                        while (i < run) {
+                            uint32_t rw0 = ring[(head_mod + i) % RING_CAP];
+                            if (pp_is_timer(rw0)) {
+                                if (lane < NL) {
+                                    cur_hi[lane] = pp_timer_hi(rw0);
+                                }
+                                i += 1;
+                                continue;
+                            }
+                            if (i + 1 >= run) {
+                                break;
+                            }
+                            emit(lane, rw0, ring[(head_mod + i + 1) % RING_CAP]);
+                            i += 2;
                         }
                     }
                     p += prefix + rawn;
-                } else if (pp_is_src(w0)) {
+                } else if (pp_is_src(w0)) {  // 1 word: sets the current lane
                     cur_lane = pp_src_lane(w0);
-                    p += 2;
-                } else {
+                    p += 1;
+                } else if (pp_is_timer(w0)) {  // 1 word: refresh the current lane's wall-clock high half
+                    if (cur_lane < NL) {
+                        cur_hi[cur_lane] = pp_timer_hi(w0);
+                    }
+                    p += 1;
+                } else {  // 2 words: PROG / marker (emit resolves)
+                    if (p + 1 >= sz) {
+                        break;
+                    }
                     emit(cur_lane, w0, buf[p + 1]);
                     p += 2;
                 }
