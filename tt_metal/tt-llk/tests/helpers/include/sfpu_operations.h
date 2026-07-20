@@ -627,11 +627,7 @@ void call_unary_sfpu_operation_init()
         OPERATION == SfpuType::round || OPERATION == SfpuType::add1 || OPERATION == SfpuType::silu || OPERATION == SfpuType::relu_max ||
         OPERATION == SfpuType::relu_min)
     {
-        // These ops execute via the self-contained tt-llk primitives (_calculate_floor_ / calculate_add1 /
-        // _calculate_silu_ / _relu_max_ / ...), which need only the generic per-op init: the SFPU config reg +
-        // ADDR_MOD_7 set by llk_math_sfpu_init_once() above, plus a dest RWC counter reset. The harness routes them
-        // through the bare `unused` init because the OPERATION-keyed bare init has no delegate branch for these ops
-        // (floor/ceil/trunc/frac/round/add1/silu) and no linkable definition here (relu_max/relu_min).
+        // These ops execute via the self-contained tt-llk primitives
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
     }
     else
