@@ -135,6 +135,16 @@ class CIv2ModelDownloadUtils_:
             subprocess.run(
                 [
                     "wget",
+                    # LFC is an internal cluster service and must be reached directly. The CIv2
+                    # no_proxy entry for it is scheme-prefixed ("http://...") so it never matches
+                    # the target hostname; without --no-proxy, wget sends the request through the
+                    # restricted egress proxy, which returns 503 for internal hosts.
+                    "--no-proxy",
+                    # LFC occasionally refuses direct connections; wget does not retry connection
+                    # refusals by default, so opt in and back off a few times before giving up.
+                    "--tries=5",
+                    "--retry-connrefused",
+                    "--waitretry=10",
                     "-r",
                     "-nH",
                     "-x",

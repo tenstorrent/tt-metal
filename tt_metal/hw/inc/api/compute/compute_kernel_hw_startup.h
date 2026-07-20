@@ -11,6 +11,10 @@
 #include "llk_unpack_common_api.h"
 #endif
 
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
+
 namespace ckernel {
 
 // clang-format off
@@ -82,6 +86,9 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
+    // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). Hoisted out of the per-op SFPU init
+    // so self-contained per-op inits (ckernel::sfpu::_init_<op>_) don't re-run it. Safe for non-SFPU kernels.
+    MATH((llk_math_sfpu_init_once()));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init<PackMode::Default>(ocb)));

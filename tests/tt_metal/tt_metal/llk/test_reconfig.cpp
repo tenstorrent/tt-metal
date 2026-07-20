@@ -490,11 +490,11 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
             experimental::ComputeGen2Config{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                .fpu_math_fidelity = MathFidelity::HiFi4,
+                .enable_32_bit_dest = true,
+                .unpack_modes =
+                    {{INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+                     {INP3_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}},
             },
     };
 
@@ -822,11 +822,11 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
              dfb_binding(OUT2_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
             experimental::ComputeGen2Config{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+                .fpu_math_fidelity = MathFidelity::HiFi4,
+                .enable_32_bit_dest = true,
+                .unpack_modes =
+                    {{INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+                     {INP3_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}},
             },
     };
 
