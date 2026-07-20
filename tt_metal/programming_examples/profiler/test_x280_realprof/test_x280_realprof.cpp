@@ -512,7 +512,8 @@ int main(int argc, char** argv) {
     };
     // ---- --mpmc pipeline: per-socket flush+demux -> device-record MPMC -> M consumers ----
     const size_t BATCH_RECS = 4096;  // records per batch (amortizes the MPMC lock)
-    BatchQ mq(64);                   // bounded (64 batches): full -> flusher blocks = back-pressure
+    BatchQ mq(640);                  // bounded (640 batches, 10x): full -> flusher blocks = back-pressure. Bigger
+                                     // = more slack to absorb consumer bursts (diagnostic: does depth kill stalls?)
     std::atomic<uint64_t> consumed{0}, sink_total{0};
     // per-flusher (per-socket) verify results
     std::vector<uint64_t> fl_mk(ndh, 0), fl_start(ndh, 0), fl_end(ndh, 0), fl_prog_ok(ndh, 0), fl_ts_bad(ndh, 0),
