@@ -434,6 +434,17 @@ void MetalEnvImpl::initialize_control_plane_impl() {
 // exchanges (physical discovery, intermesh connectivity, per-mesh sub-context registration). Default
 // (unset) returns nullptr, leaving the workload path untouched.
 std::shared_ptr<tt::tt_fabric::coordination::SystemCoordinator> MetalEnvImpl::make_system_coordinator() const {
+    // Option (a): an external backend (the fabric-manager tool/service) may register a factory that
+    // supplies its own coordinator (e.g. the no-MPI gRPC/TCP ServiceCoordinator). It takes
+    // precedence so the transport stays entirely outside tt_metal.
+    if (const auto& factory = tt::tt_fabric::coordination::get_system_coordinator_factory()) {
+        if (auto coordinator = factory()) {
+            log_info(tt::LogDistributed, "Using externally-registered SystemCoordinator factory for ControlPlane");
+            return coordinator;
+        }
+    }
+    // Option B2-i validation fallback: wrap the existing DistributedContext in a behaviour-preserving
+    // CollectiveCoordinator so the injection seam is exercisable under MPI.
     if (std::getenv("TT_FABRIC_USE_COORDINATOR") == nullptr) {
         return nullptr;
     }

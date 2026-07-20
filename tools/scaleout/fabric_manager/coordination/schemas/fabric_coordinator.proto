@@ -7,7 +7,13 @@ syntax = "proto3";
 package tt.tt_fabric.coordination.proto;
 
 // Wire contract between fabric-manager agents (clients) and the controller
-// (server) for cross-host fabric bring-up coordination (Option B2-i).
+// (server) for cross-host fabric bring-up coordination (Option (a)).
+//
+// STATUS: this is the EVENTUAL gRPC contract. The current PoC ships a
+// dependency-free reference transport (in-process + a minimal length-prefixed TCP
+// framing in tcp_transport.cpp) that implements the exact same semantics via a
+// single rendezvous primitive (see transport.hpp / controller.hpp). gRPC is a
+// drop-in transport added later; nothing in tt_metal depends on this file.
 //
 // Design notes:
 //  * This is a DOMAIN coordination contract, not an MPI transport. There are no

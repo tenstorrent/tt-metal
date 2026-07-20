@@ -18,6 +18,10 @@
 #include "tools/scaleout/fabric_manager/utils/fabric_manager_utils.hpp"
 #include <enchantum/enchantum.hpp>
 
+#if defined(FABRIC_MANAGER_WITH_SERVICE_COORDINATOR)
+#include "tools/scaleout/fabric_manager/coordination/coordinator_cli.hpp"
+#endif
+
 namespace tt::scaleout_tools {
 
 // Captures current list of supported input args
@@ -96,6 +100,17 @@ void print_usage_info() {
     std::cout << "  --terminate-fabric: Terminate fabric configuration" << std::endl;
     std::cout << "  --help: Print usage information" << std::endl << std::endl;
     std::cout << "To run on a multi-node cluster, use mpirun with a --hostfile option" << std::endl;
+#if defined(FABRIC_MANAGER_WITH_SERVICE_COORDINATOR)
+    std::cout << std::endl;
+    std::cout << "Coordinator service (no-MPI, controller + agents):" << std::endl;
+    std::cout << "  --role: standalone (default) | controller | agent | selftest" << std::endl;
+    std::cout << "  controller: --world-size N [--port P (default 7777)]" << std::endl;
+    std::cout << "  agent:      --controller HOST:PORT --world-index I --world-size N" << std::endl;
+    std::cout << "              [--mesh-membership meshid:index/count,...] [--mesh-id M --mesh-host-rank R]"
+              << std::endl;
+    std::cout << "              plus the usual --initialize-fabric / --mesh-shape / ... options" << std::endl;
+    std::cout << "  selftest:   --world-size N (in-process rendezvous check; no hardware)" << std::endl;
+#endif
 }
 
 void set_config_vars() {
@@ -119,7 +134,22 @@ int main(int argc, char* argv[]) {
 
     set_config_vars();
 
-    auto input_args = parse_input_args(std::vector<std::string>(argv, argv + argc));
+    const std::vector<std::string> args_vec(argv, argv + argc);
+
+#if defined(FABRIC_MANAGER_WITH_SERVICE_COORDINATOR)
+    // Option (a): --role selects the coordinator backend at runtime (compiled in via the
+    // FABRIC_MANAGER_WITH_SERVICE_COORDINATOR CMake option). controller/selftest handle
+    // everything and exit without touching MetalContext/hardware; agent registers the
+    // external no-MPI ServiceCoordinator, then falls through to the normal bring-up.
+    switch (fabric_manager::parse_role(args_vec)) {
+        case fabric_manager::Role::Controller: return fabric_manager::run_controller(args_vec);
+        case fabric_manager::Role::SelfTest: return fabric_manager::run_selftest(args_vec);
+        case fabric_manager::Role::Agent: fabric_manager::register_agent_coordinator(args_vec); break;
+        case fabric_manager::Role::Standalone: break;
+    }
+#endif
+
+    auto input_args = parse_input_args(args_vec);
     if (input_args.help) {
         print_usage_info();
         return 0;

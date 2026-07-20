@@ -62,6 +62,7 @@ set(FABRIC_SOURCES
     serialization/port_descriptor_serialization.cpp
     coordination/merge_ops.cpp
     coordination/collective_coordinator.cpp
+    coordination/coordinator_registry.cpp
     ccl/ccl_common.cpp
     physical_system_discovery.cpp
     physical_system_descriptor.cpp

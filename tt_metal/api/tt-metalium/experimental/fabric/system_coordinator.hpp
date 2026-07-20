@@ -39,6 +39,8 @@
 //
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -119,5 +121,29 @@ public:
         return apply_merge(op, all_gather(local, scope));
     }
 };
+
+// --- External injection seam (Option (a)) ---------------------------------
+//
+// The concrete transport backend (e.g. the gRPC/TCP ServiceCoordinator) lives
+// OUTSIDE tt_metal, in the fabric-manager tool/service. tt_metal must therefore
+// be able to obtain that coordinator WITHOUT knowing its type or linking its
+// transport. The tool registers a factory here BEFORE it triggers fabric
+// bring-up; tt_metal (MetalContext) invokes the factory when it constructs the
+// ControlPlane, so the coordinator is available for construction-time exchanges
+// (physical discovery, intermesh connectivity, per-mesh sub-context registration).
+//
+// The factory is a pure `() -> shared_ptr<SystemCoordinator>` (bytes-in/bytes-out
+// interface), so no transport/domain coupling leaks into tt_metal. A factory that
+// returns nullptr (or no factory registered) leaves the default path untouched.
+using SystemCoordinatorFactory = std::function<std::shared_ptr<SystemCoordinator>()>;
+
+// Register (or clear, by passing an empty std::function) the process-wide factory.
+// Storage lives in tt_metal so a single instance is shared across the tool and the
+// core library. Not thread-safe against concurrent bring-up; set it during startup.
+void set_system_coordinator_factory(SystemCoordinatorFactory factory);
+
+// Returns the registered factory (empty std::function if none). Consulted by
+// MetalContext when constructing the ControlPlane.
+[[nodiscard]] const SystemCoordinatorFactory& get_system_coordinator_factory();
 
 }  // namespace tt::tt_fabric::coordination
