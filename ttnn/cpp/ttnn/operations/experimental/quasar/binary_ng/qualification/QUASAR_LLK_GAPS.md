@@ -3,13 +3,13 @@ SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Quasar ↔ Wormhole LLK support matrix — eltwise binary ops & fusable activations
+# Quasar ↔ Wormhole LLK support matrix — eltwise binary ops, fusable activations & subtile broadcast
 
-**Audience: the LLK team.** **Wormhole is the baseline:** every row below is a binary op or fusable
-activation that `binary_ng` can emit and that **Wormhole supports**. The **Quasar** column is the live
-status. This is a *matrix, not a gaps list* — the **rows are stable and do not change as support lands;
-only the Quasar cell flips** (`kernel` → `bridge` → `✓`). A "gap" is simply any Quasar cell that is not
-yet `✓`. Over time the WH and Quasar columns converge.
+**Audience: the LLK team.** **Wormhole is the baseline:** every row below is a binary op, fusable
+activation, or broadcast primitive that `binary_ng` can emit/use and that **Wormhole supports**. The
+**Quasar** column is the live status. This is a *matrix, not a gaps list* — the **rows are stable and do
+not change as support lands; only the Quasar cell flips** (`kernel` → `bridge` → `✓`). A "gap" is simply
+any Quasar cell that is not yet `✓`. Over time the WH and Quasar columns converge.
 
 - **How to maintain:** when the LLK team lands a primitive, flip its Quasar cell — do **not** delete the
   row. A new op WH gains becomes a new row (WH `✓`, Quasar per its state). Re-derive live any time with
@@ -42,6 +42,10 @@ itself lacks.
   ops), so they are out of scope.
 - **Activation rows** = every `UnaryOpType` `binary_ng` can fuse as an lhs/rhs/post activation — i.e.
   every op `unary_op_utils.cpp::get_op_init_and_func` handles (nearly the whole enum).
+- **Broadcast rows** (Table 3) = the `unary_bcast<BroadcastType>` primitive `binary_ng`'s Quasar DFB
+  factory uses to realize `SubtileBroadcastType != NONE` for a **single** operand
+  (`SCALAR`/`ROW`/`COL`); the mixed types (`ROW_A_COL_B`/`ROW_B_COL_A`) aren't op-wired yet, so they have
+  no row here (tracked in `../QUASAR_PARITY_GAPS.md`).
 - **Which `tt_llk_quasar` tree is authoritative** — there are **two** and they disagree. The build uses
   **`tt_metal/tt-llk/tt_llk_quasar/`** (on the kernel `-I` path — `tt_metal/hw/CMakeLists.txt`). The other,
   `tt_metal/third_party/tt_llk/tt_llk_quasar/`, is **NOT** on the include path (IDE glob only) and is
@@ -232,6 +236,36 @@ Everything else is `bridge` or `kernel`.
 `alt_complex_rotate90`, `tiled_prod`. (`where` and `typecast` do have Quasar LLK paths + bridges, but they
 are ternary-select / dtype-cast infra, not activations.)
 
+## Table 3 — Subtile broadcast primitive (`unary_bcast`)
+
+Unlike Table 1/2 (`BinaryOpType` / `UnaryOpType` rows), this tracks the **single-operand broadcast
+primitive** `unary_bcast<BroadcastType::{SCALAR,ROW,COL}>` (`tt_metal/hw/inc/api/compute/bcast.h`) that
+`binary_ng`'s Quasar DFB factory uses to pre-broadcast the smaller operand into DST before the FPU/SFPU
+binary op runs on it. WH/BH carry the same header's non-Quasar branch. An op-level `SubtileBroadcastType`
+(e.g. `SCALAR_A` vs `SCALAR_B`) picks which operand feeds this primitive; the primitive itself only cares
+about the broadcast dimension, hence one row per dimension.
+
+| Broadcast dimension | WH | Quasar | Evidence / to-close |
+|---|:--:|---|---|
+| `unary_bcast<SCALAR>` | ✓ | `✓*` | Quasar `#else` branch (`bcast.h`) + `llk_unpack_unary_broadcast_operands.h` / `llk_math_unary_broadcast.h` SCALAR body; sim-certified standalone (`test_unary_broadcast_quasar.py`) **and** through `binary_ng` (`test_binary_ng_bcast.py`, `SubtileBroadcastType::SCALAR_A/B`) |
+| `unary_bcast<ROW>` | ✓ | `✓*` | same evidence, ROW body; op-certified via `SubtileBroadcastType::ROW_A/B` |
+| `unary_bcast<COL>` | ✓ | `✓*` | same evidence, COL body; op-certified via `SubtileBroadcastType::COL_A/B` |
+
+All three dimensions lower to the same Quasar LLK path — the MOVB2D srcB→dest datacopy
+(`llk_math_eltwise_unary_datacopy<DataCopyType::B2D, ...>`), differentiated only by broadcast constants
+(`dst_lo`/`bcast0`/`srcb_col_inc`). This is a different mechanism from the two-operand
+`add_tiles_bcast_rows`/`mul_tiles_bcast_cols`/etc. shorthand family further down `bcast.h` (`ELWADD`-style,
+`llk_unpack_AB<BroadcastType>`), which is WH/BH-only and not used by the Quasar DFB kernels.
+
+- **32-bit formats are gated off:** the Quasar branch's `enable_unpack_to_dest` check omits
+  `DataFormat::UInt32` — Quasar has no uint32 device format (its 32-bit formats are `Float32`/`Int32`; the
+  enum slot WH/BH use for `UInt32` is `MxFp4_2x_B` on Quasar) — and asserts if a 32-bit format would need
+  the A2D unpack-to-dest path, which isn't implemented on Quasar. bf16 only for now.
+- `reconfigure_unary_bcast` (mid-program bcast-type/format switch) is `#ifndef ARCH_QUASAR`-only; Quasar
+  re-`init`s per broadcast type instead.
+- No sim/LLK bug surfaced while certifying SCALAR/ROW/COL through the op — all 112 broadcast cases in
+  `test_binary_ng_bcast.py` pass on the QSR sim alongside the 88-case no-bcast regression suite.
+
 ## Priorities (by model impact)
 
 1. **int `lt`/`le`/`ge`** (binary) — `bridge`, trivial (ckernel already handles lt/gt/le/ge).
@@ -241,7 +275,8 @@ are ternary-select / dtype-cast infra, not activations.)
 5. Everything else as op/model demand arises.
 
 **Already done — no LLK work:** `relu` (ResNet50), `silu` (Llama SwiGLU), `sigmoid`, `tanh`, `square`, `gelu`
-— all sim-certified — plus the arithmetic/`where`/compare-to-zero core.
+— all sim-certified — plus the arithmetic/`where`/compare-to-zero core and single-operand subtile
+broadcast `unary_bcast` SCALAR/ROW/COL (Table 3), sim-certified through `binary_ng` itself.
 
 ## Closing a gap — the pattern
 
@@ -268,6 +303,13 @@ are ternary-select / dtype-cast infra, not activations.)
   `…/llk_lib/llk_defs.h`. **(Authoritative build tree — NOT `third_party/tt_llk/tt_llk_quasar/`.)**
 - Quasar LLK tests: `tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_{binary,binary_sfpu,unary_sfpu}_quasar.py`
   (WH baselines: `tests/python_tests/test_eltwise_binary.py`, `test_eltwise_unary_sfpu.py`).
+- Broadcast primitive (Table 3): `tt_metal/hw/inc/api/compute/bcast.h` (`unary_bcast`/`_init`/`_uninit`) ·
+  Quasar LLK-API bridges `tt_metal/hw/ckernels/quasar/metal/llk_api/{llk_unpack_A_api.h,
+  llk_math_unary_datacopy_api.h}` · core LLK
+  `tt_metal/tt-llk/tt_llk_quasar/llk_lib/{llk_unpack_unary_broadcast_operands.h,
+  llk_math_unary_broadcast.h}`.
+- Broadcast tests: standalone LLK `tt_metal/tt-llk/tests/python_tests/quasar/test_unary_broadcast_quasar.py`;
+  through the op `tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_bcast.py`.
 
 ## Caveats
 

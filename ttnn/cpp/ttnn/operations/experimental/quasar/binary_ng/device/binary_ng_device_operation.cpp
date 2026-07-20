@@ -499,22 +499,24 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
         return false;
     }
     // Subtile broadcast admission. The DFB path drives the LLK unary_bcast primitive through an
-    // intermediate DFB. Only ROW_A / ROW_B are wired so far, and only for bf16 -- on both the FPU
-    // (add/subtract) and SFPU (multiply/divide) compute kernels (fp32/int, and the SCALAR / COL / mixed
+    // intermediate DFB. ROW_A / ROW_B (unary_bcast<ROW>), COL_A / COL_B (unary_bcast<COL>), and
+    // SCALAR_A / SCALAR_B (unary_bcast<SCALAR>) are wired -- all three lower to the same MOVB2D LLK
+    // datacopy, differentiated only by broadcast constants -- and only for bf16 -- on both the FPU
+    // (add/subtract) and SFPU (multiply/divide/maximum) compute kernels (fp32/int and the mixed ROW/COL
     // types are later tasks). Admitting a type here without a matching factory kernel would route it to
     // an unwired factory path, so keep every not-yet-wired type on the descriptor.
     switch (attributes.subtile_broadcast_type) {
         case SubtileBroadcastType::NONE: break;  // whole no-broadcast slice (FPU/SFPU, any dtype)
         case SubtileBroadcastType::ROW_A:
         case SubtileBroadcastType::ROW_B:
-            if (tensor_args.input_tensor_a.dtype() != tt::tt_metal::DataType::BFLOAT16) {
-                return false;  // bf16 only (FPU + SFPU) until the fp32 / int row-bcast paths are wired
-            }
-            break;
-        case SubtileBroadcastType::SCALAR_A:
-        case SubtileBroadcastType::SCALAR_B:
         case SubtileBroadcastType::COL_A:
         case SubtileBroadcastType::COL_B:
+        case SubtileBroadcastType::SCALAR_A:
+        case SubtileBroadcastType::SCALAR_B:
+            if (tensor_args.input_tensor_a.dtype() != tt::tt_metal::DataType::BFLOAT16) {
+                return false;  // bf16 only (FPU + SFPU) until the fp32 / int bcast paths are wired
+            }
+            break;
         case SubtileBroadcastType::ROW_A_COL_B:
         case SubtileBroadcastType::ROW_B_COL_A: return false;  // not wired in the DFB factory yet
     }

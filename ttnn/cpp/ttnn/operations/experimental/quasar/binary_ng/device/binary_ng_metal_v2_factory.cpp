@@ -108,6 +108,30 @@ constexpr const char* kComputeFpuRowBcastDfb =
 constexpr const char* kComputeSfpuRowBcastDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
     "eltwise_binary_sfpu_row_bcast_dfb.cpp";
+// COL subtile broadcast: a dedicated reader (the broadcast operand's column tile is read once per
+// tile-row and reused across the row) + the col-bcast compute (unary_bcast<COL>, which lowers to the
+// same MOVB2D LLK datacopy as ROW/SCALAR, keyed by COL's broadcast constants; freq=Wt reuse loop).
+constexpr const char* kReaderColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/reader_col_bcast_dfb.cpp";
+constexpr const char* kComputeFpuColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_col_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_sfpu_col_bcast_dfb.cpp";
+// SCALAR subtile broadcast: a dedicated reader (the broadcast operand's single-element tile is read once
+// per (N,C) slab and reused across the whole Ht * Wt block) + the scalar-bcast compute (unary_bcast<
+// SCALAR>, which lowers to the same MOVB2D LLK datacopy as ROW/COL, keyed by SCALAR's broadcast constants;
+// freq=Ht*Wt reuse loop).
+constexpr const char* kReaderScalarBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/"
+    "reader_scalar_bcast_dfb.cpp";
+constexpr const char* kComputeFpuScalarBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_scalar_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuScalarBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_sfpu_scalar_bcast_dfb.cpp";
 
 // The compute kernel includes eltwise_utils_common.hpp (in kernels/compute) and its DFB preprocess
 // helper (in kernels_dfb/compute) by bare name; both directories go on the compute include path.
@@ -117,8 +141,9 @@ constexpr const char* kComputeIncludeDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute";
 
 // Per-broadcast-type kernel-source seam (the DFB analogue of the descriptor's BinaryNgKernelConfig):
-// it maps a SubtileBroadcastType to the reader/writer/compute kernel sources. Only the no-broadcast
-// (NONE) triple is wired; the broadcast variants follow when their DFB kernels are added.
+// it maps a SubtileBroadcastType to the reader/writer/compute kernel sources. NONE, ROW_A/ROW_B,
+// COL_A/COL_B, and SCALAR_A/SCALAR_B are wired; the remaining (mixed ROW/COL) broadcast variants follow
+// when their DFB kernels are added.
 struct DfbKernelSources {
     const char* reader = nullptr;
     const char* writer = nullptr;
@@ -143,10 +168,29 @@ DfbKernelSources select_dfb_kernel_sources(SubtileBroadcastType subtile_broadcas
                 .writer = kWriterDfb,
                 .compute = is_sfpu ? kComputeSfpuRowBcastDfb : kComputeFpuRowBcastDfb,
             };
-        case SubtileBroadcastType::SCALAR_A:
-        case SubtileBroadcastType::SCALAR_B:
         case SubtileBroadcastType::COL_A:
         case SubtileBroadcastType::COL_B:
+            // COL subtile broadcast: the col reader delivers the partial column tile (once per tile-row)
+            // and the col-bcast compute expands it via unary_bcast<COL> (MOVB2D LLK datacopy, same as
+            // ROW/SCALAR), reusing it across the row (freq=Wt), then runs the binary op -- FPU
+            // (add/subtract) or SFPU (multiply/divide/maximum). matches_metal_v2_slice restricts this to bf16.
+            return DfbKernelSources{
+                .reader = kReaderColBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuColBcastDfb : kComputeFpuColBcastDfb,
+            };
+        case SubtileBroadcastType::SCALAR_A:
+        case SubtileBroadcastType::SCALAR_B:
+            // SCALAR subtile broadcast: the scalar reader delivers the single-element tile (once per
+            // (N,C) slab) and the scalar-bcast compute expands it via unary_bcast<SCALAR> (MOVB2D LLK
+            // datacopy, same as ROW/COL), reusing it across the whole slab (freq=Ht*Wt), then runs the
+            // binary op -- FPU (add/subtract) or SFPU (multiply/divide/maximum). matches_metal_v2_slice
+            // restricts this to bf16.
+            return DfbKernelSources{
+                .reader = kReaderScalarBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuScalarBcastDfb : kComputeFpuScalarBcastDfb,
+            };
         case SubtileBroadcastType::ROW_A_COL_B:
         case SubtileBroadcastType::ROW_B_COL_A: break;  // rejected by matches_metal_v2_slice, not wired here
     }
@@ -180,6 +224,30 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(cons
         shape[-3],
         tt::div_up(shape[-2], tile.get_height()),
         tt::div_up(shape[-1], tile.get_width())};
+}
+
+// Compute-kernel {freq, tile_start} for the subtile-broadcast reuse loop. Mirrors
+// calculate_compute_kernel_args in binary_ng_program_factory.cpp (anonymous namespace there, so
+// reimplemented here like the other small helpers). For COL it returns {Wt, start_tw}: the compute
+// broadcasts the column tile once and reuses it across a full tile-row (freq = Wt), starting at this
+// core's column offset (start_tw). ROW/NONE need no reuse ({1, 0}); SCALAR reuses across the whole
+// HtWt block. Kept as a full switch so a later SCALAR/mixed wiring reuses it unchanged.
+std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
+    SubtileBroadcastType broadcast_type, uint32_t start_tile_id, uint32_t Ht, uint32_t Wt) {
+    const uint32_t start_t = start_tile_id % (Ht * Wt);
+    const uint32_t start_tw = start_t % Wt;
+    switch (broadcast_type) {
+        case SubtileBroadcastType::NONE:
+        case SubtileBroadcastType::ROW_A:
+        case SubtileBroadcastType::ROW_B: return {1, 0};
+        case SubtileBroadcastType::SCALAR_A:
+        case SubtileBroadcastType::SCALAR_B: return {Ht * Wt, start_t};
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
+        case SubtileBroadcastType::ROW_A_COL_B:
+        case SubtileBroadcastType::ROW_B_COL_A: return {Wt, start_tw};
+    }
+    TT_THROW("binary_ng Metal 2.0 factory: unreachable subtile broadcast type in calculate_compute_kernel_args");
 }
 
 // Number of shards spanning the output width. Mirrors get_shards_per_width in the descriptor factory.
@@ -406,21 +474,34 @@ ProgramArtifacts create_no_bcast_artifacts(
     const m2::KernelSpecName COMPUTE{"binary_ng_compute"};
 
     // Per-broadcast-type kernel-source selection (the descriptor's BinaryNgKernelConfig analogue): the
-    // no-broadcast (NONE) triple, plus the ROW subtile-broadcast reader/compute for ROW_A / ROW_B.
+    // no-broadcast (NONE) triple, the ROW subtile-broadcast reader/compute for ROW_A / ROW_B, the COL
+    // subtile-broadcast reader/compute for COL_A / COL_B, and the SCALAR subtile-broadcast reader/compute
+    // for SCALAR_A / SCALAR_B.
     const DfbKernelSources kernel_sources = select_dfb_kernel_sources(op.subtile_broadcast_type, is_sfpu);
 
-    // ROW subtile broadcast: ROW_A broadcasts the LHS operand (a), ROW_B the RHS operand (b). Exactly one
-    // holds on the row-bcast path (the gate admits only ROW_A / ROW_B here); both false on no-broadcast.
-    const bool bcast_lhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A;
-    const bool bcast_rhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B;
+    // Subtile broadcast: ROW_A / COL_A / SCALAR_A broadcast the LHS operand (a), ROW_B / COL_B / SCALAR_B
+    // the RHS operand (b). Exactly one holds on the bcast path (the gate admits only ROW_A/B, COL_A/B, and
+    // SCALAR_A/B here); both false on no-broadcast. uses_tile_freq_reuse additionally selects the COL/
+    // SCALAR freq/tile_start reuse loop (compute args) -- ROW's compute is a flat per-tile loop (freq
+    // always 1) and needs no runtime freq/tile_start.
+    const bool bcast_lhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A;
+    const bool bcast_rhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B;
+    const bool uses_tile_freq_reuse = op.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+                                      op.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+                                      op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+                                      op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B;
 
-    // The row-bcast compute processes exactly ONE tile per cycle (unary_bcast -> pack -> binary op on DST
+    // The bcast compute processes exactly ONE tile per cycle (unary_bcast -> pack -> binary op on DST
     // index 0) while advancing every DFB by num_tiles_per_cycle; that is only correct at
     // num_tiles_per_cycle == 1 (the interleaved / non-borrowed path this task wires). A future borrowed
     // or multi-tile broadcast path MUST revisit the kernel's per-tile loop before relaxing this.
     TT_FATAL(
         !(bcast_lhs || bcast_rhs) || num_tiles_per_cycle == 1,
-        "binary_ng Metal 2.0 factory: ROW subtile broadcast requires num_tiles_per_cycle == 1, got {}",
+        "binary_ng Metal 2.0 factory: subtile broadcast requires num_tiles_per_cycle == 1, got {}",
         num_tiles_per_cycle);
 
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
@@ -465,11 +546,13 @@ ProgramArtifacts create_no_bcast_artifacts(
             std::nullopt));
     }
 
-    // llk_post intermediate DFB for the ROW subtile broadcast (c_5 for LHS bcast, c_6 for RHS bcast):
-    // the compute both produces (unary_bcast<ROW> -> pack) and consumes (binary op) it in program order
-    // on one thread, so num_tiles_per_cycle entries suffice -- the same self-loop precedent as the
-    // POST_LHS/POST_RHS activation DFBs. Format is the broadcast operand's own format (bf16 on this
-    // path; op_has_exp never reaches the LLK bcast path). Allocated only for the operand being broadcast.
+    // llk_post intermediate DFB for the subtile broadcast (c_5 for LHS bcast, c_6 for RHS bcast): the
+    // compute both produces (unary_bcast<ROW|COL|SCALAR> -> pack) and consumes (binary op) it in program
+    // order on one thread, so num_tiles_per_cycle entries suffice -- the same self-loop precedent as the
+    // POST_LHS/POST_RHS activation DFBs. (COL reuses the single expanded tile across a tile-row, SCALAR
+    // across the whole (N,C) slab: produced once, read freq times, popped once -- still one live entry.)
+    // Format is the broadcast operand's own format (bf16 on this path; op_has_exp never reaches the LLK
+    // bcast path). Allocated only for the operand being broadcast.
     if (bcast_lhs) {
         dfbs.push_back(make_dfb(
             LLK_POST_LHS,
@@ -502,11 +585,13 @@ ProgramArtifacts create_no_bcast_artifacts(
     writer_defines["DST_SHARDED"] = c_borrowed ? "1" : "0";
     writer_defines["HAS_SHARDING"] = has_sharding ? "1" : "0";
 
-    // ROW subtile-broadcast defines. Set only on the row-bcast path so the no-broadcast define set is
-    // untouched. The bcast reader keys the partial-tile walk off SRC_BCAST / SRC_BCAST_B; BCAST_LLK=1
-    // means it delivers the partial tile (no FILL_TILE), leaving the broadcast to the compute's
-    // unary_bcast<ROW>. The row compute selects its c_5/c_6 llk_post mapping off SRC_BCAST[_B].
-    // BCAST_INPUT (0 = LHS bcast, 1 = RHS bcast) mirrors the descriptor's compute define.
+    // Subtile-broadcast defines (ROW, COL, and SCALAR). Set only on the bcast path so the no-broadcast
+    // define set is untouched. The bcast reader keys the partial-tile walk off SRC_BCAST / SRC_BCAST_B;
+    // BCAST_LLK=1 means it delivers the partial (or, for SCALAR, single-element) tile (no FILL_TILE),
+    // leaving the broadcast to the compute's unary_bcast<ROW|COL|SCALAR>. The compute selects its c_5/c_6
+    // llk_post mapping off SRC_BCAST[_B]. BCAST_INPUT (0 = LHS bcast, 1 = RHS bcast) mirrors the
+    // descriptor's compute define (COL/SCALAR use it to preprocess the broadcast operand once and stream
+    // the other per freq iteration).
     if (bcast_lhs || bcast_rhs) {
         const std::string src_bcast = bcast_lhs ? "1" : "0";
         const std::string src_bcast_b = bcast_rhs ? "1" : "0";
@@ -632,11 +717,11 @@ ProgramArtifacts create_no_bcast_artifacts(
         compute_dfb_bindings.push_back(m2::ProducerOf(POST_RHS, "post_rhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(POST_RHS, "post_rhs"));
     }
-    // ROW subtile broadcast: the row compute both produces (unary_bcast<ROW> -> pack) and consumes
-    // (binary op) the llk_post intermediate — the same self-loop pair as post_lhs/post_rhs. Exactly one
-    // of LLK_POST_LHS (c_5, ROW_A) / LLK_POST_RHS (c_6, ROW_B) is allocated per op; whichever it is binds
-    // under the accessor name "llk_post", and that accessor-name binding is what lets the single compute
-    // kernel read either as dfb::llk_post.
+    // Subtile broadcast (ROW/COL/SCALAR): the compute both produces (unary_bcast<ROW|COL|SCALAR> -> pack)
+    // and consumes (binary op) the llk_post intermediate — the same self-loop pair as post_lhs/post_rhs.
+    // Exactly one of LLK_POST_LHS (c_5, ROW_A/COL_A/SCALAR_A) / LLK_POST_RHS (c_6, ROW_B/COL_B/SCALAR_B) is
+    // allocated per op; whichever it is binds under the accessor name "llk_post", and that accessor-name
+    // binding is what lets the single compute kernel read either as dfb::llk_post.
     if (bcast_lhs) {
         compute_dfb_bindings.push_back(m2::ProducerOf(LLK_POST_LHS, "llk_post"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(LLK_POST_LHS, "llk_post"));
@@ -647,6 +732,14 @@ ProgramArtifacts create_no_bcast_artifacts(
     }
 
     m2::Group<std::string> compute_rt_names = {"num_tiles"};
+    // COL/SCALAR broadcast reuse the expanded tile across a freq/tile_start loop (COL: freq = Wt, one
+    // tile-row; SCALAR: freq = Ht * Wt, the whole (N,C) slab); the compute reads freq and the per-core
+    // tile offset as runtime args. ROW/NONE do not (their compute is a flat per-tile loop), so the args
+    // are added only on the COL/SCALAR path.
+    if (uses_tile_freq_reuse) {
+        compute_rt_names.push_back("tile_freq");
+        compute_rt_names.push_back("tile_start");
+    }
     if (op_type == BinaryOpType::ISCLOSE) {
         compute_rt_names.push_back("rtol_bits");
         compute_rt_names.push_back("atol_bits");
@@ -807,6 +900,17 @@ ProgramArtifacts create_no_bcast_artifacts(
         writer_args["cND"][node] = cND;
 
         compute_args["num_tiles"][node] = c_num_tiles_core;
+        if (uses_tile_freq_reuse) {
+            // COL: {freq = Wt, tile_start = this core's column offset} -- broadcasts the column tile once
+            // per tile-row and reuses it across the row (freq iterations). SCALAR: {freq = Ht * Wt,
+            // tile_start = this core's offset into the (N,C) slab} -- broadcasts the single-element tile
+            // once per slab and reuses it across the whole slab. Either way tile_start is where this
+            // core's tile range begins within one broadcast period.
+            const auto [tile_freq, tile_start] =
+                calculate_compute_kernel_args(op.subtile_broadcast_type, c_start_id, cHt, cWt);
+            compute_args["tile_freq"][node] = tile_freq;
+            compute_args["tile_start"][node] = tile_start;
+        }
         if (op_type == BinaryOpType::ISCLOSE) {
             compute_args["rtol_bits"][node] = isclose_rtol_bits;
             compute_args["atol_bits"][node] = isclose_atol_bits;

@@ -97,7 +97,7 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
-def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=None, pcc=None):
+def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, rhs_act=None, post_act=None, pcc=None):
     torch.manual_seed(0)
     ttnn_fn = _OPS[op_name][0]()
     torch_fn = _OPS[op_name][1]
@@ -118,9 +118,10 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=No
         # Keep the divisor away from zero so bf16 PCC is meaningful.
         b = b * 0.5 + 2.0
 
-    # Golden: lhs activation applies before the binary op, post activation after.
+    # Golden: lhs/rhs activations apply before the binary op (to a/b respectively), post activation after.
     a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
-    golden = torch_fn(a_golden, b)
+    b_golden = _ACT_GOLDEN[rhs_act](b) if rhs_act is not None else b
+    golden = torch_fn(a_golden, b_golden)
     if post_act is not None:
         golden = _ACT_GOLDEN[post_act](golden)
 
@@ -132,6 +133,8 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=No
         kwargs["activations"] = _act(post_act)
     if lhs_act is not None:
         kwargs["input_tensor_a_activations"] = _act(lhs_act)
+    if rhs_act is not None:
+        kwargs["input_tensor_b_activations"] = _act(rhs_act)
 
     out_tt = ttnn_fn(a_tt, b_tt, **kwargs)
     out_torch = ttnn.to_torch(out_tt)
@@ -148,24 +151,63 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=No
     return out_tt
 
 
-def _run_mixed(device, op_name, a_mem, b_mem, out_mem, dtype_tt, shape=_MIXED_SHAPE, pcc=None):
+def _run_mixed(
+    device,
+    op_name,
+    a_mem,
+    b_mem,
+    out_mem,
+    dtype_tt,
+    shape=_MIXED_SHAPE,
+    lhs_act=None,
+    rhs_act=None,
+    post_act=None,
+    pcc=None,
+):
     # Like _run, but with an INDEPENDENT memory config per operand (a, b, output) so the borrow-vs-NoC
     # routing in the DFB factory is exercised across mixed sharded/interleaved layouts (borrow only when
-    # all three are L1-sharded on one matching grid; otherwise every operand is NoC-read/written).
+    # all three are L1-sharded on one matching grid; otherwise every operand is NoC-read/written). Also
+    # like _run, optionally fuses lhs/rhs (pre) and post activation params -- used by the sharded-broadcast-
+    # operand activation-over-broadcast cases, e.g. a height-sharded broadcast operand feeding the bcast
+    # reader's NoC path rather than the fully-interleaved one.
     torch.manual_seed(0)
     ttnn_fn = _OPS[op_name][0]()
     torch_fn = _OPS[op_name][1]
 
-    a = torch.randn(shape, dtype=torch.float32)
-    b = torch.randn(shape, dtype=torch.float32)
+    # `shape` is either a single shape shared by both operands (the no-broadcast case) or a 2-tuple
+    # (a_shape, b_shape) that selects a subtile broadcast: the two operands are built at their own shapes
+    # and torch/ttnn broadcast for the golden. Same pair-detection _run uses (a pair is a length-2
+    # sequence whose first element is itself a sequence), so an ordinary (H, W) shape still takes the
+    # shared-shape path -- backward compatible with every existing _run_mixed caller.
+    if isinstance(shape, (tuple, list)) and len(shape) == 2 and isinstance(shape[0], (tuple, list)):
+        a_shape, b_shape = shape
+    else:
+        a_shape = b_shape = shape
+
+    a = torch.randn(a_shape, dtype=torch.float32)
+    b = torch.randn(b_shape, dtype=torch.float32)
     if op_name == "divide":
         b = b * 0.5 + 2.0
-    golden = torch_fn(a, b)
+
+    # Golden: lhs/rhs activations apply before the binary op (to a/b respectively), post activation after.
+    a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
+    b_golden = _ACT_GOLDEN[rhs_act](b) if rhs_act is not None else b
+    golden = torch_fn(a_golden, b_golden)
+    if post_act is not None:
+        golden = _ACT_GOLDEN[post_act](golden)
 
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=a_mem)
     b_tt = ttnn.from_torch(b, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=b_mem)
 
-    out_tt = ttnn_fn(a_tt, b_tt, memory_config=out_mem, dtype=dtype_tt)
+    kwargs = {"memory_config": out_mem, "dtype": dtype_tt}
+    if post_act is not None:
+        kwargs["activations"] = _act(post_act)
+    if lhs_act is not None:
+        kwargs["input_tensor_a_activations"] = _act(lhs_act)
+    if rhs_act is not None:
+        kwargs["input_tensor_b_activations"] = _act(rhs_act)
+
+    out_tt = ttnn_fn(a_tt, b_tt, **kwargs)
     out_torch = ttnn.to_torch(out_tt)
 
     # Same degenerate-constant guard as _run (catches an operand-switch / wrong-tile-pairing bug, the
