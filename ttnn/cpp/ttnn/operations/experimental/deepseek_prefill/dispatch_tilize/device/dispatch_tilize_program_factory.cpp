@@ -22,15 +22,15 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
     ttnn::Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
-    (void)operation_attributes;
 
-    // Region-aware skip: when the routing tensors are supplied the kernels bound work to the filled prefix of
-    // the worst-case-padded dispatch buffer (valid_blocks = ceil(max_e(region[e]+align32(count[e]))/32)); the
-    // reader publishes this_core_blocks via a control CB (c_1) for the compute + writer. Omitted => full tilize.
-    const bool region_aware = tensor_args.expert_region_offsets.has_value();
-    Buffer* region_buffer = region_aware ? tensor_args.expert_region_offsets->buffer() : nullptr;
+    // Region-aware skip: when total_counts_per_expert is supplied the kernels bound work to the filled prefix of
+    // the worst-case-padded dispatch buffer (valid_blocks = ceil(max_chip Σ_{e∈chip} align32(count[e]) / 32),
+    // grouping the [1,E] counts into experts_per_chip chips = the fullest chip's fill). The reader publishes
+    // this_core_blocks via a control CB (c_1) for the compute + writer. Omitted => full tilize.
+    const bool region_aware = tensor_args.total_counts_per_expert.has_value();
     Buffer* counts_buffer = region_aware ? tensor_args.total_counts_per_expert->buffer() : nullptr;
     const uint32_t num_experts = region_aware ? (uint32_t)tensor_args.total_counts_per_expert->logical_shape()[-1] : 0u;
+    const uint32_t experts_per_chip = operation_attributes.experts_per_chip;
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -83,7 +83,7 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
     });
 
     if (region_aware) {
-        // c_1: control (this_core_blocks, one uint32). c_2/c_3: reader scratch for the two [1,E] routing pages.
+        // c_1: control (this_core_blocks, one uint32). c_2: reader scratch for the [1,E] counts page.
         const uint32_t exp_bytes = num_experts * 4;
         desc.cbs.push_back(CBDescriptor{
             .total_size = 16,
@@ -94,17 +94,15 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
                 .page_size = 16,
             }}},
         });
-        for (auto cb : {tt::CBIndex::c_2, tt::CBIndex::c_3}) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = exp_bytes,
-                .core_ranges = all_cores,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(cb),
-                    .data_format = tt::DataFormat::UInt32,
-                    .page_size = exp_bytes,
-                }}},
-            });
-        }
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = exp_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = exp_bytes,
+            }}},
+        });
     }
 
     // reader
@@ -118,11 +116,11 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     reader_ct_args.push_back(region_aware ? 1u : 0u);
     reader_ct_args.push_back(num_experts);
-    // Always append region + counts accessor args so TensorAccessorArgs<after_src+2> is well-formed on the full
-    // path too: kernel_main is not a template, so if constexpr(region_aware)'s discarded branch is still compiled.
-    // When not region-aware these describe src0 as a harmless placeholder and are never read (that branch is
-    // discarded at runtime, so RT args 9/10 are never fetched).
-    TensorAccessorArgs(*(region_aware ? region_buffer : src0_buffer)).append_to(reader_ct_args);
+    reader_ct_args.push_back(experts_per_chip);
+    // Always append the counts accessor args so TensorAccessorArgs<after_src+3> is well-formed on the full path
+    // too: kernel_main is not a template, so if constexpr(region_aware)'s discarded branch is still compiled. When
+    // not region-aware this describes src0 as a harmless placeholder and is never read (that branch is discarded
+    // at runtime, so RT arg 9 is never fetched).
     TensorAccessorArgs(*(region_aware ? counts_buffer : src0_buffer)).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
@@ -207,7 +205,6 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
         reader_rt_args.push_back(std::uint32_t{0});
         reader_rt_args.push_back(page_start_id);
         if (region_aware) {
-            reader_rt_args.push_back(region_buffer);
             reader_rt_args.push_back(counts_buffer);
         }
         reader_desc.emplace_runtime_args(core, reader_rt_args);
@@ -228,7 +225,6 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
         reader_rt_args.push_back(std::uint32_t{0});
         reader_rt_args.push_back(page_start_id);
         if (region_aware) {
-            reader_rt_args.push_back(region_buffer);
             reader_rt_args.push_back(counts_buffer);
         }
         reader_desc.emplace_runtime_args(core, reader_rt_args);

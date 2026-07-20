@@ -14,16 +14,15 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_tilize {
 struct DispatchTilizeParams {
     tt::tt_metal::DataType output_dtype;
     tt::tt_metal::MemoryConfig output_memory_config;
-    uint32_t experts_per_chip;  // 0 => plain tilize (no region-aware skip)
+    uint32_t experts_per_chip;  // groups the [1,E] counts into per-chip fills; must be >0 on the skip path
 };
 
 struct DispatchTilizeInputs {
     ttnn::Tensor input_tensor;
-    // Optional routing metadata for the region-aware (skip-padding) path. When both are
-    // supplied the kernel bounds its work by the filled prefix of the dispatch buffer
-    // (valid_rows = region_offsets[last] + align32(counts[last])); when omitted it tilizes
-    // the full padded input (byte-identical to ttnn.to_layout).
-    std::optional<ttnn::Tensor> expert_region_offsets;
+    // Optional routing metadata for the region-aware (skip-padding) path. When supplied the kernel bounds its
+    // work by the filled prefix of the dispatch buffer: valid_rows = max_chip Σ_{e∈chip} align32(count[e]),
+    // the fullest chip's fill (chips = consecutive experts_per_chip groups). Omitted => full tilize
+    // (byte-identical to ttnn.to_layout).
     std::optional<ttnn::Tensor> total_counts_per_expert;
 };
 

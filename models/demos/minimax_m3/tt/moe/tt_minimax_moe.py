@@ -214,12 +214,11 @@ class TtMiniMaxMoE(LightweightModule):
 
         _dispatched_rm = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
         if os.getenv("REGION_TILIZE") == "1":
-            # Region-aware tilize: skips the worst-case dispatch padding (mostly empty) and uses a
-            # pipelined DRAM writer. Pass routing counts/offsets so the kernel bounds work by the
-            # filled prefix; experts_per_chip drives the per-chip valid_rows.
+            # Region-aware tilize: skips the worst-case dispatch padding (mostly empty). Pass the per-expert
+            # token counts so the kernel bounds work by the filled prefix; experts_per_chip groups the counts
+            # into the per-chip valid_rows (the fullest chip's fill).
             dispatched_buffer_tiled = ttnn.experimental.deepseek_prefill.dispatch_tilize(
                 _dispatched_rm,
-                tt_expert_region_offsets,
                 tt_expert_token_counts,
                 output_dtype=self.routed_expert.activations_dtype,
                 experts_per_chip=self.experts_per_chip,

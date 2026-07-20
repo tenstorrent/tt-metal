@@ -56,30 +56,21 @@ def _align32(c):
 
 
 def _build_routing(counts, experts_per_chip, device):
-    """Construct [1,E] uint32 (region_offsets, counts) matching offset_cumsum's convention:
-    region = exclusive prefix sum of align32(counts), restarting every experts_per_chip group.
-    Returns (region_tt, counts_tt, valid_rows) where valid_rows = max_e(region[e]+align32(counts[e]))."""
+    """Construct the [1,E] uint32 total_counts_per_expert tensor and the expected valid_rows.
+    valid_rows = fullest chip's fill = max over experts_per_chip groups of Σ align32(count[e])."""
     E = len(counts)
     aligned = [_align32(c) for c in counts]
-    region = [0] * E
-    for g in range(E // experts_per_chip):
-        acc = 0
-        for i in range(experts_per_chip):
-            idx = g * experts_per_chip + i
-            region[idx] = acc
-            acc += aligned[idx]
-    valid_rows = max(region[e] + aligned[e] for e in range(E))
-
-    def _u32(vals):
-        return ttnn.from_torch(
-            torch.tensor(vals, dtype=torch.int64).reshape(1, E).to(torch.int32),
-            device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    return _u32(region), _u32(counts), valid_rows
+    valid_rows = max(
+        sum(aligned[g * experts_per_chip + i] for i in range(experts_per_chip)) for g in range(E // experts_per_chip)
+    )
+    counts_tt = ttnn.from_torch(
+        torch.tensor(counts, dtype=torch.int64).reshape(1, E).to(torch.int32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return counts_tt, valid_rows
 
 
 # rows=2048, emb=3072, one chip (experts_per_chip == num_experts). Each case exercises a fill regime:
@@ -105,11 +96,11 @@ def test_dispatch_tilize_skip_vs_to_layout(device, counts, label, in_dtype):
     experts_per_chip = len(counts)
     torch.manual_seed(0)
     x = _rand_rm(rows, emb, torch.bfloat16, device, in_dtype)
-    region_tt, counts_tt, valid_rows = _build_routing(counts, experts_per_chip, device)
+    counts_tt, valid_rows = _build_routing(counts, experts_per_chip, device)
 
     ref = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=out_dtype)
     got = ttnn.experimental.deepseek_prefill.dispatch_tilize(
-        x, region_tt, counts_tt, output_dtype=out_dtype, experts_per_chip=experts_per_chip
+        x, counts_tt, output_dtype=out_dtype, experts_per_chip=experts_per_chip
     )
 
     ref_t = ttnn.to_torch(ref).float()

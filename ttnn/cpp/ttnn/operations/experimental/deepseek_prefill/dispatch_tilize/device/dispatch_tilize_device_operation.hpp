@@ -35,7 +35,6 @@ namespace ttnn::prim {
 
 ttnn::Tensor dispatch_tilize(
     const ttnn::Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& expert_region_offsets,
     const std::optional<ttnn::Tensor>& total_counts_per_expert,
     tt::tt_metal::DataType output_dtype,
     uint32_t experts_per_chip,
