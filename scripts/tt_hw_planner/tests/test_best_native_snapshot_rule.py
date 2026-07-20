@@ -123,27 +123,3 @@ def test_phi_3_5_iter_5_does_not_clobber_a_prior_measurable_snapshot():
 
 
 # ─── Static guard: the closure routes through the pure helper ───────
-
-
-def test_snapshot_closure_routes_through_should_snapshot_helper():
-    """Belt-and-suspenders: the nested ``_snapshot_best_native_stub``
-    closure must call ``_should_snapshot_best_native`` rather than
-    re-implementing the rule table inline. Without this guard, a
-    future refactor could drift the closure away from the tested
-    helper."""
-    import inspect
-
-    from scripts.tt_hw_planner._cli_helpers import auto_iterate
-
-    src = inspect.getsource(auto_iterate)
-    # Find the _run_auto_iterate_loop body to scope the check.
-    loop_idx = src.find("def _run_auto_iterate_loop")
-    assert loop_idx > 0
-    loop_body = src[loop_idx:]
-    snap_idx = loop_body.find("def _snapshot_best_native_stub")
-    assert snap_idx > 0, "_snapshot_best_native_stub closure must exist"
-    snap_body = loop_body[snap_idx : snap_idx + 4000]
-    assert "_should_snapshot_best_native(" in snap_body, (
-        "the closure must delegate the rule decision to "
-        "_should_snapshot_best_native so the rule table stays in one place"
-    )

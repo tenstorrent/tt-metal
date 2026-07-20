@@ -29,22 +29,19 @@ from .environment import EnvironmentError_
 # 7.1 environment probe — `tt-smi -s` (TBD(env-script): CLOSED)
 # ---------------------------------------------------------------------------
 
-# board_type prefix -> arch token understood by environment.ARCH_FACTS
-BOARD_ARCH_PREFIXES: tuple[tuple[str, str], ...] = (
-    ("n150", "wormhole"),
-    ("n300", "wormhole"),
-    ("galaxy", "wormhole"),
-    ("p100", "blackhole"),
-    ("p150", "blackhole"),
-    ("p300", "blackhole"),
-)
-
 
 def board_to_arch(board_type: str) -> str | None:
     b = (board_type or "").strip().lower()
-    for prefix, arch in BOARD_ARCH_PREFIXES:
-        if b.startswith(prefix):
-            return arch
+    if not b:
+        return None
+    try:
+        from scripts.tt_hw_planner.hardware import HARDWARE
+    except Exception:
+        return None
+    for box in HARDWARE:
+        for bt in box.board_types:
+            if bt and b.startswith(bt.lower()):
+                return box.arch.lower()
     return None
 
 
@@ -54,7 +51,7 @@ def tt_smi_probe() -> str:
     The real snapshot has no `arch` key — it carries board_info.board_type
     (e.g. "n300 L"); we adapt that to the arch token here.
     """
-    proc = subprocess.run(["tt-smi", "-s"], check=True, capture_output=True, text=True)
+    proc = subprocess.run(["tt-smi", "-s"], check=True, capture_output=True, text=True, timeout=120)
     data = json.loads(proc.stdout)
     devices = data.get("device_info") or []
     if not devices:
@@ -186,9 +183,11 @@ def cli_model_files_runner(max_turns: int = 24) -> Callable[[str], str]:
         for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
             env.pop(_k, None)
         try:
+            from .agent_bin import resolve_claude_bin
+
             r = subprocess.run(
                 [
-                    "claude",
+                    resolve_claude_bin(),
                     "-p",
                     prompt,
                     "--output-format",
@@ -246,6 +245,34 @@ class TracyHangError(TracyRunError):
     crash. Retriable: reset the device and re-profile."""
 
 
+_ERR_RE = re.compile(
+    r"^[A-Za-z_][\w.]*(Error|Exception|Interrupt|Fault):"  # `ExceptionType: message` (not a `raise X(` line)
+    r"|Segmentation fault|Aborted|core dumped|TT_FATAL|terminate called|Fatal Python error",
+)
+
+
+def _salient_tail(text: str, n: int = 4) -> str:
+    """The human-meaningful last lines of a failed run's log — the actual error/signal, not the Python
+    frame stack. Prefers lines that look like an error or a fatal signal (so a terminal shows e.g.
+    'Segmentation fault' + 'AssertionError: cpp_device_perf_report.csv not found' instead of 15 lines of
+    traceback), de-duped, most recent last. Falls back to non-frame lines if nothing matches. The full
+    log path is always printed alongside for the details."""
+    hits, seen = [], set()
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s and _ERR_RE.search(s) and s not in seen:
+            seen.add(s)
+            hits.append(s)
+    if hits:
+        return "\n".join(hits[-n:])
+    keep = [
+        ln.strip()
+        for ln in text.splitlines()
+        if ln.strip() and not ln.lstrip().startswith('File "') and set(ln.strip()) != {"^"}
+    ]
+    return "\n".join(keep[-n:])
+
+
 # A device-op runtime crash (the edit broke the model), distinct from a benign
 # perf-threshold AssertionError (the model ran fully — valid measurement). TT_FATAL is
 # the unambiguous device-op abort; a ttnn-op RuntimeError (decorators.py) is the wrapper.
@@ -263,6 +290,7 @@ _CRASH_RE = re.compile(
     r"|Compil(?:e|ation)Error[^\n]*|LoweringError[^\n]*|failed to (?:compile|lower|build)[^\n]*"
     r"|loc\([^\n]*\):\s*error:[^\n]*|ttmlir[^\n]*?error[^\n]*)"
 )
+_DEVICE_CRASH_RE = re.compile(r"Segmentation fault|core dumped|Aborted|terminate called|libc\+\+abi")
 # pytest end-of-run summary: BOTH "failed" and "error" (collection/fixture errors print as
 # "N errors", never "failed") mark a non-passing run.
 _TEST_FAILED_RE = re.compile(r"=+\s*(\d+)\s+(?:failed|error)", re.IGNORECASE)
@@ -281,6 +309,29 @@ def detect_perf_crash(log_text: str) -> str | None:
         return None
     cm = _CRASH_RE.search(log_text)
     return cm.group(1).strip() if cm else None
+
+
+_MARKER_DROP_RE = re.compile(
+    r"markers were dropped"
+    r"|marker was dropped"
+    r"|PERF_AUTOMATION_ORPHAN_SKIP"
+    r"|report will be partial"
+    r"|DRAM[- ]buffer overflow"
+    r"|marker imbalance"
+    r"|dropped due to DRAM",
+    re.IGNORECASE,
+)
+
+_MAX_PROFILER_SUPPORT_COUNT = 2_000_000
+_MAX_HEAL_ATTEMPTS = 4
+_HEAL_GROWTH = 8
+
+
+def detect_marker_drop(log_text: str) -> str | None:
+    if not log_text:
+        return None
+    m = _MARKER_DROP_RE.search(log_text)
+    return m.group(0) if m else None
 
 
 class PreflightError(Exception):
@@ -381,13 +432,159 @@ def _kill_tree(root_pid: int) -> None:
             pass
 
 
+_GALAXY_HOST: bool | None = None
+
+
+def _galaxy_capability_probe(tt_smi: str) -> bool | None:
+    """Ask tt-smi DIRECTLY whether this is a Galaxy host, on the healthy startup board — the only
+    signal that survives the mesh rewiring (board_type strings, physical ASIC enumeration, and the
+    --box/--mesh chip count are all unreliable now). `-glx_list_tray_to_device` lists galaxy trays and
+    succeeds ONLY on a Galaxy; it errors on a plain board. Returns None if the probe itself failed to
+    run (tt-smi missing / timed out), so the caller can fall back to hints."""
+    try:
+        r = subprocess.run([tt_smi, "-glx_list_tray_to_device"], capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode == 0 and "tray" in out.lower():
+        return True
+    if r.returncode != 0:
+        return False
+    return None
+
+
+def note_board(card: str = "", device_count: int = 0, box: str = "", tt_smi: str | None = None) -> None:
+    """Record, at healthy STARTUP, whether this host is a Galaxy — a Galaxy needs `-glx_reset`, a plain
+    board needs `-r`, and a WEDGED board can't be re-probed at reset time so the decision must be made
+    now. Order of trust: explicit env override -> tt-smi galaxy-tray capability probe (authoritative,
+    survives the mesh rewiring) -> cheap hints (box/board name says 'galaxy', or >=32 chips) as a
+    last-ditch fallback when the probe couldn't run."""
+    global _GALAXY_HOST
+    v = os.environ.get("TT_HW_PLANNER_GALAXY")
+    if v is not None:
+        _GALAXY_HOST = v.strip().lower() in ("1", "true", "yes")
+        return
+    text = f"{card} {box}".strip().lower()
+    if "galaxy" not in text and 0 < device_count < 32:
+        _GALAXY_HOST = False
+        return
+    smi = tt_smi or shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    probed = _galaxy_capability_probe(smi)
+    if probed is not None:
+        _GALAXY_HOST = probed
+        return
+    _GALAXY_HOST = "galaxy" in text or device_count >= 32
+
+
+def _enumerated_device_count() -> int:
+    """How many local Tenstorrent chips the host exposes, counted from /dev/tenstorrent (works even when
+    the runtime is wedged and ttnn enumeration itself throws). Drives a box-complete reset device list."""
+    try:
+        import glob
+
+        return len([p for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit()])
+    except Exception:
+        return 0
+
+
+def _reset_arg_sets() -> list[list[str]]:
+    """The tt-smi reset invocations to try, in order, for THIS host. An explicit override wins; else a
+    Galaxy host uses the galaxy-tray reset (auto-retry first) with the plain reset as a last-ditch
+    fallback, and a non-Galaxy host resets the FULL enumerated chip list (`-r 0,1,..,N-1`). A partial
+    reset (a subset of a multi-chip board's chips) leaves the untouched chips' clock arbiter inconsistent
+    and wedges device-open, so the reset must cover every chip the box exposes, not a fixed subset."""
+    override = os.environ.get("TT_HW_PLANNER_RESET_ARGS")
+    if override:
+        return [override.split()]
+    galaxy = _GALAXY_HOST
+    if galaxy is None:
+        galaxy = os.environ.get("TT_HW_PLANNER_GALAXY", "").strip().lower() in ("1", "true", "yes")
+    if galaxy:
+        return [["-glx_reset_auto"], ["-glx_reset"], ["-r"]]
+    n = _enumerated_device_count()
+    if n >= 2:
+        return [["-r", ",".join(str(i) for i in range(n))]]
+    if n == 1:
+        return [["-r", "0"]]
+    return [["-r"]]
+
+
 def _device_reset() -> bool:
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    for args in _reset_arg_sets():
+        try:
+            proc = subprocess.run([tt_smi, *args], capture_output=True, text=True, timeout=300)
+            if proc.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+_DEVICE_OVERHEAT_RE = re.compile(r"Waiting for AICLK value to settle failed|possible overheating|AICLK clamped")
+_COOL_MARGIN_C = float(os.environ.get("PERF_MCP_COOL_MARGIN_C", "5") or "5")
+_COOL_POLL_S = float(os.environ.get("PERF_MCP_COOL_POLL_S", "5") or "5")
+_COOL_MAX_S = float(os.environ.get("PERF_MCP_COOL_MAX_S", "120") or "120")
+
+
+def detect_overheat(log_text: str) -> str | None:
+    """A run's log carrying the device's OWN thermal-distress signal (AICLK failed to settle / clamped /
+    possible overheating). Returns the matched phrase, else None. Distinct from a crash: the run may
+    complete, but the chip is throttling and the next run should let it cool first."""
+    if not log_text:
+        return None
+    m = _DEVICE_OVERHEAT_RE.search(log_text)
+    return m.group(0) if m else None
+
+
+def _max_asic_temp(data) -> float | None:
+    temps: list[float] = []
+
+    def _walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == "asic_temperature":
+                    try:
+                        temps.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+                else:
+                    _walk(v)
+        elif isinstance(o, list):
+            for x in o:
+                _walk(x)
+
+    _walk(data)
+    return max(temps) if temps else None
+
+
+def _read_asic_temp():
+    """Max ASIC temperature (deg C) across chips from `tt-smi -s`, or None if unavailable. Only safe at a
+    run boundary (device idle) -- tt-smi contends with an active profiler run."""
+    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
     try:
-        subprocess.run([tt_smi, "-r"], capture_output=True, text=True, timeout=240)
-        return True
-    except Exception:
-        return False
+        proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=30)
+        return _max_asic_temp(json.loads(proc.stdout))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _await_cool(read_temp=_read_asic_temp, sleeper=time.sleep) -> None:
+    """Idle-wait until the chip sheds heat, keeping the device OPEN (no reset, no close) -- passive
+    cooling while it does no work. Target is RELATIVE (entry temp minus a margin) so there is no absolute
+    magic threshold; best-effort -- returns immediately if temp is unreadable and never blocks past the
+    max wait. Call only at a run boundary (device idle)."""
+    entry = read_temp()
+    if entry is None:
+        return
+    target = entry - _COOL_MARGIN_C
+    waited = 0.0
+    while waited < _COOL_MAX_S:
+        sleeper(_COOL_POLL_S)
+        waited += _COOL_POLL_S
+        t = read_temp()
+        if t is None or t <= target:
+            return
 
 
 def _execute(
@@ -396,7 +593,7 @@ def _execute(
     env: dict,
     timeout_s: int,
     log_path: Path,
-    stall_timeout_s: int = 2400,
+    stall_timeout_s: int = 600,
 ) -> int:
     """Run cmd with output streamed to log_path (live-tailable). Hang-proof:
     no pipes (a daemon child inheriting them cannot deadlock us), and the
@@ -597,6 +794,12 @@ def make_run_profiled(
         env = dict(os.environ)
         env["TT_METAL_DEVICE_PROFILER"] = "1"
         env.update(extra_env or {})
+        _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
+        if _prof:
+            try:
+                env.update(json.loads(_prof))
+            except (ValueError, TypeError):
+                pass
         try:
             from .profiler_heal import ensure_profiler_patched
 
@@ -605,27 +808,58 @@ def make_run_profiled(
             pass
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
         cmd = build_tracy_command(node_id, None, out_dir)
+        support_count = int(env.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") or 0)
         t_start = time.monotonic()
-        for _attempt in range(retries + 1):
-            watermark = time.time() - 0.05
-            try:
-                code = execute(cmd, root, env, timeout_s, log_path)
-                break
-            except TracyHangError:
-                if _attempt >= retries:
-                    raise
-                device_reset()
+        partial_reason = None
+        heal_attempt = 0
+        while True:
+            if support_count > 0:
+                env["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(support_count)
+            for _attempt in range(retries + 1):
+                watermark = time.time() - 0.05
+                try:
+                    code = execute(cmd, root, env, timeout_s, log_path)
+                    break
+                except TracyHangError:
+                    if _attempt >= retries:
+                        raise
+                    device_reset()
+            if code != 0:
+                tail = _salient_tail(log_path.read_text()) if log_path.is_file() else ""
+                raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")
+            log_text = log_path.read_text() if log_path.is_file() else ""
+            if detect_overheat(log_text):
+                _await_cool()
+            # `python -m tracy -m pytest` exits 0 even when the inner test FAILS, so a device-op
+            # crash (the edit broke the model) leaves a PARTIAL CSV that would be misread as an
+            # op_count_mismatch measurement. Detect the runtime crash here and raise PerfRunFailed
+            # (carries the error) so REMEASURE routes it to REPAIR_CODE and the agent fixes its edit.
+            crash = detect_perf_crash(log_text)
+            if crash:
+                if _DEVICE_CRASH_RE.search(log_text) and heal_attempt < _MAX_HEAL_ATTEMPTS:
+                    heal_attempt += 1
+                    _await_cool()
+                    device_reset()
+                    with open(log_path, "a") as fh:
+                        fh.write(
+                            f"\n[harness] device crash ({crash}); reset + re-profile "
+                            f"(heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
+                        )
+                    continue
+                raise PerfRunFailed(crash, log_path)
+            drop = detect_marker_drop(log_text)
+            if drop and support_count < _MAX_PROFILER_SUPPORT_COUNT and heal_attempt < _MAX_HEAL_ATTEMPTS:
+                heal_attempt += 1
+                support_count = min(max(support_count, 1000) * _HEAL_GROWTH, _MAX_PROFILER_SUPPORT_COUNT)
+                with open(log_path, "a") as fh:
+                    fh.write(
+                        f"\n[harness] profiler buffer grew to TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="
+                        f"{support_count}; re-profiling (heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
+                    )
+                continue
+            partial_reason = drop
+            break
         wall_ms = (time.monotonic() - t_start) * 1000.0
-        if code != 0:
-            tail = "\n".join(log_path.read_text().splitlines()[-15:]) if log_path.is_file() else ""
-            raise TracyRunError(f"tracy run exit {code}; log {log_path}; tail:\n{tail}")
-        # `python -m tracy -m pytest` exits 0 even when the inner test FAILS, so a device-op
-        # crash (the edit broke the model) leaves a PARTIAL CSV that would be misread as an
-        # op_count_mismatch measurement. Detect the runtime crash here and raise PerfRunFailed
-        # (carries the error) so REMEASURE routes it to REPAIR_CODE and the agent fixes its edit.
-        crash = detect_perf_crash(log_path.read_text() if log_path.is_file() else "")
-        if crash:
-            raise PerfRunFailed(crash, log_path)
 
         # layer 1: directed output (-o). out_dir PERSISTS across iterations, so a PRIOR
         # run's CSV is still sitting here -- filter to THIS run (mtime > watermark) or the
@@ -664,6 +898,11 @@ def make_run_profiled(
         _validate_csv(newest, log_path)
         dest = profiles_dir / f"run{i}_raw.csv"
         shutil.copyfile(newest, dest)
+        if partial_reason:
+            try:
+                (profiles_dir / f"run{i}.partial").write_text(str(partial_reason))
+            except Exception:
+                pass
         return dest, wall_ms
 
     return run_profiled
@@ -689,6 +928,17 @@ REVIEW_PROMPT = (
     "profile? Is the extracted end-to-end PCC threshold plausible as a "
     "correctness gate (not a loose debug value)? Do the warnings change "
     "anything?\n"
+    "The perf test may be AUTO-GENERATED by the harness from the specified PCC "
+    "gate when the repository ships no dedicated perf test; this is a supported, "
+    "expected mode. When the findings' perf_test entry is populated (even if "
+    "marked auto-generated), that is the artifact that will actually be profiled "
+    "— judge THAT, on the hardware this harness is currently running on. Warnings "
+    "may describe OTHER, pre-existing tests in the repository that this run will "
+    "NOT execute (e.g. a reduced-scope micro-benchmark that disables features, or "
+    "a test written for a different accelerator). Do NOT stop merely because such "
+    "an unused test exists, targets another platform, or disables features, and do "
+    "NOT stop merely because no hand-written perf test was present. Base the "
+    "decision on the resolved perf_test and pcc entries themselves.\n"
     'Respond with ONLY a JSON object: {{"decision": "continue"|"stop", '
     '"reasoning": <2-3 sentences>}}. Stop only for genuine blockers — '
     "warnings with a sensible fallback are acceptable."
@@ -712,6 +962,18 @@ def lead_review_gate(
     resolved = apply_agent_env(env_agent_path)
     model = get_model("lead", resolved)
     findings = json.dumps({k: pathmap[k] for k in ("perf_test", "pcc", "components", "summary", "warnings")}, indent=1)
+    prompt = REVIEW_PROMPT.format(findings=findings)
+    if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
+        prompt += (
+            "\n\nMODULE-LEVEL RUN (--module-level): this is a SINGLE-COMPONENT optimization. The perf test "
+            "times ONE module in isolation and the correctness gate is DELIBERATELY that module's OWN "
+            "per-component PCC test (a unit-level PCC >= its target), NOT a full-model end-to-end check. A "
+            "whole-pipeline / end-to-end gate is NOT expected or required here — the per-component PCC test "
+            "IS the correct and sufficient correctness signal for the single module being optimized. Do NOT "
+            "stop for 'the gate is only a per-component/unit test' or 'no correctness signal for the other "
+            "stages'; judge ONLY whether the per-component perf test and its per-component PCC gate are sound "
+            "for that one module."
+        )
     options = ClaudeAgentOptions(
         model=model,
         system_prompt="You make go/no-go calls for an automated perf-optimization harness.",
@@ -725,7 +987,7 @@ def lead_review_gate(
     usage: dict[str, Any] = {}
 
     async def _go() -> None:
-        async for msg in query(prompt=REVIEW_PROMPT.format(findings=findings), options=options):
+        async for msg in query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):

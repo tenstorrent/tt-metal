@@ -22,8 +22,11 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from ._cli_helpers.agent import resolve_claude_bin
+
 
 _HB_EVERY_S = 45
+_AGENT_LINE = "[agent] "
 
 
 def _verbose() -> bool:
@@ -51,7 +54,7 @@ def _render_cc_event(line: str):
     render to nothing on a clean screen (framework chatter stays off-screen, exactly like fsm)."""
     line = (line or "").strip()
     if not line or not line.startswith("{"):
-        return (("  · " + line) if (_verbose() and line) else None, 0)
+        return ((_AGENT_LINE + line) if (_verbose() and line) else None, 0)
     try:
         ev = json.loads(line)
     except Exception:
@@ -68,9 +71,9 @@ def _render_cc_event(line: str):
             if not isinstance(b, dict):
                 continue
             if b.get("type") == "text" and b.get("text"):
-                parts.append("  " + b["text"].replace("\n", "\n  "))
+                parts.append(_AGENT_LINE + b["text"].replace("\n", "\n" + _AGENT_LINE))
             elif b.get("type") == "tool_use":
-                parts.append("  → " + _fmt_tool(b.get("name", ""), b.get("input")))
+                parts.append(_AGENT_LINE + "→ " + _fmt_tool(b.get("name", ""), b.get("input")))
                 n += 1
         return ("\n".join(parts) if parts else None, n)
     return (None, 0)
@@ -189,9 +192,10 @@ def run_cc_loop(
     env: dict,
     gate_fn: Callable[[], dict],
     max_rounds: int = 1000,
-    claude_bin: str = "claude",
+    claude_bin: str = resolve_claude_bin() or "claude",
     on_round: Callable[[int, dict], None] | None = None,
     pre_round: Callable[[int, dict], None] | None = None,
+    on_heartbeat: Callable[[dict], None] | None = None,
     agent_timeout_s: int | None = None,
     max_consecutive_timeouts: int = 2,
 ) -> dict:
@@ -266,10 +270,18 @@ def run_cc_loop(
                         sys.stdout.write(rendered + "\n")
                         sys.stdout.flush()
                     now = time.monotonic()
-                    if not verbose and (now - hb[0]) >= _HB_EVERY_S:
+                    if (now - hb[0]) >= _HB_EVERY_S:
                         hb[0] = now
                         sys.stdout.write(f"  · round {rnd} working… {int(now - _start)}s, {tc[0]} tool calls\n")
                         sys.stdout.flush()
+                        # Live graduation feed: same cadence as the heartbeat. Domain caller
+                        # inspects the gate state (cheap file read) and prints any new rows.
+                        # Wrapped so a caller-side raise can never wedge the pump thread.
+                        if on_heartbeat is not None:
+                            try:
+                                on_heartbeat(gate_fn())
+                            except Exception:
+                                pass
             except Exception:
                 pass
 

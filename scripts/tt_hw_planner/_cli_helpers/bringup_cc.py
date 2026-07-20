@@ -16,6 +16,62 @@ import sys
 from pathlib import Path
 from typing import List
 
+_SUMMARY_EMITTED = False
+
+
+def _reset_summary() -> None:
+    global _SUMMARY_EMITTED
+    _SUMMARY_EMITTED = False
+    try:
+        from ..run_report import reset_run_report
+
+        reset_run_report()
+    except Exception:
+        pass
+
+
+def _mark_summary_emitted() -> None:
+    global _SUMMARY_EMITTED
+    _SUMMARY_EMITTED = True
+
+
+def _emit_stop_summary(model_id: str, stop_reason: str = "", converged=None) -> None:
+    global _SUMMARY_EMITTED
+    if _SUMMARY_EMITTED:
+        return
+    try:
+        from ..bringup_loop import find_demo_dir
+
+        demo_dir = find_demo_dir(model_id)
+    except Exception:
+        demo_dir = None
+    if demo_dir is None:
+        try:
+            from ..discovery import BRINGUP_ROOT
+            from ..scaffold_demo_folder import _slug
+
+            cand = BRINGUP_ROOT() / "models" / "demos" / _slug(model_id.split("/")[-1])
+            demo_dir = cand if cand.exists() else None
+        except Exception:
+            demo_dir = None
+    if demo_dir is None:
+        bar = "=" * 78
+        print("\n" + bar)
+        print(f"  BRING-UP REPORT — {model_id}")
+        if stop_reason:
+            print(f"  RUN ENDED: {stop_reason}")
+        print("  (stopped before a demo folder was scaffolded — no components enumerated yet)")
+        print(bar)
+        _SUMMARY_EMITTED = True
+        return
+    try:
+        from ..run_report import emit_run_report
+
+        emit_run_report(model_id, demo_dir, converged=converged, stop_reason=stop_reason)
+    except Exception as exc:
+        print(f"  [run-report] skipped: {type(exc).__name__}: {exc}")
+    _SUMMARY_EMITTED = True
+
 
 def _restore_orphaned_stale_tests(model_id: str, demo_dir: Path) -> int:
     try:
@@ -44,7 +100,7 @@ def _preflight_capture_real_inputs(model_id: str, demo_dir: Path) -> int:
         components_all = [
             str(c.get("name", "")).strip()
             for c in json.loads(status_path.read_text()).get("components", [])
-            if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
+            if c.get("status") in ("NEW", "ADAPT", "REUSE") and str(c.get("name", "")).strip()
         ]
         to_capture: List[str] = []
         for cn in components_all:
@@ -218,6 +274,23 @@ def _derive_shard_tp(model_id: str, mesh) -> int:
         return 1
 
 
+def _clear_graduation_snapshots(demo_dir) -> int:
+    """Remove restored ``.py.last_good_native`` / ``.py.last_good_sharded`` markers
+    under ``<demo_dir>/_stubs`` (the stub bodies are kept), so the gate treats each
+    component as not-yet-graduated and re-earns graduation via a fresh PCC run.
+    Returns the count removed."""
+    stubs_dir = Path(demo_dir) / "_stubs"
+    cleared = 0
+    for pattern in ("*.py.last_good_native", "*.py.last_good_sharded"):
+        for snap in stubs_dir.glob(pattern):
+            try:
+                snap.unlink()
+                cleared += 1
+            except OSError:
+                pass
+    return cleared
+
+
 def run_bringup_cc(
     *,
     model_id: str,
@@ -228,10 +301,19 @@ def run_bringup_cc(
     max_rounds: int = 1000,
     agent_bin: str = "claude",
     mesh=None,
+    reverify: bool = False,
 ) -> int:
     """Run bring-up via the cc engine. Returns 0 iff the gate reports can_stop (all material components
     graduated or capped-to-fallback). Graduation is persisted via the shared .last_good_native snapshot
-    contract, so promote/emit-e2e see it."""
+    contract, so promote/emit-e2e see it.
+
+    ``reverify`` clears any restored graduation snapshots at run start, so a
+    component that was graduated in a previous run is re-run through its PCC gate
+    and must re-earn graduation this run (rather than being trusted from a stale
+    marker). It leaves the stub bodies intact — only the .last_good_native /
+    .last_good_sharded markers are removed — so nothing is lost; the gate simply
+    re-verifies. The overlay/capture contract is untouched, so promote/emit-e2e
+    still see freshly-written markers afterward."""
     from .. import cc_harness
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -243,6 +325,12 @@ def run_bringup_cc(
 
         pybin = _sys.executable
     state_path = Path(demo_dir) / ".bringup_cc_state.json"
+    if reverify:
+        _cleared = _clear_graduation_snapshots(demo_dir)
+        print(
+            f"  [reverify] cleared {_cleared} restored graduation snapshot(s) — every component "
+            f"re-verifies (PCC re-run) this run; stubs kept, markers re-earned"
+        )
     import shutil as _shutil
 
     _agent_abs = _shutil.which(agent_bin) or agent_bin
@@ -267,14 +355,29 @@ def run_bringup_cc(
         if _tp > 1:
             _shard_flag, _shard_tp = "1", str(_tp)
             print(f"  [shard] mesh implies TP={_tp} → Phase 2 (shard-aware bring-up) enabled at TP={_tp}")
+    _grad_dp = 1
     if _shard_flag:
         mcp_env["TT_HW_PLANNER_SHARD"] = _shard_flag
         if _shard_tp:
             mcp_env["TT_HW_PLANNER_SHARD_TP"] = _shard_tp
-            _dp = max(_mesh_chips(mesh) // int(_shard_tp), 1)
-            if _dp > 1:
-                mcp_env["TT_HW_PLANNER_SHARD_DP"] = str(_dp)
-            print(f"  [shard] TP={_shard_tp} x DP={_dp} → opens {int(_shard_tp) * _dp} chips (fabric auto-discovered)")
+            _grad_dp = max(_mesh_chips(mesh) // int(_shard_tp), 1)
+            if _grad_dp > 1:
+                mcp_env["TT_HW_PLANNER_SHARD_DP"] = str(_grad_dp)
+            print(
+                f"  [shard] TP={_shard_tp} x DP={_grad_dp} → opens {int(_shard_tp) * _grad_dp} chips (fabric auto-discovered)"
+            )
+    _grad_chips = _mesh_chips(mesh)
+    _grad_tp = int(_shard_tp) if _shard_tp else 1
+    try:
+        from ..parallelism import write_parallelism_manifest
+
+        _mpath = write_parallelism_manifest(demo_dir, chips=_grad_chips, tp=_grad_tp, dp=_grad_dp)
+        if _mpath is not None:
+            print(
+                f"  [topology] graduated split recorded → {_mpath.name} (chips={_grad_chips} TP={_grad_tp} DP={_grad_dp})"
+            )
+    except Exception:  # noqa: BLE001
+        pass
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "bringup-mcp")
     import re as _re
 
@@ -338,7 +441,7 @@ def run_bringup_cc(
         print(f"  [loader-resolver] pre-flight skipped: {type(_pf_exc).__name__}: {_pf_exc}")
     prompt = _bringup_cc_prompt(model_id, Path(demo_dir), pcc)
     sep = "=" * 78
-    _seen = {"grad": set(), "shard": set()}
+    _seen = {"grad": set(), "shard": set(), "comps": set(), "decomposed": set(), "decomp_ever": set(), "total": 0}
 
     def _banner(title):
         print()
@@ -346,14 +449,58 @@ def run_bringup_cc(
         print(f"  {title}")
         print(sep)
 
+    def _read_components():
+        try:
+            data = json.loads((Path(demo_dir) / "bringup_status.json").read_text())
+            return {
+                str(c.get("name", "")).strip() for c in (data.get("components") or []) if str(c.get("name", "")).strip()
+            }
+        except Exception:
+            return set()
+
+    def _read_decomposed():
+        try:
+            return set(json.loads(Path(state_path).read_text()).get("decomposed") or [])
+        except Exception:
+            return set()
+
+    def _prog_row(event, module, gn, total):
+        import time as _t
+
+        _seen.setdefault("t0", _t.monotonic())
+        el = int(_t.monotonic() - _seen["t0"])
+        mmss = f"{el // 60:02d}:{el % 60:02d}"
+        mod = module if len(module) <= 50 else module[:49] + "…"
+        left = max(total - gn, 0)
+        if not _seen.get("hdr"):
+            print(f"  | {'time':<5} | {'event':<13} | {'module':<50} | {'graduated':<9} | {'left':<4} |")
+            print(f"  |{'-'*7}|{'-'*15}|{'-'*52}|{'-'*11}|{'-'*6}|")
+            _seen["hdr"] = True
+        print(f"  | {mmss:<5} | {event:<13} | {mod:<50} | {f'{gn}/{total}':<9} | {left:<4} |")
+
     def _announce_graduations(st):
         cur_g = set(st.get("graduated") or [])
         cur_s = set(st.get("shard_graduated") or [])
+        comps = _read_components()
+        total = len(comps) if comps else max(_seen["total"], len(cur_g))
+        decomp = _read_decomposed()
+
+        # DECOMPOSITION: a parent newly entered the decomposed set (children spawned -> total grew)
+        for parent in sorted(decomp - _seen["decomposed"]):
+            children = sorted(c for c in (comps - _seen["comps"]) if c != parent)
+            k = len(children) if children else max(total - _seen["total"], 0)
+            _prog_row("⊕ DECOMPOSED", f"{parent} → {k} children", len(cur_g), total)
+
+        # GRADUATIONS (running count); a component that was decomposed and now graduates = RECOMPOSED parent
         for c in sorted(cur_g - _seen["grad"]):
-            print(f"  ✓ `{c}` GRADUATED to native TTNN (PCC-verified)")
+            recomposed = c in (decomp | _seen["decomp_ever"])
+            _prog_row("↻ RECOMPOSED" if recomposed else "✓ GRADUATED", c, len(cur_g), total)
         for c in sorted(cur_s - _seen["shard"]):
-            print(f"  ✓ `{c}` SHARD-GRADUATED on the mesh (gathered-PCC)")
+            _prog_row("✓ SHARD-GRAD", c, len(cur_g), total)
+
         _seen["grad"], _seen["shard"] = cur_g, cur_s
+        _seen["comps"], _seen["decomposed"], _seen["total"] = comps, decomp, total
+        _seen["decomp_ever"] |= decomp
 
     def _pre_round(round_no, st):
         _announce_graduations(st)
@@ -388,6 +535,7 @@ def run_bringup_cc(
         claude_bin=agent_bin,
         pre_round=_pre_round,
         on_round=_on_round,
+        on_heartbeat=_announce_graduations,
     )
     final = gate_fn()
     _announce_graduations(final)
@@ -407,4 +555,36 @@ def run_bringup_cc(
     except Exception:
         pass
     print(sep)
+    _grad_list = final.get("graduated") or []
+    try:
+        _blocked = (Path(demo_dir) / ".loader_blocker.txt").is_file()
+    except Exception:
+        _blocked = False
+    if not _grad_list and _blocked:
+        _reason = (
+            "STOPPED — could not load/inspect the model (reference loader failed); "
+            "0 components enumerated. See BLOCKER below for the exact cause/fix."
+        )
+    elif not _grad_list:
+        _reason = (
+            "STOPPED — 0 components enumerated (discovery produced no module tree); "
+            "nothing to bring up. See BLOCKER / discovery messages above."
+        )
+    elif final.get("can_stop"):
+        _reason = "bring-up complete — gate can_stop (all components graduated or fell back)"
+    else:
+        _reason = "bring-up INCOMPLETE — gate wants more work (attempt/iteration budget capped)"
+    try:
+        from ..run_report import emit_run_report
+
+        emit_run_report(
+            model_id,
+            demo_dir,
+            converged=bool(final.get("can_stop")),
+            iterations_run=res.get("rounds"),
+            stop_reason=_reason,
+        )
+        _mark_summary_emitted()
+    except Exception as _tbl_exc:
+        print(f"  [run-report] skipped: {type(_tbl_exc).__name__}: {_tbl_exc}")
     return 0 if final.get("can_stop") else 1

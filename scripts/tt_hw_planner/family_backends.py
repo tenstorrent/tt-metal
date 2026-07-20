@@ -275,12 +275,58 @@ for _b in _BACKENDS:
     _BY_CATEGORY.setdefault(_b.category, []).append(_b)
 
 
+_OVERLAY_BACKENDS_CACHE: Optional[List[FamilyBackend]] = None
+
+
+def _overlay_backends() -> List[FamilyBackend]:
+    """Family backends declared by upstream modules via the generated overlay
+    (fixes-plan Point 2a). Pure supplement: a family whose ``name`` OR any
+    ``model_type_keys`` already exists in the static ``_BACKENDS`` is dropped so
+    the hand-written list always wins. Empty until a module self-declares a
+    ``TT_HW_PLANNER_FAMILY`` marker upstream. Cached; never raises."""
+    global _OVERLAY_BACKENDS_CACHE
+    if _OVERLAY_BACKENDS_CACHE is not None:
+        return _OVERLAY_BACKENDS_CACHE
+    out: List[FamilyBackend] = []
+    try:
+        from .registry_sync import load_generated_overlay
+
+        static_names = {b.name for b in _BACKENDS}
+        static_mt = {k.lower() for b in _BACKENDS for k in b.model_type_keys}
+        for m in load_generated_overlay().get("families", []):
+            name = m.get("name") or m.get("concept")
+            cat = m.get("category")
+            demo = m.get("demo_path") or m.get("tt_path")
+            if not (name and cat and demo) or name in static_names:
+                continue
+            mkeys = [str(k).lower() for k in (m.get("model_type_keys") or [])]
+            if any(k in static_mt for k in mkeys):
+                continue
+            out.append(
+                FamilyBackend(
+                    category=cat,
+                    name=name,
+                    demo_path=demo,
+                    routing_mode=m.get("routing_mode", "template"),
+                    canonical_hf_id=m.get("canonical_hf_id"),
+                    notes=m.get("notes", "auto-registered from upstream TT_HW_PLANNER_FAMILY marker"),
+                    model_type_keys=mkeys,
+                    pipeline_tags=[str(t).lower() for t in (m.get("pipeline_tags") or [])],
+                )
+            )
+    except Exception:
+        out = []
+    _OVERLAY_BACKENDS_CACHE = out
+    return out
+
+
 def all_backends() -> List[FamilyBackend]:
-    return list(_BACKENDS)
+    return list(_BACKENDS) + _overlay_backends()
 
 
 def backends_for_category(category: str) -> List[FamilyBackend]:
-    return list(_BY_CATEGORY.get(category, []))
+    static = list(_BY_CATEGORY.get(category, []))
+    return static + [b for b in _overlay_backends() if b.category == category]
 
 
 def pick_backend(
@@ -332,14 +378,14 @@ def pick_backend_with_quality(
     for b in candidates:
         if mt and mt in {k.lower() for k in b.model_type_keys}:
             return (b, "exact")
-    for b in candidates:
-        if pt and pt in {t.lower() for t in b.pipeline_tags}:
-            return (b, "pipeline")
-
     if mt:
         for b in all_backends():
             if mt in {k.lower() for k in b.model_type_keys}:
                 return (b, "exact")
+
+    for b in candidates:
+        if pt and pt in {t.lower() for t in b.pipeline_tags}:
+            return (b, "pipeline")
     if pt:
         for b in all_backends():
             if pt in {t.lower() for t in b.pipeline_tags}:
@@ -351,6 +397,48 @@ def pick_backend_with_quality(
                 return (b, "category-default")
         return (candidates[0], "category-default")
     return (None, "none")
+
+
+def rank_backends(
+    *,
+    category: str,
+    model_type: Optional[str] = None,
+    pipeline_tag: Optional[str] = None,
+    top_n: Optional[int] = 3,
+) -> List[Tuple[FamilyBackend, int, str]]:
+    """Rank candidate family backends best-first with a match score + reason.
+
+    Where :func:`pick_backend_with_quality` returns ONE locked pick, this exposes
+    the runners-up so scaffold can surface the top-N sibling candidates (and
+    compose per-component reuse across them) instead of one silent choice that
+    historically mapped a model onto the wrong family's tree (fixes-plan Point 2b).
+
+    Score: exact model_type = 100 (90 cross-category), pipeline_tag = 70 (60
+    cross-category), same-category generic default = 40, same-category other = 30.
+    Returns the top ``top_n`` (all if ``top_n`` is falsy), highest score first.
+    """
+    mt = (model_type or "").lower()
+    pt = (pipeline_tag or "").lower()
+    ranked: List[Tuple[FamilyBackend, int, str]] = []
+    for b in all_backends():
+        same_cat = b.category == category
+        mkeys = {k.lower() for k in b.model_type_keys}
+        pkeys = {t.lower() for t in b.pipeline_tags}
+        if mt and mt in mkeys:
+            score = 100 if same_cat else 90
+            reason = f"exact model_type '{mt}'" + ("" if same_cat else f" (cross-category {b.category})")
+        elif pt and pt in pkeys:
+            score = 70 if same_cat else 60
+            reason = f"pipeline_tag '{pt}'" + ("" if same_cat else f" (cross-category {b.category})")
+        elif same_cat:
+            generic = getattr(b, "routing_mode", "") == "generic"
+            score = 40 if generic else 30
+            reason = f"category '{category}' default" + (" (generic runner)" if generic else "")
+        else:
+            continue
+        ranked.append((b, score, reason))
+    ranked.sort(key=lambda x: (-x[1], x[0].name))
+    return ranked[:top_n] if top_n else ranked
 
 
 def canonical_hf_ids() -> List[str]:

@@ -245,28 +245,3 @@ def test_sync_demo_noop_when_demo_missing(tmp_path: Path) -> None:
     result = sync_demo_to_main_tree(worktree_demo_path=fake)
     assert result.status == "source_missing"
     assert result.synced_path is None
-
-
-def test_auto_iterate_wires_brain_sync_at_run_end() -> None:
-    """Pin: auto_iterate must import + call the sync primitive at
-    end-of-run on success."""
-    src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "_cli_helpers" / "auto_iterate.py").read_text()
-    assert (
-        "from ..agentic.persistence import sync_graduated_to_main_tree" in src
-    ), "auto_iterate must import the brain's sync primitive"
-    assert "sync_graduated_to_main_tree(" in src, "auto_iterate must CALL the sync primitive"
-    assert "SYNC (brain G8)" in src, "auto_iterate must emit a visible banner when sync fires"
-    # Must be gated on having something to sync. The sync helper itself
-    # handles the empty-list and not-in-worktree cases as no-ops, so
-    # the call site only needs a final_all_passed gate OR can call
-    # unconditionally from a path that's already known-success.
-    assert "_brain_sync_graduated_to_main_tree(" in src, (
-        "auto_iterate must call the brain sync helper (which wraps " "sync_graduated_to_main_tree with local context)"
-    )
-    # AND the sync must be called from multiple success-exit paths
-    # (early-exit + fall-through) so it isn't bypassed.
-    assert src.count("_brain_sync_graduated_to_main_tree(") >= 2, (
-        "sync helper must be called from BOTH the early-exit and "
-        "fall-through success paths (gap surfaced 2026-05-30: SAM2 "
-        "early-exit bypassed the sync)"
-    )

@@ -77,6 +77,8 @@ class TestRegistryLookup:
 
         repo_root = Path(__file__).resolve().parents[3]
         for entry in all_entries():
+            if "auto-derived from upstream" in (entry.notes or ""):
+                continue  # overlay entries point at upstream paths, not guaranteed in the local checkout
             target = repo_root / entry.tt_path
             assert target.is_file(), f"Registry entry {entry.concept} points at non-existent " f"file {entry.tt_path}"
 
@@ -146,4 +148,4 @@ class TestModuleTreeIntegration:
             f"components. Got {counts}. "
             f"Components: {[(c.name, c.class_name, c.status) for c in comps]}"
         )
-        assert counts[REUSE] >= 1, f"At least RMSNorm / RotaryEmbedding should be REUSE. Got {counts}"
+        assert counts[REUSE] >= 1, f"At least RMSNorm / RotaryEmbedding should be REUSE (exact drop-in). Got {counts}"

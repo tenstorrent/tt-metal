@@ -10,8 +10,30 @@ from typing import List, Optional, Tuple
 from .family_backends import FamilyBackend
 
 
-_EXCLUDE_DIR_NAMES = {"__pycache__", ".pytest_cache", "build", "dist", ".cache"}
+_EXCLUDE_DIR_NAMES = {"__pycache__", ".pytest_cache", "build", "dist", ".cache", "_captured"}
 _EXCLUDE_FILE_SUFFIXES = {".pyc", ".pyo", ".so", ".o", ".a"}
+# Bring-up run/state artifacts. These are per-run outputs (regenerated for each
+# model by the bring-up loop) and MUST NOT be cloned from a backend template
+# into a new model's demo dir — cloning them produces phantom "already-graduated"
+# state and a stale RUN_REPORT.md that never gets overwritten if the new run
+# fails to converge.
+_EXCLUDE_FILE_NAMES = {
+    "RUN_REPORT.md",
+    "E2E_REPORT.md",
+    "BRING_UP_PLAN.md",
+    "bringup_status.json",
+    ".bringup_cc_state.json",
+    "_runtime_fallbacks.json",
+    "kernel_findings.json",
+    "e2e_plan.json",
+    ".loader_blocker.txt",
+}
+_EXCLUDE_STUB_SNAPSHOT_SUFFIXES = (
+    ".py.best_native",
+    ".py.last_good_native",
+    ".py.last_good_sharded",
+    ".py.preiter_native",
+)
 _TEXT_SUFFIXES = {
     ".py",
     ".md",
@@ -217,6 +239,10 @@ def _should_skip_dir(path: Path) -> bool:
 
 def _should_skip_file(path: Path) -> bool:
     if path.suffix.lower() in _EXCLUDE_FILE_SUFFIXES:
+        return True
+    if path.name in _EXCLUDE_FILE_NAMES:
+        return True
+    if any(path.name.endswith(s) for s in _EXCLUDE_STUB_SNAPSHOT_SUFFIXES):
         return True
     return False
 

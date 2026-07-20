@@ -716,43 +716,65 @@ def test_{component_safe}(device_params, device):
         _seed = 0
     torch.manual_seed(_seed)
 
-    print("[bringup] stage=build_torch_reference", flush=True)
-    _set_stage_timeout(stage_budget_s)
-    try:
-        torch_module, sample_kwargs, primary = _build_torch_reference()
-    finally:
-        _clear_stage_timeout()
+    _module_level = os.environ.get("TT_PLANNER_GOLDEN_CACHE", "1") not in ("", "0", "false", "False")
+    _golden_cache_file = None
+    _golden_hit = None
+    if _module_level:
+        try:
+            from models.common.golden_cache import golden_cache_path, load_golden_cache
 
-    try:
-        torch_module = torch_module.float()
-    except Exception:
-        pass
-    for _k in list(sample_kwargs.keys()):
-        _v = sample_kwargs[_k]
-        if isinstance(_v, torch.Tensor) and _v.is_floating_point():
-            sample_kwargs[_k] = _v.to(torch.float32)
-    _pn, _pt = primary
-    if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():
-        primary = (_pn, _pt.to(torch.float32))
+            _golden_cache_file = golden_cache_path(__file__, COMPONENT_NAME, _seed)
+            _golden_hit = load_golden_cache(_golden_cache_file)
+        except Exception:
+            _golden_hit = None
+    if _golden_hit is not None:
+        torch_module, sample_kwargs, primary, torch_out = _golden_hit
+        print("[bringup] stage=golden_cache_hit (skipped full-model load)", flush=True)
+    else:
+        print("[bringup] stage=build_torch_reference", flush=True)
+        _set_stage_timeout(stage_budget_s)
+        try:
+            torch_module, sample_kwargs, primary = _build_torch_reference()
+        finally:
+            _clear_stage_timeout()
 
-    print("[bringup] stage=torch_forward", flush=True)
-    _set_stage_timeout(stage_budget_s)
-    try:
-        with torch.no_grad():
+        try:
+            torch_module = torch_module.float()
+        except Exception:
+            pass
+        for _k in list(sample_kwargs.keys()):
+            _v = sample_kwargs[_k]
+            if isinstance(_v, torch.Tensor) and _v.is_floating_point():
+                sample_kwargs[_k] = _v.to(torch.float32)
+        _pn, _pt = primary
+        if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():
+            primary = (_pn, _pt.to(torch.float32))
+
+        print("[bringup] stage=torch_forward", flush=True)
+        _set_stage_timeout(stage_budget_s)
+        try:
+            with torch.no_grad():
+                try:
+                    torch_out = torch_module(**sample_kwargs)
+                except Exception as exc:
+                    pytest.skip(
+                        f"HF reference forward({{list(sample_kwargs.keys())}}) raised "
+                        f"{{type(exc).__name__}} for {{COMPONENT_NAME}}: {{exc}} -- "
+                        f"the synthetic inputs from _make_arg_for() are incompatible "
+                        f"with this submodule's expected shapes. Either edit the test "
+                        f"to provide model-specific kwargs, or skip this Phase-2 PCC "
+                        f"and validate via the top-level demo instead."
+                    )
+        finally:
+            _clear_stage_timeout()
+        torch_out = _normalize_out(torch_out)
+        if _module_level and _golden_cache_file:
             try:
-                torch_out = torch_module(**sample_kwargs)
-            except Exception as exc:
-                pytest.skip(
-                    f"HF reference forward({{list(sample_kwargs.keys())}}) raised "
-                    f"{{type(exc).__name__}} for {{COMPONENT_NAME}}: {{exc}} -- "
-                    f"the synthetic inputs from _make_arg_for() are incompatible "
-                    f"with this submodule's expected shapes. Either edit the test "
-                    f"to provide model-specific kwargs, or skip this Phase-2 PCC "
-                    f"and validate via the top-level demo instead."
-                )
-    finally:
-        _clear_stage_timeout()
-    torch_out = _normalize_out(torch_out)
+                from models.common.golden_cache import save_golden_cache
+
+                save_golden_cache(_golden_cache_file, torch_module, sample_kwargs, primary, torch_out)
+            except Exception:
+                pass
 
     print("[bringup] stage=ttnn_build", flush=True)
     _set_stage_timeout(stage_budget_s)
@@ -776,7 +798,18 @@ def test_{component_safe}(device_params, device):
         ttnn_extra_kwargs = {{
             k: v for k, v in sample_kwargs.items() if k != primary_name
         }}
-        ttnn_out = ttnn_module(ttnn_input, **ttnn_extra_kwargs)
+        import pathlib as _pathlib
+
+        from models.common.native_probe import run_native_probe as _run_native_probe
+
+        _stub_for_probe = _pathlib.Path(__file__).resolve().parents[2] / "_stubs" / (COMPONENT_NAME + ".py")
+        ttnn_out, _np = _run_native_probe(
+            _stub_for_probe, lambda: ttnn_module(ttnn_input, **ttnn_extra_kwargs)
+        )
+        print(
+            f"[bringup] native_probe ttnn_dispatch={{_np['ttnn_dispatch']}} torch_ops={{_np['torch_ops']}}",
+            flush=True,
+        )
     finally:
         _clear_stage_timeout()
     if isinstance(ttnn_out, tuple) and ttnn_out:
@@ -887,40 +920,30 @@ def _stub_import_path(demo_dir: Path, component_safe: str, repo_root: Path) -> s
     return ".".join(rel.with_suffix("").parts)
 
 
-def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
-    """True iff the stub HAS BEEN VERIFIED-GRADUATED (PCC passed against
-    native ttnn code) at some point.
+_FORWARD_TORCH_CALL_RE = re.compile(r"\btorch\.[A-Za-z_]\w*\s*\(")
 
-    Detection requires BOTH:
 
-      1. Positive graduation evidence: a ``.py.last_good_native`` snapshot
-         sibling exists. That file is written ONLY by
-         ``_snapshot_native_stub`` in the auto-iterate loop, upon a PCC
-         test passing. Its existence means "at some point this component
-         had a working native ttnn forward verified by PCC."
+def _stub_body_is_native(stub_path: Path) -> bool:
+    """True iff the stub is a PURE ttnn forward: it must not delegate to the torch reference AND its
+    compute path (every method except __init__) must not call torch (`torch.<fn>(`) or read data off the
+    device (`.to_torch(`). Weight prep in __init__ (torch.cat/detach/float staged via ttnn.from_torch) is
+    allowed; isinstance/type refs are not calls and are allowed. Host reimplementation — torch math or a
+    device->host readback anywhere in the forward — is rejected even at PCC 1.0. Does NOT check for a
+    snapshot — compose with the caller's snapshot check.
 
-      2. Current stub does NOT delegate to torch fallback. AST-aware
-         detection so we don't false-positive on the LLM leaving
-         ``_get_torch_submodule`` as a dead helper while writing native
-         ttnn elsewhere. Catches the case where a graduated stub was
-         later edited back to fallback (rare but possible).
-
-    Why BOTH: previously this function returned True for any stub
-    without torch-fallback markers — which mis-classified op-synth
-    scaffolded stubs (no fallback markers, but the body is just
-    pre-bound ``_apply_*`` helpers that were never PCC-validated) as
-    graduated. The snapshot-exists check is positive evidence; the
-    fallback-absence check guards against later regressions.
-    """
+    A fresh runtime probe (written by the PCC run: it counts torch ops vs ttnn dispatches that ACTUALLY
+    execute) is authoritative when present — un-evadable by aliasing/obfuscation, unlike the static scan
+    below. Falls back to the static scan when no fresh probe exists."""
     if not stub_path.is_file():
         return False
-    # Positive evidence: PCC graduation snapshot from a prior successful
-    # iteration. No snapshot → never graduated, no matter what the
-    # current stub body looks like (could be placeholder, scaffold,
-    # in-progress LLM draft, etc.).
-    snapshot = stub_path.with_suffix(".py.last_good_native")
-    if not snapshot.is_file():
-        return False
+    try:
+        from models.common.native_probe import is_native_from_probe, read_fresh_probe
+
+        _verdict = is_native_from_probe(read_fresh_probe(stub_path))
+        if _verdict is not None:
+            return _verdict
+    except Exception:  # noqa: BLE001
+        pass
     try:
         text = stub_path.read_text(errors="ignore")
     except Exception:
@@ -934,6 +957,8 @@ def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
         if "_get_torch_submodule" in head:
             return False
         if "self._torch_module" in head or "_coerce_to_torch" in head or "throw_exception_on_fallback" in head:
+            return False
+        if re.search(r"\.to_torch\s*\(", text) and re.search(r"\btorch\.[A-Za-z_]\w*\s*\(", text):
             return False
         return True
 
@@ -1004,7 +1029,45 @@ def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
                 return False
             if _calls_fallback(node) and node.name not in helper_function_names:
                 return False
+
+    compute = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != "__init__":
+            seg = ast.get_source_segment(text, node)
+            if seg:
+                compute.append(seg)
+    compute_src = "\n".join(compute)
+    if _FORWARD_TORCH_CALL_RE.search(compute_src) or re.search(r"\.to_torch\s*\(", compute_src):
+        return False
     return True
+
+
+def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
+    """Verified-graduated: `.py.last_good_native` snapshot exists AND current body is native.
+    Without the body re-check, op-synth-scaffolded stubs (no fallback markers, dead-helper bodies)
+    would falsely count as graduated."""
+    if not stub_path.is_file():
+        return False
+    snapshot = stub_path.with_suffix(".py.last_good_native")
+    if not snapshot.is_file():
+        return False
+    return _stub_body_is_native(stub_path)
+
+
+def _stub_has_graduated_any(stub_path: Path) -> bool:
+    """Verified-graduated via EITHER the single-chip native path (`.py.last_good_native`) OR the
+    tensor-parallel sharded path (`.py.last_good_sharded`) — in both cases the current body must be
+    native. A sharded snapshot is written only when the gathered-PCC shard gate passes, so it is a
+    real graduation just like the native one."""
+    if not stub_path.is_file():
+        return False
+    has_snapshot = (
+        stub_path.with_suffix(".py.last_good_native").is_file()
+        or stub_path.with_suffix(".py.last_good_sharded").is_file()
+    )
+    if not has_snapshot:
+        return False
+    return _stub_body_is_native(stub_path)
 
 
 def _emit_pcc_template(
@@ -1265,7 +1328,7 @@ def run_bringup_loop(
     _freshly_emitted_tests: List[Path] = []
 
     for comp in components:
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         name = comp["name"]
         stub_rel = demo_dir / "_stubs" / f"{_safe_id(name)}.py"
@@ -1719,6 +1782,71 @@ def _render_autofill_stub(
     )
 
 
+_REUSE_COPY_MARKER = "tt_hw_planner: ADAPT/REUSE native copy of an existing tt-module"
+
+
+def _reuse_target_source_path(tt_reuse_target: Optional[str], repo_root: Path) -> Optional[Path]:
+    """The concrete source file of a component's tt_reuse_target, or None.
+
+    Strips annotations (``a/b.py (wraps c)``) and non-path sentinels; returns the
+    repo-relative .py file only if it exists under ``repo_root``."""
+    if not tt_reuse_target:
+        return None
+    tok = str(tt_reuse_target).strip().split(" ")[0].rstrip("/")
+    if not tok.endswith(".py") or "/" not in tok:
+        return None
+    f = Path(repo_root) / tok
+    return f if f.is_file() else None
+
+
+def _render_reuse_copy_stub(component_name: str, tt_reuse_target: str, repo_root: Path) -> Optional[str]:
+    """Native starting stub for ADAPT: a VERBATIM copy of the existing tt-module's
+    source (the ``tt_reuse_target``), so bring-up starts from the real ttnn
+    implementation instead of a torch fallback.
+
+    A copy (not an import) because ADAPT is the tier meant to be ADJUSTED for this
+    model's quirks — the loop can edit the copy freely without touching the
+    original source. (REUSE, by contrast, is a pure drop-in and uses an import
+    canonical-wrapper.) Absolute imports in the copied source still resolve
+    against the real package. Returns None if the target can't be read (caller
+    falls back to the torch template — e.g. NEW, or an unreadable target)."""
+    src_file = _reuse_target_source_path(tt_reuse_target, repo_root)
+    if src_file is None:
+        return None
+    try:
+        src = src_file.read_text()
+    except OSError:
+        return None
+    rel = str(safe_relative_to_root(src_file))
+    header = (
+        f'"""{_REUSE_COPY_MARKER}\n\n'
+        f"Component: {component_name}\n"
+        f"Copied verbatim from: {rel}\n"
+        f"This is a COPY — edit it freely for this model; the original is untouched.\n"
+        f'REUSE: if it passes PCC as-is it graduates; otherwise it is refined as ADAPT.\n"""\n\n'
+    )
+    return header + src
+
+
+def _render_component_stub(comp: dict, *, model_id: str, repo_root: Path) -> str:
+    """Initial stub for a component. ADAPT with a readable tt_reuse_target starts
+    from a native, EDITABLE COPY of that module (:func:`_render_reuse_copy_stub`)
+    — ADAPT is the tier meant to be adjusted, so it needs an editable copy. REUSE
+    starts from an IMPORT canonical-wrapper (handled in the autofill loop) — a
+    drop-in that isn't edited, so importing avoids duplication. NEW (or an
+    unresolvable target) starts from the torch-fallback template."""
+    if comp.get("status") == "ADAPT":
+        copied = _render_reuse_copy_stub(comp.get("name", ""), comp.get("tt_reuse_target") or "", repo_root)
+        if copied is not None:
+            return copied
+    return _render_autofill_stub(
+        component_name=comp.get("name", ""),
+        model_id=model_id,
+        hf_reference=comp.get("hf_reference") or "",
+        discovered_submodule_path=comp.get("submodule_path"),
+    )
+
+
 _AUTOFILL_DTYPE_FIX_MARKER = "Bug Y fix (2026-05-23 live-run sam2-hiera-tiny)"
 
 
@@ -1927,7 +2055,8 @@ def _render_canonical_import_stub(
 
     Caller is responsible for gating: only call when
     ``component["tt_reuse_target"]`` is non-empty AND
-    ``component["status"] == "ADAPT"``."""
+    ``component["status"] == "REUSE"`` (the drop-in tier). A REUSE that fails
+    iter-0 is demoted to ADAPT, which switches to an editable copy."""
     safe = _safe_id(component_name)
     # Derive a CamelCase-ish class name from the component slug.
     # ("decoder_layer" -> "DecoderLayer", "r_m_s_norm" -> "RMSNorm").
@@ -2085,16 +2214,11 @@ def autofill_stubs(
 
     actions: List[Tuple[str, str]] = []
     for comp in data.get("components", []):
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         safe = _safe_id(comp["name"])
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
-        body = _render_autofill_stub(
-            component_name=comp["name"],
-            model_id=model_id,
-            hf_reference=comp.get("hf_reference") or "",
-            discovered_submodule_path=comp.get("submodule_path"),
-        )
+        body = _render_component_stub(comp, model_id=model_id, repo_root=repo_root)
 
         _skip_preserve_branches = False
         if stub_path.exists() and not overwrite:
@@ -2118,7 +2242,7 @@ def autofill_stubs(
                 actions.append((comp["name"], "regen:autofill-missing-dtype-fix"))
                 _skip_preserve_branches = True
 
-            elif "_get_torch_submodule" in existing or "_LLM_GAPS" in existing:
+            elif "_get_torch_submodule" in existing or "_LLM_GAPS" in existing or _REUSE_COPY_MARKER in existing:
                 actions.append((comp["name"], "preserved:already-autofilled"))
 
                 _safe = _safe_id(comp["name"])
@@ -2190,16 +2314,17 @@ def autofill_stubs(
         # the existing op-synth/torch-fallback path unchanged.
         _tt_reuse_target = comp.get("tt_reuse_target")
         _wrote_canonical_import = False
-        # Gate on tt_reuse_target presence AND status == ADAPT
-        # (post-2026-06-01: force_adapt_all demotes REUSE -> ADAPT,
-        # not REUSE -> NEW). For cold-start NEW components with no
-        # tt_reuse_target, fall through to the torch-fallback path.
+        # REUSE = drop-in: import the canonical class + delegate (no copy, no
+        # edit). If it passes iter-0 it graduates as-is; if not, the gate demotes
+        # it to ADAPT, which gets an EDITABLE copy instead. ADAPT + NEW do not
+        # take this import path (ADAPT -> editable copy via _render_component_stub;
+        # NEW -> torch fallback).
         _comp_status = comp.get("status", "")
         if (
             _tt_reuse_target
             and isinstance(_tt_reuse_target, str)
             and _tt_reuse_target.strip()
-            and _comp_status == "ADAPT"
+            and _comp_status == "REUSE"
         ):
             canonical_body = _render_canonical_import_stub(
                 component_name=comp["name"],

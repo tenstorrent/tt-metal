@@ -29,11 +29,16 @@ embedding, lm_head, norms — these aren't TP-sharded in most ports.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Iterator, Tuple
+from pathlib import Path
+from typing import Iterator, Optional, Tuple
 
 from .architecture import MemoryModel
 from .hardware import Box
+
+
+PARALLELISM_MANIFEST = "parallelism_manifest.json"
 
 
 _REPLICATED_FRAC = 0.04
@@ -134,6 +139,25 @@ def select_parallelism(chips: int, kernel_report) -> ParallelConfig:
     return ParallelConfig(tp=1, dp=chips)
 
 
+def plan_parallelism(model_id: str, chips: int):
+    """Shared topology planner for BOTH emit-e2e and optimize: probe the model, evaluate per-TP kernel
+    viability, and return the select_parallelism ParallelConfig for `chips`. Returns None when chips<=1
+    or the model cannot be probed (caller then runs single-chip / a 1D default). Engine-neutral: the
+    only place either path decides a TP x DP split, so both stay consistent."""
+    if not model_id or not chips or chips <= 1:
+        return None
+    try:
+        from .cli import evaluate_kernels, probe_model
+
+        probe = probe_model(model_id)
+        if not getattr(probe, "raw_config", None):
+            return None
+        kr = evaluate_kernels(probe.raw_config, tp_grid=None)
+        return select_parallelism(chips, kr)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def enumerate_meshes(box: Box, explore_pp: bool = False) -> Iterator[Tuple[Tuple[int, int], ParallelConfig]]:
     """
     Yield (mesh_shape, parallel_config) for each canonical mesh on `box`.
@@ -195,3 +219,34 @@ def shard(
         kv_cache_bytes=per_chip_kv,
         activation_bytes=per_chip_act,
     )
+
+
+def write_parallelism_manifest(demo_dir, *, chips: int, tp: int, dp: int) -> Optional[Path]:
+    """Persist the TOPOLOGY bring-up graduated at, so emit-e2e can hard-assert consistency instead of
+    silently recomputing from its own --mesh. Records the decidable degrees only (chips/tp/dp + the
+    MeshShape(dp,tp) it implies); the per-component SCHEME stays in the graduated stub code for the
+    LLM to read. Best-effort: returns the path on success, None on any write failure."""
+    path = Path(demo_dir) / PARALLELISM_MANIFEST
+    data = {
+        "chips": int(chips),
+        "tp": int(tp),
+        "dp": int(dp),
+        "mesh": [int(dp), int(tp)],
+    }
+    try:
+        path.write_text(json.dumps(data, indent=2) + "\n")
+        return path
+    except OSError:
+        return None
+
+
+def read_parallelism_manifest(demo_dir) -> Optional[dict]:
+    """Load the graduated-topology manifest for `demo_dir`, or None if absent/unreadable/malformed."""
+    path = Path(demo_dir) / PARALLELISM_MANIFEST
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "chips" not in data:
+        return None
+    return data

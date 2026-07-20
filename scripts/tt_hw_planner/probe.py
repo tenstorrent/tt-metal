@@ -119,7 +119,62 @@ def _category_from_model_type(model_type: str) -> Optional[str]:
         return "STT"
     if mt in {"llava", "blip-2", "blip2", "idefics", "paligemma", "qwen2_5_vl", "qwen2_vl"}:
         return "VLM"
+    return _category_from_transformers_registry(mt)
+
+
+def _category_from_transformers_registry(model_type: str) -> Optional[str]:
+    """Classify an unknown model_type via the installed transformers library's task
+    registries. Self-updating: a model_type unknown to the hardcoded tables above is
+    still classified as long as the venv's transformers version knows it (and that
+    version now tracks upstream tt-metal via registry_sync). Fallback only, so known
+    types keep their curated category. Returns a category or None; never raises."""
+    try:
+        from transformers.models.auto import modeling_auto as _ma
+    except Exception:
+        return None
+
+    def _has(mapping_name: str) -> bool:
+        m = getattr(_ma, mapping_name, None)
+        return isinstance(m, dict) and model_type in m
+
+    if _has("MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES") or _has("MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES"):
+        return "VLM"
+    if _has("MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES") or _has("MODEL_FOR_CTC_MAPPING_NAMES"):
+        return "STT"
+    if (
+        _has("MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING_NAMES")
+        or _has("MODEL_FOR_OBJECT_DETECTION_MAPPING_NAMES")
+        or _has("MODEL_FOR_SEMANTIC_SEGMENTATION_MAPPING_NAMES")
+        or _has("MODEL_FOR_IMAGE_SEGMENTATION_MAPPING_NAMES")
+    ):
+        return "CNN"
+    if (
+        _has("MODEL_FOR_CAUSAL_LM_MAPPING_NAMES")
+        or _has("MODEL_FOR_MASKED_LM_MAPPING_NAMES")
+        or _has("MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES")
+    ):
+        return "LLM"
     return None
+
+
+def _arch_override_category(category: str, cfg: dict) -> str:
+    """Trust ``config.architectures`` over a diffusion/unknown pipeline_tag.
+
+    A causal/MoE transformer can carry a diffusion pipeline_tag (e.g.
+    HunyuanImage-3.0 is tagged text-to-image but its config declares
+    ``architectures=["HunyuanImage3ForCausalMM"]`` with ``num_experts``). The
+    pipeline_tag alone lands it in ``Image``, which early-returns before
+    ``detect_architecture`` ever runs, so the MoE/attention structure is never
+    seen and sibling matching force-fits a diffusion family. When the config
+    itself declares a ``*ForCausalLM``/``*ForCausalMM`` architecture, reclassify
+    an ``Image``/``Video``/``Unknown`` category to ``LLM`` so architecture
+    detection runs. Model-agnostic (matches the architecture suffix, not a
+    model name)."""
+    if category in {"Image", "Video", "Unknown"}:
+        archs = " ".join(cfg.get("architectures") or [])
+        if re.search(r"ForCausal(LM|MM)\b", archs):
+            return "LLM"
+    return category
 
 
 @dataclass
@@ -146,6 +201,9 @@ class ModelProbe:
     flags: List[str] = field(default_factory=list)
     raw_config: dict = field(default_factory=dict)
 
+    is_composite: bool = False
+    submodels: List[str] = field(default_factory=list)
+
 
 def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Optional[str]) -> str:
     if pipeline_tag and pipeline_tag in PIPELINE_CATEGORY:
@@ -167,6 +225,25 @@ def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Op
     if "transformers" in lib:
         return "LLM"
     return "Unknown"
+
+
+def _detect_composite(siblings, raw_config) -> Tuple[bool, List[str]]:
+    """Detect a composite / multi-submodel repo from the file list + root config,
+    with no weight download (fixes-plan Point 3).
+
+    A composite is a container of ordinary models: >=2 subfolders that each carry
+    their own ``config.json``, OR a repo that cannot load as one model
+    (``model_index.json`` present with no root ``model_type``). Returns
+    ``(is_composite, submodels)``. Standard single-root models (Nemotron/Qwen/XTTS)
+    -> ``(False, [])``.
+    """
+    files = [getattr(s, "rfilename", "") for s in (siblings or [])]
+    fileset = set(files)
+    subdirs = {f.split("/")[0] for f in files if "/" in f}
+    submodels = sorted(d for d in subdirs if f"{d}/config.json" in fileset)
+    root_type = bool((raw_config or {}).get("model_type"))
+    is_composite = len(submodels) >= 2 or ("model_index.json" in fileset and not root_type)
+    return is_composite, submodels
 
 
 def _sum_weight_files(siblings) -> Tuple[int, int]:
@@ -238,6 +315,38 @@ def _dominant_dtype(parameters, weight_bytes) -> Tuple[str, str, Optional[int], 
     return canonical, pretty, total_params, bytes_per_param
 
 
+_TORCH_DTYPE_BYTES = {
+    "float32": 4,
+    "float": 4,
+    "float64": 8,
+    "double": 8,
+    "bfloat16": 2,
+    "float16": 2,
+    "half": 2,
+    "float8_e4m3fn": 1,
+    "float8_e5m2": 1,
+    "float8": 1,
+    "int8": 1,
+    "uint8": 1,
+}
+
+
+def _bytes_per_param_from_config(model_id: str) -> Tuple[int, bool]:
+    """Fallback bytes-per-param derived from ``config.json torch_dtype`` when the
+    exact safetensors parameter count is unavailable.
+
+    Returns ``(bytes, confident)``. ``confident`` is False when the dtype could
+    not be determined and 2 (bf16) was assumed — callers should flag the derived
+    parameter count as a low-confidence estimate. Keys on the universal weight
+    dtype, never the architecture, so it holds for any repo (LLM / DiT / VAE / CNN).
+    """
+    cfg = _maybe_fetch_config(model_id) or {}
+    td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
+    if td in _TORCH_DTYPE_BYTES:
+        return _TORCH_DTYPE_BYTES[td], True
+    return 2, False
+
+
 def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     safe_id = _validate_hf_id(model_id)
     try:
@@ -258,6 +367,68 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
         return None
 
 
+def _read_model_card_frontmatter(model_dir: str) -> dict:
+    """Parse ``pipeline_tag`` and ``tags`` from a local repo's ``README.md`` YAML
+    frontmatter — the model-card metadata that HF ships in-repo. ``config.json``
+    never carries ``pipeline_tag`` (it is hub/model-card metadata), so a local
+    probe must read the card. Returns ``{}`` when absent or unparseable."""
+    path = os.path.join(model_dir, "README.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return {}
+    if not text.lstrip().startswith("---"):
+        return {}
+    start = text.index("---") + 3
+    end = text.find("\n---", start)
+    if end == -1:
+        return {}
+    block = text[start:end]
+    try:
+        import yaml
+
+        meta = yaml.safe_load(block)
+        if isinstance(meta, dict):
+            tags = meta.get("tags")
+            if isinstance(tags, str):
+                tags = [tags]
+            return {
+                "pipeline_tag": meta.get("pipeline_tag"),
+                "tags": list(tags) if isinstance(tags, list) else [],
+            }
+    except Exception:
+        pass
+    return _parse_frontmatter_lines(block)
+
+
+def _parse_frontmatter_lines(block: str) -> dict:
+    """Dependency-free fallback parser for a README frontmatter block: pulls the
+    ``pipeline_tag`` scalar and a block/inline ``tags`` list."""
+    pipeline_tag = None
+    tags: List[str] = []
+    in_tags = False
+    for raw in block.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("pipeline_tag:"):
+            pipeline_tag = line.split(":", 1)[1].strip().strip("'\"") or None
+            in_tags = False
+        elif line.startswith("tags:"):
+            rest = line.split(":", 1)[1].strip()
+            if rest.startswith("[") and rest.endswith("]"):
+                tags = [t.strip().strip("'\"") for t in rest[1:-1].split(",") if t.strip()]
+                in_tags = False
+            else:
+                in_tags = True
+        elif in_tags and line.lstrip().startswith("- "):
+            tags.append(line.lstrip()[2:].strip().strip("'\""))
+        elif not line.startswith((" ", "\t", "-")):
+            in_tags = False
+    return {"pipeline_tag": pipeline_tag, "tags": tags}
+
+
 def _probe_local_model(model_id: str) -> ModelProbe:
     """Build a ModelProbe from a local directory (bypasses the HF Hub API)."""
     weight_exts_legacy = (".bin", ".pt", ".pth", ".ckpt", ".msgpack", ".nemo")
@@ -275,9 +446,11 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     weight_bytes = sf_bytes if sf_bytes > 0 else legacy_bytes
 
     cfg = _maybe_fetch_config(model_id) or {}
-    pipeline_tag = cfg.get("pipeline_tag")
-    library = "transformers"
-    category = _classify_category(pipeline_tag, [], library)
+    card = _read_model_card_frontmatter(model_id)
+    pipeline_tag = cfg.get("pipeline_tag") or card.get("pipeline_tag")
+    card_tags = card.get("tags") or []
+    library = cfg.get("library_name") or card.get("library_name") or "transformers"
+    category = _classify_category(pipeline_tag, card_tags, library)
     model_type_category = _category_from_model_type(str(cfg.get("model_type", "")))
     if model_type_category:
         category = model_type_category
@@ -346,7 +519,14 @@ def probe_model(model_id: str) -> ModelProbe:
     parameters = info.safetensors.parameters if info.safetensors else None
     canonical_dtype, pretty_dtype, total_params, bytes_per_param = _dominant_dtype(parameters, weight_bytes)
     if total_params is None and weight_bytes > 0:
-        total_params = weight_bytes // 2
+        _bpp, _confident = _bytes_per_param_from_config(model_id)
+        total_params = weight_bytes // _bpp
+        bytes_per_param = float(_bpp)
+        pretty_dtype = (
+            f"{pretty_dtype} (param count est. from config torch_dtype, {_bpp} B/param)"
+            if _confident
+            else f"{pretty_dtype} (param count est., dtype unknown — assumed bf16, low confidence)"
+        )
 
     category = _classify_category(info.pipeline_tag, info.tags or [], info.library_name)
 
@@ -370,6 +550,12 @@ def probe_model(model_id: str) -> ModelProbe:
         return probe
 
     probe.raw_config = cfg
+    probe.is_composite, probe.submodels = _detect_composite(info.siblings, cfg)
+    if probe.is_composite:
+        _sm = ", ".join(probe.submodels) or "model_index.json (no root model_type)"
+        probe.flags.append(
+            f"composite repo — {len(probe.submodels)} submodel(s) [{_sm}]; bring up per subfolder, not one root model"
+        )
 
     model_type_category = _category_from_model_type(str(cfg.get("model_type", "")))
     if model_type_category and probe.category in {"LLM", "VLM"} and model_type_category != probe.category:
@@ -380,6 +566,13 @@ def probe_model(model_id: str) -> ModelProbe:
         probe.category = model_type_category
     elif model_type_category and probe.category == "Unknown":
         probe.category = model_type_category
+
+    _arch_cat = _arch_override_category(probe.category, cfg)
+    if _arch_cat != probe.category:
+        probe.flags.append(
+            f"Reclassified {probe.category} to {_arch_cat} via " f"config.architectures={cfg.get('architectures')!r}"
+        )
+        probe.category = _arch_cat
 
     if probe.category not in TRANSFORMER_CATEGORIES:
         probe.config_status = None

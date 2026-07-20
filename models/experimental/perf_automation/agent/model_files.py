@@ -284,11 +284,25 @@ def _validate(pathmap: dict[str, Any], model_root: Path) -> dict[str, Any]:
     fatal = [f for f in flags if isinstance(f, dict) and f.get("level") == "fatal"]
     warnings = [f for f in flags if isinstance(f, dict) and f.get("level") == "warning"]
 
+    # Module-level optimize (TT_PERF_MODULE_LEVEL) gates each module on its OWN
+    # per-component PCC test and never enters the whole-model pipeline, so the
+    # absence of a whole-model end_to_end correctness check is NOT fatal here —
+    # the per-component test IS the correctness gate. Demote no_end_to_end_pcc to
+    # a warning and drop the end_to_end-required floor for module-level runs. The
+    # other module-level consumers (perf_test_gen, before_loop, probes) already
+    # honor this flag; the discovery floor was the one place that never did.
+    _module_level = os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False")
+    if _module_level:
+        _demoted = [f for f in fatal if f.get("code") == "no_end_to_end_pcc"]
+        fatal = [f for f in fatal if f.get("code") != "no_end_to_end_pcc"]
+        warnings.extend(_demoted)
+
     pcc_raw = pathmap.get("pcc")
     if not isinstance(pcc_raw, dict):
         raise ModelFilesError("pathmap.pcc must be an object")
-    # FLOOR (code, not judgment): no e2e correctness candidate -> cannot continue.
-    if fatal or "end_to_end" not in pcc_raw:
+    # FLOOR (code, not judgment): no e2e correctness candidate -> cannot continue
+    # (except module-level, which supplies its own per-component gate — see above).
+    if fatal or ("end_to_end" not in pcc_raw and not _module_level):
         details = (
             "; ".join(f"{f.get('code')}: {f.get('detail')}" for f in fatal) or "no 'end_to_end' PCC entry discovered"
         )
@@ -300,8 +314,9 @@ def _validate(pathmap: dict[str, Any], model_root: Path) -> dict[str, Any]:
             if isinstance(thr, bool) or not isinstance(thr, (int, float)) or not (0.0 < float(thr) < 1.0):
                 raise ModelFilesError(f"pcc entry {name!r} threshold must be a number in (0, 1), got {thr!r}")
             entry["threshold"] = float(thr)
-    # FLOOR (code): an e2e check with no enforced threshold gives the loop nothing to gate on.
-    if pcc["end_to_end"]["threshold"] is None:
+    # FLOOR (code): an e2e check with no enforced threshold gives the loop nothing to gate on
+    # (only when an end_to_end entry exists — module-level may legitimately have none).
+    if "end_to_end" in pcc and pcc["end_to_end"]["threshold"] is None:
         raise ModelFilesError(
             "CANNOT CONTINUE — fatal discovery flag(s): no_pcc_threshold: "
             "end_to_end PCC test found but no numeric threshold extracted from it"
@@ -325,7 +340,18 @@ def _validate(pathmap: dict[str, Any], model_root: Path) -> dict[str, Any]:
             warnings.append(
                 {"level": "warning", "code": "no_perf_test", "detail": "perf_test null; falling back to pcc.end_to_end"}
             )
-        perf = {"path": pcc["end_to_end"]["path"], "case": None, "note": "fallback: profiling the end-to-end PCC test"}
+        if "end_to_end" in pcc:
+            perf = {
+                "path": pcc["end_to_end"]["path"],
+                "case": None,
+                "note": "fallback: profiling the end-to-end PCC test",
+            }
+        else:
+            perf = {
+                "path": "",
+                "case": None,
+                "note": "module-level: perf test generated from --pcc-test in before_loop",
+            }
     elif isinstance(perf_raw, dict):
         perf = _norm_entry(perf_raw, model_root, "perf_test")
         case = perf_raw.get("case")
@@ -378,7 +404,8 @@ def _validate(pathmap: dict[str, Any], model_root: Path) -> dict[str, Any]:
     # discovered perf_test/end_to_end-PCC when no e2e perf tests exist (model-agnostic).
     pipelines = _enumerate_pipelines(Path(model_root))
     if not pipelines:
-        pipelines = [{"task": "main", "perf_test": perf["path"], "pcc_test": pcc["end_to_end"]["path"]}]
+        _pcc_node = pcc["end_to_end"]["path"] if "end_to_end" in pcc else perf["path"]
+        pipelines = [{"task": "main", "perf_test": perf["path"], "pcc_test": _pcc_node}]
     is_multimodal = len(pipelines) > 1
 
     # Under mandatory regen, the baseline profiles the regenerated pipeline perf test(s), not the

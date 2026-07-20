@@ -38,6 +38,28 @@ _SPDX_HEADER = """# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 """
 
 
+_MESH_KW_HELPER = '''def _mesh_kw(device, **kw):
+    """Return ``ttnn.from_torch`` kwargs that are mesh-aware.
+
+    On a plain ``ttnn.Device`` this returns the caller's kwargs unchanged plus
+    ``device=device`` — byte-identical to the pre-existing single-chip call
+    pattern. On a ``ttnn.MeshDevice`` this also inserts
+    ``mesh_mapper=ttnn.ReplicateTensorToMesh(device)`` so ``from_torch`` knows
+    how to fan the tensor across chips (without this on a MeshDevice, the C++
+    upload path stalls or produces incorrect placement).
+    """
+    kw["device"] = device
+    try:
+        if isinstance(device, ttnn.MeshDevice):
+            kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+    except AttributeError:
+        pass
+    return kw
+
+
+'''
+
+
 _RUNTIME_FALLBACK_HELPER = '''def _log_runtime_fallback(helper, kind, reason):
     """Append a structured CPU-fallback event for the planner reporter.
 
@@ -105,13 +127,13 @@ def _emit_linear(op: OpDescriptor) -> Tuple[List[str], List[str], str]:
     init.append(
         f"self.w_{attr}_weight = ttnn.from_torch("
         f"sd[{weight_key!r}].T.contiguous(), "
-        f"dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)"
+        f"**_mesh_kw(device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))"
     )
     if has_bias:
         init.append(
             f"self.w_{attr}_bias = ttnn.from_torch("
             f"sd[{bias_key!r}].reshape(1, -1), "
-            f"dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)"
+            f"**_mesh_kw(device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))"
         )
 
     apply: List[str] = []
@@ -138,13 +160,13 @@ def _emit_layer_norm(op: OpDescriptor) -> Tuple[List[str], List[str], str]:
         init.append(
             f"self.w_{attr}_weight = ttnn.from_torch("
             f"sd[{op.name + '.weight'!r}], "
-            f"dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)"
+            f"**_mesh_kw(device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))"
         )
     if has_bias:
         init.append(
             f"self.w_{attr}_bias = ttnn.from_torch("
             f"sd[{op.name + '.bias'!r}], "
-            f"dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)"
+            f"**_mesh_kw(device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))"
         )
     init.append(f"self._eps_{attr} = {float(eps)!r}")
 
@@ -173,7 +195,7 @@ def _emit_rms_norm(op: OpDescriptor) -> Tuple[List[str], List[str], str]:
         init.append(
             f"self.w_{attr}_weight = ttnn.from_torch("
             f"sd[{op.name + '.weight'!r}], "
-            f"dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)"
+            f"**_mesh_kw(device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))"
         )
     init.append(f"self._eps_{attr} = {float(eps)!r}")
 
@@ -197,7 +219,7 @@ def _emit_embedding(op: OpDescriptor) -> Tuple[List[str], List[str], str]:
     init.append(
         f"self.w_{attr}_weight = ttnn.from_torch("
         f"sd[{op.name + '.weight'!r}], "
-        f"dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)"
+        f"**_mesh_kw(device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT))"
     )
     apply: List[str] = []
     apply.append(f"def _apply_{attr}(self, indices):")
@@ -236,7 +258,7 @@ def _emit_activation(op: OpDescriptor) -> Tuple[List[str], List[str], str]:
         apply.append(f"    with torch.no_grad():")
         apply.append(f"        out_t = sub(t)")
         apply.append(
-            f"    return ttnn.from_torch(out_t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)"
+            f"    return ttnn.from_torch(out_t.to(torch.bfloat16), **_mesh_kw(self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))"
         )
         sig = f"self._apply_{attr}(x)  ({variant})  [CPU fallback; optional to specialize]"
     return init, apply, sig
@@ -398,7 +420,7 @@ def _emit_conv2d(op: OpDescriptor) -> Tuple[List[str], List[str], str]:
     apply.append(f"            groups=p.get('groups', 1),")
     apply.append(f"        )")
     apply.append(
-        f"        return ttnn.from_torch(out_t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)"
+        f"        return ttnn.from_torch(out_t.to(torch.bfloat16), **_mesh_kw(self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))"
     )
 
     sig = (
@@ -517,6 +539,7 @@ def emit_partial_stub(
 
     parts.append(f"HF_MODEL_ID = {model_id!r}\n")
     parts.append(f"_CANDIDATE_SUBMODULE_PATHS = {submodule_candidates!r}\n\n")
+    parts.append(_MESH_KW_HELPER)
     parts.append(_RUNTIME_FALLBACK_HELPER)
     parts.append("_LLM_GAPS = [\n" + "".join(f"    {g!r},\n" for g in gaps) + "]\n\n")
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -10,6 +11,32 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..discovery import safe_relative_to_root
+
+
+def resolve_claude_bin() -> Optional[str]:
+    """Resolve the `claude` CLI to an absolute path (fixes-plan Point 9).
+
+    Fallback chain (universal, arch-independent): TT_PLANNER_AGENT_BIN env ->
+    CLAUDE_BIN env -> ``shutil.which("claude")`` on PATH -> ``~/.local/bin/claude``
+    if present. Returns None if none resolve, so callers can fail fast once with a
+    clear message instead of a late opaque FileNotFoundError from a bare spawn.
+    Makes every spawn point PATH-independent (login/non-login shells, cron, CI).
+    """
+    local = os.path.expanduser("~/.local/bin/claude")
+    return (
+        os.environ.get("TT_PLANNER_AGENT_BIN")
+        or os.environ.get("CLAUDE_BIN")
+        or shutil.which("claude")
+        or (local if os.path.exists(local) else None)
+    )
+
+
+def require_claude_bin() -> str:
+    """resolve_claude_bin() or a single clear error (Point 9 fail-fast)."""
+    b = resolve_claude_bin()
+    if not b:
+        raise RuntimeError("claude CLI not found — install it or set CLAUDE_BIN / TT_PLANNER_AGENT_BIN")
+    return b
 
 
 def _verbose() -> bool:

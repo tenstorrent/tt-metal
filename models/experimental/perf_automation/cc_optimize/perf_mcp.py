@@ -17,8 +17,10 @@ Config via env (set in .mcp.json):
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import signal
 import statistics
 import sys
 import tempfile
@@ -56,6 +58,7 @@ _ENV = _MANIFEST.get("env", {})
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
 _BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_baseline.json"
 _FULLPIPE_BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json"
+_FULLPIPE_BASELINE_1CQ_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
 _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
 _FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "1")))
 _FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
@@ -89,6 +92,82 @@ def _note_device_crash(where: str) -> None:
 
 def _note_device_ok() -> None:
     _CONSEC_CRASH["n"] = 0
+
+
+def _l1_sig(text) -> bool:
+    s = (str(text) or "").lower()
+    return ("circular buffer" in s or "max l1" in s or "l1 size" in s) and (
+        "beyond max l1" in s or "grow to" in s or "l1 size of" in s
+    )
+
+
+def _is_l1_overflow(msg) -> bool:
+    if _l1_sig(msg):
+        return True
+    import re as _re2
+
+    for lp in _re2.findall(r"(/\S+run\d+_tracy\.log)", str(msg) or ""):
+        try:
+            if _l1_sig(Path(lp).read_text(errors="ignore")):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _reclaim_mesh(where: str) -> None:
+    try:
+        _sp.run([_TT_SMI, "-r"], capture_output=True, text=True, timeout=420)
+        sys.stderr.write(f"[perf-mcp] full-mesh reset (L1 overflow) at {where}\n")
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[perf-mcp] full-mesh reset failed at {where}: {exc}\n")
+    _CONSEC_CRASH["n"] = 0
+
+
+_L1_OVERFLOW_MSG = (
+    "L1_OVERFLOW: this config's circular buffers exceed the per-core L1 budget (~1.5MB on Wormhole) "
+    "and crashed the run; the mesh was reset. Reduce the L1 footprint (smaller in0_block_w / per_core_N, "
+    "or spread the matmul over more cores) and retry — do NOT keep this config."
+)
+
+_DRAM_TRACE_SIG_A = ("trace region", "trace_region", "trace buffer", "trace_buffer")
+_DRAM_TRACE_SIG_B = ("full", "exceed", "not enough", "out of space", "too small", "ran out", "grow the trace")
+_TRACE_REGION_DEFAULT = 23887872
+_TRACE_REGION_MAX = 512 * 1024 * 1024
+
+
+def _dram_trace_sig(text) -> bool:
+    s = (str(text) or "").lower()
+    return any(a in s for a in _DRAM_TRACE_SIG_A) and any(b in s for b in _DRAM_TRACE_SIG_B)
+
+
+def _is_dram_trace_overflow(msg) -> bool:
+    if _dram_trace_sig(msg):
+        return True
+    import re as _re3
+
+    for lp in _re3.findall(r"(/\S+run\d+_tracy\.log)", str(msg) or ""):
+        try:
+            if _dram_trace_sig(Path(lp).read_text(errors="ignore")):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _grow_trace_region() -> int:
+    cur = int(os.environ.get("TT_PERF_TRACE_REGION", str(_TRACE_REGION_DEFAULT)) or str(_TRACE_REGION_DEFAULT))
+    new = min(cur * 2, _TRACE_REGION_MAX)
+    os.environ["TT_PERF_TRACE_REGION"] = str(new)
+    return new
+
+
+def _dram_overflow_msg(new_region: int) -> str:
+    return (
+        "DRAM_TRACE_OVERFLOW: the captured trace command stream exceeded the reserved trace region; grew "
+        "TT_PERF_TRACE_REGION to %d bytes and reset the mesh — retry (auto-healed, not a config to abandon; "
+        "if it recurs at the %d-byte cap the trace genuinely does not fit)." % (new_region, _TRACE_REGION_MAX)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +231,177 @@ def _load_attempts() -> list:
 
 def _save_attempts(a: list) -> None:
     _KERNEL_LOG_PATH.write_text(json.dumps(a))
+
+
+_LAST_TARGET_PATH = Path(str(_KERNEL_LOG_PATH) + ".target")
+_LAST_TARGET: dict = {}
+
+
+def _persist_target(t) -> None:
+    _LAST_TARGET.clear()
+    if isinstance(t, dict):
+        _LAST_TARGET.update(t)
+    try:
+        _LAST_TARGET_PATH.write_text(json.dumps(_LAST_TARGET))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _load_target() -> dict:
+    if _LAST_TARGET:
+        return dict(_LAST_TARGET)
+    try:
+        return json.loads(_LAST_TARGET_PATH.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _append_attempt(rec: dict) -> list:
+    attempts = _load_attempts()
+    sig, kind, note = rec.get("op_signature"), rec.get("kernel_kind"), rec.get("note") or ""
+    if rec.get("wedged"):
+        attempts = [
+            a
+            for a in attempts
+            if not (a.get("wedged") and a.get("op_signature") == sig and a.get("kernel_kind") == kind)
+        ]
+    else:
+        attempts = [
+            a
+            for a in attempts
+            if not (
+                not a.get("wedged")
+                and a.get("op_signature") == sig
+                and a.get("kernel_kind") == kind
+                and (a.get("note") or "") == note
+            )
+        ]
+    attempts.append(rec)
+    _save_attempts(attempts)
+    _rebuild_optimize_report()
+    return attempts
+
+
+def _autorecord_wedge(reason: str) -> None:
+    t = _load_target()
+    rec = {
+        "op_signature": t.get("op") or "candidate config",
+        "kernel_kind": t.get("rung") or "knob",
+        "measured_ms": None,
+        "beat_baseline": False,
+        "note": reason,
+        "stages": [],
+        "kernel_detected_in_source": False,
+        "wedged": True,
+        "evidence": {},
+        "diff": "",
+    }
+    try:
+        _append_attempt(rec)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _summary_mod():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("cc_summary", str(Path(__file__).parent / "summary.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _report_baseline_ms():
+    try:
+        if _BASELINE_PATH.exists():
+            return round(float(json.loads(_BASELINE_PATH.read_text()).get("device_ms", 0.0)), 4)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _read_baseline_profile():
+    try:
+        if _BASELINE_PATH.exists():
+            return json.loads(_BASELINE_PATH.read_text())
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _merge_cumulative(cum_path, attempts) -> list:
+    try:
+        prior = json.loads(cum_path.read_text())
+        if not isinstance(prior, list):
+            prior = []
+    except Exception:  # noqa: BLE001
+        prior = []
+    seen, out = set(), []
+    for a in list(prior) + list(attempts or []):
+        if not isinstance(a, dict):
+            continue
+        key = (
+            a.get("op_signature") or a.get("op_code") or "",
+            a.get("kernel_kind") or "",
+            (a.get("note") or "")[:200],
+            bool(a.get("wedged")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(a)
+    try:
+        cum_path.write_text(json.dumps(out))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _rebuild_optimize_report(model_root=None) -> None:
+    import time as _t
+
+    attempts = _load_attempts()
+    cum_path = Path(str(_KERNEL_LOG_PATH) + ".cumulative")
+    merged = _merge_cumulative(cum_path, attempts)
+    if not merged:
+        return
+    root = model_root if model_root is not None else _MODEL_ROOT
+    render_path = cum_path
+    n_attempts = len(merged)
+    try:
+        mod = _summary_mod()
+        perf_test = (_MANIFEST.get("perf_test_resolved") or {}).get("path") or ""
+        text = mod.render_summary(
+            render_path,
+            _report_baseline_ms(),
+            model=Path(root).name,
+            task=os.environ.get("PERF_MCP_TASK", "main"),
+            metric=os.environ.get("PERF_MCP_METRIC", "device_ms"),
+            perf_test=perf_test,
+            baseline_profile=_read_baseline_profile(),
+        )
+        when = (
+            f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {n_attempts} lever attempt(s) so far — "
+            "each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed."
+        )
+        _key = os.environ.get("PERF_MCP_REPORT_KEY", "optimize")
+        _module = os.environ.get("PERF_MCP_REPORT_MODULE")
+        if _module:
+            _block = mod.module_optimize_block(
+                root,
+                len(attempts),
+                text,
+                when,
+                module=_module,
+                index=os.environ.get("PERF_MCP_REPORT_INDEX", ""),
+                pcc_gate=os.environ.get("PERF_MCP_REPORT_PCC", ""),
+                outcome="optimizing…",
+            )
+        else:
+            _block = mod.optimize_block(root, len(attempts), text, when)
+        mod.upsert_report_section(root, _key, _block)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [perf-report] render failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
 def _norm(s: str) -> str:
@@ -290,18 +540,16 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
         )
     if _is_kernel_able(op_code):
         if "tt-lang" not in kinds:
-            if not _ttl_available():
+            if _ttl_available():
                 return (
                     False,
-                    "tt-lang:install-required",
-                    "this op needs a tt-lang kernel but the ttl toolchain is not installed — install "
-                    "tt-lang first (e.g. pip install tt-lang==1.0.1 --no-deps, matching your ttnn)",
+                    "tt-lang",
+                    "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it",
                 )
-            return (
-                False,
-                "tt-lang",
-                "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it",
-            )
+            # tt-lang toolchain unavailable (commonly a Python-version mismatch): DO NOT halt the run
+            # on an un-actionable 'install-required' target. Skip the tt-lang rung and fall through to
+            # the next lever so the run still completes on the levers that DO work. The end-of-run
+            # summary flags that tt-lang was not used this run.
         if "cpp" not in kinds:
             return (
                 False,
@@ -354,7 +602,9 @@ class _Ctx:
 
     def __init__(self):
         self.manifest = _MANIFEST
-        self.run = _Run(tempfile.mkdtemp(prefix="perf_mcp_"))
+        _d = tempfile.mkdtemp(prefix="perf_mcp_")
+        _TMP_DIRS.add(_d)
+        self.run = _Run(_d)
         self.deps = {}
 
     def model_root(self):
@@ -371,9 +621,79 @@ def _reap_measurement_dir(path) -> bool:
     return True
 
 
-def _profile_once() -> dict:
+_TMP_DIRS = set()
+
+
+def _reap_tracked_tmp():
+    for _d in list(_TMP_DIRS):
+        try:
+            _reap_measurement_dir(_d)
+        except Exception:
+            pass
+
+
+atexit.register(_reap_tracked_tmp)
+try:
+    signal.signal(signal.SIGTERM, lambda *_a: (_reap_tracked_tmp(), os._exit(143)))
+except Exception:
+    pass
+
+
+_STABLE_ARTIFACT_DIR = Path(tempfile.gettempdir()) / "perf_mcp_last_profile"
+
+
+def _persist_artifacts(prof: dict) -> dict:
+    """Copy prof['artifacts'] CSVs out of the about-to-be-reaped tmpdir into one fixed dir
+    (overwritten each call) and repoint the paths there, so they stay readable after the
+    reap. Best-effort: never raises, so profiling is unaffected if persistence fails."""
+    arts = prof.get("artifacts")
+    if not isinstance(arts, dict):
+        return prof
+    try:
+        _shutil.rmtree(_STABLE_ARTIFACT_DIR, ignore_errors=True)
+        _STABLE_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+        repointed = {}
+        for key, src in arts.items():
+            sp = Path(str(src))
+            try:
+                if sp.is_file():
+                    dst = _STABLE_ARTIFACT_DIR / sp.name
+                    _shutil.copy2(sp, dst)
+                    repointed[key] = str(dst)
+                else:
+                    repointed[key] = src
+            except Exception:
+                repointed[key] = src
+        prof["artifacts"] = repointed
+    except Exception:
+        pass
+    return prof
+
+
+def _detect_partial_capture(profiles_dir) -> str | None:
+    try:
+        d = Path(profiles_dir)
+        for sc in sorted(d.glob("*.partial")):
+            txt = sc.read_text().strip()
+            if txt:
+                return txt
+        from agent.probes import detect_marker_drop
+
+        for log in sorted(d.glob("*_tracy.log")):
+            hit = detect_marker_drop(log.read_text())
+            if hit:
+                return hit
+    except Exception:
+        return None
+    return None
+
+
+def _profile_once(cq=None) -> dict:
     ctx = _Ctx()
     tmpdir = ctx.run.dir
+    _saved_cq = os.environ.get("TT_PERF_NUM_CQ")
+    if cq is not None:
+        os.environ["TT_PERF_NUM_CQ"] = str(cq)
     try:
         profiles = measure_runs(ctx)
         prof = profiles[0]
@@ -381,8 +701,17 @@ def _profile_once() -> dict:
             prof = roofline.annotate_profile(prof, _ENV)
         except Exception:  # annotation is best-effort; raw profile still usable
             pass
+        partial = _detect_partial_capture(ctx.run.profiles_dir)
+        if partial:
+            prof["capture_partial"] = partial
+        prof = _persist_artifacts(prof)
         return prof
     finally:
+        if cq is not None:
+            if _saved_cq is None:
+                os.environ.pop("TT_PERF_NUM_CQ", None)
+            else:
+                os.environ["TT_PERF_NUM_CQ"] = _saved_cq
         _reap_measurement_dir(tmpdir)
 
 
@@ -423,9 +752,25 @@ def profile_model() -> dict:
     roofline target (the achievable floor). Records this as the baseline for measure_candidate.
     Call this first, and again whenever you want a fresh picture."""
     try:
-        prof = _profile_once()
+        prof = _profile_once(cq=2)
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)[-800:]}
+        _msg = str(exc)
+        if _is_dram_trace_overflow(_msg):
+            _new = _grow_trace_region()
+            _reclaim_mesh("profile_model:dram_trace")
+            return {"ok": False, "error": _dram_overflow_msg(_new)}
+        if _is_l1_overflow(_msg):
+            _reclaim_mesh("profile_model")
+            return {"ok": False, "error": _L1_OVERFLOW_MSG}
+        return {"ok": False, "error": _msg[-800:]}
+    if prof.get("capture_partial"):
+        return {
+            "ok": False,
+            "error": (
+                f"partial capture (profiler dropped markers: {prof['capture_partial']}); baseline NOT "
+                f"recorded — auto-heal could not get a clean run. Re-profile a smaller/signposted region."
+            ),
+        }
     _BASELINE_PATH.write_text(json.dumps(prof))
     dev = round(float(prof.get("device_ms", 0.0)), 4)
     target, at_floor, residual_gap, open_ops = None, None, None, []
@@ -449,6 +794,9 @@ def profile_model() -> dict:
         "tokens_per_sec_per_user": prof.get("tokens_per_sec_per_user"),
         "tokens_per_sec": prof.get("tokens_per_sec"),
         "decode_status": prof.get("decode_status"),
+        # repeat_prefill (AR decode, no cached decode_step/KV-cache) -> propose the
+        # conditional structural-decode lever; null otherwise so it never fires elsewhere.
+        "suggested_lever": ("structural-decode" if prof.get("decode_status") == "repeat_prefill" else None),
         "roofline_target_ms": target,
         "at_floor": at_floor,
         "residual_gap_ms": residual_gap,
@@ -465,12 +813,29 @@ def measure_candidate() -> dict:
     A REJECTED measurement is NEVER a win no matter how fast it looks — do not keep it. Call this
     after every edit; only a 'valid' result that is faster than baseline is a real gain."""
     try:
-        prof = _profile_once()
+        prof = _profile_once(cq=1)
     except Exception as exc:  # noqa: BLE001
+        _msg = str(exc)
+        if _is_dram_trace_overflow(_msg):
+            _new = _grow_trace_region()
+            _reclaim_mesh("measure_candidate:dram_trace")
+            _autorecord_wedge(_dram_overflow_msg(_new))
+            return {"verdict": "REJECTED", "reason": _dram_overflow_msg(_new)}
+        if _is_l1_overflow(_msg):
+            _reclaim_mesh("measure_candidate")
+            _autorecord_wedge(_L1_OVERFLOW_MSG)
+            return {"verdict": "REJECTED", "reason": _L1_OVERFLOW_MSG}
         _note_device_crash("measure_candidate")  # may tt-smi reset if this is a repeat (wedge)
-        return {"verdict": "REJECTED", "reason": f"profiler crashed: {str(exc)[-600:]}"}
+        _autorecord_wedge(f"wedged/crashed when tried: {_msg[-300:]}")
+        return {"verdict": "REJECTED", "reason": f"profiler crashed: {_msg[-600:]}"}
     _note_device_ok()
     dev = round(float(prof.get("device_ms", 0.0)), 4)
+    if prof.get("capture_partial"):
+        return {
+            "verdict": "REJECTED",
+            "reason": f"partial_capture: profiler dropped markers ({prof['capture_partial']})",
+            "device_ms": dev,
+        }
     if not _BASELINE_PATH.exists():
         return {"verdict": "valid", "device_ms": dev, "note": "no baseline recorded; call profile_model first"}
     baseline = json.loads(_BASELINE_PATH.read_text())
@@ -524,6 +889,92 @@ def check_pcc() -> dict:
     return res
 
 
+def _pg_cpu_jiffies(pgid):
+    total = 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0
+    target = str(pgid)
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open("/proc/%s/stat" % entry) as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        if len(fields) > 12 and fields[2] == target:
+            try:
+                total += int(fields[11]) + int(fields[12])
+            except ValueError:
+                pass
+    return total
+
+
+class _AdaptiveResult:
+    def __init__(self, returncode, stdout):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None):
+    import threading as _th
+    import time as _t
+
+    stall_s = int(stall_s if stall_s is not None else os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600")
+    backstop = int(backstop if backstop is not None else os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600")
+    proc = _sp.Popen(
+        list(cmd), cwd=str(cwd), env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, start_new_session=True
+    )
+    buf = []
+    act = [_t.monotonic()]
+
+    def _pump():
+        try:
+            for ln in proc.stdout:
+                buf.append(ln)
+                act[0] = _t.monotonic()
+        except Exception:  # noqa: BLE001
+            pass
+
+    pt = _th.Thread(target=_pump, daemon=True)
+    pt.start()
+    pgid = proc.pid
+    start = _t.monotonic()
+    last_progress = start
+    last_cpu = _pg_cpu_jiffies(pgid)
+    max_gap = 0.0
+    while proc.poll() is None:
+        _t.sleep(5)
+        now = _t.monotonic()
+        cpu = _pg_cpu_jiffies(pgid)
+        moved = cpu > last_cpu + 10 or act[0] > last_progress
+        last_cpu = cpu
+        if moved:
+            max_gap = max(max_gap, now - last_progress)
+            last_progress = now
+        limit = max(stall_s, int(3 * max_gap))
+        if now - last_progress >= limit or now - start >= backstop:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:  # noqa: BLE001
+                proc.kill()
+            try:
+                proc.communicate(timeout=30)
+            except Exception:  # noqa: BLE001
+                pass
+            raise _sp.TimeoutExpired(cmd, limit if now - last_progress >= limit else backstop)
+    rc = proc.returncode
+    pt.join(timeout=30)
+    return _AdaptiveResult(rc, "".join(buf))
+
+
 def _run_full_pipeline_ms():
     ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
     node = ptr.get("path")
@@ -538,6 +989,15 @@ def _run_full_pipeline_ms():
     env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
     env.setdefault("TT_PERF_TRACE", "1")
     env["TT_PERF_PREFILL_TRACE"] = "1"
+    _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
+    if _prof:
+        try:
+            env.update(json.loads(_prof))
+        except (ValueError, TypeError):
+            pass
+    _cq = os.environ.get("PERF_MCP_FULLPIPE_CQ")
+    if _cq and _cq.isdigit():
+        env["TT_PERF_NUM_CQ"] = _cq
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node]
     if case:
@@ -552,7 +1012,7 @@ def _run_full_pipeline_ms():
     last_err = None
     for _ in range(_FULLPIPE_SAMPLES):
         try:
-            r = _sp.run(cmd, cwd=repo, capture_output=True, text=True, timeout=5400, env=env)
+            r = _adaptive_run(cmd, repo, env, "full-pipeline")
         except Exception as exc:  # noqa: BLE001
             last_err = f"run failed: {str(exc)[-400:]}"
             continue
@@ -620,12 +1080,12 @@ def _run_full_pipeline_ms():
         )
         sys.stderr.flush()
     if per_tokens:
-        return statistics.median(per_tokens), "trace", None
+        return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
-        return statistics.median(walls), "eager", None
+        return statistics.median(walls), "eager", None, None
     if last_err:
-        return None, None, last_err
-    return None, None, "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)"
+        return None, None, last_err, None
+    return None, None, "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)", None
 
 
 _FULLPIPE_GATE_LOG = Path(tempfile.gettempdir()) / "perf_mcp_fullpipe_gate.log"
@@ -659,6 +1119,184 @@ def _emit_fullpipe(result: dict) -> dict:
     return result
 
 
+_FULLPIPE_MODE_RANK = {"eager": 0, "trace": 1, "trace+1cq": 1, "trace+2cq": 2}
+
+
+def _fullpipe_mode(method: str, path: str | None) -> str:
+    if method != "trace":
+        return "eager"
+    p = (path or "").strip()
+    return p if p in ("trace+2cq", "trace+1cq") else "trace"
+
+
+def _mode_rank(mode: str) -> int:
+    return _FULLPIPE_MODE_RANK.get(mode, 1)
+
+
+_SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
+
+
+def _infer_block_count(counts: dict) -> int:
+    vals = [c for c in counts.values() if c > 1]
+    if not vals:
+        return 1
+    from collections import Counter as _C
+
+    return _C(vals).most_common(1)[0][0]
+
+
+def _signpost_blocks(seq: list) -> int:
+    m = -1
+    for s in seq or []:
+        if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX):
+            try:
+                m = max(m, int(s.split(":", 1)[1]))
+            except (ValueError, IndexError):
+                pass
+    return m + 1
+
+
+def _signposts_agree(seq: list) -> bool:
+    sp = _signpost_blocks(seq)
+    op = _infer_block_count(
+        _C_counts([s for s in seq or [] if not (isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX))])
+    )
+    if sp <= 1 or op <= 1:
+        return False
+    lo, hi = sorted((sp, op))
+    return lo / hi >= float(os.environ.get("PERF_MCP_SIGNPOST_AGREE_RATIO", "0.8"))
+
+
+def _block_starts(sequence: list, n_blocks: int | None = None) -> tuple:
+    seq = sequence or []
+    sp = [i for i, s in enumerate(seq) if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX)]
+    if sp and _signposts_agree(seq):
+        return sp, "signposts"
+    if n_blocks is None:
+        n_blocks = _infer_block_count(_C_counts(seq))
+    from collections import Counter as _C
+
+    c = _C(seq)
+    anchor = next((s for s in seq if c.get(s) == n_blocks), None)
+    if anchor is None:
+        return [], "none"
+    return [i for i, s in enumerate(seq) if s == anchor], "inferred"
+
+
+def _C_counts(seq):
+    from collections import Counter as _C
+
+    return dict(_C(seq))
+
+
+def _block_of(pos: int, starts: list) -> int:
+    import bisect
+
+    return bisect.bisect_right(starts, pos) - 1
+
+
+def compute_lever_coverage(
+    counts: dict, sequence: list, op_match: str, stale_dtype: str = "", new_dtype: str = ""
+) -> dict:
+    matching = {s: n for s, n in (counts or {}).items() if op_match and op_match in s}
+    if not matching:
+        return {"status": "not_found", "note": "no op signature matched '%s' at full depth" % op_match}
+    total = sum(matching.values())
+    stale = sum(n for s, n in matching.items() if stale_dtype and stale_dtype in s)
+    fresh = sum(n for s, n in matching.items() if new_dtype and new_dtype in s)
+    starts, block_source = _block_starts(sequence or [], _infer_block_count(counts or {}))
+    n_blocks = len(starts) if starts else _infer_block_count(counts or {})
+    missed_blocks = []
+    if stale_dtype:
+        stale_sigs = {s for s in matching if stale_dtype in s}
+        seen = set()
+        for i, s in enumerate(sequence or []):
+            if s in stale_sigs:
+                b = _block_of(i, starts)
+                if b >= 0 and b not in seen:
+                    seen.add(b)
+                    missed_blocks.append(b)
+    fully = (stale == 0 and fresh > 0) if (stale_dtype and new_dtype) else None
+    if fully:
+        note = "lever reached ALL %d instances of this op" % total
+    elif fully is False:
+        note = (
+            "PARTIAL: %d of %d instances still carry the OLD signature (blocks %s) — the edit is on an "
+            "instance-specific path; move it to the SHARED block definition and reapply so every layer changes"
+            % (stale, total, sorted(missed_blocks))
+        )
+    else:
+        note = "signature-visible check only: pass stale_dtype+new_dtype for a dtype lever; grid/program_config levers are not tensor-visible and rely on shared-definition propagation"
+    return {
+        "status": "ok",
+        "op_match": op_match,
+        "total_instances": total,
+        "applied": fresh if new_dtype else None,
+        "stale_remaining": stale if stale_dtype else None,
+        "fully_applied": fully,
+        "n_blocks": n_blocks,
+        "block_source": block_source,
+        "missed_blocks": sorted(missed_blocks),
+        "note": note,
+    }
+
+
+def _full_depth_op_probe():
+    ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
+    node = ptr.get("path")
+    if not node:
+        return None, None
+    case = ptr.get("case")
+    repo = str(Path(_PKG).parent.parent.parent)
+    env = dict(os.environ)
+    env["TT_METAL_HOME"] = repo
+    env["PYTHONPATH"] = repo
+    env["TT_PERF_LAYERS"] = "0"
+    env["TT_PERF_MAX_NEW_TOKENS"] = "1"
+    env.pop("TT_METAL_DEVICE_PROFILER", None)
+    cmd = [sys.executable, str(Path(__file__).parent / "_op_sig_probe.py"), node]
+    if case:
+        cmd.append(case)
+    try:
+        r = _adaptive_run(cmd, repo, env, "op-sig probe")
+    except Exception as exc:  # noqa: BLE001
+        return None, "probe failed: %s" % str(exc)[-300:]
+    out = (r.stdout or "") + "\n" + (r.stderr or "")
+    counts, seq = {}, []
+    for line in out.splitlines():
+        if line.startswith("PERF_OP_SIG_COUNTS="):
+            try:
+                counts = json.loads(line.split("=", 1)[1])
+            except Exception:  # noqa: BLE001
+                counts = {}
+        elif line.startswith("PERF_OP_SIG_SEQUENCE="):
+            try:
+                seq = json.loads(line.split("=", 1)[1])
+            except Exception:  # noqa: BLE001
+                seq = []
+    return counts, seq
+
+
+@mcp.tool()
+def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = "") -> dict:
+    """After applying a lever (dtype knob / kernel swap) to an op, VERIFY it reached EVERY layer instance,
+    not just the profiled representative slice. Runs an ALL-LAYERS op-signature probe (TT_PERF_LAYERS=0,
+    NO tracy -> no marker buffer -> overflow-safe) and checks whether the op still appears with its OLD
+    signature anywhere. op_match: a substring identifying the op (name + a shape dim, e.g. 'linear(1, 4096').
+    stale_dtype/new_dtype: the OLD and NEW dtype markers the lever changed (e.g. 'BFLOAT16','BFLOAT8_B') —
+    supply both for a dtype lever so coverage is exact. Returns fully_applied + missed_blocks: if PARTIAL,
+    the edit is on an instance-specific path (e.g. layers[0]) — move it to the SHARED block definition and
+    reapply so all N layers change. A repeated block is ONE class instantiated N times, so a lever on the
+    shared definition propagates to every instance; this catches the case where it did not."""
+    counts, seq = _full_depth_op_probe()
+    if not counts:
+        return {
+            "status": "skip",
+            "note": "all-layers op-signature probe produced no counts (%s)" % (seq or "no output"),
+        }
+    return compute_lever_coverage(counts, seq, op_match, stale_dtype, new_dtype)
+
+
 @mcp.tool()
 def check_full_pipeline_latency() -> dict:
     """Measure end-to-end latency and gate it as a CONVERGENCE gate toward the target (a GPU number if
@@ -677,10 +1315,21 @@ def check_full_pipeline_latency() -> dict:
     $TMPDIR/perf_mcp_fullpipe_gate.log so the gated end-to-end time is visible every iteration.
     Returns {status, full_pipeline_ms, method, metric, best_ms?, delta_pct?, target_ms?,
     gap_to_target_ms?, reached_target?}."""
-    ms, method, err = _run_full_pipeline_ms()
+    _cq_env = os.environ.get("PERF_MCP_FULLPIPE_CQ")
+    cq = int(_cq_env) if (_cq_env and _cq_env.isdigit()) else 1
+    ms, method, err, path = _run_full_pipeline_ms()
     if ms is None:
-        return _emit_fullpipe({"status": "crash", "error": err})
+        return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
+    mode = _fullpipe_mode(method, path)
+    base_path = _FULLPIPE_BASELINE_PATH if cq >= 2 else _FULLPIPE_BASELINE_1CQ_PATH
+    cq_note = (
+        "trace+1cq (robust per-iteration signal): validate/bank compute-op wins here — it always engages "
+        "(no 2-CQ reservation, so no OOM/downgrade). The trace+2cq production number is confirmed at the "
+        "start/end bookend; only 2-CQ-overlap / L1-headroom levers require that bookend to judge."
+        if cq < 2
+        else "trace+2cq (production ship metric): start/end bookend anchor."
+    )
     tgt = _FULLPIPE_TARGET_MS if _FULLPIPE_TARGET_MS > 0 else None
     tgt_fields = {}
     if tgt is not None:
@@ -690,28 +1339,49 @@ def check_full_pipeline_latency() -> dict:
             "reached_target": ms <= tgt,
         }
     base = {}
-    if _FULLPIPE_BASELINE_PATH.exists():
+    if base_path.exists():
         try:
-            base = json.loads(_FULLPIPE_BASELINE_PATH.read_text())
+            base = json.loads(base_path.read_text())
         except Exception:  # noqa: BLE001
             base = {}
     best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
-    if base.get("method", "eager") != method or best <= 0:
-        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method}))
+    base_mode = base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None)
+    if best > 0 and _mode_rank(mode) < _mode_rank(base_mode):
+        return _emit_fullpipe(
+            {
+                "status": "degraded",
+                "full_pipeline_ms": round(ms, 4),
+                "method": method,
+                "metric": metric,
+                "mode": mode,
+                "cq": cq,
+                "baseline_mode": base_mode,
+                "error": (
+                    "trace fidelity degraded %s -> %s in the %d-CQ track; delta NOT banked, baseline NOT "
+                    "downgraded — the workload fell back below the expected trace mode (fix or revert)"
+                    % (base_mode, mode, cq)
+                ),
+                **tgt_fields,
+            }
+        )
+    if base_mode != mode or best <= 0:
+        base_path.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
         return _emit_fullpipe(
             {
                 "status": "ok",
                 "full_pipeline_ms": round(ms, 4),
                 "method": method,
                 "metric": metric,
-                "note": "best-so-far recorded",
+                "mode": mode,
+                "cq": cq,
+                "note": "best-so-far recorded · " + cq_note,
                 **tgt_fields,
             }
         )
     delta_pct = round((ms - best) / best * 100.0, 2) if best > 0 else None
     diverged = ms > best * (1.0 + _FULLPIPE_TOL)
     if ms < best:
-        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method}))
+        base_path.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
     return _emit_fullpipe(
         {
             "status": "diverged" if diverged else "ok",
@@ -720,9 +1390,66 @@ def check_full_pipeline_latency() -> dict:
             "delta_pct": delta_pct,
             "method": method,
             "metric": metric,
+            "mode": mode,
+            "cq": cq,
+            "note": cq_note,
             **tgt_fields,
         }
     )
+
+
+_HITL_STEP = {"n": 0}
+
+
+@mcp.tool()
+def hitl_gate(
+    tried_op: str,
+    tried_lever: str,
+    why_tried: str,
+    is_win: bool,
+    why_not: str = "",
+    next_target: str = "",
+    next_why: str = "",
+    before_ms: float = 0.0,
+    after_ms: float = 0.0,
+    stages_json: str = "",
+) -> dict:
+    """HUMAN-IN-THE-LOOP gate (--hitl only). After applying ONE lever and measuring it, call this
+    INSTEAD of git_commit/git_revert. It shows the operator a block-level timing + rationale pause
+    screen and returns their decision {action: 'commit'|'revert'|'try', note, knob}: on 'commit'/'revert'
+    the orchestrator performs the git action for you; on 'try' apply the operator's `knob` next. Pass
+    what you tried + why, the win flag + why_not, the next planned target + why, the before/after
+    full-pipeline ms, and stages_json = the per-stage trace timings you just measured as a JSON list of
+    {"name","ms"} (and optional "dominant"). Blocks until the operator answers."""
+    import importlib.util as _ilu
+
+    _spec = _ilu.spec_from_file_location("cc_hitl", str(Path(__file__).parent / "hitl.py"))
+    hitl = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(hitl)
+    hdir = os.environ.get("PERF_MCP_HITL_DIR")
+    if not hdir:
+        return {"action": "commit", "note": "hitl not wired (no PERF_MCP_HITL_DIR) — proceeding without gate"}
+    try:
+        stages = json.loads(stages_json) if stages_json else []
+    except ValueError:
+        stages = []
+    _HITL_STEP["n"] += 1
+    proposal = {
+        "model": Path(_MODEL_ROOT).name,
+        "step": _HITL_STEP["n"],
+        "stages": stages,
+        "tried": {"op": tried_op, "lever": tried_lever, "why": why_tried},
+        "result": {
+            "win": bool(is_win),
+            "before_ms": before_ms or None,
+            "after_ms": after_ms or None,
+            "why_not": why_not,
+        },
+        "next": {"target": next_target, "why": next_why},
+    }
+    hitl.post_proposal(hdir, proposal)
+    _to = float(os.environ.get("PERF_MCP_HITL_TIMEOUT", "0") or "0") or None
+    return hitl.await_decision(hdir, timeout=_to)
 
 
 @mcp.tool()
@@ -760,9 +1487,49 @@ def git_revert(sha: str) -> dict:
     return {"reverted_to": sha}
 
 
+def _capture_attempt_diff(max_lines: int = 40) -> str:
+    """Best-effort snapshot of the SOURCE change THIS attempt made, for the RUN_REPORT code-change log.
+    A rejected (no-gain) attempt is still in the working tree at record time (revert happens AFTER) ->
+    `git diff HEAD`; a banked win is already committed -> `git show HEAD`. Scoped to the model dir,
+    truncated to max_lines. Never raises."""
+    try:
+        repo = gitio.repo_root(_MODEL_ROOT)
+        try:
+            pathspec = str(_MODEL_ROOT.relative_to(repo))
+        except ValueError:
+            pathspec = "."
+        # Exclude tool-generated artifacts so the captured "code change" is the
+        # ACTUAL source edit — not the report quoting itself (RUN_REPORT.md lives
+        # in the model dir, so without this the diff embeds its own live-update
+        # churn -> the optimize table nests/duplicates) nor scaffold/state files.
+        _excludes = [
+            ":(exclude,glob)**/RUN_REPORT.md",
+            ":(exclude,glob)**/bringup_status.json",
+            ":(exclude,glob)**/.bringup_cc_state.json",
+            ":(exclude,glob)**/*.opplan.json",
+        ]
+        out = ""
+        for cmd in (
+            ["git", "-C", str(repo), "diff", "HEAD", "--", pathspec, *_excludes],
+            ["git", "-C", str(repo), "show", "--format=", "HEAD", "--", pathspec, *_excludes],
+        ):
+            r = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+            if r.returncode == 0 and r.stdout.strip():
+                out = r.stdout
+                break
+        if not out.strip():
+            return ""
+        all_lines = out.splitlines()
+        if len(all_lines) > max_lines:
+            all_lines = all_lines[:max_lines] + [f"... (truncated, {len(out.splitlines()) - max_lines} more lines)"]
+        return "\n".join(all_lines)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 @mcp.tool()
 def record_kernel_attempt(
-    op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = ""
+    op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
 ) -> dict:
     """Record that you AUTHORED and MEASURED a real custom kernel for an open op (tt-lang or C++).
     REQUIRED before termination_check() will let you stop on any op with material roofline gap — a
@@ -772,7 +1539,9 @@ def record_kernel_attempt(
     (e.g. 'MatmulDeviceOperation 32 x 32 x 32' or 'LayerNorm'). kernel_kind: 'tt-lang' | 'cpp'.
     measured_ms: the device_ms measure_candidate reported with the kernel in place. This verifies a
     kernel actually exists in the model source — a record with no kernel present is flagged and will
-    NOT clear the op."""
+    NOT clear the op. stages_json: OPTIONAL per-stage trace timings for this lever (the same
+    JSON list of {"name","ms","dominant?"} you would pass hitl_gate) — rendered as the block-level
+    timing table in RUN_REPORT.md so BOTH hitl and non-hitl runs surface where device time went."""
     # CONFIG/STRUCTURAL kinds — changes with NO custom-kernel source marker: program-config knobs
     # (grid/dtype), trace/2-CQ host-loop transforms, and dataflow restructures (gather/fusion/cache).
     # Accepted as detected; the re-profile + PCC verify the real effect. Only true kernel kinds
@@ -801,36 +1570,70 @@ def record_kernel_attempt(
     ttl_absent = (kernel_kind or "").lower() == "tt-lang" and not _ttl_available()
     if ttl_absent:
         detected = False
-    attempts = _load_attempts()
+    try:
+        stages = json.loads(stages_json) if stages_json else []
+        stages = [s for s in stages if isinstance(s, dict)] if isinstance(stages, list) else []
+    except Exception:  # noqa: BLE001
+        stages = []
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
         "measured_ms": round(float(measured_ms), 4),
         "beat_baseline": bool(beat_baseline),
         "note": note,
+        "stages": stages,
         "kernel_detected_in_source": detected,
+        "wedged": False,
         "evidence": ev,
+        "diff": _capture_attempt_diff(),
     }
-    attempts.append(rec)
-    _save_attempts(attempts)
+    _append_attempt(rec)
     return {
         "recorded": True,
         "attempt": rec,
         "warning": (
             "tt-lang toolchain (ttl) not installed — kernel cannot run or be measured; attempt NOT credited."
             if ttl_absent
-            else None
-            if detected
-            else "TP attempt needs BOTH a ShardTensorToMesh AND a CCL (all_gather/reduce_scatter) in model "
-            "source — not found; attempt UNSUPPORTED and will NOT clear the op."
-            if is_tp
-            else "NO kernel markers (generic_op/@ttl/.cpp/ProgramDescriptor) found in model source — this "
-            "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first."
+            else (
+                None
+                if detected
+                else (
+                    "TP attempt needs BOTH a ShardTensorToMesh AND a CCL (all_gather/reduce_scatter) in model "
+                    "source — not found; attempt UNSUPPORTED and will NOT clear the op."
+                    if is_tp
+                    else "NO kernel markers (generic_op/@ttl/.cpp/ProgramDescriptor) found in model source — this "
+                    "attempt is UNSUPPORTED and will NOT clear the op in termination_check. Author a real kernel first."
+                )
+            )
         ),
     }
 
 
 @mcp.tool()
+def _trace_budget_facts():
+    if os.environ.get("TT_PERF_TRACE", "1") != "1":
+        return None
+    try:
+        ncq = int(os.environ.get("TT_PERF_NUM_CQ", "2") or "2")
+    except ValueError:
+        ncq = 2
+    if ncq < 2:
+        return None
+    try:
+        tr = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872") or "23887872")
+    except ValueError:
+        tr = 23887872
+    return {
+        "num_command_queues": ncq,
+        "trace_region_size": tr,
+        "note": (
+            "2-CQ + trace region are reserved at device-open. Size L1 shards/grids to leave headroom so "
+            "the candidate fits 2 command queues; filling all of L1 OOMs under 2 CQs and forces a "
+            "trace+1cq fallback — a fidelity downgrade check_full_pipeline_latency flags (delta not banked)."
+        ),
+    }
+
+
 def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
     """REUSE-FIRST: return the tested/known knobs already catalogued for this op_class, so you
     APPLY/ADAPT a proven one BEFORE improvising from scratch. Routed deterministically from the
@@ -915,6 +1718,7 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
             "narrowed_by": {k: v for k, v in q.items() if k != "op_class"},
             "known_knobs": out,
             "count": len(out),
+            "budget": _trace_budget_facts(),
         }
     except Exception as exc:  # noqa: BLE001 — advisory tool: never raise into the loop
         return {"op_class": op_class, "known_knobs": [], "count": 0, "error": str(exc)[-200:]}
@@ -1004,6 +1808,57 @@ def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
     return None
 
 
+def kv_cache_needed_by_scaling(ms_at_c, ms_at_2c, ratio_threshold=1.6):
+    if not isinstance(ms_at_c, (int, float)) or not isinstance(ms_at_2c, (int, float)):
+        return None
+    if ms_at_c <= 0:
+        return None
+    return (ms_at_2c / ms_at_c) >= ratio_threshold
+
+
+def _decode_is_recompute(model_root) -> bool:
+    try:
+        src = (Path(model_root) / "tt" / "pipeline.py").read_text(errors="ignore")
+    except Exception:
+        return False
+    s = "".join(src.split()).lower()
+    no_kv = ("use_cache=false" in s) or ("past_key_value=none" in s)
+    kv_write = any(
+        k in s for k in ("update_cache", "paged_update", "fill_cache", "kv_cache=", "cache_k[", "self.cache")
+    )
+    return no_kv and not kv_write
+
+
+def _decode_gate(prof: dict, attempts: list) -> dict | None:
+    if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
+        return None
+    repeat = prof.get("decode_status") == "repeat_prefill"
+    scale = kv_cache_needed_by_scaling(prof.get("decode_ms_at_c"), prof.get("decode_ms_at_2c"))
+    recompute = bool(scale) if scale is not None else _decode_is_recompute(_MODEL_ROOT)
+    if not (repeat or recompute):
+        return None
+    if any((a.get("kernel_kind") or "").lower() in ("structural-decode", "kv-cache") for a in attempts):
+        return None
+    reason = (
+        "repeat_prefill: decode re-runs the full prefill every token (no cached decode_step / "
+        "KV-cache); add a KV-cache + single-token decode_step (recall_knobs(op_class='decode'))"
+        if repeat
+        else "recompute decode: per-token cost scales with capacity (use_cache=False, no KV-cache write) "
+        "-> O(capacity) recompute every token EVEN THOUGH it traces; add a KV-cache + single-token "
+        "decode_step (recall_knobs(op_class='decode'))"
+    )
+    return {
+        "op": "generation_loop",
+        "op_class": "decode",
+        "gap_ms": round(float(prof.get("per_token_ms") or _MATERIAL_GAP_MS), 4),
+        "bound_by": "host",
+        "grid": None,
+        "weight_dtype": None,
+        "next_rung": "structural-decode",
+        "reason": reason,
+    }
+
+
 @mcp.tool()
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
@@ -1017,7 +1872,7 @@ def termination_check() -> dict:
     stop' shortcut; NO OR-with-at_floor escape. can_stop is true iff no material op has a reachable
     rung left. Obey can_stop; for each blocking_op do the rung named in its 'next_rung'."""
     try:
-        prof = _profile_once()
+        prof = _profile_once(cq=1)
     except Exception as exc:  # noqa: BLE001
         _note_device_crash("termination_check")
         return {"can_stop": False, "error": f"profiler crashed: {str(exc)[-500:]}"}
@@ -1054,6 +1909,9 @@ def termination_check() -> dict:
     host_block = _host_gate(prof, blocking, attempts)
     if host_block:
         blocking.append(host_block)
+    decode_block = _decode_gate(prof, attempts)
+    if decode_block:
+        blocking.append(decode_block)
     can_stop = not blocking
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
@@ -1070,6 +1928,7 @@ def termination_check() -> dict:
         if blocking
         else None
     )
+    _persist_target(next_target)
     return {
         "can_stop": can_stop,
         "halt": bool(halt),
@@ -1173,4 +2032,8 @@ def verify_tp_fracture(m: int, k: int, n: int, tp: int = 4) -> dict:
 
 
 if __name__ == "__main__":
+    try:
+        _rebuild_optimize_report()
+    except Exception:  # noqa: BLE001
+        pass
     mcp.run()

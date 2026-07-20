@@ -68,6 +68,7 @@ def _run_wrapped() -> int:
         r"|Initial ttnn\.CONFIG"
         r"|\[prompt-block\]"
         r"|\[exemplar\]"
+        r"|^\[agent\] "
     )
 
     child_env = dict(os.environ)

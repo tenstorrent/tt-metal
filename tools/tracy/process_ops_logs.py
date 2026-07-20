@@ -199,6 +199,40 @@ def get_op_sub_device_lookup_key(op: OpDict, device_id: int) -> Tuple[int, int, 
     return (op_device_id, runtime_id, trace_id, trace_id_counter)
 
 
+_CSV_CHUNK_ROWS = 2_000_000
+
+
+def _iter_csv_rows(path, **read_kwargs):
+    """Yield ``itertuples()`` rows from a CSV in bounded memory (chunked). Equivalent to
+    ``for row in pd.read_csv(path, **kw).itertuples()`` but never holds the whole file in
+    memory: rows are yielded in the same order, so any order-independent accumulation over
+    them (e.g. building a lookup dict) is unchanged while peak memory stays O(chunk)."""
+    for _chunk in pd.read_csv(path, chunksize=_CSV_CHUNK_ROWS, **read_kwargs):
+        yield from _chunk.itertuples()
+
+
+def _read_op_times_filtered(path):
+    """Memory-bounded read of the tracy op-times log. Only rows matching the two downstream
+    filters are ever used — ``name`` ~ TT_DNN/TT_METAL (host_time) or ``special_parent_text``
+    ~ 'id:' (child-call durations) — and the log is dominated by per-core marker rows that
+    match neither. Stream in chunks, keep only the union of those rows (all columns retained),
+    and concat. Peak memory is O(chunk) regardless of capture size (so it can't OOM the way a
+    whole-file read does on ~4 GB+ logs), and callers re-applying their masks get identical
+    results. The C engine tolerates the logs' ragged rows; pyarrow does not."""
+    kept = []
+    cols = None
+    for _chunk in pd.read_csv(path, low_memory=False, chunksize=_CSV_CHUNK_ROWS):
+        cols = _chunk.columns
+        name = _chunk["name"].astype(str)
+        spt = _chunk["special_parent_text"].astype(str)
+        m = name.str.contains("TT_DNN|TT_METAL", regex=True, na=False) | spt.str.contains("id:", na=False)
+        if m.any():
+            kept.append(_chunk[m])
+    if kept:
+        return pd.concat(kept, ignore_index=True)
+    return pd.DataFrame(columns=cols) if cols is not None else pd.read_csv(path, low_memory=False, nrows=0)
+
+
 def build_sub_device_id_lookup_from_device_csv(
     device_log_path: Path,
 ) -> Dict[Tuple[int, int, int, int], int]:
@@ -209,8 +243,7 @@ def build_sub_device_id_lookup_from_device_csv(
     if not device_log_path.is_file():
         return lookup
 
-    df = pd.read_csv(device_log_path, skiprows=1, header=0, na_filter=False)
-    for row in df.itertuples():
+    for row in _iter_csv_rows(device_log_path, skiprows=1, header=0, na_filter=False):
         meta_data = parse_device_csv_meta_data(row[15])
         if meta_data is None or "sub_device_id" not in meta_data:
             continue
@@ -444,10 +477,7 @@ def import_tracy_op_logs(
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
-    try:
-        df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
-    except (ImportError, ValueError):
-        df = pd.read_csv(tracyOpTimesLog)
+    df = _read_op_times_filtered(tracyOpTimesLog)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor

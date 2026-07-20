@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 PERF_DIR = "models/experimental/perf_automation"
@@ -208,51 +212,216 @@ def _latest_summary(perf_dir: Path):
     }
 
 
-def run_perf_optimization(
-    demo_dir,
-    repo_root,
-    devices="0",
-    mesh=None,
-    box=None,
-    metric="device_ms",
-    max_iter=1000,
-    perf_test=None,
-    case=None,
-    baseline_only=False,
-):
-    perf_dir = repo_root / PERF_DIR
-    env = _perf_env(repo_root)
-    py = _python_bin(repo_root)
-    before = [
-        py,
-        "-m",
-        "agent.before_loop",
-        str(demo_dir),
-        "--metric",
-        metric,
-        "--devices",
-        devices,
-        "--max-iter",
-        str(max_iter),
+def _optimize_section_present(demo_dir) -> bool:
+    p = Path(demo_dir) / "RUN_REPORT.md"
+    try:
+        return p.is_file() and "<!-- BEGIN optimize -->" in p.read_text()
+    except Exception:
+        return False
+
+
+def _optimize_summary_md(label, args, summ) -> str:
+    import time as _t
+
+    engine = getattr(args, "engine", "cc") or "cc"
+    md = [
+        f"# Optimize (perf) — `{label}`",
+        "",
+        f"_Generated: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')}_",
+        "",
+        f"- engine={engine} devices={args.devices} mesh={args.mesh or '-'} metric={args.metric}",
     ]
-    if box:
-        before += ["--box", box]
-    if mesh:
-        before += ["--mesh", mesh]
-    if perf_test:
-        before += ["--perf-test", perf_test]
-    if case:
-        before += ["--case", case]
-    rc = subprocess.run(before, cwd=str(perf_dir), env=env).returncode
-    if rc != 0:
-        return None, rc
-    if baseline_only:
-        return _latest_summary(perf_dir), 0
-    rc = subprocess.run([py, "-m", "agent.loop", "runs"], cwd=str(perf_dir), env=env).returncode
-    return _latest_summary(perf_dir), rc
+    if summ:
+        md.append(
+            f"- baseline {summ.get('baseline_ms')} ms -> final {summ.get('final_ms')} ms · "
+            f"{summ.get('kept')} lever(s) kept over {summ.get('iters')} iter(s)"
+        )
+        if summ.get("run_dir"):
+            md.append(f"- run dir: `{summ['run_dir']}`")
+        kl = summ.get("kept_levers") or []
+        if kl:
+            md += ["", "## Kept levers", "", "| lever | before ms | after ms |", "|---|---|---|"]
+            for k in kl:
+                md.append(f"| `{k.get('lever')}` | {k.get('before')} | {k.get('after')} |")
+    else:
+        md.append("- no per-lever summary available (baseline-only or no ledger yet).")
+    return "\n".join(md)
+
+
+def _write_optimize_fallback(demo_dir, label, args, summ) -> None:
+    if _optimize_section_present(demo_dir):
+        return
+    try:
+        from ..run_report import upsert_report_section
+
+        upsert_report_section(demo_dir, "optimize", _optimize_summary_md(label, args, summ))
+    except Exception:
+        pass
+
+
+def _chip_count_from_mesh(mesh_arg) -> int:
+    if not mesh_arg:
+        return 0
+    try:
+        prod = 1
+        for tok in str(mesh_arg).lower().split("x"):
+            prod *= int(tok)
+        return max(prod, 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _optimize_chip_count(args):
+    mesh_chips = _chip_count_from_mesh(getattr(args, "mesh", None))
+    if mesh_chips >= 1:
+        return mesh_chips
+    dev = (getattr(args, "devices", "") or "").strip()
+    if dev == "single":
+        return 1
+    if dev in ("", "all"):
+        return None
+    ids = [x for x in dev.split(",") if x.strip() != ""]
+    return len(ids) or None
+
+
+def _derive_topology_env(args, model_dir):
+    """Reshape topology from --devices/--mesh the SAME way emit-e2e does: chip count -> shared
+    plan_parallelism (kernel-viable TP x DP) -> export TT_PERF_MESH_ROWS/COLS the model's open + the
+    perf skeleton read via perf_adapter.resolve_mesh_shape. Falls back to a 1D 1xN mesh when the model
+    can't be probed (existing --model-dir with no HF id). No-op when chip count is unknown ('all')."""
+    chips = _optimize_chip_count(args)
+    if not chips:
+        return
+    if chips <= 1:
+        os.environ["TT_PERF_MESH_ROWS"] = "1"
+        os.environ["TT_PERF_MESH_COLS"] = "1"
+        print("  topology : single chip -> mesh 1x1")
+        return
+    rows, cols, tag = 1, chips, "1D default"
+    model_id = None if model_dir else getattr(args, "target", None)
+    try:
+        from ..parallelism import plan_parallelism
+
+        pc = plan_parallelism(model_id, chips)
+    except Exception:  # noqa: BLE001
+        pc = None
+    if pc is not None:
+        rows, cols, tag = pc.dp, pc.tp, "kernel-viable"
+    os.environ["TT_PERF_MESH_ROWS"] = str(rows)
+    os.environ["TT_PERF_MESH_COLS"] = str(cols)
+    print(f"  topology : {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows}) [{tag}]")
+
+
+_MIN_FREE_BYTES = 20 * 1024**3
+_STALE_TMP_AGE = 3600
+
+
+def _lowest_free_bytes():
+    paths = {tempfile.gettempdir()}
+    try:
+        paths.add(str(_repo_root()))
+    except Exception:
+        pass
+    low = None
+    culprits = []
+    for p in paths:
+        try:
+            free = shutil.disk_usage(p).free
+        except Exception:
+            continue
+        culprits.append((p, free))
+        low = free if low is None else min(low, free)
+    return low, culprits
+
+
+def _disk_gate():
+    low, culprits = _lowest_free_bytes()
+    if low is None:
+        return True, low, culprits
+    return low >= _MIN_FREE_BYTES, low, culprits
+
+
+def _sweep_stale_perf_mcp():
+    now = time.time()
+    for d in glob.glob(os.path.join(tempfile.gettempdir(), "perf_mcp_*")):
+        try:
+            if os.path.isdir(d) and now - os.path.getmtime(d) > _STALE_TMP_AGE:
+                shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _out_of_disk_msg(low):
+    gb = (low or 0) / (1024**3)
+    return (
+        f"  [optimize] OUT OF DISK — only {gb:.1f} GB free (need >= {_MIN_FREE_BYTES // 1024 ** 3} GB). "
+        "Free space and rerun; clear stale /tmp/perf_mcp_* dirs and old worktrees."
+    )
+
+
+def invalid_trace_flag_error():
+    v = os.environ.get("TT_PERF_TRACE")
+    if v is not None and v not in ("0", "1"):
+        return (
+            "TT_PERF_TRACE=%r is invalid: it is a trace on/off flag (0=eager, 1=trace+2CQ), NOT a "
+            "command-queue count. Set it to 0 or 1; control command queues via TT_PERF_NUM_CQ." % v
+        )
+    return None
 
 
 def cmd_optimize(args) -> int:
+    _tf = invalid_trace_flag_error()
+    if _tf:
+        print("error: " + _tf)
+        return 1
+    if os.environ.get("PERF_MCP_SUPERVISED") != "1":
+        _sweep_stale_perf_mcp()
+    _ok, _low, _cul = _disk_gate()
+    if not _ok:
+        print(_out_of_disk_msg(_low))
+        return 1
+    # AUTO-RESTART SUPERVISOR: an orchestrator SIGSEGV / native tt-metal crash kills the whole Python
+    # process, which no in-process recovery can catch. Run the real work in a supervised CHILD and, on
+    # abnormal exit, reset the device and relaunch it -- the per-op ladder + attempt log persist on disk,
+    # so a native crash becomes an automatic restart instead of a dead run. Disable with
+    # PERF_MCP_SUPERVISE=0; bounded by PERF_MCP_MAX_RESTARTS (default 3).
+    import os as _os, sys as _sys, subprocess as _sp, shutil as _sh, time as _t
+
+    if _os.environ.get("PERF_MCP_SUPERVISED") != "1" and _os.environ.get("PERF_MCP_SUPERVISE", "1") == "1":
+        _max = int(_os.environ.get("PERF_MCP_MAX_RESTARTS", "3") or "3")
+        _ttsmi = _sh.which("tt-smi")
+        for _n in range(_max + 1):
+            _rc = _sp.run(
+                [_sys.executable, "-m", "scripts.tt_hw_planner", *_sys.argv[1:]],
+                env={**_os.environ, "PERF_MCP_SUPERVISED": "1"},
+            ).returncode
+            if _rc != 0:
+                _dok, _dlow, _ = _disk_gate()
+                if not _dok:
+                    print(_out_of_disk_msg(_dlow), flush=True)
+                    return _rc
+            if _rc == 0 or _n >= _max:
+                if _rc != 0:
+                    print(f"  [optimize/supervisor] child exited rc={_rc}; {_max} restart(s) exhausted.", flush=True)
+                return _rc
+            print(
+                f"  [optimize/supervisor] orchestrator exited rc={_rc} (likely native crash / device wedge) "
+                f"-- resetting device + restarting (restart {_n + 1}/{_max}); ladder state is preserved on disk.",
+                flush=True,
+            )
+            try:
+                from models.experimental.perf_automation.cc_optimize.run import _reclaim_device as _rcl
+
+                print("  [optimize/supervisor] " + _rcl(getattr(args, "devices", "all") or "all"), flush=True)
+            except Exception as _e:  # noqa: BLE001
+                if _ttsmi:
+                    try:
+                        _sp.run([_ttsmi, "-r"], timeout=420, capture_output=True, text=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+                print(f"  [optimize/supervisor] reclaim fell back to reset ({_e})", flush=True)
+            _t.sleep(5)
+
     try:
         from ..cli import _quiet_framework_logging
 
@@ -279,10 +448,14 @@ def cmd_optimize(args) -> int:
     if model_dir and engine != "cc":
         print("  [optimize] --model-dir / --pcc-test is supported only on the cc engine.")
         return 2
-    print(f"  [optimize] {target} -> {demo_dir} ({kind})")
+    _sep = "=" * 78
+    _hitl = " · HITL" if getattr(args, "hitl", False) else ""
+    print(f"\n{_sep}\n  Optimize (perf) — {target}{_hitl}\n{_sep}")
+    print(f"  model    : {demo_dir} ({kind})")
+    print(f"  engine   : {engine} · devices {args.devices} · mesh {args.mesh or '-'} · metric {args.metric}")
     if pcc_test:
-        print(f"  [optimize] pcc gate: {pcc_test} (perf test auto-generated from it)")
-    print(f"  [optimize] engine={engine} devices={args.devices} mesh={args.mesh or '-'} metric={args.metric}")
+        print(f"  pcc gate : {pcc_test} (perf test auto-generated from it)")
+    _derive_topology_env(args, model_dir)
     if engine == "cc":
         run_cc = _load_cc_runner(repo_root)
         if run_cc is None:
@@ -302,6 +475,10 @@ def cmd_optimize(args) -> int:
                 return 1
             run_root, run_demo = iso["wt"], iso["demo_in_wt"]
             print(f"  [optimize/cc] existing demo -> isolated on branch '{iso['branch']}' (working tree untouched)")
+        if getattr(args, "module_level", False):
+            from .module_optimize import run_module_level_optimize
+
+            return run_module_level_optimize(args, run_demo, run_root, run_cc)
         result = run_cc(
             run_demo,
             run_root,
@@ -317,34 +494,17 @@ def cmd_optimize(args) -> int:
             catalog_branch=getattr(args, "catalog_branch", "perf-catalog"),
             max_rounds=getattr(args, "max_rounds", 3),
             model_id_hint=(None if model_dir else args.target),
+            hitl=getattr(args, "hitl", False),
         )
         if result is None:
             print("  [optimize/cc] run failed (see messages above)")
             return 1
         for r in result.get("results", []):
             print(f"      pipeline {r['task']}: {r['rounds']} round(s), can_stop={r['can_stop']}")
+        if iso is None:
+            _write_optimize_fallback(
+                demo_dir, args.target or demo_dir.name, args, _latest_summary(repo_root / Path(PERF_DIR))
+            )
         if iso is not None:
             _report_isolation(iso, repo_root)
         return 0
-    summary, rc = run_perf_optimization(
-        demo_dir,
-        repo_root,
-        devices=args.devices,
-        mesh=args.mesh,
-        box=getattr(args, "box", None),
-        metric=args.metric,
-        max_iter=args.max_iter,
-        perf_test=getattr(args, "perf_test", None),
-        case=getattr(args, "case", None),
-        baseline_only=getattr(args, "baseline_only", False),
-    )
-    if summary is None:
-        print(f"  [optimize] perf run failed (rc={rc})")
-        return rc or 1
-    print(
-        f"  [optimize] baseline={summary['baseline_ms']} ms, {summary['iters']} iters, "
-        f"{summary['kept']} kept, final={summary['final_ms']} ms  ({summary['run_dir']})"
-    )
-    for k in summary["kept_levers"]:
-        print(f"      keep {k['lever']}: {k['before']} -> {k['after']} ms")
-    return 0 if rc == 0 else rc

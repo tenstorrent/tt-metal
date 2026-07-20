@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -13,6 +14,48 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def _pipeline_self_opens_device(demo_dir: Path):
+    """Return [(rel_path, lineno)] for every ttnn.open_device / open_mesh_device
+    call in the emitted tt/ package that is NOT inside an `if __name__ ==
+    "__main__"` guard (fixes-plan Point 10).
+
+    The pipeline must run on the single device passed into build_pipeline; the
+    test fixture is the sole opener (with num_command_queues=2 + trace_region_size
+    for the trace+2CQ lever). A second, ad-hoc open in the importable/callable path
+    creates a competing device with a different command-queue count — the exact
+    cause of the trace+2CQ `id < mesh_command_queues_.size()` fatal. A standalone
+    `__main__` self-test opening its own device is fine and not flagged.
+    """
+    tt_pkg = demo_dir / "tt"
+    hits = []
+    if not tt_pkg.is_dir():
+        return hits
+    for p in sorted(tt_pkg.rglob("*.py")):
+        try:
+            src = p.read_text(errors="ignore")
+            tree = ast.parse(src)
+        except Exception:
+            continue
+        main_spans = [
+            (n.lineno, n.end_lineno)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.If)
+            and isinstance(n.test, ast.Compare)
+            and isinstance(n.test.left, ast.Name)
+            and n.test.left.id == "__name__"
+        ]
+        for n in ast.walk(tree):
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr in ("open_device", "open_mesh_device")
+            ):
+                ln = n.lineno
+                if not any(a <= ln <= b for a, b in main_spans):
+                    hits.append((str(p.relative_to(demo_dir)), ln))
+    return hits
 
 
 def _reset_device() -> str:
@@ -34,95 +77,218 @@ def _verbose() -> bool:
     return os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
 
 
-def _md_to_terminal(text: str) -> str:
-    """Strip the markdown markup (** , `, leading #) the agent emits so a
-    fallback summary reads cleanly on a terminal instead of as raw .md source."""
-    out = []
-    for ln in (text or "").splitlines():
-        s = re.sub(r"\*\*(.+?)\*\*", r"\1", ln)
-        s = re.sub(r"`([^`]+)`", r"\1", s)
-        s = s.replace("**", "")
-        s = re.sub(r"^\s{0,3}#{1,6}\s*", "", s)
-        out.append("  " + s)
-    return "\n".join(out)
+def _e2e_cell(rel: str, sub: str, f) -> str:
+    return f"`{rel}/{sub}/{f.name}`" if f else "(none)"
 
 
-def _render_grader_report(demo_dir: Path) -> bool:
-    """Render the structured grader_report.json as a clean, aligned terminal
-    block (no markdown). Returns True if rendered, False if unavailable —
-    callers fall back to a stripped version of the agent's prose."""
+def _repoint_canonical_demo(demo_dir, demo_files) -> Optional[list]:
+    """Make the advertised ``demo/demo.py`` lead to the real emitted pipeline(s)
+    after emit-e2e passes, instead of leaving the CPU scaffold as a dead
+    entrypoint (fixes-plan Point 8).
+
+    Single task -> ``demo.py`` runs the one real ``demo_<task>.py``. Multi-task ->
+    ``demo.py`` becomes a dispatcher that lists the per-task demos and runs one by
+    name. Never raises; returns the demo filenames it pointed at, or None.
+    """
     try:
-        rep = json.loads((demo_dir / "grader_report.json").read_text())
-    except Exception:
-        return False
-
-    rule = "  " + "─" * 74
-    lines = [rule, f"  GRADER REPORT — {demo_dir.name}", rule]
-
-    calls = rep.get("calls") or []
-    if calls:
-        lines.append(f"  {'Call':<6} {'Re-run':<7} {'Final PCC':<38} Audit")
-        for c in calls:
-            pccs = c.get("final_pcc") or []
-            try:
-                pcc_s = " / ".join(f"{float(x):.6f}" for x in pccs)
-            except Exception:
-                pcc_s = ", ".join(str(x) for x in pccs)
-            lines.append(
-                f"  {str(c.get('call', '?')):<6} {str(c.get('rerun', '?')):<7} "
-                f"{pcc_s:<38} {c.get('source_audit', '')}"
+        demo_root = Path(demo_dir) / "demo"
+        names = [f.name for f in (demo_files or []) if f.name != "demo.py"]
+        if not demo_root.is_dir() or not names:
+            return None
+        header = "# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n# SPDX-License-Identifier: Apache-2.0\n"
+        if len(names) == 1:
+            body = (
+                header
+                + '"""Canonical entrypoint: runs the real emitted pipeline demo (repointed by emit-e2e)."""\n'
+                + "import os\nimport runpy\nimport sys\n\n"
+                + "_HERE = os.path.dirname(os.path.abspath(__file__))\n"
+                + f"_TARGET = os.path.join(_HERE, {names[0]!r})\n"
+                + "sys.argv[0] = _TARGET\n"
+                + 'runpy.run_path(_TARGET, run_name="__main__")\n'
             )
-        lines.append(rule)
-
-    def _ok(d):
-        return "pass" if d.get("ok") else "FAIL"
-
-    struct = rep.get("structure") or {}
-    nw = rep.get("no_waste") or {}
-    holes = rep.get("holes") or []
-    lines.append(f"  {'Structure':<11} {_ok(struct)}")
-    nw_extra = ""
-    if nw:
-        nw_extra = f" — {nw.get('names_present', '?')}/{nw.get('graduated_total', '?')} graduated invoked"
-        missing = nw.get("missing") or []
-        if missing:
-            nw_extra += f", missing: {', '.join(map(str, missing))}"
-    lines.append(f"  {'No-waste':<11} {_ok(nw)}{nw_extra}")
-    if holes:
-        lines.append(f"  {'Holes':<11} {len(holes)}")
-        for h in holes[:8]:
-            lines.append(
-                f"    - [{h.get('severity', '?')}] {h.get('id', '?')} " f"@ {h.get('file', '?')}:{h.get('lines', '?')}"
+        else:
+            body = (
+                header
+                + '"""Canonical dispatcher over the emitted per-task pipeline demos (repointed by emit-e2e)."""\n'
+                + "import os\nimport runpy\nimport sys\n\n"
+                + "_HERE = os.path.dirname(os.path.abspath(__file__))\n"
+                + f"_DEMOS = {names!r}\n\n\n"
+                + "def main() -> None:\n"
+                + "    if len(sys.argv) > 1:\n"
+                + "        pick = sys.argv[1]\n"
+                + '        target = pick if pick.endswith(".py") else f"demo_{pick}.py"\n'
+                + "        if target in _DEMOS:\n"
+                + "            sys.argv = [os.path.join(_HERE, target)] + sys.argv[2:]\n"
+                + '            runpy.run_path(os.path.join(_HERE, target), run_name="__main__")\n'
+                + "            return\n"
+                + '    print(f"This model has {len(_DEMOS)} task demo(s). Run one of:")\n'
+                + "    for _n in _DEMOS:\n"
+                + '        print(f"  python demo/{_n}")\n\n\n'
+                + 'if __name__ == "__main__":\n    main()\n'
             )
-    else:
-        lines.append(f"  {'Holes':<11} none")
-    lines.append(f"  {'Verdict':<11} {rep.get('verdict', '?')}")
-    lines.append(rule)
-    print("\n" + "\n".join(lines))
-    return True
+        (demo_root / "demo.py").write_text(body)
+        return names
+    except Exception:
+        return None
 
 
-def _render_compute_split(model_id: str) -> None:
-    """Show how much of the pipeline runs natively on the TT device vs torch on
-    CPU — reusing the exact split the auto-iterate loop prints (component-level
-    + op-level), read from bringup_status.json + the op-synth manifests."""
+def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
+    """Consolidated end-of-emit-e2e report: the on-device vs CPU-fallback split, and
+    per task/demo the real-input demo + full-model e2e PCC test + trace+2CQ perf test
+    (with reproduce commands). Prints a terminal table AND writes <demo>/E2E_REPORT.md.
+    Multimodal: one row per demo/task. Non-fatal — never raises."""
+    import time as _time
+    from pathlib import Path as _P
+
     try:
-        from ..cli import _format_compute_split, _format_op_split
-    except Exception:
-        return
-    lines = []
-    try:
-        lines += _format_compute_split(model_id, label="compute split (TT device vs CPU)")
-    except Exception:
-        pass
-    try:
-        lines += _format_op_split(model_id, label="operations")
-    except Exception:
-        pass
-    if lines:
-        print()
-        for ln in lines:
+        demo_dir = _P(demo_dir)
+        _dd = str(demo_dir)
+        _mi = _dd.rfind("/models/")
+        rel = _dd[_mi + 1 :] if _mi >= 0 else demo_dir.name
+
+        split_lines = []
+        try:
+            from ..cli import _format_compute_split, _format_op_split
+
+            split_lines += _format_compute_split(model_id, label="components")
+            split_lines += _format_op_split(model_id, label="operations")
+        except Exception:
+            pass
+        fallback = []
+        try:
+            from ..final_categorization import build_final_categorization
+
+            _cat = build_final_categorization(model_id=model_id, demo_dir=demo_dir)
+            fallback = sorted(
+                list(getattr(_cat, "kernel_missing", []) or []) + list(getattr(_cat, "pending", []) or [])
+            )
+        except Exception:
+            fallback = []
+
+        demo_files = sorted((demo_dir / "demo").glob("demo_*.py")) if (demo_dir / "demo").is_dir() else []
+        if str(verdict).upper() == "PASS":
+            _repoint_canonical_demo(demo_dir, demo_files)
+        e2e_dir = demo_dir / "tests" / "e2e"
+        all_e2e = sorted(e2e_dir.glob("test_*.py")) if e2e_dir.is_dir() else []
+
+        pcc_by_key = {}
+        try:
+            rep = json.loads((demo_dir / "grader_report.json").read_text())
+            for c in rep.get("calls") or []:
+                pccs = c.get("final_pcc") or []
+                try:
+                    pcc_by_key[str(c.get("call", "")).lower()] = min(float(x) for x in pccs) if pccs else None
+                except Exception:
+                    pcc_by_key[str(c.get("call", "")).lower()] = None
+        except Exception:
+            pass
+
+        def _match(task, want_perf):
+            for f in all_e2e:
+                if task in f.name.lower() and (("perf" in f.name.lower()) == want_perf):
+                    return f
+            return None
+
+        rows = []
+        if demo_files:
+            for dfp in demo_files:
+                task = dfp.stem[len("demo_") :] if dfp.stem.startswith("demo_") else dfp.stem
+                rows.append(
+                    (task, dfp, pcc_by_key.get(task.lower()), _match(task.lower(), False), _match(task.lower(), True))
+                )
+        else:
+            _pcc = None
+            if pcc_by_key and all(v is not None for v in pcc_by_key.values()):
+                _pcc = min(pcc_by_key.values())
+            rows.append(
+                (
+                    "e2e",
+                    None,
+                    _pcc,
+                    next((f for f in all_e2e if "perf" not in f.name.lower()), None),
+                    next((f for f in all_e2e if "perf" in f.name.lower()), None),
+                )
+            )
+
+        bar = "=" * 78
+        print("\n" + bar)
+        print(f"  E2E REPORT — {model_id}")
+        print(f"  Verdict: {verdict}")
+        print(bar)
+        print("  PIPELINE PLACEMENT (on-device vs CPU fallback):")
+        for ln in split_lines:
             print(ln)
+        print(f"    CPU-fallback modules: {', '.join(fallback) if fallback else '(none — fully on device)'}")
+        print("  " + "-" * 74)
+        print(f"    {'task':<12} {'e2e PCC':<9} {'demo (real I/O)':<26} trace+2CQ perf test")
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            pcc_s = f"{pcc:.4f}" if isinstance(pcc, float) else "n/a"
+            demo_s = (f"demo/{dfp.name}" if dfp else "(none)")[:26]
+            print(f"    {task[:12]:<12} {pcc_s:<9} {demo_s:<26} {perf_test.name if perf_test else '(none)'}")
+        print("  " + "-" * 74)
+        print("  REPRODUCE (per task):")
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            print(f"    {task}:")
+            if dfp:
+                print(f"      demo   → python {rel}/demo/{dfp.name}")
+            if pcc_test:
+                print(f"      pcc    → pytest {rel}/tests/e2e/{pcc_test.name} -svv")
+            if perf_test:
+                print(f"      trace  → pytest {rel}/tests/e2e/{perf_test.name} -svv")
+        print(f"  full report → {rel}/RUN_REPORT.md")
+        print(bar)
+
+        md = [
+            f"# E2E report — `{model_id}`",
+            "",
+            f"_Generated: {_time.strftime('%Y-%m-%d %H:%M:%S %Z')}_",
+            "",
+            f"**Verdict: {verdict}**",
+            "",
+            "## Pipeline placement (on-device vs CPU fallback)",
+            "",
+        ]
+        for ln in split_lines:
+            md.append(f"- {ln.strip()}")
+        md.append(
+            "- CPU-fallback modules: "
+            + (", ".join(f"`{m}`" for m in fallback) if fallback else "(none — fully on device)")
+        )
+        md += [
+            "",
+            "## Per task / demo",
+            "",
+            "| task | e2e PCC | demo (real input→output) | e2e PCC test | trace+2CQ perf test |",
+            "|---|---|---|---|---|",
+        ]
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            pcc_s = f"{pcc:.4f}" if isinstance(pcc, float) else "n/a"
+            md.append(
+                f"| `{task}` | {pcc_s} | {_e2e_cell(rel, 'demo', dfp)} | "
+                f"{_e2e_cell(rel, 'tests/e2e', pcc_test)} | {_e2e_cell(rel, 'tests/e2e', perf_test)} |"
+            )
+        md += ["", "## Reproduce", ""]
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            md.append(f"### {task}")
+            md.append("```bash")
+            if dfp:
+                md.append(f"python {rel}/demo/{dfp.name}")
+            if pcc_test:
+                md.append(f"pytest {rel}/tests/e2e/{pcc_test.name} -svv")
+            if perf_test:
+                md.append(f"pytest {rel}/tests/e2e/{perf_test.name} -svv")
+            md.append("```")
+            md.append("")
+        from ..run_report import refresh_bringup_section, upsert_report_section
+
+        refresh_bringup_section(demo_dir, model_id)
+        upsert_report_section(demo_dir, "emit-e2e", "\n".join(md))
+        try:
+            (demo_dir / "E2E_REPORT.md").unlink()  # consolidated into RUN_REPORT.md — drop the standalone
+        except OSError:
+            pass
+    except Exception as exc:
+        print(f"  [e2e-report] skipped: {type(exc).__name__}: {exc}")
 
 
 _G1_TORCH_DELEGATION = (
@@ -280,7 +446,11 @@ _G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
 
 def _host_op_gate_reason(probe_result):
     if not isinstance(probe_result, dict) or not probe_result.get("ran"):
-        return None
+        return (
+            "on-device: fully-on-device NOT proven — the pipeline exposes no runnable "
+            "host_op_selftest hook (emit it per COMMAND 3 so the observer can verify). "
+            "Set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model."
+        )
     v = probe_result.get("verdict") or {}
     if v.get("on_device", True):
         return None
@@ -461,6 +631,18 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     if not (demo_dir / "README.md").is_file():
         reasons.append("G4 structure: no README.md (standard demo layout)")
 
+    _self_opens = _pipeline_self_opens_device(demo_dir)
+    if _self_opens:
+        _where = ", ".join(f"{rel}:{ln}" for rel, ln in _self_opens)
+        reasons.append(
+            "G5 device-ownership: the pipeline opens its own device "
+            f"(ttnn.open_device/open_mesh_device at {_where}). The pipeline MUST run on the `device` passed "
+            "into build_pipeline — the test fixture is the SOLE device opener (it opens once with "
+            "num_command_queues=2 + trace_region_size for the trace+2CQ lever). A second ad-hoc open creates a "
+            "competing device with a different command-queue count, which is what breaks trace+2CQ with "
+            "`id < mesh_command_queues_.size()`. Remove these open_device calls and thread the passed-in device through."
+        )
+
     if os.environ.get("E2E_ALL_TASKS", "0") == "1":
         model_id = os.environ.get("E2E_MODEL_ID", "")
         if model_id:
@@ -474,142 +656,41 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                     f"(one demo/demo_<task>.py per HF-registered head required — do not collapse)"
                 )
 
-    stub_dir = demo_dir / "_stubs"
-    nonnative = []
-    for p in sorted(stub_dir.glob("*.py")) if stub_dir.is_dir() else []:
-        if p.name.startswith("_"):
-            continue
-        try:
-            src = p.read_text(errors="ignore")
-        except Exception:
-            continue
-        if any(re.search(pat, src) for pat in _G1_TORCH_DELEGATION):
-            nonnative.append(p.stem)
-    if nonnative:
-        reasons.append("G1: stub(s) delegate to the torch reference (not native ttnn): " + ", ".join(nonnative[:8]))
-
-    tt_dir = demo_dir / "tt"
-    hf_hits = []
-    scan_targets = []
-    if tt_dir.is_dir():
-        scan_targets.extend(sorted(tt_dir.glob("*.py")))
-    if stub_dir.is_dir():
-        scan_targets.extend([p for p in sorted(stub_dir.glob("*.py")) if not p.name.startswith("_")])
-    for p in scan_targets:
-        try:
-            src = p.read_text(errors="ignore")
-        except Exception:
-            continue
-        rel = p.relative_to(demo_dir)
-        for h in _check_hf_fallback(src)[:6]:
-            hf_hits.append(f"{rel}: {h}")
-    if hf_hits:
-        reasons.append(
-            "G1b: tt/*.py HOT-path function(s) call HF submodules as computation — "
-            "pipeline is not a real TT forward path: "
-            + "; ".join(hf_hits[:8])
-            + " (chain the graduated TTNN stub instead; HF is allowed in *_trace_setup "
-            "and reference helpers for fixed-input injection, not in *_trace_step / "
-            "decode_step / run_* / __call__)"
-        )
-
     if os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1":
-        tt_dir = demo_dir / "tt"
-        host_hits = []
-        for p in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
+        repo = demo_dir
+        for parent in demo_dir.parents:
+            if (parent / "models").is_dir():
+                repo = parent
+                break
+        hop = repo / "scripts" / "tt_hw_planner" / "_host_op_probe.py"
+        if hop.is_file():
+            penv3 = dict(os.environ)
+            penv3["TT_METAL_HOME"] = str(repo)
+            penv3["PYTHONPATH"] = str(repo) + os.pathsep + penv3.get("PYTHONPATH", "")
+            penv3.pop("TT_METAL_DEVICE_PROFILER", None)
+            _pb3 = repo / "python_env" / "bin" / "python"
+            _pbin3 = str(_pb3) if _pb3.exists() else sys.executable
             try:
-                src = p.read_text(errors="ignore")
-            except Exception:  # noqa: BLE001
-                continue
-            if any(re.search(pat, src) for pat in _G5_HOST_SAMPLING):
-                host_hits.append(p.stem)
-        if host_hits:
-            reasons.append(
-                "G5 on-device: pipeline samples on the HOST (torch.argmax/topk/multinomial) — decode is not "
-                "fully on-device, so trace + 2CQ is blocked: " + ", ".join(host_hits[:8]) + " (move sampling "
-                "on-device with ttnn; set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model)"
-            )
-        else:
-            repo = demo_dir
-            for parent in demo_dir.parents:
-                if (parent / "models").is_dir():
-                    repo = parent
-                    break
-            probe = repo / "models" / "experimental" / "perf_automation" / "cc_optimize" / "_op_sig_probe.py"
-            if probe.is_file() and test_files:
-                penv = dict(os.environ)
-                penv["TT_METAL_HOME"] = str(repo)
-                penv["PYTHONPATH"] = str(repo) + os.pathsep + penv.get("PYTHONPATH", "")
-                penv["TT_PERF_MAX_NEW_TOKENS"] = "2"
-                penv.pop("TT_METAL_DEVICE_PROFILER", None)
-                _pb = repo / "python_env" / "bin" / "python"
-                _pbin = str(_pb) if _pb.exists() else sys.executable
-                try:
-                    pr = subprocess.run(
-                        [_pbin, str(probe), str(test_files[0].relative_to(repo))],
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout_s,
-                        cwd=str(repo),
-                        env=penv,
-                    )
-                    # _parse_facts rule (same as cc_optimize's scorecard, but ENFORCED
-                    # here as a gate): a ttnn.Tensor lives on-device and torch can't touch
-                    # it, so ANY host-transfer op appearing in the REAL forward's op stream
-                    # means the pipeline crosses to host mid-compute — host glue, trace+2CQ
-                    # blocked. Model-agnostic: reads the actual op stream (whatever the model
-                    # runs — encoder / decoder / prefill+decode / diffusion / …), not a
-                    # per-model map or a named step. Presence, not op-type variety.
-                    host_ops = []
-                    for line in ((pr.stdout or "") + "\n" + (pr.stderr or "")).splitlines():
-                        if line.startswith("PERF_OP_SIGS="):
-                            import json as _json
-
-                            try:
-                                sigs = _json.loads(line.split("=", 1)[1])
-                            except Exception:  # noqa: BLE001
-                                sigs = []
-                            host_ops = sorted({s.split("(")[0] for s in sigs if any(h in s for h in _G5_HOST_XFER)})
-                    if host_ops:
-                        reasons.append(
-                            "G5 on-device: the real forward round-trips to host via "
-                            + ", ".join(host_ops[:8])
-                            + " — not fully on-device, so trace+2CQ is blocked (host/torch compute is "
-                            "reached mid-forward; keep the whole forward resident + sample on-device, or "
-                            "set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model)"
-                        )
-                except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
-                    pass
-
-            hop = repo / "scripts" / "tt_hw_planner" / "_host_op_probe.py"
-            if hop.is_file():
-                penv3 = dict(os.environ)
-                penv3["TT_METAL_HOME"] = str(repo)
-                penv3["PYTHONPATH"] = str(repo) + os.pathsep + penv3.get("PYTHONPATH", "")
-                penv3.pop("TT_METAL_DEVICE_PROFILER", None)
-                _pb3 = repo / "python_env" / "bin" / "python"
-                _pbin3 = str(_pb3) if _pb3.exists() else sys.executable
-                try:
-                    pr3 = subprocess.run(
-                        [_pbin3, str(hop), str(demo_dir)],
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout_s,
-                        cwd=str(repo),
-                        env=penv3,
-                    )
-                    _res = None
-                    for line in ((pr3.stdout or "") + "\n" + (pr3.stderr or "")).splitlines():
-                        if line.startswith("HOST_OP_PROBE="):
-                            try:
-                                _res = json.loads(line.split("=", 1)[1])
-                            except Exception:  # noqa: BLE001
-                                _res = None
-                    _r = _host_op_gate_reason(_res)
-                    if _r:
-                        reasons.append(_r)
-                except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
-                    pass
+                pr3 = subprocess.run(
+                    [_pbin3, str(hop), str(demo_dir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_s,
+                    cwd=str(repo),
+                    env=penv3,
+                )
+                _res = None
+                for line in ((pr3.stdout or "") + "\n" + (pr3.stderr or "")).splitlines():
+                    if line.startswith("HOST_OP_PROBE="):
+                        try:
+                            _res = json.loads(line.split("=", 1)[1])
+                        except Exception:  # noqa: BLE001
+                            _res = None
+                _r = _host_op_gate_reason(_res)
+                if _r:
+                    reasons.append(_r)
+            except Exception as _e:  # noqa: BLE001
+                reasons.append("on-device: host-op observer probe could not run (%s) — cannot prove on-device" % _e)
 
     py = sys.executable
     for parent in [Path.cwd(), *demo_dir.parents]:
@@ -665,6 +746,64 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             continue
         if re.search(r"pytest\.xfail|mark\.xfail|pytest\.skip|assert\s+True\b", src):
             reasons.append(f"honesty: {p.name} contains pytest.xfail / pytest.skip / assert True")
+
+    # --- Enumerate any stubs still on torch fallback (static + runtime) --------
+    # Two complementary scans, both pure read-side, both silent when clean:
+    #   G1-static  — grep _stubs/*.py for `self._torch_module(...)` / `_get_torch_submodule(...)`
+    #                (the un-graduated scaffold shape). Wires up the previously-dead
+    #                _G1_TORCH_DELEGATION patterns from line 282 so operators see WHICH
+    #                stubs the LLM never rewrote, not just an aggregate count.
+    #   G1-runtime — read _runtime_fallbacks.json for components that fell back during
+    #                the pytest run just completed. Complements the static scan when a
+    #                stub looks native but its runtime except-branch fired (e.g. conv2d
+    #                CPU-fallback under an edge-case shape).
+    # When both scans return empty (fully graduated pipeline), no reason is appended
+    # and gate behavior is identical to before. Purely additive diagnostic on exit.
+    _stubs_dir = demo_dir / "_stubs"
+    _static_offenders: List[str] = []
+    if _stubs_dir.is_dir():
+        for _stub in sorted(_stubs_dir.glob("*.py")):
+            if _stub.name.startswith("_"):
+                continue
+            try:
+                _src = _stub.read_text(errors="ignore")
+            except Exception:
+                continue
+            for _pat in _G1_TORCH_DELEGATION:
+                if re.search(_pat, _src):
+                    _static_offenders.append(_stub.stem)
+                    break
+    if _static_offenders:
+        _shown = _static_offenders[:12]
+        _tail = f", +{len(_static_offenders) - 12} more" if len(_static_offenders) > 12 else ""
+        reasons.append(
+            f"G1-static: {len(_static_offenders)} stub(s) still route __call__ through torch "
+            f"(scaffold not yet graduated by LLM): {', '.join(_shown)}{_tail}"
+        )
+
+    _rt_offenders: List[str] = []
+    _rtj = demo_dir / "_runtime_fallbacks.json"
+    if _rtj.is_file():
+        try:
+            _rt = json.loads(_rtj.read_text())
+            if isinstance(_rt, dict):
+                for _comp, _info in sorted(_rt.items()):
+                    if not isinstance(_info, dict):
+                        continue
+                    _kinds = _info.get("kinds") or []
+                    _helpers = _info.get("helpers") or []
+                    if _helpers or _kinds:
+                        _kk = ",".join(sorted(set(_kinds))) if _kinds else "?"
+                        _rt_offenders.append(f"{_comp} ({_kk}, {len(_helpers)} call(s))")
+        except Exception:
+            pass
+    if _rt_offenders:
+        _shown = _rt_offenders[:8]
+        _tail = f"; +{len(_rt_offenders) - 8} more" if len(_rt_offenders) > 8 else ""
+        reasons.append(
+            f"G1-runtime: {len(_rt_offenders)} component(s) hit CPU fallback during pytest: "
+            f"{'; '.join(_shown)}{_tail}"
+        )
 
     _rt_off = os.environ.get("E2E_REQUIRE_TRACE", "1") == "0"
     _anno = os.environ.get("E2E_ALLOW_NO_TRACE") == "1"
@@ -746,7 +885,49 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                         + " (set E2E_ALLOW_NO_TRACE=1 to waive for a genuinely non-traceable model)"
                     )
 
+    try:
+        from ..trace_gate import build_fix_directive, evaluate_trace_gate, overflow_fix_loop, record_trace_verdict
+
+        _proof = None
+        _proof_raw = os.environ.get("E2E_TRACE_OVERFLOW_PROOF")
+        if _proof_raw:
+            try:
+                _proof = json.loads(_proof_raw)
+            except Exception:  # noqa: BLE001
+                _proof = None
+        _tg = evaluate_trace_gate(demo_dir, allow_no_trace=_anno, overflow_proof=_proof)
+        if _tg.get("verdict") == "FAIL" and _is_overflow_detail(_tg.get("capture_detail")):
+            _fix = overflow_fix_loop(demo_dir)
+            print("[emit-e2e] trace-gate overflow fix-loop: %s" % _fix.get("detail"))
+            if _fix.get("resolved"):
+                _tg = evaluate_trace_gate(demo_dir, trace_caps=_fix.get("caps"), allow_no_trace=_anno)
+            elif _fix.get("proof"):
+                _tg = evaluate_trace_gate(demo_dir, allow_no_trace=True, overflow_proof=_fix.get("proof"))
+        for _r in _tg.get("reasons") or []:
+            if _r not in reasons:
+                reasons.append(_r)
+        print(
+            "[emit-e2e] trace-gate verdict=%s (%d graduated, %d ungraduated): %s"
+            % (
+                _tg.get("verdict"),
+                len(_tg.get("policy", {}).get("graduated_modules") or []),
+                len(_tg.get("policy", {}).get("eager_eligible_modules") or []),
+                _tg.get("reason"),
+            )
+        )
+        _fd = build_fix_directive(_tg)
+        if _fd:
+            print("[emit-e2e] trace-gate fix directive: %s" % _fd)
+        record_trace_verdict(demo_dir, _tg)
+    except Exception as _tge:  # noqa: BLE001
+        print("[emit-e2e] trace-gate evaluation skipped: %s" % _tge)
+
     return (len(reasons) == 0), reasons
+
+
+def _is_overflow_detail(detail):
+    d = (detail or "").lower()
+    return any(m in d for m in ("trace region", "trace_region", "overflow", "out of memory", "oom", "not enough space"))
 
 
 _TT_ONLY_CONTRACT = """
@@ -836,6 +1017,12 @@ def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
 
 
 def cmd_emit_e2e(args) -> int:
+    from .optimize import invalid_trace_flag_error
+
+    _tf = invalid_trace_flag_error()
+    if _tf:
+        print("error: " + _tf)
+        return 1
     return _emit_e2e_phase_a(args)
 
 
@@ -894,6 +1081,8 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     print("\n" + sep)
     print(f"  cc engine: rounds={res['rounds']} can_stop={final.get('can_stop')} halted={res['halted']}")
     print(sep)
+    if final.get("can_stop"):
+        emit_e2e_report(model_id, demo_dir, verdict="PASS")
     return 0 if final.get("can_stop") else 1
 
 
@@ -930,7 +1119,6 @@ def _emit_e2e_phase_a(args) -> int:
     agent_model = getattr(args, "model", None) or "opus"
     agent_bin = getattr(args, "agent_bin", "claude") or "claude"
     timeout_s = int(getattr(args, "agent_timeout_s", 0) or 0) or 14400
-    skip_grade = bool(getattr(args, "no_grade", False))
     max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 20
 
     # One consolidated full log for the whole run (builder + grader + fix
@@ -954,6 +1142,22 @@ def _emit_e2e_phase_a(args) -> int:
     print(sep)
 
     _pc = _planned_parallelism(model_id, args)
+    from ..parallelism import read_parallelism_manifest
+
+    _manifest = read_parallelism_manifest(demo_dir)
+    _mismatch = _topology_mismatch(_manifest, _pc, _mesh_chip_count(getattr(args, "mesh", None)))
+    if _mismatch:
+        print(sep)
+        print(f"  ✗ EMIT-E2E ABORTED (topology guard) — {_mismatch}")
+        print(sep)
+        return 2
+    if _manifest and int(_manifest.get("tp", 1)) > 1:
+        if _pc is not None:
+            print(
+                f"  ✓ topology guard: --mesh reverified against graduated split "
+                f"TP={_manifest.get('tp')} x DP={_manifest.get('dp')} on {_manifest.get('chips')} chips"
+            )
+        # (a tp<=1 manifest, or no manifest, is not enforced — see _topology_mismatch)
     _parallel_note = _parallelism_prompt_block(_pc)
     if _pc is not None and _pc.chips > 1:
         print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
@@ -971,6 +1175,20 @@ def _emit_e2e_phase_a(args) -> int:
                     f"NO shard implementation may be replicated. The final pipeline MUST contain "
                     f"ShardTensorToMesh + a collective (all_reduce/all_gather); a pure-replication pipeline is "
                     f"NOT an acceptable TP={_pc.tp} result."
+                )
+                _parallel_note += (
+                    "\n\nSCHEME EVALUATION (do this BEFORE composing — the tool has verified the chip "
+                    "count/TP/DP match bring-up, but the per-component SCHEME is YOUR check and it must "
+                    "generalize to THIS model): for EACH sharded stub above, read its forward + docstring "
+                    "to identify its parallel scheme (TP column/row, expert-parallel EP, sequence/SP, "
+                    "replicate) and the mesh AXIS + COLLECTIVE it uses, then validate that scheme against "
+                    f"THIS model's config at TP={_pc.tp} x DP={_pc.dp} — e.g. expert-parallel requires "
+                    "n_routed_experts % (expert-axis degree) == 0; attention TP requires degree <= "
+                    "num_key_value_heads; sequence-parallel requires seq % degree == 0; every sharded "
+                    "component must agree on which physical mesh axis is the sharded (cols/TP) axis. If any "
+                    "component's scheme is INCOMPATIBLE with this mesh/config, STOP and report it as a hole — "
+                    "do NOT silently replicate it. Gathered output MUST still equal the single-device HF "
+                    "golden; the on-device PCC gate is the final arbiter."
                 )
             else:
                 print(
@@ -1001,9 +1219,8 @@ def _emit_e2e_phase_a(args) -> int:
         label="builder",
         log_path=full_log,
     )
-    engine = getattr(args, "engine", "cc") or "cc"
     if rc_build != 0:
-        if engine == "cc" and (demo_dir / "tt").is_dir():
+        if (demo_dir / "tt").is_dir():
             print(
                 f"\n  ⚠ builder agent exited rc={rc_build}, but {demo_dir}/tt exists — "
                 f"entering CC fix-loop against the gate from current state"
@@ -1014,63 +1231,14 @@ def _emit_e2e_phase_a(args) -> int:
     else:
         print("  ✓ builder finished (exit 0)")
 
-    if engine == "cc":
-        return _run_emit_e2e_cc(
-            model_id=model_id,
-            demo_dir=demo_dir,
-            pcc=pcc,
-            timeout_s=timeout_s,
-            agent_bin=agent_bin,
-            max_rounds=max_grade_rounds,
-        )
-
-    if skip_grade:
-        print("\n  (--no-grade) skipping independent grader phase.\n")
-        # No grader report to render; show a clean (markdown-stripped) build summary.
-        if (build_final or "").strip():
-            print(_md_to_terminal(build_final))
-        _render_compute_split(model_id)
-        return 0
-
-    rule = "  " + "─" * 74
-    for rnd in range(1, max_grade_rounds + 1):
-        print(f"\n  ===== PHASE 3: DETERMINISTIC GATES (tool-run, round {rnd}/{max_grade_rounds}) =====\n")
-        ok, reasons = _run_deterministic_gates(demo_dir, pcc, timeout_s)
-        print(rule)
-        print(f"  GATES (tool-enforced, not agent-reported): {'PASS' if ok else 'FAIL'}")
-        for r in reasons:
-            print(f"    - {r}")
-        print(rule)
-        _render_compute_split(model_id)
-
-        if ok:
-            print("\n" + sep)
-            print(f"  ✓ TOOL-ENFORCED GATES: PASS (round {rnd}) — verdict computed by the tool")
-            print(sep)
-            return 0
-        if rnd == max_grade_rounds:
-            break
-        print(f"\n  ===== FIX agent (round {rnd}/{max_grade_rounds - 1}) — addressing gate failures =====\n")
-        fix_prompt = _build_fix_prompt(
-            model_id=model_id,
-            demo_dir=demo_dir,
-            pcc=pcc,
-            grader_findings="TOOL-ENFORCED GATES FAILED (fix these, do not weaken them):\n"
-            + "\n".join(f"  - {r}" for r in reasons),
-        )
-        _run_agent(
-            prompt=fix_prompt,
-            agent_bin=agent_bin,
-            agent_model=agent_model,
-            timeout_s=timeout_s,
-            label="fix",
-            log_path=full_log,
-        )
-
-    print("\n" + sep)
-    print(f"  ✗ TOOL-ENFORCED GATES: did NOT pass within {max_grade_rounds} round(s)")
-    print(sep)
-    return 1
+    return _run_emit_e2e_cc(
+        model_id=model_id,
+        demo_dir=demo_dir,
+        pcc=pcc,
+        timeout_s=timeout_s,
+        agent_bin=agent_bin,
+        max_rounds=max_grade_rounds,
+    )
 
 
 def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int, label="agent", log_path: Path = None):
@@ -1236,171 +1404,51 @@ def _fmt_tool(name: str, inp: dict) -> str:
         return name
 
 
-def _build_fix_prompt(*, model_id: str, demo_dir: Path, pcc: float, grader_findings: str) -> str:
-    return f"""The TOOL-ENFORCED end-to-end gates FAILED for `{model_id}` at {demo_dir}.
-The verdict is computed by the tool itself (it runs tests/e2e on the device and
-reads pass/fail) — you CANNOT pass by editing a report; you must make the gates
-genuinely pass when the tool re-runs them.
-
-Gate failures to fix:
-{grader_findings}
-
-Fix rules:
-  - Failures here are WIRING/ASSEMBLY, not component math. The components are
-    already graduated and PCC-verified in isolation — do NOT change stub math or
-    re-run per-component PCC. Make every flagged module genuinely on the real
-    compute path: fed by the previous TT stage's real output, its output flowing
-    into the FINAL output. NO off-path side-runs, NO matched/reference tensor
-    injected at a joint, NO counter bumped while the real compute bypasses the
-    stub.
-  - GENERATIVE heads (reference is `model.generate()`): reproduce generate()'s
-    real chain and compare to it. Keep the gate fast by capping BOTH sides to the
-    same small N (e.g. 40): pass `max_new_tokens=N` to `model.generate()` AND stop
-    the TT decode loop at N, then compare the first-N sequence (+ per-step PCC).
-    Do NOT run full-length generation (the gate times out). Do NOT cap only the
-    TT side while HF runs full (lengths won't match → false fail, and HF stays
-    slow).
-  - Do NOT weaken any gate, lower a threshold, add pytest.skip/assert True, or
-    relax no-waste. Keep input from the real HF processor/tokenizer and the
-    golden from the real HF reference (`model.generate()`).
-  - STRUCTURE/demo failures: emit-e2e's deliverable is a runnable demo. Ensure
-    `demo/demo_<task>.py` entrypoints exist (each with `__main__` + argparse),
-    plus `tt/` and `README.md`. The demo MUST call the SAME shared pipeline in
-    `tt/` that the e2e test calls — do NOT give the demo its own copy of the
-    wiring (it will drift and ship broken while the test stays green). Fix the
-    demo by routing it through the test's pipeline, not by rewriting wiring.
-  - Keep the demo package structure (demo/ + tt/ + tests/ + README) intact.
-  - Re-run tests/e2e on the device yourself and confirm they pass before finishing.
-{_TT_ONLY_CONTRACT}
-Report what you changed and the device re-run result."""
-
-
-def _build_grader_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
-    return f"""You are the independent GRADER for the end-to-end TTNN pipeline of
-`{model_id}` at {demo_dir}. You did NOT build this pipeline. Your job is NOT to
-fix or improve it — it is to ADVERSARIALLY VERIFY it and try to find a hole.
-Assume the builder may have gamed the gates; prove it didn't.
-
-Do all of this with your own tools (Read/Bash), then report a verdict.
-
-1. RE-RUN (independent execution). For each {demo_dir}/tests/e2e/test_*.py, run
-   it FRESH on the device yourself:
-     ./python_env/bin/python -m pytest <file> -s
-   Record pass/fail and every FINAL_PCC printed. A pass you reproduce counts;
-   a result you only read in a summary does NOT.
-
-2. AUDIT THE TEST SOURCE (is the test honest?). Read each test file and CONFIRM:
-   - the PCC is computed between the TT pipeline output and the HUGGINGFACE
-     reference output — NOT TT-vs-TT, not against a constant or a trivially
-     equal tensor;
-   - the input is built from the real HF processor/tokenizer/feature_extractor
-     (Source A), not random tensors;
-   - the INVOKED counters wrap stubs that are actually ON the compute path
-     (the wrapped object's output is really used downstream) — not a counter
-     that is bumped while the real compute bypasses it;
-   - there is NO `pytest.skip`, no `assert True`, no early return that dodges
-     the PCC assertion;
-   - every PCC assertion threshold is >= {pcc}.
-
-3. STRUCTURE (standard demo layout). Confirm the emitted package exists and is real:
-   {demo_dir}/demo/ (runnable per-Call entrypoints), {demo_dir}/tt/,
-   {demo_dir}/tests/e2e/, and a README.md. Flag missing/placeholder pieces.
-
-4. NO-WASTE. From {demo_dir}/bringup_status.json, take the GRADUATED set (NEW
-   components with a `_stubs/<name>.py.last_good_native` OR `.py.last_good_sharded`
-   snapshot — bring-up is single-phase, so a TP>1 mesh run graduates shardable
-   modules DIRECTLY sharded). Confirm the UNION of INVOKED stubs across all task
-   heads' runs == that graduated set. Name any graduated module never invoked.
-   IMPORTANT: coverage_step / coverage_sweep / invoke_all_stubs / any function
-   that calls each graduated stub once just to check the "invoked" counter DOES
-   NOT COUNT as invoked-in-forward-path. Every graduated stub must be truly IN
-   the real forward path (its output feeds downstream computation). Flag any
-   stub whose only invocation is via a coverage sweep as WASTE / SHORTCUT.
-
-5. TT-ONLY. Confirm the pipeline is pure TTNN in the forward path:
-   - NO `model.generate(...)` / `hf_model.generate(...)` — HF's host AR loop
-   - NO monkey-patching of HF submodule forwards (`self.model.<X>.forward = ...`)
-   - NO `hf_model.<X>(...)` computation calls (config reads and weight
-     extraction OK)
-   - NO `torch.matmul` / `torch.softmax` / `torch.layer_norm` / `torch.embedding` /
-     `torch.argmax` / `torch.topk` / `torch.multinomial` / `torch.nn.functional.*` /
-     `F.<X>` in the forward path
-   - The pipeline must be an EXPLICIT Python chain calling `stubs["<name>"](...)`
-     directly, readable top-down from `run_<task>()` — not HF orchestration.
-   HF/torch are ONLY allowed in `_hf_reference_<task>()` (golden reference) and
-   `<stage>_trace_setup(...)` (seeding fixed-input persistent buffers). Any
-   violation is a HOLE — flag it in the report.
-
-WRITE the structured machine-readable report to {demo_dir}/grader_report.json
-so the fix agent gets precise targets. Use EXACTLY this schema:
-  {{
-    "verdict": "PASS" | "FAIL",
-    "calls": [
-      {{"call": "<id>", "rerun": "pass|fail", "final_pcc": [<num>, ...],
-        "source_audit": "clean|ISSUE"}}
-    ],
-    "structure": {{"ok": true|false, "detail": "<...>"}},
-    "no_waste": {{"ok": true|false, "graduated_total": <N>, "on_path": <N>,
-                  "names_present": <N>, "missing": [<name>, ...]}},
-    "holes": [
-      {{"id": "<short-slug>",
-        "call": "<id>",
-        "modules": ["<graduated module name>", ...],
-        "file": "<path relative to {demo_dir}>",
-        "lines": "<start-end>",
-        "mechanism": "<exactly how the gate is gamed / what is wrong>",
-        "fix_hint": "<concrete action that would make it genuinely pass>",
-        "severity": "blocker" | "minor"}}
-    ]
-  }}
-A clean call contributes no holes. Every FAIL reason MUST appear as a hole with
-file+lines+mechanism+fix_hint filled in (no vague entries).
-
-Then ALSO print this verdict block to stdout (one row per Call):
-
-  GRADER_REPORT
-  | Call | re-run | final_pcc | source-audit | holes_found |
-  | ...  | pass/fail | <num> | clean/ISSUE | <what, or none> |
-  STRUCTURE: pass/fail (<detail>)
-  NO_WASTE: pass/fail (<N>/<total> graduated invoked; missing: <list>)
-  GRADER_VERDICT: PASS    <-- only if EVERY call re-ran-pass + source-audit clean
-                              + STRUCTURE pass + NO_WASTE pass. Otherwise:
-  GRADER_VERDICT: FAIL
-
-Do not write or edit any pipeline/stub/test files — you are read-only except for
-{demo_dir}/grader_report.json (the structured report above) and an optional
-{demo_dir}/grader_report.md prose summary. Be skeptical; if anything is
-ambiguous, it is a FAIL with a hole describing the ambiguity."""
-
-
 def _mesh_chip_count(mesh_arg) -> int:
     if not mesh_arg:
         return 1
     try:
         prod = 1
-        for tok in str(mesh_arg).lower().split("x"):
-            prod *= int(tok)
+        for tok in str(mesh_arg).lower().replace(",", "x").split("x"):
+            if tok.strip():
+                prod *= int(tok.strip())
         return max(prod, 1)
     except Exception:
         return 1
 
 
 def _planned_parallelism(model_id: str, args):
-    chips = _mesh_chip_count(getattr(args, "mesh", None))
-    if chips <= 1:
-        return None
-    try:
-        from ..cli import evaluate_kernels, probe_model
-        from ..parallelism import select_parallelism
+    from ..parallelism import plan_parallelism
 
-        probe = probe_model(model_id)
-        if not getattr(probe, "raw_config", None):
-            return None
-        kr = evaluate_kernels(probe.raw_config, tp_grid=None)
-        pc = select_parallelism(chips, kr)
-    except Exception:
-        return None
-    return pc
+    return plan_parallelism(model_id, _mesh_chip_count(getattr(args, "mesh", None)))
+
+
+def _topology_mismatch(manifest, pc, given_chips: int):
+    """Deterministic fail-safe: return an error string if the --mesh-derived split disagrees with the
+    topology bring-up actually graduated at (recorded in parallelism_manifest.json), else None.
+
+    Only enforced when bring-up graduated a real sharded split (tp>1) — a single-device / replicate-only
+    graduation has nothing to reproduce. This is the decidable floor (pure chip/tp/dp equality); the
+    per-component SCHEME compatibility is evaluated by the builder LLM, not here."""
+    if not manifest:
+        return None  # no recorded topology (older bring-up) — don't block, fall through to current behavior
+    g_chips = int(manifest.get("chips", 1))
+    g_tp = int(manifest.get("tp", 1))
+    g_dp = int(manifest.get("dp", 1))
+    if g_tp <= 1:
+        return None  # bring-up graduated single-device / replicate-only — nothing to enforce
+    hint = f"Pass --mesh {g_dp}x{g_tp} (or --mesh {g_chips}) to match, or re-run bring-up at the new mesh."
+    if pc is None:
+        return (
+            f"bring-up graduated TP={g_tp} x DP={g_dp} on {g_chips} chips, but --mesh implies "
+            f"{given_chips} chip(s) (single-device). {hint}"
+        )
+    if pc.chips != g_chips or pc.tp != g_tp or pc.dp != g_dp:
+        return (
+            f"topology mismatch — bring-up graduated TP={g_tp} x DP={g_dp} on {g_chips} chips, but "
+            f"--mesh implies TP={pc.tp} x DP={pc.dp} on {pc.chips} chips. {hint}"
+        )
+    return None
 
 
 def _parallelism_prompt_block(pc) -> str:
@@ -1453,6 +1501,16 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf/2CQ
     stage; the prompt / next chunk for a one-shot stage) -> flips on the 2CQ path.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
+
+Expose a MODULE-LEVEL factory `build_pipeline(device, model=None, **kwargs)` in tt/pipeline.py that
+CONSTRUCTS AND RETURNS the resident pipeline OBJECT — the one carrying PIPELINE_STAGES and the
+per-stage <stage>_trace_setup/_trace_step/_write_inputs hooks (+ the AR decode contract). This is the
+SINGLE entry the perf/2CQ harness (optimize's generated test) calls to OBTAIN that object for
+measurement. It MUST return the object, NOT run it — no generate()/run_tts()/one-shot result, which
+exposes none of the hooks and makes the trace engine skip. Accept and ignore any demo kwargs (text,
+prompt, language, …) for call-signature compatibility; the resident build derives its shapes from the
+config, not a prompt. `trace_capture_selftest` and the demo entry MUST build through this same factory
+so there is ONE build surface.
 
 Expose trace_capture_selftest(device): for EACH stage in PIPELINE_STAGES, capture ONE step in
 ttnn.begin_trace_capture / end_trace_capture, execute_trace it, then RELEASE the trace before the
@@ -1608,7 +1666,12 @@ def _resolve_demo_dir(args) -> Path:
     if raw:
         p = Path(raw)
         return p.parent if p.suffix == ".py" else p
-    slug = args.model_id.split("/")[-1].replace("-", "_").lower()
+    try:
+        from ..scaffold_demo_folder import _slug
+
+        slug = _slug(args.model_id.split("/")[-1])
+    except Exception:
+        slug = args.model_id.split("/")[-1].replace("-", "_").lower()
     demos_root = Path.cwd() / "models" / "demos"
     if demos_root.is_dir():
         for cand in demos_root.rglob(slug):

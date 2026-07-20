@@ -60,6 +60,7 @@ from scripts.tt_hw_planner import reference_loader_resolver as _rlr  # noqa: E40
 from scripts.tt_hw_planner import shard_plan as _shard  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import auto_iterate as _auto  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import bringup_ladder  # noqa: E402
+from scripts.tt_hw_planner._cli_helpers.agent import resolve_claude_bin  # noqa: E402
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
@@ -108,12 +109,18 @@ def _snap(component: str, suffix: str) -> Path:
 
 
 def _is_torch_wrapper(stub: Path) -> bool:
-    """Delegate to the SAME detector the fsm loop uses so 'native vs CPU-fallback' means the
-    same thing in both engines."""
+    """Inverse of the fsm's strict `_stub_body_is_native`. Falls back to `cli._stub_uses_torch_wrapper`
+    only if the import fails."""
     try:
-        return bool(_cli._stub_uses_torch_wrapper(stub))
+        from scripts.tt_hw_planner.bringup_loop import _stub_body_is_native
     except Exception:
+        try:
+            return bool(_cli._stub_uses_torch_wrapper(stub))
+        except Exception:
+            return False
+    if not stub.is_file():
         return False
+    return not _stub_body_is_native(stub)
 
 
 def _graduation_block_reason(stub: Path) -> str | None:
@@ -135,16 +142,23 @@ def _graduation_block_reason(stub: Path) -> str | None:
 
 
 def _is_graduated(component: str) -> bool:
-    """Graduation per the SHARED contract emit-e2e/promote read: a `.py.last_good_native` snapshot
-    exists next to the stub (written on a PCC pass)."""
-    return _snap(component, ".py.last_good_native").is_file()
+    """Snapshot exists AND current stub is native. Re-checking the stub closes the overlay-restore
+    loophole where a stale snapshot can sit next to a regressed torch-wrapper stub."""
+    if not _snap(component, ".py.last_good_native").is_file():
+        return False
+    if _is_torch_wrapper(_stub_path(component)):
+        return False
+    return True
 
 
 def _is_shard_graduated(component: str) -> bool:
-    """Shard graduation: a `.py.last_good_sharded` snapshot exists (written when the shard-aware body
-    passed gathered-PCC on the mesh). Separate from `.py.last_good_native` so single-device graduation
-    is never disturbed."""
-    return _snap(component, ".py.last_good_sharded").is_file()
+    """Shard graduation: `.py.last_good_sharded` exists AND stub is native. Separate snapshot suffix
+    so single-device graduation isn't disturbed."""
+    if not _snap(component, ".py.last_good_sharded").is_file():
+        return False
+    if _is_torch_wrapper(_stub_path(component)):
+        return False
+    return True
 
 
 def _shard_mode_active() -> bool:
@@ -181,9 +195,98 @@ def _pending_shard_component(comps: list[str]) -> str | None:
     return None
 
 
+def _declared_components() -> list[str]:
+    """The gate's universe: components DECLARED in bringup_status.json (status
+    NEW/ADAPT/REUSE), minus the legitimately-excluded set (no_emit).
+
+    This is deliberately NOT keyed off which per-component PCC test files happen
+    to exist on disk. Keying the universe off emitted test files let a declared
+    component whose test was never written (scaffold gap, promote resume, a
+    post-scaffold addition) slip out of the universe entirely — so it was never
+    attempted AND did not block can_stop (the gate reported "all graduated" over
+    a component it never saw). Enumerating the DECLARED set closes that hole:
+    the missing-test state is handled below (auto-emit) instead of vanishing."""
+    try:
+        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
+    except Exception:
+        return []
+    try:
+        from scripts.tt_hw_planner.overlay_manager import load_no_emit_tests
+
+        no_emit = set(load_no_emit_tests(_MODEL_ID).keys())
+    except Exception:
+        no_emit = set()
+    out: list[str] = []
+    for c in data.get("components", []) or []:
+        if c.get("status") not in ("NEW", "ADAPT", "REUSE"):
+            continue
+        name = str(c.get("name", "")).strip()
+        if name and name not in no_emit:
+            out.append(name)
+    return sorted(set(out))
+
+
+def _repo_root_for_demo() -> Path:
+    d = _DEMO_DIR.resolve()
+    for p in d.parents:
+        if p.name == "models":
+            return p.parent
+    return d
+
+
+def _ensure_component_tests() -> list[str]:
+    """Emit tests/pcc/test_<name>.py for any DECLARED component that is missing
+    it, using the same deterministic scaffolder the bring-up loop uses.
+
+    This is the self-heal both auto-up and promote get for free (both obey this
+    gate): a declared component can never stay test-less and therefore
+    unattended. Best-effort per component; returns the names it emitted."""
+    try:
+        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
+    except Exception:
+        return []
+    try:
+        from scripts.tt_hw_planner.overlay_manager import load_no_emit_tests
+
+        no_emit = set(load_no_emit_tests(_MODEL_ID).keys())
+    except Exception:
+        no_emit = set()
+    try:
+        from scripts.tt_hw_planner.bringup_loop import _emit_pcc_template, _safe_id
+    except Exception:
+        return []
+    pcc_dir = _DEMO_DIR / "tests" / "pcc"
+    repo_root = _repo_root_for_demo()
+    emitted: list[str] = []
+    for c in data.get("components", []) or []:
+        if c.get("status") not in ("NEW", "ADAPT", "REUSE"):
+            continue
+        name = str(c.get("name", "")).strip()
+        if not name or name in no_emit:
+            continue
+        if (pcc_dir / f"test_{_safe_id(name)}.py").is_file():
+            continue
+        try:
+            _emit_pcc_template(
+                demo_dir=_DEMO_DIR,
+                component_name=name,
+                model_id=_MODEL_ID,
+                hf_reference=c.get("hf_reference") or "",
+                new_shape=c.get("new_shape") or {},
+                repo_root=repo_root,
+                overwrite=False,
+                discovered_submodule_path=c.get("submodule_path"),
+            )
+            if (pcc_dir / f"test_{_safe_id(name)}.py").is_file():
+                emitted.append(name)
+        except Exception:
+            pass
+    return emitted
+
+
 def _components() -> list[str]:
     try:
-        return [_component_of(t) for t in _cli._list_component_pcc_tests(_DEMO_DIR)]
+        return _declared_components()
     except Exception:
         return []
 
@@ -416,6 +519,34 @@ def run_component(component: str, mode: str = "single") -> dict:
 
 
 @mcp.tool()
+def _demote_reuse_to_adapt(component: str) -> bool:
+    """A REUSE component gets exactly one iter-0 shot: try the existing tt-module
+    as-is. If it doesn't graduate (PCC fail or the stub is still a torch wrapper),
+    re-tag it REUSE->ADAPT in bringup_status.json so the ADAPT refine path (LLM
+    wraps + adjusts the module) takes over. No-op if it isn't currently REUSE.
+    Returns True iff it flipped."""
+    sp = _DEMO_DIR / "bringup_status.json"
+    try:
+        data = json.loads(sp.read_text())
+    except Exception:
+        return False
+    flipped = False
+    for c in data.get("components", []) or []:
+        if str(c.get("name", "")).strip() == component and c.get("status") == "REUSE":
+            c["status"] = "ADAPT"
+            c["notes"] = (
+                "[gate] REUSE failed iter-0 (PCC/native) -> ADAPT; wrap + refine the existing module. "
+                + (c.get("notes") or "")
+            ).strip()
+            flipped = True
+    if flipped:
+        try:
+            sp.write_text(json.dumps(data, indent=2))
+        except Exception:
+            return False
+    return flipped
+
+
 def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str = "", mode: str = "single") -> dict:
     """Persist the outcome of working `component`: bump attempts, advance the consecutive-same-class
     counter using the DETERMINISTIC class from run_component (your `failure_class` arg is only a
@@ -459,11 +590,13 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
         if _block:
             st.setdefault("consecutive_same_class", {})[component] = 0
             _save_state(st)
+            _demoted = _demote_reuse_to_adapt(component)
             return {
                 "recorded": True,
                 "component": component,
                 "graduated": False,
                 "reason": _block,
+                "demoted_reuse_to_adapt": _demoted,
             }
         if stub.is_file():
             try:
@@ -485,7 +618,8 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
         if len(hist) > 16:
             del hist[: len(hist) - 16]
     _save_state(st)
-    return {"recorded": True, "component": component, "graduated": ok}
+    _demoted = _demote_reuse_to_adapt(component) if not ok else False
+    return {"recorded": True, "component": component, "graduated": ok, "demoted_reuse_to_adapt": _demoted}
 
 
 @mcp.tool()
@@ -723,7 +857,7 @@ def resolve_reference_loader(component: str = "") -> dict:
         model_id=_MODEL_ID,
         demo_dir=_DEMO_DIR,
         failure_text=text,
-        agent_bin=os.environ.get("BRINGUP_MCP_AGENT_BIN", "claude"),
+        agent_bin=os.environ.get("BRINGUP_MCP_AGENT_BIN") or resolve_claude_bin() or "claude",
         cwd=_REPO,
     )
     return res
@@ -737,6 +871,7 @@ def termination_check() -> dict:
     the failure verdict warrants it and it hasn't been decomposed -> decompose, else -> fallback. Uses
     the extracted bringup_ladder cap rule. Agent may NOT declare done."""
     st = _load_state()
+    _ensure_component_tests()
     comps = _components()
     if not comps:
         return {"can_stop": True, "halt": False, "next_target": None, "reason": "no components to bring up"}
@@ -832,6 +967,16 @@ def termination_check() -> dict:
                 f"Mamba). Then run_component('{c}', mode='shard') and record_result(mode='shard'); a "
                 f"gathered-PCC>={_PCC} pass writes .py.last_good_sharded. Math unchanged: gathered output == "
                 f"golden.",
+            }
+        elif _test_file_for(c) is None:
+            nxt = {
+                "unit": c,
+                "rung": "emit",
+                "reason": f"component '{c}' is DECLARED but has no tests/pcc/test_{c}.py and the "
+                f"deterministic scaffolder could not auto-emit one. It MUST have a PCC test to be brought "
+                f"up on device — create tests/pcc/test_{c}.py mirroring a sibling per-component test "
+                f"(reuse tests/pcc/conftest.py's _make_arg_for; see _captured/{c}/ for real shapes), then "
+                f"edit _stubs/{c}.py to a native ttnn forward and run_component. Do NOT leave it test-less.",
             }
         else:
             rung = "emit" if attempts == 0 else "repair"

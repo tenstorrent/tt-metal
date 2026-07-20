@@ -450,42 +450,6 @@ def discover_components(
     return discovered
 
 
-def _load_via_reference_loader(model_id: str, demo_dir):
-    """Fallback for non-transformers checkpoints: when AutoModel can't construct the
-    architecture, load the real nn.Module via the model-local reference loader (written
-    by the resolver if absent) so discovery can walk the genuine tree. Model-agnostic;
-    returns the nn.Module or None."""
-    if not demo_dir:
-        return None
-    try:
-        import importlib.util as _ilu
-        from pathlib import Path as _P
-
-        from . import reference_loader_resolver as _rlr
-    except Exception:
-        return None
-    dd = _P(demo_dir)
-    if not _rlr.has_loader(dd):
-        try:
-            _rlr.resolve(
-                model_id=model_id,
-                demo_dir=dd,
-                failure_text="component discovery: AutoModel cannot construct this architecture (non-transformers checkpoint)",
-                enabled=True,
-            )
-        except Exception:
-            return None
-    if not _rlr.has_loader(dd):
-        return None
-    try:
-        _spec = _ilu.spec_from_file_location("_thp_reference_loader", str(_rlr.loader_path(dd)))
-        _mod = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        return _mod.load_reference_model(model_id)
-    except Exception:
-        return None
-
-
 def discover_components_from_hf_id(
     model_id: str,
     *,
@@ -527,28 +491,156 @@ def discover_components_from_hf_id(
         if load_weights:
             return AutoModel.from_pretrained(model_id, low_cpu_mem_usage=True, **kwargs)
         config = AutoConfig.from_pretrained(model_id, **kwargs)
-        return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
+        try:
+            from accelerate import init_empty_weights
+        except Exception:
+            return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
+        with init_empty_weights():
+            return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
 
     if install_cpu_compat is not None:
         install_cpu_compat()
     model = None
-    _orig_exc: Optional[BaseException] = None
+    build_exc: Optional[BaseException] = None
     try:
         model = _build()
-    except ImportError as _e:
-        _orig_exc = _e
+    except ImportError as exc:
+        build_exc = exc
         if install_cpu_compat is not None and install_cpu_compat():
             try:
                 model = _build()
-            except Exception as _e2:
-                _orig_exc = _e2
-    except Exception as _e:
-        _orig_exc = _e
+                build_exc = None
+            except Exception as exc2:
+                build_exc = exc2
+    except Exception as exc:
+        build_exc = exc
     if model is None:
-        model = _load_via_reference_loader(model_id, demo_dir)
-        if model is None:
-            raise _orig_exc
+        model = _load_reference_module(model_id)
+    if model is None:
+        if build_exc is not None:
+            raise build_exc
+        raise RuntimeError(f"could not construct {model_id} for component discovery")
     try:
         return discover_components(model)
     finally:
         del model
+
+
+def _pkg_from_import_error(exc: BaseException) -> str:
+    pkg = getattr(exc, "name", "") or ""
+    if not pkg:
+        _m = re.search(r"[Nn]o module named ['\"]([\w.]+)['\"]", str(exc))
+        pkg = _m.group(1) if _m else ""
+    return pkg.split(".")[0]
+
+
+def _reference_loader_next_steps(model_id: str, exc: BaseException, loader_file) -> str:
+    import sys as _sys
+
+    err = f"{type(exc).__name__}: {exc}"
+    low = str(exc).lower()
+    py = _sys.executable
+
+    if isinstance(exc, ModuleNotFoundError) or "no module named" in low:
+        pkg = _pkg_from_import_error(exc) or "<the-model-package>"
+        problem = (
+            f"the model's code needs the Python package '{pkg}', which is not installed in the tool's environment."
+        )
+        solution = f"{py} -m pip install {pkg}"
+    elif ("flash_attn" in low) or ("attn_implementation" in low) or ("attention_functions" in low):
+        cur = "?"
+        try:
+            import transformers as _tf
+
+            cur = _tf.__version__
+        except Exception:
+            pass
+        problem = (
+            f"the model's package is incompatible with transformers {cur} in this env (it needs transformers < 5)."
+        )
+        solution = f'{py} -m pip install "transformers<5"'
+    else:
+        problem = f"the reference model could not be built ({err}) — usually a missing package or a dependency version mismatch."
+        solution = f"{py} -m pip install <the-model-package>   # package name is in the error above"
+
+    return "\n".join(
+        [
+            f"Could not build a reference model for '{model_id}' → discovery found 0 components, nothing to bring up.",
+            f"PROBLEM:  {problem}",
+            f"CAUSE:    {err}",
+            "SOLUTION — run this exact command, then re-run the bring-up, and it will work:",
+            f"    {solution}",
+            "(If that package/version would conflict with other tt-metal models in this env, run the",
+            " same command inside a dedicated venv and launch the bring-up from there instead.)",
+        ]
+    )
+
+
+def _write_loader_blocker(demo_dir, message: str) -> None:
+    for ln in message.splitlines():
+        print(f"  [discovery] {ln}")
+    try:
+        (demo_dir / ".loader_blocker.txt").write_text(message, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_reference_module(model_id: str, demo_dir=None):
+    try:
+        from . import reference_loader_resolver as _rlr
+    except Exception:
+        return None
+    if demo_dir is None:
+        try:
+            from .bringup_loop import find_demo_dir
+
+            demo_dir = find_demo_dir(model_id)
+        except Exception:
+            demo_dir = None
+    if demo_dir is None:
+        try:
+            from .discovery import BRINGUP_ROOT
+            from .scaffold_demo_folder import _slug
+
+            demo_dir = BRINGUP_ROOT() / "models" / "demos" / _slug(model_id.split("/")[-1])
+        except Exception:
+            return None
+    try:
+        if not _rlr.has_loader(demo_dir) and _rlr.is_enabled():
+            print(
+                f"  [discovery] {model_id} does not load via AutoModel/AutoConfig — synthesizing a "
+                f"reference loader to enumerate its module tree ..."
+            )
+            _rlr.resolve(
+                model_id=model_id,
+                demo_dir=demo_dir,
+                failure_text="discovery: model does not load via AutoModel/AutoConfig (config-less repo)",
+            )
+        if not _rlr.has_loader(demo_dir):
+            return None
+        import importlib.util as _ilu
+
+        loader_file = _rlr.loader_path(demo_dir)
+
+        def _exec_loader():
+            spec = _ilu.spec_from_file_location("_tt_hw_planner_reference_loader", str(loader_file))
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.load_reference_model(model_id)
+
+        try:
+            ref = _exec_loader()
+        except Exception as exc:
+            _write_loader_blocker(demo_dir, _reference_loader_next_steps(model_id, exc, loader_file))
+            return None
+        try:
+            ref.eval()
+        except Exception:
+            pass
+        return ref
+    except Exception as exc:
+        _write_loader_blocker(
+            demo_dir,
+            _reference_loader_next_steps(model_id, exc, locals().get("loader_file", "tests/pcc/_reference_loader.py")),
+        )
+        return None

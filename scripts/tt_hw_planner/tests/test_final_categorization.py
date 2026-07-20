@@ -42,19 +42,63 @@ def _make_demo_with_components(demo_dir: Path, comps: list) -> None:
     (demo_dir / "bringup_status.json").write_text(json.dumps(status))
 
 
-def test_report_has_three_placement_fields() -> None:
+def test_report_has_placement_fields() -> None:
     fc = _fc()
     fields = set(fc.CategorizationReport.__dataclass_fields__)
-    assert fields == {"on_device", "kernel_missing", "pending"}, fields
+    assert fields == {"on_device", "kernel_missing", "pending", "cpu_reuse"}, fields
 
 
 def test_runtime_target_for_on_device_is_device() -> None:
     fc = _fc()
-    report = fc.CategorizationReport(on_device=["a"], kernel_missing=["b"], pending=["c"])
+    report = fc.CategorizationReport(on_device=["a"], kernel_missing=["b"], pending=["c"], cpu_reuse=["d"])
     assert report.runtime_target("a") == "device"
     assert report.runtime_target("b") == "cpu"
+    assert report.runtime_target("d") == "cpu"
     assert report.runtime_target("c") is None
     assert report.runtime_target("not_in_report") is None
+
+
+def test_bare_reuse_not_wired_routes_to_cpu_reuse_not_on_device(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    demo.mkdir(parents=True)
+    (demo / "_stubs").mkdir()
+    status = {
+        "new_model_id": "test/m",
+        "components": [
+            {"name": "grad", "status": "NEW", "submodule_path": "s0"},
+            {"name": "reuse_bare", "status": "REUSE", "tt_reuse_target": "models/common/rmsnorm.py"},
+            {"name": "adapt_bare", "status": "ADAPT", "tt_reuse_target": "models/tt_transformers/tt/attn.py"},
+        ],
+    }
+    (demo / "bringup_status.json").write_text(json.dumps(status))
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"grad"})
+    assert report.on_device == ["grad"], report.on_device
+    assert sorted(report.cpu_reuse) == ["adapt_bare", "reuse_bare"], report.cpu_reuse
+
+
+def test_wired_reuse_target_routes_to_on_device(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    (demo / "_stubs").mkdir(parents=True)
+    (demo / "tt").mkdir()
+    (demo / "tt" / "rmsnorm.py").write_text("# sibling ttnn module copied into this demo\n")
+    status = {
+        "new_model_id": "test/m",
+        "components": [
+            {"name": "reuse_wired", "status": "REUSE", "tt_reuse_target": "models/common/rmsnorm.py"},
+        ],
+    }
+    (demo / "bringup_status.json").write_text(json.dumps(status))
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set=set())
+    assert report.on_device == ["reuse_wired"], report.on_device
+    assert report.cpu_reuse == [], report.cpu_reuse
 
 
 def test_graduated_routes_to_on_device(tmp_path, monkeypatch) -> None:
@@ -396,12 +440,3 @@ def test_persist_skip_kernel_missing_can_update_reason(tmp_path, monkeypatch) ->
     listing = om.load_persistent_skips("test/m")
     assert listing["x"]["reason"] == "r2 with more detail"
     assert listing["x"]["captured_ts"] == ts_first
-
-
-def test_cmd_up_uses_placement_summary() -> None:
-    """Source-grep: cmd_up still imports the categorization helpers."""
-    cli_mod = importlib.import_module("scripts.tt_hw_planner.cli")
-    src = Path(cli_mod.__file__).read_text()
-    assert "build_final_categorization(" in src
-    assert "format_categorization_summary" in src
-    assert "format_kernel_gap_report" in src

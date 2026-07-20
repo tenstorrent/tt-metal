@@ -27,10 +27,11 @@ class ReuseEntry:
 
 
 def _effort_to_status(effort: Effort, status: Status) -> str:
-    # ADAPT restored 2026-06-01 with iterate-loop integration.
-    #   MISSING                 -> NEW   (write from scratch)
-    #   SUPPORTED + DROP_IN     -> REUSE (use as-is, no test)
-    #   SUPPORTED + !DROP_IN    -> ADAPT (wrap canonical + refine on PCC fail)
+    """Map (effort, support) to a component status. Every category emits a stub +
+    PCC test and goes through the gates. MISSING -> NEW (write from scratch);
+    SUPPORTED+DROP_IN -> REUSE (iter-0 tries the existing module as-is; demoted to
+    ADAPT after the first attempt if the PCC/native gate fails); SUPPORTED+other
+    -> ADAPT (wrap + refine)."""
     if status == Status.MISSING:
         return "NEW"
     if effort == Effort.DROP_IN and status == Status.SUPPORTED:
@@ -96,6 +97,41 @@ _HANDWRITTEN_COMPOSITES: List[ReuseEntry] = [
 ]
 
 
+@lru_cache(maxsize=1)
+def _overlay_entries() -> Tuple[ReuseEntry, ...]:
+    """Reuse targets auto-derived from the synced upstream tree (fixes-plan
+    Point 2a), loaded as the LOWEST-priority supplement so curated entries always
+    win. These let a component wrap an already-implemented upstream module rather
+    than write it from scratch; all are status ADAPT (wrapped + PCC-gated, never
+    trusted) and participate only in concept lookup (a never-matching hf_class
+    pattern keeps them out of the hf-class ``lookup``). Empty if no overlay."""
+    out: List[ReuseEntry] = []
+    try:
+        from .registry_sync import load_generated_overlay
+
+        never = re.compile(r"(?!x)x")
+        for c in load_generated_overlay().get("concepts", []):
+            concept = c.get("concept")
+            tt_path = c.get("tt_path")
+            tt_class = c.get("tt_class")
+            if not (concept and tt_path and tt_class):
+                continue
+            out.append(
+                ReuseEntry(
+                    model_types=tuple(c.get("model_types") or ()),
+                    hf_class_pattern=never,
+                    concept=_concept_from_block_name(concept),
+                    tt_path=tt_path,
+                    tt_class=tt_class,
+                    status=c.get("status", "ADAPT"),
+                    notes="auto-derived from upstream tree (fixes-plan Point 2a); ADAPT => wrapped + PCC-gated, not trusted.",
+                )
+            )
+    except Exception:
+        return tuple()
+    return tuple(out)
+
+
 def lookup(model_type: Optional[str], hf_class_name: Optional[str]) -> Optional[ReuseEntry]:
     if not hf_class_name:
         return None
@@ -144,6 +180,9 @@ def lookup_by_concept(model_type: Optional[str], concept: str) -> Optional[Reuse
     for entry in _HANDWRITTEN_COMPOSITES:
         if _concept_overlap(concept, entry.concept) and _entry_allows_model_type(entry, model_type):
             return entry
+    for entry in _overlay_entries():
+        if _concept_overlap(concept, entry.concept) and _entry_allows_model_type(entry, model_type):
+            return entry
     return None
 
 
@@ -153,7 +192,7 @@ def _synthetic_class_for_concept(concept: str) -> str:
 
 
 def all_entries() -> List[ReuseEntry]:
-    return list(_derived_entries()) + list(_HANDWRITTEN_COMPOSITES)
+    return list(_derived_entries()) + list(_HANDWRITTEN_COMPOSITES) + list(_overlay_entries())
 
 
 def entries_for_model_type(model_type: Optional[str]) -> List[ReuseEntry]:

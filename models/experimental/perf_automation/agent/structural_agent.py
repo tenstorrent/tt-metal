@@ -133,12 +133,46 @@ KERNEL_TEMPLATE = (
 )
 
 
+# DECODE template: the structural-decode lever fires ONLY when the gate detects an
+# autoregressive decode loop that re-runs a growing-sequence prefill every token (no
+# cached decode_step / KV-cache) — the repeat_prefill signal. It is a multi-site
+# restructure of the decode loop, not an op knob, so it lands on this structural agent
+# but must AUTHOR a cached single-token decode path, NOT the sharding recipe.
+DECODE_TEMPLATE = (
+    "This model's decode is REPEAT-PREFILL: an autoregressive loop that re-runs the full "
+    "growing-sequence forward for every generated token, with NO cached single-token "
+    "`decode_step` and NO KV-cache. That is the dominant cost (host-dispatch-bound: most of "
+    "the per-token time is re-slicing/re-computing the whole prefix). Your job is the "
+    "STRUCTURAL decode rewrite — add a cached single-token decode path — then stop.\n\n"
+    "STEPS:\n"
+    "  1. Add a KV-cache + a single-token `decode_step`: after the one-time prefill of the "
+    "prompt, each subsequent token must attend to CACHED keys/values and run attention on the "
+    "ONE new token (seq_len=1), not re-prefill the whole sequence. Append the new K/V to the "
+    "cache each step.\n"
+    "  2. PRESERVE the decode loop's I/O contract exactly (same output tokens/logits, same "
+    "dtype/layout at the boundary) so the rest of the pipeline still stitches and PCC holds.\n"
+    "  3. VALIDATE with `check_candidate_edit` before finishing: it is kept ONLY if PCC-clean "
+    "AND faster; on FAIL (wrong tokens / slower / crash) fix or revert, and re-check.\n\n"
+    "WHERE the decode loop executes (op->source attribution — restructure THAT loop):\n{hot_sources}\n\n"
+    "Hottest ops in the repeat-prefill decode:\n{top_ops}\n\n"
+    "Edit ONLY these files (Read them first):\n{files}\n\n"
+    "When done, output exactly ONE JSON object: "
+    '{{"files": [<repo-relative paths you changed>], "summary": <one sentence: the KV-cache/decode_step you added>}}'
+)
+
+
 def build_structural_prompt(
     lever: str, section: str, model_files: list, top_ops: list[dict] | None, hot_sources: list[dict] | None = None
 ) -> str:
     from .op_attribution import format_hot_sources
 
     files = "\n".join(f"  - {f}" for f in model_files)
+    if lever == "structural-decode":  # gate detected repeat_prefill -> add cached decode_step/KV-cache
+        return DECODE_TEMPLATE.format(
+            top_ops=_format_top_ops(top_ops),
+            hot_sources=format_hot_sources(hot_sources or []),
+            files=files,
+        )
     if not (section or "").strip():  # FROM_PRINCIPLES: no playbook section -> think from the roofline gap
         return FROM_PRINCIPLES_TEMPLATE.format(
             top_ops=_format_top_ops(top_ops),

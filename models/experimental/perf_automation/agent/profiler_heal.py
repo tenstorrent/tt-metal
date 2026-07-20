@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -122,13 +121,13 @@ def _build_dir(root: Path) -> Path | None:
 
 
 def _rebuild(root: Path, build: Path) -> bool:
-    for target in (["tt_metal/libtt_metal.so"], []):
+    for targets in (["tt_metal/libtt_metal.so", "ttnn/_ttnn.so"], []):
         try:
             r = subprocess.run(
-                ["ninja", "-C", str(build), *target],
+                ["ninja", "-C", str(build), *targets],
                 capture_output=True,
                 text=True,
-                timeout=3600,
+                timeout=5400,
             )
         except Exception as exc:
             _log(f"rebuild invocation failed: {exc}")
@@ -138,14 +137,21 @@ def _rebuild(root: Path, build: Path) -> bool:
     else:
         _log("ninja rebuild failed")
         return False
-    built = build / "tt_metal" / "libtt_metal.so"
-    lib = _loaded_lib(root)
-    if built.is_file() and lib is not None and built.resolve() != lib.resolve():
-        try:
-            lib.write_bytes(built.read_bytes())
-        except Exception as exc:
-            _log(f"could not install rebuilt lib: {exc}")
-            return False
+    installs = [
+        (build / "tt_metal" / "libtt_metal.so", "build*/lib/libtt_metal.so"),
+        (build / "ttnn" / "_ttnn.so", "build*/lib/_ttnn.so"),
+        (build / "ttnn" / "_ttnn.so", "ttnn/ttnn/_ttnn.so"),
+    ]
+    for built, loaded_glob in installs:
+        if not built.is_file():
+            continue
+        for loaded in sorted(root.glob(loaded_glob)):
+            if built.resolve() != loaded.resolve():
+                try:
+                    loaded.write_bytes(built.read_bytes())
+                except Exception as exc:
+                    _log(f"could not install {loaded.name}: {exc}")
+                    return False
     return True
 
 
@@ -173,11 +179,15 @@ def ensure_profiler_patched(tt_metal_root) -> None:
                     patched = patched.replace(old, new, 1)
                     matched += 1
             if matched != len(_BLOCKS):
-                _log(f"profiler.cpp did not match expected pattern ({matched}/{len(_BLOCKS)}); leaving stock, skipping heal")
+                _log(
+                    f"profiler.cpp did not match expected pattern ({matched}/{len(_BLOCKS)}); leaving stock, skipping heal"
+                )
                 return
             src.with_name("profiler.cpp.perfauto_bak").write_text(text)
             src.write_text(patched)
-            _log("detected unpatched tt-metal profiler (orphan-marker crash) -> applied fix, rebuilding libtt_metal (one-time, ~2-3 min)...")
+            _log(
+                "detected unpatched tt-metal profiler (orphan-marker crash) -> applied fix, rebuilding libtt_metal (one-time, ~2-3 min)..."
+            )
         build = _build_dir(root)
         if build is None:
             _log("no build dir found (wheel/prebuilt install) -> cannot rebuild; run will use stock profiler")

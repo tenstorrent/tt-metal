@@ -19,6 +19,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -26,6 +27,22 @@ PERF_DIR = "models/experimental/perf_automation"
 CC_DIR = PERF_DIR + "/cc_optimize"
 DEFAULT_MAX_ROUNDS = 3
 _LAST_SCORECARD: dict = {}
+
+
+def _resolve_claude_bin() -> str:
+    """Resolve the `claude` CLI to an absolute path so the orchestrator spawn is
+    PATH-independent (fixes-plan Point 9). Inlined (stdlib only) because run.py is
+    loaded standalone and cannot import the agent-package helper. Falls back to
+    bare "claude" so the spawn always gets a string."""
+    local = os.path.expanduser("~/.local/bin/claude")
+    return (
+        os.environ.get("TT_PLANNER_AGENT_BIN")
+        or os.environ.get("CLAUDE_BIN")
+        or shutil.which("claude")
+        or (local if os.path.exists(local) else None)
+        or "claude"
+    )
+
 
 _ALLOWED_TOOLS = [
     "mcp__perf-mcp__profile_model",
@@ -39,6 +56,7 @@ _ALLOWED_TOOLS = [
     "mcp__perf-mcp__git_revert",
     "mcp__perf-mcp__termination_check",
     "mcp__perf-mcp__record_kernel_attempt",
+    "mcp__perf-mcp__check_lever_coverage",
     "mcp__perf-mcp__tp_pick_degree",
     "mcp__perf-mcp__verify_tp_fracture",
     "Read",
@@ -51,6 +69,8 @@ _ALLOWED_TOOLS = [
 
 _PROMPT = """You are optimizing the TTNN model {model} ({task} pipeline) for {metric} via the perf-mcp tools. Drive {metric} toward the roofline floor. Run CONTINUOUSLY.
 
+HANDS OFF THE HARDWARE — device and process recovery is NOT your job. NEVER run kill, pkill, tt-smi, fuser, or any command that kills a process or resets the device, and NEVER open or close a mesh device yourself. Device wedges, hangs, and leaked device handles are recovered AUTOMATICALLY by the harness (watchdog + supervisor + device reclaim) between rounds. If a perf-mcp tool returns a device error or a measurement appears stuck, do NOT try to fix the device: if you have a measurement, record the attempt; otherwise just note it and move on — the harness will reclaim, reset, and restart as needed. Killing processes or resetting the device yourself WILL BREAK THE RUN (the agent has killed its own orchestrator this way). Your ONLY job is to choose and apply optimizations via the perf-mcp tools and source edits.
+
 termination_check() is the SOLE authority on whether more optimization is needed. It returns a DETERMINISTIC per-op CHECKLIST and a single next_target = {{op, op_class, grid, bound_by, rung}} you MUST work next. The per-op ladder ORDER is: knob:grid -> knob:dtype -> tt-lang -> cpp. An op is "nothing left" ONLY when every rung is ticked; you may STOP ONLY when can_stop=true.
 
 LOOP:
@@ -61,22 +81,35 @@ LOOP:
     knob:dtype -> lower that op's WEIGHT dtype (bf16->bf8_b->bf4_b). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'dtype',measured_ms,beat_baseline) EVEN IF pcc forced a revert (that marks the knob tried).
     tt-lang    -> author a tt-lang (ttl) kernel (Read GUIDELINES/11). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'tt-lang',measured_ms,beat_baseline).
     cpp        -> author a C++ Metalium kernel via ttnn.generic_op (Read GUIDELINES/12). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'cpp',measured_ms,beat_baseline).
-  (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency ok (moved TOWARD the target / not diverged) AND verdict 'valid' AND is_real_gain. REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than best-so-far.)
+  COVERAGE — the profiled slice is a REPRESENTATIVE set of layers, not all of them, so after a dtype knob or a kernel swap call check_lever_coverage(op_match, stale_dtype, new_dtype) to CONFIRM the lever reached EVERY layer instance. A repeated block is ONE class instantiated N times, so editing the SHARED block definition/config propagates to all N; editing an instance-specific path (e.g. layers[0], a per-layer override) changes only that one and silently misses the rest. If fully_applied is false, REAPPLY on the shared definition (target the reported missed_blocks) and re-check until fully_applied — a partial application is NOT a real win even if the slice looks faster.
+  ALWAYS pass note= to record_kernel_attempt: ONE line stating (a) WHY you tried this lever on this op (the hypothesis — e.g. 'op is DRAM-bw bound, bf8_b weights halve reads') and (b) WHY it won or failed (the outcome reason — e.g. 'kept: 4.1->3.6ms', 'reverted: PCC 0.71<0.95', 'no gain: 4.1->4.1ms bw-bound', 'OOM under 2CQ'). This note is streamed LIVE into the model's RUN_REPORT.md the instant the attempt resolves (win OR fail), so it must explain the reasoning, not just restate the numbers. ALSO pass stages_json to record_kernel_attempt whenever you have per-stage trace timings (the SAME JSON list of {{"name","ms","dominant?"}} you'd pass hitl_gate, e.g. from check_full_pipeline_latency's stage breakdown) — this renders the block-level timing table in RUN_REPORT.md so BOTH hitl and non-hitl runs show where device time went per stage/block.
+  TWO measurements are fed back to you each step — use BOTH: (1) measure_candidate returns the per-op tracy device_ms (the fast steering signal that tells you WHICH op moved); (2) check_full_pipeline_latency returns the robust whole-pipeline trace+1cq per-token ms (its `mode` field = trace+1cq, `full_pipeline_ms` + `delta_pct` vs best) — this is the per-iteration VERDICT you bank a compute win on. trace+1cq always engages (no 2-CQ reservation), so a dtype/grid/fusion/kernel win it confirms is real and will NOT spuriously fail the way a 2-CQ run can; the trace+2cq production number is measured only at the start/end bookend, so DO NOT treat a mid-loop 1cq result as a downgrade. Only levers whose whole value is the 2-CQ input/compute overlap or L1 headroom need the 2cq bookend to judge.
+  (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency status 'ok' (moved TOWARD the target / not diverged, at its trace+1cq mode) AND measure_candidate verdict 'valid' AND is_real_gain AND (for a dtype/kernel lever) check_lever_coverage fully_applied (reached every layer, not just the profiled slice). REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than best-so-far in its CQ track.)
   WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs had no match), call distill_knob to persist the general technique; if the win RE-USED a provisional lever learned on another model, pass its id to distill_knob to graduate it.
   Re-run termination_check. Repeat. NEVER stop while can_stop=false. NEVER reason a lever "won't help" — prove it by measuring + recording the attempt.
 
 LEAVE CLEAN (commit wins, revert in-progress edits); end with git_head. Report start->final {metric}, committed wins, and per blocking op which rungs were done + measured ms."""
 
 
+_HITL_PROMPT = (
+    _PROMPT
+    + """
+
+HITL MODE (human-in-the-loop): you do NOT have git_commit / git_revert. After you apply ONE lever and measure it (check_pcc; measure_candidate; check_full_pipeline_latency; check_lever_coverage for a dtype/kernel lever), call hitl_gate(tried_op, tried_lever, why_tried, is_win, why_not, next_target, next_why, before_ms, after_ms, stages_json) INSTEAD of committing. stages_json = the per-stage trace timings you just measured, a JSON list of {{"name","ms"}} (add "dominant" if known). hitl_gate returns {{action}}: on 'commit' or 'revert' the operator's git action is ALREADY DONE for you — move to the next target; on 'try', apply the operator's returned knob next. Exactly ONE lever per hitl_gate call; never batch. record_kernel_attempt as usual so RUN_REPORT stays live."""
+)
+
+
 def _visible_devices(devices: str) -> str | None:
-    """Translate the --devices spec to a TT_VISIBLE_DEVICES value the same way before_loop does (UMD
-    wants explicit ids or the var UNSET): 'single' -> '0', 'all'/'' -> None (all chips visible, var
-    left unset), explicit ids ('0,1,2,3') pass through. Setting the literal 'all'/'single' breaks UMD."""
-    if not devices or devices == "all":
-        return None
-    if devices == "single":
-        return "0"
-    return devices
+    """DEVICE VISIBILITY IS INTENTIONALLY NEVER RESTRICTED — this is what makes the tool chip-count /
+    hardware agnostic. Pinning TT_VISIBLE_DEVICES to a chip SUBSET ('single' -> '0', '0,1', ...) makes
+    tt-metal's fabric auto-discovery classify the board as a CUSTOM cluster and fatally demand a
+    mesh-graph-descriptor path that we don't provide — so a subset spec crashes device/fabric init
+    (before any forward) on any multi-chip board. The full physical topology must stay visible so
+    auto-discovery works for single | all | explicit-ids alike. HOW MANY chips a run actually uses is
+    controlled by the mesh SHAPE (TT_PERF_MESH_ROWS/COLS via _derive_topology_env + resolve_mesh_shape),
+    which is the chip-count-agnostic lever. Hence: always None (leave TT_VISIBLE_DEVICES unset)."""
+    _ = devices  # spec informs the mesh shape, not OS-level visibility (which would break fabric)
+    return None
 
 
 def cc_env(repo_root: Path, devices: str) -> dict:
@@ -134,11 +167,23 @@ def discover(
         cmd += ["--pcc-test", pcc_test]
     if case:
         cmd += ["-k", case]
-    rc = subprocess.run(cmd, cwd=str(perf_dir), env=cc_env(repo_root, devices)).returncode
-    if rc != 0:
-        return None
+    launch_ts = time.time()
+    rc, _ = _run_device_proc(
+        cmd,
+        perf_dir,
+        cc_env(repo_root, devices),
+        devices,
+        int(os.environ.get("PERF_MCP_DISCOVER_TIMEOUT", "10800") or "10800"),
+        "discovery",
+        capture=False,
+        stall_s=int(os.environ.get("PERF_MCP_DISCOVER_STALL_SEC", "1200") or "1200"),
+    )
     mani = _latest_manifest(perf_dir)
-    return json.loads(mani.read_text()) if mani else None
+    if mani is None or rc is None:
+        return None
+    if rc != 0 and mani.stat().st_mtime < launch_ts:
+        return None
+    return json.loads(mani.read_text())
 
 
 def pipelines_from_manifest(manifest: dict, model_rel: str) -> list[dict]:
@@ -179,6 +224,7 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
         "TT_METAL_HOME": str(repo_root),
         "PYTHONPATH": str(repo_root),
         "PATH": f"{repo_root / 'python_env' / 'bin'}{os.pathsep}/usr/bin:/bin",
+        "PERF_MCP_FULLPIPE_CQ": "1",
     }
     if pipe.get("case"):
         env["PERF_MCP_PERF_CASE"] = pipe["case"]
@@ -215,18 +261,18 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)  # PERF_MCP_* so the gate targets this pipeline
-    try:
-        r = subprocess.run(
-            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
-            cwd=str(repo_root / PERF_DIR),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=3600,
-        )
-    except Exception:  # noqa: BLE001 — gate crashed/timed out -> treat as not-done, loop retries
+    rc, out = _run_device_proc(
+        [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+        repo_root / PERF_DIR,
+        env,
+        devices,
+        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        "termination_check",
+        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
+    )
+    if rc is None:
         return {"can_stop": False, "halt": False, "reason": ""}
-    out = r.stdout or ""
+    out = out or ""
     reason = ""
     for line in out.splitlines():
         if line.startswith("HALTREASON="):
@@ -252,24 +298,24 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
+    env["PERF_MCP_FULLPIPE_CQ"] = "2"
     env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
     print(
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
     )
     ms = None
-    try:
-        r = subprocess.run(
-            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
-            cwd=str(repo_root / PERF_DIR),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=5400,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"  [optimize/cc] FULL-model end-to-end ({label}) skipped ({exc})")
+    rc, out = _run_device_proc(
+        [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+        repo_root / PERF_DIR,
+        env,
+        devices,
+        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        f"full-pipeline ({label})",
+        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
+    )
+    if rc is None:
         return None
-    for line in ((r.stderr or "") + "\n" + (r.stdout or "")).splitlines():
+    for line in (out or "").splitlines():
         if line.startswith("FULLPIPE_MS="):
             try:
                 ms = float(line.split("=", 1)[1])
@@ -316,53 +362,459 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
     if case:
         cmd.append(case)
-    try:
-        r = subprocess.run(cmd, cwd=str(repo_root), env=env, capture_output=True, text=True, timeout=1800)
-    except Exception:  # noqa: BLE001
+    rc, raw = _run_device_proc(
+        cmd,
+        repo_root,
+        env,
+        devices,
+        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        "coverage probe",
+        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
+    )
+    if rc is None:
         return None, ""
-    raw = (r.stdout or "") + "\n" + (r.stderr or "")
+    raw = raw or ""
     sigs = None
+    seq = []
     for line in raw.splitlines():
         if line.startswith("PERF_OP_SIGS="):
             try:
                 sigs = set(json.loads(line.split("=", 1)[1]))
-            except Exception:  # noqa: BLE001
+            except (ValueError, TypeError):
                 sigs = None
+        elif line.startswith("PERF_OP_SIG_SEQUENCE="):
+            try:
+                seq = json.loads(line.split("=", 1)[1])
+            except (ValueError, TypeError):
+                seq = []
     if not sigs:
-        return None, raw
-    return sigs, raw
+        return None, raw, []
+    return sigs, raw, seq
 
 
-def _coverage_layers(repo_root: Path, mcp_env: dict, devices: str, node, case, n_layers: int = 52):
-    """MODEL-AGNOSTIC profiling-window sizing: grow TT_PERF_LAYERS until the set of distinct ttnn op
-    signatures SATURATES (a deeper window adds no new op type) — so the tracy 2-layer-style slice actually
-    covers EVERY block type, not just whatever falls in the first N layers. Homogeneous models saturate at
-    1-2; heterogeneous ones (mamba/attention/MoE interleaved) grow until all types appear. No per-model
-    layer maps. Returns (layer_count_or_None, facts) — facts from the deepest probe feed the scorecard.
-    Disable via PERF_MCP_COVERAGE_SIZING=0."""
+_LAYER_PATTERN_ATTRS = ("hybrid_override_pattern", "layer_types", "layers_block_type", "block_types")
+
+
+def _config_layer_kinds(model_name: str):
+    """Enumerate distinct layer KINDS from the model's HF-config-declared per-layer pattern, WITHOUT
+    building or running the model. Returns (k, n_kinds) where the first k layers already include one of
+    EVERY kind (so profiling that slice is representative), or (None, 0) when the config declares no
+    per-layer pattern (a homogeneous model, or one that doesn't expose it) so the caller falls back to
+    the observed climb. Reading the DECLARED pattern catches a kind that first appears DEEP in the stack
+    (past any shallow-probe ceiling) — the exact case an observation-only climb silently misses."""
+    if not model_name:
+        return None, 0
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    except Exception:  # noqa: BLE001
+        return None, 0
+    pat = None
+    for attr in _LAYER_PATTERN_ATTRS:
+        v = getattr(cfg, attr, None)
+        if v:
+            pat = v
+            break
+    seq = list(pat) if pat else []
+    if not seq:
+        return None, 0
+    first: dict = {}
+    for i, sym in enumerate(seq):
+        first.setdefault(sym, i)
+    n_layers = int(getattr(cfg, "num_hidden_layers", 0) or len(seq)) or len(seq)
+    return min(max(first.values()) + 1, n_layers), len(first)
+
+
+def _coverage_cache_path(repo_root: Path) -> Path:
+    return repo_root / CC_DIR / ".coverage_cache.json"
+
+
+def _coverage_fingerprint(node) -> str:
+    try:
+        base = Path(str(node).split("::", 1)[0])
+        mt = max((f.stat().st_mtime for f in base.parent.rglob("*.py")), default=0.0)
+        return str(int(mt))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _coverage_cache_get(repo_root: Path, node, case):
+    try:
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{node}|{case}")
+        if entry and entry.get("fp") == _coverage_fingerprint(node):
+            return int(entry["k"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _coverage_cache_put(repo_root: Path, node, case, k: int) -> None:
+    try:
+        path = _coverage_cache_path(repo_root)
+        data = json.loads(path.read_text()) if path.is_file() else {}
+        data[f"{node}|{case}"] = {"k": int(k), "fp": _coverage_fingerprint(node)}
+        path.write_text(json.dumps(data, indent=1))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _depth_cache_get(repo_root: Path, node):
+    try:
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"depth|{node}")
+        if entry and entry.get("fp") == _coverage_fingerprint(node):
+            return dict(entry["env"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _depth_cache_put(repo_root: Path, node, env) -> None:
+    try:
+        path = _coverage_cache_path(repo_root)
+        data = json.loads(path.read_text()) if path.is_file() else {}
+        data[f"depth|{node}"] = {"env": dict(env), "fp": _coverage_fingerprint(node)}
+        path.write_text(json.dumps(data, indent=1))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _claude_text(prompt: str, timeout_s: int = 300):
+    env = dict(os.environ)
+    for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(_k, None)
+    _nat = env.pop("PERF_NATIVE_ANTHROPIC_API_KEY", "")
+    if _nat:
+        env["ANTHROPIC_API_KEY"] = _nat
+    else:
+        env.pop("ANTHROPIC_API_KEY", None)
+    try:
+        r = subprocess.run(
+            [_resolve_claude_bin(), "-p", prompt, "--output-format", "text"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env=env,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _blocks_ran(seq) -> int:
+    m = -1
+    for tok in seq or []:
+        if isinstance(tok, str) and tok.startswith("PERF_BLOCK_SIGNPOST:"):
+            try:
+                m = max(m, int(tok.split(":", 1)[1]))
+            except (ValueError, IndexError):
+                pass
+    return m + 1
+
+
+def _model_root_from_node(repo_root: Path, node):
+    p = (node or "").split("::", 1)[0]
+    if "/tests/" in p:
+        p = p.split("/tests/", 1)[0]
+    root = repo_root / p
+    return root if root.is_dir() else None
+
+
+_KNOB_CACHE_FILE = Path(tempfile.gettempdir()) / "perf_mcp_knob_cache.json"
+
+
+def _knob_key(model_root) -> str:
+    p = str(model_root).replace("\\", "/")
+    i = p.find("models/")
+    return p[i:] if i >= 0 else p
+
+
+def _knob_fingerprint(model_root) -> str:
+    try:
+        import hashlib
+
+        tt = Path(model_root) / "tt"
+        h = hashlib.sha256()
+        for f in sorted(tt.rglob("*.py")):
+            try:
+                h.update(f.read_bytes())
+            except Exception:  # noqa: BLE001
+                pass
+        return h.hexdigest()[:16]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _knob_cache_get(model_root):
+    try:
+        entry = json.loads(_KNOB_CACHE_FILE.read_text()).get(_knob_key(model_root))
+        if entry and entry.get("fp") == _knob_fingerprint(model_root):
+            return dict(entry["env"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _knob_cache_put(model_root, env) -> None:
+    try:
+        data = json.loads(_KNOB_CACHE_FILE.read_text()) if _KNOB_CACHE_FILE.is_file() else {}
+        data[_knob_key(model_root)] = {"env": dict(env), "fp": _knob_fingerprint(model_root)}
+        _KNOB_CACHE_FILE.write_text(json.dumps(data))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _knob_at(env, cov):
+    env = dict(env)
+    numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
+    if numkey:
+        env[numkey] = str(cov)
+    return env
+
+
+def _llm_depth_env(model_root: Path, cov: int) -> dict:
+    if model_root is None:
+        return {}
+    cached = _knob_cache_get(model_root)
+    if cached:
+        return _knob_at(cached, cov)
+    tt_dir = model_root / "tt"
+    srcs, total = [], 0
+    for py in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
+        try:
+            txt = py.read_text(errors="ignore")
+        except Exception:  # noqa: BLE001
+            continue
+        srcs.append(f"### {py.name}\n{txt}")
+        total += len(txt)
+        if total > 60000:
+            break
+    if not srcs:
+        return {}
+    prompt = (
+        f"This TTNN model runs a stack of transformer layers/blocks. A profiler must execute only {cov} "
+        f"layers (a representative slice), not all of them, to keep profiling fast. From the source below, "
+        f"find the environment variable(s) this model reads to LIMIT how many layers/blocks it runs, plus "
+        f"any flag it requires to permit a partial/truncated run. Respond with ONLY a JSON object mapping "
+        f"env-var name to the string value that makes it run exactly {cov} layers; respond with {{}} if the "
+        f"model exposes no such control.\n\n" + "\n\n".join(srcs)
+    )
+    attempts = max(1, int(os.environ.get("PERF_MCP_KNOB_RETRIES", "8")))
+    for i in range(attempts):
+        out = _claude_text(prompt) or ""
+        m = re.search(r"\{[^{}]*\}", out, re.DOTALL)
+        if m:
+            try:
+                d = json.loads(m.group(0))
+            except (ValueError, TypeError):
+                d = None
+            if isinstance(d, dict) and d:
+                env = {str(k): str(v) for k, v in d.items() if str(k)}
+                _knob_cache_put(model_root, env)
+                return _knob_at(env, cov)
+        print(f"  [optimize/cc] depth-knob discovery: empty answer, retrying ({i + 1}/{attempts})")
+    print(f"  [optimize/cc] depth-knob discovery: no knob after {attempts} attempts (model may not support slicing)")
+    return {}
+
+
+def _work_signal(seq) -> int:
+    return sum(1 for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:"))
+
+
+def _op_block_count(seq) -> int:
+    from collections import Counter
+
+    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
+    vals = [c for c in Counter(ops).values() if c > 1]
+    if not vals:
+        return 0
+    return Counter(vals).most_common(1)[0][0]
+
+
+def _signposts_agree(seq) -> bool:
+    sp = _blocks_ran(seq)
+    op = _op_block_count(seq)
+    if sp <= 1 or op <= 1:
+        return False
+    lo, hi = sorted((sp, op))
+    return lo / hi >= float(os.environ.get("PERF_MCP_SIGNPOST_AGREE_RATIO", "0.8"))
+
+
+def _block_start_positions(seq):
+    if _signposts_agree(seq):
+        pos = [i for i, t in enumerate(seq or []) if isinstance(t, str) and t.startswith("PERF_BLOCK_SIGNPOST:")]
+        return pos, "signposts"
+    n = _op_block_count(seq)
+    if n <= 1:
+        return [], "none"
+    from collections import Counter
+
+    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith("PERF_BLOCK_SIGNPOST:")]
+    counts = Counter(ops)
+    anchor = next((t for t in ops if counts.get(t) == n), None)
+    if anchor is None:
+        return [], "none"
+    return [i for i, t in enumerate(seq or []) if t == anchor], "inferred"
+
+
+def _first_block_map(seq):
+    starts, source = _block_start_positions(seq)
+    import bisect
+
+    fb: dict = {}
+    for i, tok in enumerate(seq or []):
+        if not isinstance(tok, str) or tok.startswith("PERF_BLOCK_SIGNPOST:"):
+            continue
+        b = bisect.bisect_right(starts, i) - 1 if starts else 0
+        fb.setdefault(tok, max(b, 0))
+    return fb, source
+
+
+def _bridge_depth_env(
+    repo_root: Path,
+    mcp_env: dict,
+    devices: str,
+    node,
+    case,
+    cov: int,
+    full_hint: int = 0,
+    full_blocks: int = 0,
+    knob=None,
+) -> dict:
+    if not node or os.environ.get("PERF_MCP_DEPTH_BRIDGE", "1") != "1":
+        return {}
+    cached = _depth_cache_get(repo_root, node)
+    if cached is not None:
+        if cached:
+            print(f"  [optimize/cc] depth-knob bridge (cached): {cached}")
+        return cached
+    model_root = _model_root_from_node(repo_root, node)
+    if model_root is None:
+        return {}
+    full_op = int(full_hint)
+    full_sp = int(full_blocks)
+    if full_op <= 0:
+        _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
+        full_op = _work_signal(seq)
+        full_sp = _blocks_ran(seq)
+    if full_op <= 0:
+        print("  [optimize/cc] depth-knob bridge: full-model work-signal is 0 (probe empty); skipping")
+        _depth_cache_put(repo_root, node, {})
+        return {}
+    env = dict(knob) if knob else _llm_depth_env(model_root, cov)
+    if not env:
+        print(f"  [optimize/cc] depth-knob bridge: no depth knob found (work-signal {full_op})")
+        _depth_cache_put(repo_root, node, {})
+        return {}
+    _numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
+    if _numkey:
+        env[_numkey] = str(cov)
+    probe_env = dict(mcp_env)
+    probe_env.update(env)
+    _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
+    cap_op = _work_signal(seq2)
+    cap_sp = _blocks_ran(seq2)
+    if full_sp > 1 and cap_sp >= 1 and cap_sp <= full_sp * 0.7:
+        full, capped, metric = full_sp, cap_sp, "block-signpost"
+    else:
+        full, capped, metric = full_op, cap_op, "op-count"
+    if capped <= 0 or capped >= full * 0.7:
+        print(f"  [optimize/cc] depth-knob bridge: {env} did not reduce work ({metric} {full}->{capped}); ignoring")
+        _depth_cache_put(repo_root, node, {})
+        return {}
+    print(f"  [optimize/cc] depth-knob bridge: enforcing {env} ({metric} {full}->{capped})")
+    _depth_cache_put(repo_root, node, env)
+    return env
+
+
+def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root, base_knob=None):
+    base = dict(base_knob) if base_knob else (_llm_depth_env(model_root, 2) if model_root is not None else {})
+    if not base:
+        print("  [optimize/cc] coverage measurement skipped: no depth knob")
+        return None
+    numkey = next((k for k, v in base.items() if str(v).isdigit()), None)
+    want = set(full_types or [])
+    if not want:
+        return None
+    ladder = [int(x) for x in (os.environ.get("PERF_MCP_COV_LADDER", "2,4,8,16")).split(",") if x.strip().isdigit()]
+    got = set()
+    for d in ladder:
+        env = dict(base)
+        if numkey:
+            env[numkey] = str(d)
+        penv = dict(mcp_env)
+        penv.update(env)
+        sigs_d, _, _ = _run_op_sigs(repo_root, penv, devices, node, case, d)
+        if not sigs_d:
+            print(f"  [optimize/cc] coverage measurement inconclusive: depth-{d} probe returned no ops")
+            return None
+        got = set(sigs_d)
+        if want <= got:
+            return d, [], "measured"
+    return (ladder[-1] if ladder else 16), sorted(want - got), "measured"
+
+
+def _coverage_layers(
+    repo_root: Path,
+    mcp_env: dict,
+    devices: str,
+    node,
+    case,
+    n_layers: int = 52,
+    model_name: str = "",
+    config_ref: str = "",
+    depth_knob=None,
+):
+    """MODEL-AGNOSTIC profiling-window sizing. One all-layers probe (TT_PERF_LAYERS=0, no tracy)
+    enumerates EVERY distinct op across all layers (overflow-safe: host-side op wrapping, no marker
+    buffer) and, via its per-block signposts, the block each op first appears in. The tracy timing window
+    is the smallest depth that still holds a fresh instance of every op, capped at 16 (the marker limit);
+    ops that first appear past 16 are reported as present-but-un-timed. Falls back to the config-declared
+    layer pattern when the k=0 probe yields nothing (a model that reads TT_PERF_LAYERS=0 as an empty
+    stack). Cached per model. Disable via PERF_MCP_COVERAGE_SIZING=0."""
     facts: dict = {}
     if os.environ.get("PERF_MCP_COVERAGE_SIZING", "1") != "1" or not node:
         return None, facts
-    results: list = []
-    for k in (2, 4, 8, 16):
-        k = min(k, n_layers)
-        sigs, raw = _run_op_sigs(repo_root, mcp_env, devices, node, case, k)
-        if sigs is None:
-            break
+    cached = _coverage_cache_get(repo_root, node, case)
+    if cached is not None:
+        print(f"  [optimize/cc] coverage (cached): TT_PERF_LAYERS={cached}")
+        return cached, facts
+    sigs, raw, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, 0)
+    if sigs:
         facts = _parse_facts(raw, sigs)
-        print(f"  [optimize/cc] coverage probe: {k} layer(s) -> {len(sigs)} distinct op signatures")
-        results.append((k, sigs))
-        if k >= n_layers:
-            break
-    if not results:
-        return None, facts
-    max_sigs = max((s for _, s in results), key=len)
-    if results[-1][1] == max_sigs and len(results) >= 2 and results[-2][1] != max_sigs and results[-1][0] >= n_layers:
-        print("  [optimize/cc] coverage still growing at the depth cap — op coverage may be incomplete")
-    for k, s in results:
-        if s == max_sigs:
-            return k, facts
-    return results[-1][0], facts
+        facts["all_ops"] = sorted(sigs)
+        facts["full_signal"] = _work_signal(seq)
+        facts["full_blocks"] = _blocks_ran(seq)
+        measured = _measure_cov(
+            repo_root, mcp_env, devices, node, case, sigs, _model_root_from_node(repo_root, node), base_knob=depth_knob
+        )
+        if measured is not None:
+            _cov, deep, blk_source = measured
+        elif _signposts_agree(seq):
+            first_block, _ = _first_block_map(seq)
+            deepest = max(first_block.values()) if first_block else 0
+            deep = sorted(op for op, b in first_block.items() if b >= 16)
+            _cov = min(max(deepest + 1, 2), 16)
+            blk_source = "signposts"
+        else:
+            deep = []
+            _cov = 2
+            blk_source = "unverified-floor"
+        facts["deep_ops"] = deep
+        tail = f"; {len(deep)} op-type(s) still absent at max depth (present in full model, un-timed)" if deep else ""
+        print(f"  [optimize/cc] coverage ({blk_source}): {len(sigs)} distinct op(s) -> TT_PERF_LAYERS={_cov}{tail}")
+        _coverage_cache_put(repo_root, node, case, _cov)
+        return _cov, facts
+    k, n_kinds = _config_layer_kinds(config_ref or model_name)
+    if k is not None:
+        _cov = min(k, 16)
+        print(
+            f"  [optimize/cc] coverage (config fallback; k=0 probe empty): {n_kinds} kind(s), deepest first "
+            f"appears at layer {k - 1} -> TT_PERF_LAYERS={_cov}"
+        )
+        _coverage_cache_put(repo_root, node, case, _cov)
+        return _cov, facts
+    return None, facts
 
 
 def _print_scorecard(
@@ -434,34 +886,338 @@ def _print_scorecard(
 
 def _git(repo_root: Path, *args: str) -> str:
     try:
-        return subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, text=True).stdout.strip()
+        return subprocess.run(
+            ["git", "-C", str(repo_root), *args], capture_output=True, text=True, timeout=300
+        ).stdout.strip()
     except Exception:  # noqa: BLE001
         return ""
 
 
+# chip-index -> its board's PCI-resettable local chip, snapshotted while healthy. RESET PATH ONLY --
+# nothing about mesh-open / parallelism / scorecard reads any of this; it exists solely to pick
+# `tt-smi -r` targets so a whole n300 board resets (never half a board, never a non-PCIe remote chip).
+_BOARD_MAP_FILE = Path(tempfile.gettempdir()) / "perf_mcp_board_topology.json"
+
+
+def _read_board_topology() -> dict | None:
+    """Live-read chip-index -> board-local-chip from tt-smi -s. Two ASICs of an n300 share a board_id;
+    only the one with a real PCI bus_id is resettable, and resetting it resets its remote partner too.
+    Returns {str(chip): local_chip_index} or None. Static per host (board_ids / BDFs don't change)."""
+    try:
+        tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+        r = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=120)
+        di = (json.loads(r.stdout) or {}).get("device_info") or []
+    except Exception:  # noqa: BLE001
+        return None
+    board_of: dict[int, str] = {}
+    local_of_board: dict[str, int] = {}
+    for i, dev in enumerate(di):
+        bi = dev.get("board_info") or {}
+        bid = bi.get("board_id")
+        board_of[i] = bid
+        bus = bi.get("bus_id")
+        if bid is not None and bus and bus != "N/A":
+            local_of_board.setdefault(bid, i)
+    m = {str(i): local_of_board.get(board_of.get(i)) for i in board_of}
+    m = {k: v for k, v in m.items() if v is not None}
+    return m or None
+
+
+def _capture_board_topology() -> None:
+    """Persist the reset map while the board is HEALTHY (startup) so the reset path has a trustworthy
+    map even if the board later wedges. Best-effort; reset falls back to a live read if the file's gone.
+    RESET PATH ONLY -- captured here, consumed only by _board_reset_targets."""
+    m = _read_board_topology()
+    if m:
+        try:
+            _BOARD_MAP_FILE.write_text(json.dumps(m))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _board_reset_targets(chip_ids: list[int]) -> str | None:
+    """Map logical chip ids -> the PCI-resettable LOCAL chip of each board they live on, using the map
+    captured at healthy startup (live-read fallback). Ensures a reset hits whole n300 boards -- never
+    half a board, never a non-PCIe remote chip (the half-reset fabric that caused the ETH wedge).
+    Returns a sorted comma list, or None if no topology is available. RESET PATH ONLY."""
+    m = None
+    try:
+        m = json.loads(_BOARD_MAP_FILE.read_text())
+    except Exception:  # noqa: BLE001
+        m = None
+    if not m:
+        m = _read_board_topology()
+    if not m:
+        return None
+    targets = {m[str(c)] for c in chip_ids if str(c) in m and m[str(c)] is not None}
+    return ",".join(str(x) for x in sorted(targets)) if targets else None
+
+
 def _reset_chip_list(devices: str) -> str:
-    """Hardware-agnostic reset target derived purely from --devices: explicit ids pass through, 'single'
-    -> '0', 'all'/'' -> the enumerated chip ids. No board-specific quirks."""
+    """BOARD-AWARE reset target derived from --devices. Explicit ids / 'single' are translated to the
+    PCI-resettable LOCAL chip of each board they live on (so a whole n300 board resets, never half of
+    one). 'all'/'' returns '' so the caller uses a bare `tt-smi -r` (resets every board)."""
     d = (devices or "").strip().lower()
-    if d and d not in ("all", "single"):
-        return d
+    if d in ("all", ""):
+        return ""
     if d == "single":
-        return "0"
-    n = _chip_count(devices)
-    return ",".join(str(i) for i in range(n)) if n else ""
+        req = [0]
+    else:
+        req = [int(x) for x in d.split(",") if x.strip().isdigit()]
+    if not req:
+        return ""
+    board = _board_reset_targets(req)
+    if board is not None:
+        return board
+    return ",".join(str(x) for x in req)  # fallback: raw ids if topology probe failed
 
 
 def _reset_devices(devices: str) -> str:
-    """tt-smi reset the visible chips to recover a wedged fabric. Best-effort; returns a status string."""
-    chips = _reset_chip_list(devices)
+    """tt-smi reset the visible chips to recover a wedged fabric. Best-effort; returns a status string.
+
+    GALAXY-AWARE and UNIFIED with the profiler-layer reset (agent.probes._reset_arg_sets): a Galaxy host
+    uses -glx_reset (a plain `-r` does NOT reset a Galaxy), a plain board uses `-r`, and the
+    TT_HW_PLANNER_RESET_ARGS / TT_HW_PLANNER_GALAXY overrides are honored -- previously this path
+    hard-coded `-r` and ignored all of that. For 'all'/'' the plain reset stays BARE `tt-smi -r` (resets
+    EVERY chip): the enumerated count comes from tt-smi -s / ttnn and a stale value would reset only
+    chip 0, leaving a multi-chip ETH fabric half-reset (heartbeat-stuck wedge). Explicit/single ids
+    target exactly those chips."""
+    d = (devices or "").strip().lower()
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
-    if not chips or not Path(tt_smi).is_file():
-        return "device reset SKIPPED (tt-smi not found or no chip list)"
+    if not Path(tt_smi).is_file():
+        return "device reset SKIPPED (tt-smi not found)"
     try:
-        r = subprocess.run([tt_smi, "-r", chips], capture_output=True, text=True, timeout=420)
-        return "tt-smi -r %s rc=%d" % (chips, r.returncode)
-    except Exception as exc:  # noqa: BLE001
-        return "device reset FAILED (%s)" % exc
+        import agent.probes as _pr  # galaxy-aware reset invocations (single source of truth)
+
+        if _pr._GALAXY_HOST is None and not os.environ.get("TT_HW_PLANNER_GALAXY"):
+            try:
+                _pr.note_board(tt_smi=tt_smi)  # one-time galaxy capability probe (cheap on plain boards)
+            except Exception:  # noqa: BLE001
+                pass
+        arg_sets = _pr._reset_arg_sets()
+    except Exception:  # noqa: BLE001
+        arg_sets = [["-r"]]
+    chips = _reset_chip_list(devices) if d not in ("all", "") else ""
+    last = "no reset ran"
+    for args in arg_sets:
+        cmd = [tt_smi, "-r", chips] if (chips and args == ["-r"]) else [tt_smi, *args]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
+            last = "tt-smi %s rc=%d" % (" ".join(cmd[1:]), r.returncode)
+            if r.returncode == 0:
+                return last
+        except Exception as exc:  # noqa: BLE001
+            last = "tt-smi %s FAILED (%s)" % (" ".join(cmd[1:]), exc)
+    return "device reset (%s)" % last
+
+
+def _reclaim_device(devices: str) -> str:
+    """UNIVERSAL device reclaim used at EVERY recovery point: kill every process holding
+    /dev/tenstorrent (except this process + its ancestors, so the supervisor/self is never killed),
+    then tt-smi -r the chips. A wedge is cleared no matter WHO holds the device -- a stray child, a
+    hung profiler, a busy pytest, or a leaked resident mesh. The one holder this cannot kill is the
+    caller's own tree; an orchestrator self-hold is handled by exiting to the supervisor, which then
+    reclaims from outside."""
+    import glob as _glob
+
+    protected = set()
+    _p = os.getpid()
+    for _ in range(64):
+        if _p <= 1:
+            break
+        protected.add(_p)
+        try:
+            _p = int(open("/proc/%d/stat" % _p).read().split()[3])
+        except Exception:  # noqa: BLE001
+            break
+    holders = set()
+    for _n in _glob.glob("/dev/tenstorrent/*"):
+        try:
+            _r = subprocess.run(["fuser", _n], capture_output=True, text=True, timeout=30)
+            holders.update(int(_t) for _t in (_r.stdout + " " + _r.stderr).split() if _t.strip().isdigit())
+        except Exception:  # noqa: BLE001
+            pass
+    killed = []
+    for _pid in holders - protected:
+        try:
+            os.kill(_pid, signal.SIGKILL)
+            killed.append(_pid)
+        except Exception:  # noqa: BLE001
+            pass
+    return "reclaimed device (killed holders %s) + %s" % (killed or "none", _reset_devices(devices))
+
+
+def _pg_cpu_jiffies(pgid: int) -> int:
+    total = 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0
+    target = str(pgid)
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        if len(fields) > 12 and fields[2] == target:
+            try:
+                total += int(fields[11]) + int(fields[12])
+            except ValueError:
+                pass
+    return total
+
+
+def _llm_child_alive(pgid: int) -> bool:
+    target = str(pgid)
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return False
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        if len(fields) <= 2 or fields[2] != target:
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as fh:
+                cmd = fh.read().replace(b"\x00", b" ").decode("utf-8", "ignore").lower()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        if "claude" in cmd:
+            return True
+    return False
+
+
+def _run_device_proc(
+    cmd,
+    cwd,
+    env,
+    devices: str,
+    timeout_s: int,
+    label: str = "",
+    reset_on_timeout: bool = True,
+    capture: bool = True,
+    stall_s: int = 0,
+):
+    """Run a DEVICE-touching subprocess so a device wedge can never hang the tool forever. Own session +
+    hard timeout; on timeout SIGKILL the WHOLE process group + _reclaim_device (kill any holder + tt-smi
+    -r); AND reap the group on every exit so no stale holder survives to wedge the next op. Returns (rc,
+    combined stdout+stderr); rc is None when it timed out / was killed.
+
+    Recovery-timeout tiers (all env-overridable, stall-detector on no-progress + absolute backstop):
+      BUILD   discover                                          -> PERF_MCP_DISCOVER_STALL_SEC (1200s), backstop PERF_MCP_DISCOVER_TIMEOUT (10800s)
+      MEASURE gate / coverage / op-sig / full-pipeline runs     -> PERF_MCP_MEASURE_STALL_SEC  (600s),  backstop PERF_MCP_MEASURE_BACKSTOP (3600s)
+      ROUND   agent round                                       -> PERF_MCP_ROUND_STALL_SEC   (600s)"""
+    _piped = bool(capture or stall_s)
+    proc = subprocess.Popen(
+        list(cmd),
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE if _piped else None,
+        stderr=subprocess.STDOUT if _piped else None,
+        text=True if _piped else None,
+        start_new_session=True,
+    )
+    rc, out = None, ""
+    try:
+        if stall_s:
+            import sys as _sys
+            import threading as _th
+
+            _buf: list = []
+            _act = [time.monotonic()]
+
+            def _pump():
+                try:
+                    for _ln in proc.stdout:
+                        _buf.append(_ln)
+                        if not capture:
+                            _sys.stdout.write(_ln)
+                            _sys.stdout.flush()
+                        _act[0] = time.monotonic()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            _pt = _th.Thread(target=_pump, daemon=True)
+            _pt.start()
+            pgid = proc.pid
+            start = time.monotonic()
+            last_progress = start
+            last_cpu = _pg_cpu_jiffies(pgid)
+            max_gap = 0.0
+            while proc.poll() is None:
+                time.sleep(5)
+                now = time.monotonic()
+                cpu = _pg_cpu_jiffies(pgid)
+                moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid)
+                last_cpu = cpu
+                if moved:
+                    max_gap = max(max_gap, now - last_progress)
+                    last_progress = now
+                limit = max(stall_s, int(3 * max_gap))
+                idle = now - last_progress
+                if idle >= limit:
+                    print(
+                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no output/CPU for "
+                        f"{int(idle)}s > adaptive limit {limit}s) -- treating as wedge",
+                        flush=True,
+                    )
+                    raise subprocess.TimeoutExpired(cmd, limit)
+                if now - start >= timeout_s:
+                    raise subprocess.TimeoutExpired(cmd, timeout_s)
+            rc = proc.returncode
+            _pt.join(timeout=30)
+            out = "".join(_buf)
+        elif capture:
+            out, _ = proc.communicate(timeout=timeout_s)
+            out = out or ""
+            rc = proc.returncode
+        else:
+            proc.wait(timeout=timeout_s)
+            rc = proc.returncode
+    except subprocess.TimeoutExpired as _te:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+        try:
+            proc.communicate(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+        tail = _reclaim_device(devices) if reset_on_timeout else "process group killed"
+        _lim = int(getattr(_te, "timeout", None) or timeout_s)
+        _why = "no-progress stall" if _lim < timeout_s else "hard limit"
+        print(
+            f"  [optimize/cc] {label or 'device subprocess'} KILLED after {_lim}s ({_why}) "
+            f"(likely a device wedge / leaked mesh) -- killed the whole process group + {tail}"
+        )
+        return None, ""
+    finally:
+        # Reap any lingering group member on EVERY exit. A daemon child (profiler, not-fully-closed mesh)
+        # can outlive the main subprocess and keep holding the device -- a stale holder that wedges the
+        # NEXT device op (observed: a completed baseline measurement leaked a holder that blocked the
+        # coverage probe). Killing the whole process group here guarantees no leftover survives.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            pass
+    return rc, out
 
 
 def _progress_token(repo_root: Path, kernel_log: str):
@@ -474,25 +1230,168 @@ def _progress_token(repo_root: Path, kernel_log: str):
     return (_git(repo_root, "rev-parse", "HEAD"), mt)
 
 
+def _record_wedge_to_log(kernel_log: str, reason: str) -> None:
+    try:
+        target = {}
+        try:
+            target = json.loads(Path(str(kernel_log) + ".target").read_text())
+        except Exception:  # noqa: BLE001
+            target = {}
+        if not isinstance(target, dict):
+            target = {}
+        try:
+            attempts = json.loads(Path(kernel_log).read_text())
+        except Exception:  # noqa: BLE001
+            attempts = []
+        if not isinstance(attempts, list):
+            attempts = []
+        op = target.get("op") or "candidate config"
+        kind = target.get("rung") or "knob"
+        attempts = [
+            a
+            for a in attempts
+            if not (
+                isinstance(a, dict) and a.get("wedged") and a.get("op_signature") == op and a.get("kernel_kind") == kind
+            )
+        ]
+        attempts.append(
+            {
+                "op_signature": op,
+                "kernel_kind": kind,
+                "measured_ms": None,
+                "beat_baseline": False,
+                "note": reason,
+                "stages": [],
+                "kernel_detected_in_source": False,
+                "wedged": True,
+                "evidence": {},
+                "diff": "",
+            }
+        )
+        Path(kernel_log).write_text(json.dumps(attempts))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _fold_cumulative(kernel_log: str) -> None:
+    cum = str(kernel_log) + ".cumulative"
+
+    def _ld(p):
+        try:
+            v = json.loads(Path(p).read_text())
+            return v if isinstance(v, list) else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    seen, merged = set(), []
+    for a in _ld(cum) + _ld(kernel_log):
+        if not isinstance(a, dict):
+            continue
+        k = (
+            a.get("op_signature") or a.get("op_code") or "",
+            a.get("kernel_kind") or "",
+            (a.get("note") or "")[:200],
+            bool(a.get("wedged")),
+        )
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(a)
+    try:
+        Path(cum).write_text(json.dumps(merged))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
     """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
     whole process group (claude + its mcp server + any hung profiler) and reset the device. Returns True
     if the round was killed as wedged, False if it exited on its own. The NEXT round re-spawns a fresh
     mcp server + runs on the reset mesh, so a stale cached-mesh handle can't persist across the wedge."""
-    proc = subprocess.Popen(cmd, cwd=str(repo_root), env=cc_env(repo_root, devices), start_new_session=True)
-    last_tok = _progress_token(repo_root, kernel_log)
-    last_change = time.monotonic()
-    while True:
+    agent_log = str(kernel_log) + ".agent.log"
+    try:
+        _lf = open(agent_log, "a", buffering=1, errors="ignore")
+    except Exception:  # noqa: BLE001
+        _lf = subprocess.DEVNULL
+    # CLEAN screen: the agent's raw stream-json transcript goes to agent_log, not the terminal —
+    # the terminal shows only a periodic heartbeat. Full detail stays in the log file.
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(repo_root),
+        env=cc_env(repo_root, devices),
+        start_new_session=True,
+        stdout=_lf,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        _pgid = os.getpgid(proc.pid)
+    except Exception:  # noqa: BLE001
+        _pgid = None
+
+    def _liveness():
+        # A slow-but-WORKING round advances one of these even before it commits: the agent transcript
+        # grows (agent thinking / choosing tools) or the process group accrues CPU (a long tracy profile
+        # compiling kernels + running device ops -- GLM's 8-chip mesh profile alone is ~6 min). Only a
+        # TRULY FROZEN round (wedged device: everything blocked on I/O) advances NEITHER -- that is the
+        # real wedge. Watching only git/kernel-log killed legit multi-minute profiles as false wedges.
         try:
-            proc.wait(timeout=60)
-            return False
-        except subprocess.TimeoutExpired:
-            tok = _progress_token(repo_root, kernel_log)
-            if tok != last_tok:
-                last_tok, last_change = tok, time.monotonic()
-            elif time.monotonic() - last_change > stall_sec:
-                break
+            amt = os.path.getmtime(agent_log)
+        except OSError:
+            amt = 0.0
+        cpu = 0
+        if _pgid is not None:
+            try:
+                from agent.probes import _pgroup_cpu_jiffies
+
+                cpu = _pgroup_cpu_jiffies(_pgid)
+            except Exception:  # noqa: BLE001
+                cpu = 0
+        return (amt, cpu)
+
+    # Two independent kill bounds so a round can NEVER run unbounded:
+    #   stall_sec        - FROZEN: no sign of life at all (fast kill of a true device wedge).
+    #   max_no_progress  - HARD CAP: alive but produced NO real progress (commit/kernel attempt) for
+    #                      this long -> kill anyway (default 4x stall / >=40min, comfortably above one
+    #                      legit slow measure cycle, so a productive round always records well within it).
+    max_no_progress = int(os.environ.get("PERF_MCP_ROUND_MAX_SEC", str(max(stall_sec * 4, 2400))) or 2400)
+    last_tok = _progress_token(repo_root, kernel_log)
+    last_live = _liveness()
+    _now0 = time.monotonic()
+    last_active = _now0  # last sign of life (CPU / transcript / real progress)
+    last_real = _now0  # last REAL progress (commit / recorded kernel attempt)
+    _t0 = _now0
+    wedge_reason = ""
+    try:
+        while True:
+            try:
+                proc.wait(timeout=60)
+                return False
+            except subprocess.TimeoutExpired:
+                _now = time.monotonic()
+                print(f"  · optimizing… {int(_now - _t0)}s (agent transcript → {agent_log})", flush=True)
+                tok = _progress_token(repo_root, kernel_log)
+                live = _liveness()
+                if tok != last_tok:  # real progress resets BOTH clocks
+                    last_tok, last_live, last_active, last_real = tok, live, _now, _now
+                elif live[0] != last_live[0] or (live[1] - last_live[1]) > 200:  # alive: transcript/CPU
+                    last_live, last_active = live, _now
+                if _now - last_active > stall_sec:
+                    wedge_reason = "FROZEN %ds — no commit, no device CPU, no agent activity (real wedge)" % stall_sec
+                    break
+                if _now - last_real > max_no_progress:
+                    wedge_reason = (
+                        "UNPRODUCTIVE %ds — alive but no commit/kernel attempt in that time (hard cap)"
+                        % max_no_progress
+                    )
+                    break
+    finally:
+        try:
+            if _lf not in (None, subprocess.DEVNULL):
+                _lf.close()
+        except Exception:  # noqa: BLE001
+            pass
+    _record_wedge_to_log(kernel_log, f"wedged: round killed ({wedge_reason})")
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001
@@ -501,10 +1400,10 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
         proc.wait(timeout=30)
     except Exception:  # noqa: BLE001
         pass
-    rst = _reset_devices(devices)
+    rst = _reclaim_device(devices)
     print(
-        "  [optimize/cc] WATCHDOG: round stalled %ds with no forward progress (likely device wedge) — "
-        "killed the round + %s; next round starts a FRESH mcp server on the reset mesh." % (stall_sec, rst)
+        "  [optimize/cc] WATCHDOG: round %s — killed the round + %s; next round starts a FRESH mcp "
+        "server on the reset mesh." % (wedge_reason, rst)
     )
     return True
 
@@ -519,8 +1418,24 @@ def _baseline_ms() -> float | None:
         return None
 
 
+def _prune_legacy_reports(demo_dir: Path) -> None:
+    for legacy in ("E2E_REPORT.md", "summary.md"):
+        try:
+            (Path(demo_dir) / legacy).unlink()
+        except OSError:
+            pass
+
+
 def _emit_summary(
-    repo_root: Path, kernel_log: str, model_name: str, task: str, metric: str, start_sha: str, perf_test: str = ""
+    repo_root: Path,
+    kernel_log: str,
+    model_name: str,
+    task: str,
+    metric: str,
+    start_sha: str,
+    perf_test: str = "",
+    before_ms=None,
+    after_ms=None,
 ) -> None:
     import importlib.util
 
@@ -548,8 +1463,37 @@ def _emit_summary(
             residual = json.loads(_rr[0].read_text())
     except Exception:  # noqa: BLE001
         pass
+    render_kernel = kernel_log
+    _cum = str(kernel_log) + ".cumulative"
+
+    def _load_list(_p):
+        try:
+            _v = json.loads(Path(_p).read_text())
+            return _v if isinstance(_v, list) else []
+        except Exception:
+            return []
+
+    _seen, _merged = set(), []
+    for _a in _load_list(_cum) + _load_list(kernel_log):
+        if not isinstance(_a, dict):
+            continue
+        _k = (
+            _a.get("op_signature") or _a.get("op_code") or "",
+            _a.get("kernel_kind") or "",
+            (_a.get("note") or "")[:200],
+            bool(_a.get("wedged")),
+        )
+        if _k in _seen:
+            continue
+        _seen.add(_k)
+        _merged.append(_a)
+    try:
+        Path(_cum).write_text(json.dumps(_merged))
+        render_kernel = _cum
+    except Exception:
+        render_kernel = kernel_log
     text = mod.render_summary(
-        kernel_log,
+        render_kernel,
         _baseline_ms(),
         model=model_name,
         task=task,
@@ -559,15 +1503,87 @@ def _emit_summary(
         perf_test=perf_test,
         report_csv=report_csv,
         residual=residual,
+        before_ms=before_ms,
+        after_ms=after_ms,
+        baseline_profile=(
+            json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
+            if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
+            else None
+        ),
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)
     if md:
         try:
-            (md.parent / "summary.md").write_text(text)
-            print(f"  [optimize/cc] summary saved: {md.parent / 'summary.md'}")
+            _demo = Path(json.loads(md.read_text()).get("config", {}).get("model_root") or "")
+        except Exception:  # noqa: BLE001
+            _demo = None
+        if _demo and str(_demo):
+            when = f"Final end-of-run summary: {time.strftime('%Y-%m-%d %H:%M:%S %Z')} (adds committed wins, full-pipeline e2e, roofline residual)"
+            try:
+                from scripts.tt_hw_planner.run_report import refresh_bringup_section
+
+                refresh_bringup_section(_demo)
+            except Exception:
+                pass
+            _key = os.environ.get("PERF_MCP_REPORT_KEY", "optimize")
+            _module = os.environ.get("PERF_MCP_REPORT_MODULE")
+            if _module:
+                _block = mod.module_optimize_block(
+                    _demo,
+                    0,
+                    text,
+                    when,
+                    module=_module,
+                    index=os.environ.get("PERF_MCP_REPORT_INDEX", ""),
+                    pcc_gate=os.environ.get("PERF_MCP_REPORT_PCC", ""),
+                    outcome="optimizing…",
+                )
+            else:
+                _block = mod.optimize_block(_demo, 0, text, when)
+            mod.upsert_report_section(_demo, _key, _block)
+            print(f"  [optimize/cc] report updated: {_demo / 'RUN_REPORT.md'} ({_key} section)")
+            _prune_legacy_reports(_demo)
+        try:
+            (md.parent / "summary.md").unlink()
         except OSError:
             pass
+
+
+def _hitl_watch(repo_root, hitl_dir, stop_event):
+    """Orchestrator-side HITL loop (own thread): watch for the agent's lever proposal, render the pause
+    screen, read the operator's commit/revert/try, perform the git action, and answer the blocked agent."""
+    import importlib.util as _ilu
+
+    _spec = _ilu.spec_from_file_location("cc_hitl", str(Path(__file__).parent / "hitl.py"))
+    _h = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_h)
+
+    while not stop_event.is_set():
+        prop = _h.read_proposal(hitl_dir)
+        if prop is None:
+            stop_event.wait(0.4)
+            continue
+        print("\n" + _h.render_pause_screen(prop) + "\n", flush=True)
+        try:
+            ans = input("  choice [c=commit / r=revert / t=try other]: ").strip().lower()
+        except (EOFError, OSError):
+            ans = "r"
+        if ans.startswith("t"):
+            try:
+                knob = input("  knob / instruction to try next: ").strip()
+            except (EOFError, OSError):
+                knob = ""
+            _h.post_decision(hitl_dir, "try", knob=knob)
+        elif ans.startswith("c"):
+            _git(repo_root, "add", "-A")
+            _git(repo_root, "commit", "-m", "hitl: %s" % (prop.get("tried", {}).get("lever", "lever")))
+            _h.post_decision(hitl_dir, "commit")
+            print("  [hitl] committed.", flush=True)
+        else:
+            _git(repo_root, "checkout", "--", ".")
+            _h.post_decision(hitl_dir, "revert")
+            print("  [hitl] reverted.", flush=True)
 
 
 def optimize_pipeline(
@@ -578,23 +1594,47 @@ def optimize_pipeline(
     metric: str,
     model_name: str,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
+    hitl: bool = False,
+    config_ref: str = "",
 ) -> dict:
-    """Drive one pipeline: claude -p re-invoked until the gate's can_stop, bounded by max_rounds."""
+    """Drive one pipeline: claude -p re-invoked until the gate's can_stop, bounded by max_rounds.
+    hitl=True runs the human-in-the-loop gate: the agent proposes one lever at a time via hitl_gate and
+    a watcher thread renders the pause screen + performs the operator's commit/revert."""
     task = pipe["task"]
     kernel_log = f"/tmp/cc_kernlog_{model_name}_{task}.json"
     try:
+        _fold_cumulative(kernel_log)
         os.path.exists(kernel_log) and os.remove(kernel_log)  # fresh ladder state per pipeline
     except OSError:
         pass
+    _capture_board_topology()  # snapshot chip->board reset map while the device is healthy (reset-only)
     cfg = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)
     _cov_env = cfg["mcpServers"]["perf-mcp"]["env"]
-    _cov, _cov_facts = _coverage_layers(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"))
+    _cov, _cov_facts = _coverage_layers(
+        repo_root,
+        _cov_env,
+        devices,
+        pipe.get("perf_test"),
+        pipe.get("case"),
+        model_name=model_name,
+        config_ref=config_ref,
+    )
     if _cov:
         _cov_env["TT_PERF_LAYERS"] = str(_cov)
         print(f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov} (covers all block types)")
+        _depth_env = _bridge_depth_env(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov)
+        if _depth_env:
+            _cov_env["PERF_MCP_PROFILE_ENV"] = json.dumps(_depth_env)
+    tools = list(_ALLOWED_TOOLS)
+    hitl_dir = None
+    if hitl:
+        hitl_dir = tempfile.mkdtemp(prefix=f"hitl_{model_name}_{task}_")
+        _cov_env["PERF_MCP_HITL_DIR"] = hitl_dir
+        tools = [t for t in _ALLOWED_TOOLS if not (t.endswith("git_commit") or t.endswith("git_revert"))]
+        tools.append("mcp__perf-mcp__hitl_gate")
     cfg_path = repo_root / CC_DIR / f".mcp_config_{model_name}_{task}.json"
     cfg_path.write_text(json.dumps(cfg, indent=2))
-    prompt = _PROMPT.format(model=model_name, task=task, metric=metric)
+    prompt = (_HITL_PROMPT if hitl else _PROMPT).format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
     try:
@@ -603,22 +1643,28 @@ def optimize_pipeline(
         pass
     before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
-    stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "2400") or "2400")
+    stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "600") or "600")
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
     wedge_strikes = 0
     round_cmd = [
-        "claude",
+        _resolve_claude_bin(),
         "-p",
         prompt,
         "--mcp-config",
         str(cfg_path),
         "--strict-mcp-config",
         "--allowedTools",
-        *_ALLOWED_TOOLS,
+        *tools,
         "--output-format",
         "stream-json",
         "--verbose",
     ]
+    _stop_watcher = threading.Event()
+    _wt = None
+    if hitl:
+        _wt = threading.Thread(target=_hitl_watch, args=(repo_root, hitl_dir, _stop_watcher), daemon=True)
+        _wt.start()
+        print(f"  [optimize/cc] HITL on — pausing at each lever for your commit/revert/try (handshake {hitl_dir})")
     while rounds < max_rounds:
         st = _gate_status(repo_root, mcp_env, devices)
         if st.get("halt"):
@@ -632,6 +1678,15 @@ def optimize_pipeline(
         if wedged:
             wedge_strikes += 1
             if wedge_strikes >= max_wedge:
+                if os.environ.get("PERF_MCP_SUPERVISED") == "1":
+                    print(
+                        "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — exiting so the supervisor "
+                        "reclaims the device (kills holders + reset) and restarts; ladder state is preserved."
+                        % wedge_strikes,
+                        flush=True,
+                    )
+                    _reclaim_device(devices)
+                    os._exit(75)
                 print(
                     "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — aborting this pipeline "
                     "(all committed wins are safe)." % wedge_strikes
@@ -640,6 +1695,7 @@ def optimize_pipeline(
         else:
             wedge_strikes = 0
         rounds += 1
+    _stop_watcher.set()
     after_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "AFTER")
     if before_ms and after_ms:
         d = (before_ms - after_ms) / before_ms * 100.0
@@ -652,7 +1708,17 @@ def optimize_pipeline(
     except Exception:  # noqa: BLE001
         _mf = {}
     _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms, model_name)
-    _emit_summary(repo_root, kernel_log, model_name, task, metric, start_sha, perf_test=(pipe or {}).get("perf_test", ""))
+    _emit_summary(
+        repo_root,
+        kernel_log,
+        model_name,
+        task,
+        metric,
+        start_sha,
+        perf_test=(pipe or {}).get("perf_test", ""),
+        before_ms=before_ms,
+        after_ms=after_ms,
+    )
     return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 
 
@@ -726,20 +1792,23 @@ def catalog_push(repo_root: Path, remote: str, branch: str) -> None:
                 timeout=180,
             )
             if has_remote:
-                subprocess.run(["git", "checkout", "-B", branch], cwd=wt, capture_output=True, text=True)
+                subprocess.run(["git", "checkout", "-B", branch], cwd=wt, capture_output=True, text=True, timeout=300)
             else:
-                subprocess.run(["git", "checkout", "--orphan", branch], cwd=wt, capture_output=True, text=True)
-                subprocess.run(["git", "rm", "-rf", "."], cwd=wt, capture_output=True, text=True)
+                subprocess.run(
+                    ["git", "checkout", "--orphan", branch], cwd=wt, capture_output=True, text=True, timeout=300
+                )
+                subprocess.run(["git", "rm", "-rf", "."], cwd=wt, capture_output=True, text=True, timeout=300)
             dest = Path(wt) / _GL_REL
             dest.mkdir(parents=True, exist_ok=True)
             for g in grads:
                 shutil.copy2(g, dest / g.name)
-            subprocess.run(["git", "add", _GL_REL], cwd=wt, capture_output=True, text=True)
+            subprocess.run(["git", "add", _GL_REL], cwd=wt, capture_output=True, text=True, timeout=300)
             c = subprocess.run(
                 ["git", "commit", "-m", f"[perf-catalog] graduated knobs ({len(grads)})"],
                 cwd=wt,
                 capture_output=True,
                 text=True,
+                timeout=300,
             )
             if c.returncode != 0:
                 print("  [catalog] no new graduated knobs to push.")
@@ -753,7 +1822,11 @@ def catalog_push(repo_root: Path, remote: str, branch: str) -> None:
                 )
         finally:
             subprocess.run(
-                ["git", "worktree", "remove", "--force", wt], cwd=str(repo_root), capture_output=True, text=True
+                ["git", "worktree", "remove", "--force", wt],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
     except Exception as exc:  # noqa: BLE001
         print(f"  [catalog] push error (ignored): {str(exc)[-140:]}")
@@ -895,6 +1968,52 @@ def _decide_parallelism_route(
         print(f"  [optimize/cc] parallelism route decision skipped ({exc})")
 
 
+def _tt_lang_available() -> bool:
+    try:
+        import importlib.util
+
+        return any(importlib.util.find_spec(m) is not None for m in ("ttl", "tt_lang", "ttlang"))
+    except Exception:
+        return False
+
+
+def _print_optimize_stop(pipe, exc) -> None:
+    """On any per-pipeline crash, tell the user — in plain language — why optimize stopped, the exact
+    next step to fix it, and where to see what was accomplished. Never raises."""
+    import re as _re
+    import sys as _sys
+
+    err = f"{type(exc).__name__}: {exc}"
+    low = str(exc).lower()
+    bar = "=" * 78
+    steps = []
+    if isinstance(exc, ModuleNotFoundError) or "no module named" in low:
+        _m = _re.search(r"no module named ['\"]([\w.]+)['\"]", low)
+        pkg = (_m.group(1).split(".")[0] if _m else "") or "<the-missing-package>"
+        steps.append(f"a Python dependency ('{pkg}') is missing — install it, then re-run:")
+        steps.append(f"    {_sys.executable} -m pip install {pkg}")
+    elif "_ttnncpp" in low or "cannot open shared object" in low or ("ttnn" in low and "shared object" in low):
+        steps.append("ttnn is not built for this checkout (its compiled .so is missing) — build it, then re-run:")
+        steps.append("    ./build_metal.sh")
+    elif "transformers" in low and ("flash_attn" in low or "unrecognized" in low or "attn_implementation" in low):
+        steps.append('the model needs a different transformers version — e.g.  pip install "transformers<5"  (in a')
+        steps.append("    dedicated venv if it would conflict with other models), then re-run.")
+    else:
+        steps.append("this is usually a build/env/version mismatch — read the CAUSE above, fix it, and re-run.")
+    try:
+        print("\n" + bar)
+        print(f"  OPTIMIZE STOPPED — pipeline '{(pipe or {}).get('task', '?')}'")
+        print(f"  CAUSE: {err}")
+        print("  NEXT STEPS to make it run:")
+        for i, s in enumerate(steps, 1):
+            print(f"    {i}. {s}" if not s.startswith("    ") else s)
+        print("  What was accomplished so far is preserved — committed speedups are already in git, and")
+        print("  the per-op ledger is at models/experimental/perf_automation/runs/<timestamp>/ledger.jsonl.")
+        print(bar)
+    except Exception:
+        pass
+
+
 def run_cc_optimize(
     demo_dir: Path,
     repo_root: Path,
@@ -910,6 +2029,7 @@ def run_cc_optimize(
     catalog_remote: str = "origin",
     catalog_branch: str = "perf-catalog",
     model_id_hint=None,
+    hitl: bool = False,
 ) -> dict | None:
     """Top-level cc engine: discover pipeline(s), then optimize EVERY one to the gate's can_stop.
 
@@ -939,6 +2059,7 @@ def run_cc_optimize(
     _decide_parallelism_route(demo_dir, manifest, repo_root, metric, devices, model_id_hint)
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
+    _cfg_ref = _resolve_model_id(demo_dir, model_id_hint) or str(demo_dir)
     pipes = pipelines_from_manifest(manifest, model_rel)
     is_mm = manifest.get("pathmap", {}).get("is_multimodal")
     print(f"  [optimize/cc] discovered pipelines: {[p['task'] for p in pipes]} (multimodal={is_mm})")
@@ -953,9 +2074,35 @@ def run_cc_optimize(
     if baseline_only or not pipes:
         return {"pipelines": pipes, "is_multimodal": is_mm, "results": []}
     results = []
+    _ttl_ok = _tt_lang_available()
     for pipe in pipes:
         print(f"  [optimize/cc] === optimizing pipeline: {pipe['task']} ===")
-        results.append(optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds))
+        try:
+            results.append(
+                optimize_pipeline(
+                    repo_root,
+                    manifest_path,
+                    pipe,
+                    devices,
+                    metric,
+                    model_name,
+                    max_rounds,
+                    hitl=hitl,
+                    config_ref=_cfg_ref,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — never let one pipeline's crash kill the whole run silently
+            _print_optimize_stop(pipe, exc)
+            results.append(None)
+    if not _ttl_ok:
+        import sys as _sys
+
+        print(
+            "\n  ⚠ tt-lang was NOT used this run — the ttl toolchain is not installed in this environment\n"
+            "    (commonly a Python-version mismatch). The knob / dtype / C++ / structural levers still ran;\n"
+            "    only the tt-lang kernel rung was skipped. To enable it next time:\n"
+            f'    {_sys.executable} -m pip install "tt-lang==1.0.1" --no-deps   (must match your ttnn)'
+        )
     if sync_catalog:
         catalog_push(repo_root, catalog_remote, catalog_branch)
-    return {"pipelines": pipes, "is_multimodal": is_mm, "results": results}
+    return {"pipelines": pipes, "is_multimodal": is_mm, "results": results, "tt_lang_used": _ttl_ok}

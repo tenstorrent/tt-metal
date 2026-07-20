@@ -32,7 +32,7 @@ from .bringup_loop import (
     render_text as render_bringup_loop_text,
     run_bringup_loop,
     _safe_id,
-    _stub_has_graduated_from_autofill,
+    _stub_has_graduated_any,
 )
 from .op_classifier import (
     classify_ops_in_component,
@@ -218,6 +218,10 @@ def _purge_transformers_modules() -> None:
 _TRANSFORMERS_PIN = "transformers==5.8.1"
 
 
+def _active_transformers_pin() -> str:
+    return os.environ.get("TT_HW_PLANNER_TRANSFORMERS_PIN") or _TRANSFORMERS_PIN
+
+
 def _upgrade_transformers_from_upstream() -> Tuple[bool, str]:
     import subprocess
 
@@ -227,7 +231,7 @@ def _upgrade_transformers_from_upstream() -> Tuple[bool, str]:
         "pip",
         "install",
         "-U",
-        _TRANSFORMERS_PIN,
+        _active_transformers_pin(),
     ]
     print(f"  Running: {' '.join(cmd)}")
     print("  (this typically takes 20-40s — PyPI wheel, no source build)")
@@ -326,6 +330,24 @@ def _print_gated_or_auth_guidance(model_id: str, kind: str) -> None:
     print(f"  {sep}")
 
 
+def _loader_resolver_available(model_id: str) -> bool:
+    try:
+        from . import reference_loader_resolver as _rlr
+    except Exception:
+        return False
+    try:
+        if _rlr.is_enabled():
+            return True
+        dd = _find_demo_dir_safe(model_id)
+        return bool(dd and _rlr.has_loader(dd))
+    except Exception:
+        return False
+
+
+def _auto_enable_loader_resolver() -> None:
+    os.environ["TT_HW_PLANNER_LOADER_RESOLVER"] = "1"
+
+
 def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
     ok, msg = _can_load_with_transformers(model_id)
     if ok:
@@ -337,30 +359,6 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
         print(f"    {line}")
 
     kind = _classify_load_error(msg)
-
-    try:
-        from . import reference_loader_resolver as _rlr
-
-        _rfiles = _rlr._repo_files(model_id)
-        _hf_native = any(
-            f
-            in (
-                "model.safetensors",
-                "model.safetensors.index.json",
-                "pytorch_model.bin",
-                "pytorch_model.bin.index.json",
-            )
-            for f in _rfiles
-        )
-        if _rfiles and not _hf_native:
-            print(
-                "  non-transformers checkpoint (repo ships no HF-format weights) — proceeding past\n"
-                "  pre-flight; the reference-loader resolver auto-arms at capture and writes a loader."
-            )
-            return True
-    except Exception:
-        pass
-
     if kind in {"gated", "auth", "missing"}:
         _print_gated_or_auth_guidance(model_id, kind)
         return False
@@ -372,22 +370,40 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
             "  torchvision`). Upgrading transformers will not help."
         )
         return False
-    if kind == "unknown":
-        print(
-            "  Could not classify this load failure. Likely causes:\n"
-            "    * Network timeout reaching huggingface.co\n"
-            "    * `trust_remote_code` repo with a broken custom file\n"
-            "    * Disk full / OOM during config download\n"
-            "    * Optional dep that wasn't a clean ImportError\n"
-            "  Not auto-upgrading transformers because there's no\n"
-            "  evidence that's the cause. Re-run with the error above\n"
-            '  fixed manually, OR `pip install -U "' + _TRANSFORMERS_PIN + '"`\n'
-            "  by hand if you suspect a version mismatch."
+    _non_hf_native = False
+    try:
+        from . import reference_loader_resolver as _rlr
+
+        _rfiles = _rlr._repo_files(model_id)
+        _non_hf_native = bool(_rfiles) and not any(
+            f
+            in (
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model.bin.index.json",
+            )
+            for f in _rfiles
         )
-        return False
+    except Exception:
+        _non_hf_native = False
+    if _non_hf_native or kind in {"unknown", "version"} or _loader_resolver_available(model_id):
+        _auto_enable_loader_resolver()
+        print(
+            "  transformers cannot load this architecture here (no model_type/auto_map, an\n"
+            "  unrecognized architecture, or a non-transformers checkpoint). Auto-enabling the\n"
+            "  reference-loader path: discovery/scaffold/capture build the module tree via the\n"
+            "  model's own package or trust_remote_code code plus a synthesized\n"
+            "  tests/pcc/_reference_loader.py, and every per-component PCC test imports it.\n"
+            "  No flag needed. Correctness stays PCC-gated."
+        )
+        return True
 
     if not allow_fix:
-        print("  --no-env-fix: skipping the automatic upgrade.\n" f'  Manual fix: pip install -U "{_TRANSFORMERS_PIN}"')
+        print(
+            "  --no-env-fix: skipping the automatic upgrade.\n"
+            f'  Manual fix: pip install -U "{_active_transformers_pin()}"'
+        )
         return False
 
     if os.environ.get(_ENV_FIX_ATTEMPTED_FLAG):
@@ -556,10 +572,12 @@ def _summarize_bringup_status(model_id: str) -> Tuple[Dict[str, int], List[Tuple
 def _list_component_pcc_tests(demo_dir: Path, *, only: Optional[List[str]] = None) -> List[str]:
     """Return the canonical per-component PCC test files for this demo,
     scoped to the components listed in `bringup_status.json` (status
-    NEW or ADAPT — both need per-component PCC validation).
+    NEW, ADAPT, or REUSE — every category is validated on device).
 
-    NEW = LLM writes from scratch; ADAPT = canonical wrapper, may refine.
-    REUSE components are trusted as-is (no per-component test).
+    NEW = LLM writes from scratch; ADAPT = editable copy, refine; REUSE = import
+    canonical-wrapper, tried as-is at iter-0. REUSE is NOT trusted blind: it
+    enters the gate like the others so its stub is PCC + torch-wrapper gated —
+    passes as-is => graduates REUSE; fails => demoted to ADAPT and worked.
 
     This ignores stale/leftover `test_*.py` from earlier template-based
     scaffolds (e.g. `test_sam2_hiera_tiny_for_image_classification.py` that
@@ -575,7 +593,7 @@ def _list_component_pcc_tests(demo_dir: Path, *, only: Optional[List[str]] = Non
         return []
     components: List[str] = []
     for comp in data.get("components", []):
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         name = str(comp.get("name", "")).strip()
         if name and (only is None or name in only):
@@ -609,16 +627,17 @@ def _auto_iteration_blockers(model_id: str) -> Tuple[List[str], List[str]]:
     ungraduated: List[str] = []
     smoke_tests: List[str] = []
     for comp in data.get("components", []):
-        # ADAPT components also need per-component validation; they get
-        # canonical-wrapper stubs and per-component PCC tests just like NEW.
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        # Every category needs per-component validation and can be ungraduated:
+        # NEW (from scratch), ADAPT (editable copy), REUSE (import wrapper —
+        # tried as-is, demoted to ADAPT on failure). None is trusted blind.
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         name = str(comp.get("name", "")).strip()
         if not name:
             continue
         safe = _safe_id(name)
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
-        if not _stub_has_graduated_from_autofill(stub_path):
+        if not _stub_has_graduated_any(stub_path):
             ungraduated.append(name)
         test_path = demo_dir / "tests" / "pcc" / f"test_{safe}.py"
         if test_path.is_file():
@@ -693,7 +712,7 @@ def _classify_components(model_id: str) -> Dict[str, List[str]]:
         elif status == "NEW":
             safe = _safe_id(name)
             stub_path = demo_dir / "_stubs" / f"{safe}.py"
-            if _stub_has_graduated_from_autofill(stub_path):
+            if _stub_has_graduated_any(stub_path):
                 out["new_native"].append(name)
             else:
                 out["new_fallback"].append(name)
@@ -934,6 +953,25 @@ def _partial_cpu_components(model_id: str) -> List[str]:
 def _compute_split(model_id: str) -> Dict[str, int]:
     cats = _classify_components(model_id)
 
+    from .bringup_loop import find_demo_dir
+    from .final_categorization import reuse_adapt_on_device
+
+    _demo = find_demo_dir(model_id)
+    verified_reuse: set = set()
+    if _demo is not None:
+        _status_path = _demo / "bringup_status.json"
+        if _status_path.is_file():
+            try:
+                _clist = json.loads(_status_path.read_text()).get("components", []) or []
+                verified_reuse = reuse_adapt_on_device(_demo, _clist)
+            except Exception:
+                verified_reuse = set()
+
+    reuse_dev = [n for n in cats["reuse"] if n in verified_reuse]
+    reuse_cpu = [n for n in cats["reuse"] if n not in verified_reuse]
+    adapt_dev = [n for n in cats["adapt"] if n in verified_reuse]
+    adapt_cpu = [n for n in cats["adapt"] if n not in verified_reuse]
+
     rt_partial: List[str] = []
     clean_native: List[str] = []
     for n in cats["new_native"]:
@@ -941,21 +979,20 @@ def _compute_split(model_id: str) -> Dict[str, int]:
             rt_partial.append(n)
         else:
             clean_native.append(n)
-    on_device = len(cats["reuse"]) + len(cats["adapt"]) + len(clean_native) + len(rt_partial)
-    on_cpu = len(cats["new_fallback"])
+    on_device = len(reuse_dev) + len(adapt_dev) + len(clean_native) + len(rt_partial)
+    on_cpu = len(cats["new_fallback"]) + len(reuse_cpu) + len(adapt_cpu)
     total = on_device + on_cpu
 
-    from .bringup_loop import find_demo_dir
-
     graduated = len(cats["new_native"])
-    _demo = find_demo_dir(model_id)
     if _demo is not None:
         for _n in cats["adapt"]:
-            if _stub_has_graduated_from_autofill(_demo / "_stubs" / f"{_safe_id(_n)}.py"):
+            if _stub_has_graduated_any(_demo / "_stubs" / f"{_safe_id(_n)}.py"):
                 graduated += 1
     return {
-        "reuse": len(cats["reuse"]),
-        "adapt": len(cats["adapt"]),
+        "reuse": len(reuse_dev),
+        "adapt": len(adapt_dev),
+        "reuse_cpu": len(reuse_cpu) + len(adapt_cpu),
+        "reuse_cpu_names": sorted(reuse_cpu + adapt_cpu),
         "new_native": len(clean_native),
         "new_native_partial_cpu": len(rt_partial),
         "new_native_partial_cpu_names": rt_partial,
@@ -981,14 +1018,20 @@ def _format_compute_split(model_id: str, *, label: str = "compute split", indent
         f"{s['on_cpu']}/{total} on CPU ({pct(s['on_cpu'])})",
         f"{indent}  Graduated (ON_DEVICE) : {s.get('graduated', 0)}/{total} "
         f"({pct(s.get('graduated', 0))}) actually graduated (native stub, PCC-verified)",
-        f"{indent}  on device : REUSE={s['reuse']}  ADAPT={s['adapt']}  "
+        f"{indent}  on device : REUSE-wired={s['reuse']}  ADAPT-wired={s['adapt']}  "
         f"NEW-native={s['new_native']}  NEW-partial-CPU={s['new_native_partial_cpu']}",
-        f"{indent}  on CPU    : NEW-fallback={s['new_fallback']}",
+        f"{indent}  on CPU    : NEW-fallback={s['new_fallback']}  REUSE/ADAPT-not-wired={s.get('reuse_cpu', 0)}",
     ]
     if s.get("new_native_partial_cpu", 0) > 0:
         names = ", ".join(s.get("new_native_partial_cpu_names", []))
         lines.append(
             f"{indent}  partial-CPU components (TTNN path exists but >=1 helper ran on CPU " f"at runtime): {names}"
+        )
+    if s.get("reuse_cpu", 0) > 0:
+        names = ", ".join(s.get("reuse_cpu_names", []))
+        lines.append(
+            f"{indent}  REUSE/ADAPT tagged but NOT wired to a ttnn module in this demo "
+            f"(runs on CPU via eager runner): {names}"
         )
     return lines
 
@@ -1009,9 +1052,10 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
 
     REUSE / ADAPT components don't carry per-op manifests today (they
     point at pre-existing tt-demo ports), so we treat them as a single
-    op apiece on device — same as the component-level summary already
-    does. NEW components without a manifest are also reported as a
-    single op on CPU (plain torch wrapper).
+    op apiece — on device ONLY when the reuse target is actually wired
+    into this demo (shared verified classifier), otherwise on CPU (an
+    unwired tag runs on the eager runner). NEW components without a
+    manifest are also reported as a single op on CPU (plain torch wrapper).
 
     Returns a dict with op counts plus a per-component breakdown so
     callers can render either a one-line summary or a full table.
@@ -1036,6 +1080,10 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
     except Exception:
         return out
 
+    from .final_categorization import reuse_adapt_on_device
+
+    verified_reuse = reuse_adapt_on_device(demo_dir, data.get("components", []) or [])
+
     rows: List[Dict[str, object]] = []
     on_device = 0
     on_cpu = 0
@@ -1050,21 +1098,23 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
         manifest_path = demo_dir / "_stubs" / f"{safe}.opplan.json"
 
-        # REUSE/ADAPT both run on device: REUSE as-is, ADAPT as cloned
-        # tt-module with possible LLM refinements.
         if status in ("REUSE", "ADAPT"):
+            wired = name in verified_reuse
             rows.append(
                 {
                     "name": name,
-                    "status": status,
-                    "where": "device",
-                    "on_device": 1,
-                    "on_cpu": 0,
+                    "status": status if wired else f"{status} (not wired — CPU)",
+                    "where": "device" if wired else "cpu",
+                    "on_device": 1 if wired else 0,
+                    "on_cpu": 0 if wired else 1,
                     "total": 1,
                     "has_manifest": False,
                 }
             )
-            on_device += 1
+            if wired:
+                on_device += 1
+            else:
+                on_cpu += 1
             continue
 
         if status != "NEW":
@@ -1084,7 +1134,7 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
             n_adapt = int(counts.get("op-ADAPT", 0))
             n_new = int(counts.get("op-NEW", 0))
             comp_total = n_reuse + n_adapt + n_new
-            graduated = _stub_has_graduated_from_autofill(stub_path)
+            graduated = _stub_has_graduated_any(stub_path)
             if graduated:
                 runtime_cpu = min(_runtime_fallback_helper_count(model_id, safe), comp_total)
                 row = {
@@ -1127,7 +1177,7 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
                     }
                 )
         else:
-            graduated = _stub_has_graduated_from_autofill(stub_path)
+            graduated = _stub_has_graduated_any(stub_path)
             if graduated:
                 runtime_cpu = _runtime_fallback_helper_count(model_id, safe)
                 if runtime_cpu > 0:
@@ -1650,6 +1700,16 @@ def _enforce_backend_match_quality_or_abort(
         model_type=model_type,
         pipeline_tag=pipeline_tag,
     )
+    try:
+        from .family_backends import rank_backends as _rank_backends
+
+        _siblings = _rank_backends(category=probe.category, model_type=model_type, pipeline_tag=pipeline_tag, top_n=3)
+        if _siblings:
+            print("  Sibling candidates (top %d, exact first):" % len(_siblings))
+            for _si, (_sb, _ssc, _sr) in enumerate(_siblings, 1):
+                print("    %d. %s  [score=%d; %s]" % (_si, _sb.name, _ssc, _sr))
+    except Exception:
+        pass
     if backend is None:
         auto_picked = _try_auto_onboard_inline(
             model_id=model_id,
@@ -7338,9 +7398,7 @@ def _native_directive(forbidden_excerpt: str = "", *, strict_native: bool = Fals
 
 
 from ._cli_helpers.auto_iterate import (  # noqa: F401
-    _run_auto_iterate_loop,
     add_iter_loop_cli_args,
-    iter_loop_kwargs_from,
 )
 
 _DEVICE_RESET_COUNT: int = 0
@@ -7983,8 +8041,59 @@ def _quiet_framework_logging() -> None:
         pass
 
 
+def _warn_on_registry_drift(args=None) -> None:
+    """Remote-first registry sync + non-fatal drift check (fixes-plan Point 2a).
+
+    Resolves ``tenstorrent/tt-metal`` ``main`` to a pinned sha, sha-cached
+    shallow/sparse-fetches the reusable-module subtrees, regenerates the
+    overlay registry from that snapshot, then drift-checks (missing paths vs
+    the local checkout; unmapped modules vs the fetched tree). ``--offline`` or
+    ``TT_HW_PLANNER_OFFLINE`` (or no network) falls back to the local checkout
+    with a loud stale warning. Records the resolved sha for the run report.
+    Never raises: neither a fetch nor a drift check may block bring-up.
+    """
+    try:
+        from .discovery import REPO_ROOT
+        from .registry_sync import (
+            check_registry_drift,
+            fetch_upstream_models,
+            format_drift,
+            has_hard_drift,
+            refresh_registry,
+            upstream_transformers_pin,
+        )
+
+        offline = bool(getattr(args, "offline", False) or getattr(args, "no_registry_sync", False))
+        tree = fetch_upstream_models(REPO_ROOT, offline=offline)
+        refresh_registry(tree.root, sha=tree.sha)
+        os.environ["TT_HW_PLANNER_REGISTRY_SHA"] = f"{tree.source}:{tree.sha}"
+        _tpin = upstream_transformers_pin(tree.root)
+        if _tpin:
+            os.environ["TT_HW_PLANNER_TRANSFORMERS_PIN"] = _tpin
+            if os.environ.get("TT_HW_PLANNER_VERBOSE"):
+                print(f"[registry] transformers pin from upstream tt-metal: {_tpin}")
+        if tree.stale:
+            print(
+                f"[registry] using LOCAL tree (may be stale) — upstream not fetched (offline/no-network); sha={tree.sha[:12]}"
+            )
+        elif os.environ.get("TT_HW_PLANNER_VERBOSE"):
+            print(f"[registry] synced to tenstorrent/tt-metal@{tree.sha[:12]}")
+
+        issues = check_registry_drift(REPO_ROOT, include_unmapped=False, unmapped_root=tree.root)
+        if has_hard_drift(issues):
+            n = sum(1 for i in issues if i.kind == "missing_path")
+            print(
+                f"[registry] {n} mapped registry path(s) are stale on this checkout — run `tt_hw_planner sync-registry` for detail."
+            )
+            if os.environ.get("TT_HW_PLANNER_VERBOSE"):
+                print(format_drift(issues))
+    except Exception:
+        pass
+
+
 def cmd_up(args) -> int:
     _quiet_framework_logging()
+    _warn_on_registry_drift(args)
     # Resolve local-weights handling BEFORE any subprocess is spawned.
     # Sets HF_HOME / HF_HUB_OFFLINE in os.environ when the user passed
     # --local-dir or --offline-hf; prints an info line when cached
@@ -8100,21 +8209,12 @@ def cmd_bringup(args) -> int:
         "auto_model_heavy": None,
         "auto_model_super_heavy": None,
         "auto_agent_timeout": 600,
-        # 4 parallel agents so the brain can iterate multiple
-        # ADAPT/NEW components concurrently (LLM-edit + apply happens
-        # in parallel; pytest device runs still serialize). Locked at 1
-        # used to waste time on multi-component models like Qwen2.5-14B.
-        "parallel_agents": 2,
-        "auto_only_component": None,
-        "phase2": False,
-        "phase2_only": False,
         "accept_fallback": False,
         "strict_pcc": True,
         "no_strict_pcc": False,
         "escalate_on_pcc_fail": True,
         "no_escalate_on_pcc_fail": False,
         "strict_pcc_tokens": None,
-        "strict_pcc_max_iters": 4,
         "pcc_engine": "agentic",
         "allow_partial_cpu": False,
         "regen_demo_only": False,
@@ -8153,6 +8253,20 @@ def _cmd_up_isolated(args) -> int:
 
     session = _wt_create(args.model_id)
     print(f"  [isolation] worktree: {session.path}")
+
+    try:
+        from .registry_sync import fetch_upstream_models, hydrate_upstream_into_repo
+
+        _offline = bool(getattr(args, "offline", False) or getattr(args, "no_registry_sync", False))
+        _tree = fetch_upstream_models(session.path, offline=_offline)
+        _hydrated = hydrate_upstream_into_repo(session.path, _tree, overwrite=False)
+        if _hydrated:
+            print(
+                f"  [isolation] hydrated {len(_hydrated)} NEW upstream file(s) from {_tree.source}:{_tree.sha[:12]} "
+                f"into the worktree (add-only: fresh reuse/adapt siblings, existing modules untouched)"
+            )
+    except Exception:
+        pass
 
     with using_repo(session.path):
         n_shared, shared_files = apply_for("_shared")
@@ -8230,6 +8344,31 @@ def _cmd_up_isolated(args) -> int:
 
 
 def _cmd_up_core(args) -> int:
+    from ._cli_helpers.bringup_cc import _emit_stop_summary, _reset_summary
+
+    _reset_summary()
+    model_id = getattr(args, "model_id", "") or ""
+    stop_reason = "bring-up ended"
+    try:
+        rc = _cmd_up_core_impl(args)
+        stop_reason = {
+            0: "bring-up completed (gate can_stop)",
+            1: "bring-up incomplete — components still not graduated (budget/attempts capped)",
+            2: "pre-flight/setup failed — model could not be loaded, scaffolded, or prepared",
+        }.get(rc, f"ended with rc={rc}")
+        return rc
+    except Exception as exc:
+        stop_reason = f"aborted by exception: {type(exc).__name__}: {exc}"
+        raise
+    finally:
+        if model_id:
+            try:
+                _emit_stop_summary(model_id, stop_reason)
+            except Exception:
+                pass
+
+
+def _cmd_up_core_impl(args) -> int:
     MODEL = args.model_id
     BOX = args.box
     sep = "=" * 78
@@ -8328,16 +8467,33 @@ def _cmd_up_core(args) -> int:
         if args.strict:
             return 2
         compat_rc = 0
-    if compat_rc not in (0, None):
+    _strict = getattr(args, "strict", False)
+    if compat_rc == 1:
         print(
-            f"  Compatibility gate FAILED: {MODEL} cannot run on {BOX} as-is "
-            f"(cmd_compat exit={compat_rc}). The compat report above lists the "
-            f"BLOCKED building blocks or kernel-divisibility issues. Aborting "
-            f"before scaffold / autofill / prepare so you don't generate a "
-            f"demo skeleton against an unsupported (model, box) pair.",
+            f"  Compatibility gate FAILED: could not analyze {MODEL} on {BOX} "
+            f"(cmd_compat exit=1) -- config.json unavailable, nothing to build "
+            f"against. Aborting before scaffold / autofill / prepare.",
             file=sys.stderr,
         )
         return compat_rc
+    if compat_rc in (2, 3):
+        _kind = "missing building block(s)" if compat_rc == 2 else "kernel-level constraint(s)"
+        if _strict:
+            print(
+                f"  Compatibility gate FAILED (--strict): {MODEL} on {BOX} has "
+                f"{_kind} (cmd_compat exit={compat_rc}). Aborting before scaffold.",
+                file=sys.stderr,
+            )
+            return compat_rc
+        print(
+            f"  Compatibility gate: {MODEL} on {BOX} has {_kind} (cmd_compat "
+            f"exit={compat_rc}). NOT aborting -- recording as work-item(s) and "
+            f"continuing into the bring-up loop (ADAPT / REUSE / NEW). Blockers "
+            f"listed above are graduated where possible and isolated "
+            f"(stub / CPU-fallback) otherwise. Re-run with --strict to hard-fail "
+            f"instead.",
+            file=sys.stderr,
+        )
 
     mem_fit_rc = _enforce_memory_fit_or_abort(
         MODEL,
@@ -9462,21 +9618,6 @@ def _cmd_up_core(args) -> int:
                 "  continuing --auto to synthesize NEW components and emit real PCC tests."
             )
 
-    if getattr(args, "phase2_only", False):
-        if not getattr(args, "auto", False):
-            args.auto = True
-        # Phase 2's auto-onboard driver defaults to claude. Force the
-        # provider so phase2-only doesn't fall through to the cursor
-        # readiness check (which fails when CURSOR_API_KEY isn't set).
-        # User can still override by passing --auto-agent explicitly
-        # alongside --phase2-only, but in that case they wouldn't be
-        # relying on this implication anyway.
-        args.auto_agent = "claude"
-        print(
-            "  --phase2-only implies --auto --auto-agent claude "
-            "(needed for the auto-onboard driver path inside Phase 2)."
-        )
-
     if getattr(args, "auto", False):
         provider = (getattr(args, "auto_agent", None) or "cursor").lower()
         if provider not in ("cursor", "claude"):
@@ -9584,6 +9725,7 @@ def _cmd_up_core(args) -> int:
                 agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
                 mesh=getattr(args, "mesh", None),
                 max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
+                reverify=bool(getattr(args, "reverify", False)),
             )
             try:
                 from .run_report import emit_run_report
@@ -9595,432 +9737,6 @@ def _cmd_up_core(args) -> int:
                 pass
             return _cc_rc
 
-        _phase2_only = bool(getattr(args, "phase2_only", False))
-        _phase2 = bool(getattr(args, "phase2", False)) or _phase2_only
-        if _phase2_only:
-            banner(f"Step 6/6  --phase2-only set: SKIPPING auto-iterate loop, going straight to Phase 2")
-            _rc_loop = 0
-        else:
-            banner(f"Step 6/6  {loop_goal}")
-            _rc_loop = _run_auto_iterate_loop(
-                MODEL=MODEL,
-                BOX=BOX,
-                mesh=getattr(args, "mesh", None),
-                dtype=getattr(args, "dtype", None),
-                batch=getattr(args, "batch", 1),
-                max_seq_len=getattr(args, "max_seq_len", 1024),
-                max_generated_tokens=getattr(args, "max_generated_tokens", 200),
-                accuracy=getattr(args, "accuracy", False),
-                no_trace=getattr(args, "no_trace", False),
-                no_paged_attention=getattr(args, "no_paged_attention", False),
-                no_instruct=getattr(args, "no_instruct", False),
-                download_first=args.download_first,
-                strict=args.strict,
-                demo_dir=demo_dir,
-                provider=provider,
-                agent_bin=agent_bin,
-                model=model_alias,
-                max_iters=getattr(args, "auto_max_iters", 5),
-                sep=sep,
-                target_components=sorted(set(seed_ungrad)) if seed_ungrad else None,
-                strict_native=strict_native,
-                agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
-                allow_kill_stale=allow_kill_stale,
-                allow_device_reset=allow_device_reset,
-                max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 2),
-                allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
-                model_light=model_light,
-                model_heavy=model_heavy,
-                model_super_heavy=model_super_heavy,
-                parallel_agents=getattr(args, "parallel_agents", 1),
-                adaptive_agents=getattr(args, "adaptive_agents", False),
-                only_component=getattr(args, "auto_only_component", None),
-            )
-
-        if _phase2:
-            from .commands.tackle_skipped import run_phase2_stage
-
-            _p2_rc, _p2_dropped, _p2_recaptured = run_phase2_stage(
-                MODEL,
-                demo_dir,
-                sep=sep,
-            )
-            if _p2_recaptured:
-                _focused_tests: List[str] = []
-                for _comp in _p2_recaptured:
-                    _test_path = demo_dir / "tests" / "pcc" / f"test_{_safe_id(_comp)}.py"
-                    if _test_path.is_file():
-                        _focused_tests.append(str(_test_path))
-
-                _need_graduation = False
-                if _focused_tests:
-                    print(f"  [phase2] quick-check PCC on {len(_p2_recaptured)} unblocked component(s)")
-                    try:
-                        _rerun_rc = _run_focused_pytest(
-                            model_id=MODEL,
-                            test_files=_focused_tests,
-                        )
-                        if _rerun_rc == 0:
-                            print(
-                                f"  [phase2] already graduated (PCC passed on fallback stubs): {sorted(_p2_recaptured)}"
-                            )
-                        else:
-                            print(
-                                f"  [phase2] PCC failed (rc={_rerun_rc}) — stubs are still CPU fallback. "
-                                f"Triggering graduation loop on these components."
-                            )
-                            _need_graduation = True
-                    except Exception as _p2_exc:
-                        print(f"  [phase2] focused pytest raised: {type(_p2_exc).__name__}: {_p2_exc}", file=sys.stderr)
-                        _need_graduation = True
-
-                if _need_graduation:
-                    print(
-                        f"  [phase2] running graduation auto-iterate on "
-                        f"{len(_p2_recaptured)} unblocked component(s): {sorted(_p2_recaptured)}"
-                    )
-                    _grad_rc = _run_auto_iterate_loop(
-                        MODEL=MODEL,
-                        BOX=BOX,
-                        mesh=getattr(args, "mesh", None),
-                        dtype=getattr(args, "dtype", None),
-                        batch=getattr(args, "batch", 1),
-                        max_seq_len=getattr(args, "max_seq_len", 1024),
-                        max_generated_tokens=getattr(args, "max_generated_tokens", 200),
-                        accuracy=getattr(args, "accuracy", False),
-                        no_trace=getattr(args, "no_trace", False),
-                        no_paged_attention=getattr(args, "no_paged_attention", False),
-                        no_instruct=getattr(args, "no_instruct", False),
-                        download_first=args.download_first,
-                        strict=args.strict,
-                        demo_dir=demo_dir,
-                        provider=provider,
-                        agent_bin=agent_bin,
-                        model=model_alias,
-                        max_iters=max(2, int(getattr(args, "auto_max_iters", 5)) // 2),
-                        sep=sep,
-                        target_components=sorted(set(_p2_recaptured)),
-                        strict_native=strict_native,
-                        agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
-                        allow_kill_stale=allow_kill_stale,
-                        allow_device_reset=allow_device_reset,
-                        max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 2),
-                        allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
-                        model_light=model_light,
-                        model_heavy=model_heavy,
-                        model_super_heavy=model_super_heavy,
-                        parallel_agents=1,
-                        only_component=None,
-                    )
-                    print(f"  [phase2] graduation auto-iterate rc={_grad_rc}")
-                    if _grad_rc != 0 and _rc_loop == 0:
-                        _rc_loop = _grad_rc
-            if _p2_dropped:
-                print(
-                    f"  [phase2] dropped {len(_p2_dropped)} ModuleList component(s); changes will persist via overlay capture"
-                )
-            print(f"  [phase2] stage rc={_p2_rc}")
-
-        # ──────────────────────────────────────────────────────────────
-        # FINAL CATEGORIZATION + AUTHORITATIVE GATE
-        # ──────────────────────────────────────────────────────────────
-        from .final_categorization import (
-            build_final_categorization,
-            format_categorization_summary,
-            format_kernel_gap_report,
-        )
-
-        _final_pcc_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
-        _pcc_validated = set(_final_pcc_report.get("passed_components", []) or [])
-        _categorization = build_final_categorization(
-            model_id=MODEL,
-            demo_dir=demo_dir,
-            graduated_set=_pcc_validated,
-        )
-
-        print()
-        print(sep)
-        print(f"  PLACEMENT CATEGORIZATION for {MODEL}")
-        print(sep)
-        print(format_categorization_summary(_categorization))
-        # Surface the TTNN op-gap list. KERNEL_MISSING components stay on
-        # CPU fallback at runtime and need TTNN dev work to move on device.
-        _gap_report = format_kernel_gap_report(MODEL, _categorization)
-        if _gap_report:
-            print(_gap_report)
-
-        # ──────────────────────────────────────────────────────────────
-        # DEMO EMISSION
-        # Brain (G8) owns the decision: high-confidence full-native emit,
-        # mixed-mode emit (some on CPU fallback, still useful), or
-        # decline (mostly CPU — focus on closing gaps first). Replaces
-        # the prior `if _rc_loop == 0` flag-gate so the brain governs.
-        # ──────────────────────────────────────────────────────────────
-        try:
-            from .agentic.e2e import should_emit_e2e_demo as _brain_should_emit
-
-            _final_report_for_brain = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
-            _final_all_passed_for_brain = bool(_final_report_for_brain.get("all_passed", False))
-
-            _emit_verdict = _brain_should_emit(
-                on_device=_categorization.on_device,
-                kernel_missing=_categorization.kernel_missing,
-                pending=_categorization.pending,
-                final_all_passed=_final_all_passed_for_brain,
-            )
-            _demo_ok = True  # default if emit decision is "skip"
-            _demo_msg = ""
-            _demo_emit_declined = False
-            _demo_emit_decline_reason = ""
-            if _emit_verdict.emit:
-                print(
-                    f"  [brain G8] demo-emit decision: {_emit_verdict.confidence} confidence — "
-                    f"{_emit_verdict.reason}"
-                )
-                _demo_ok, _demo_msg = _emit_and_verify_runnable_demo(MODEL, sep=sep)
-                if not _demo_ok:
-                    print(f"  [demo-emit] note: {_demo_msg}")
-            else:
-                _demo_emit_declined = True
-                _demo_emit_decline_reason = _emit_verdict.reason
-                print(f"  [brain G8] declined to emit demo: {_emit_verdict.reason}")
-        except Exception as _emit_exc:
-            print(
-                f"  [brain G8] demo-emit decision non-fatal: " f"{type(_emit_exc).__name__}: {_emit_exc}",
-                file=sys.stderr,
-            )
-            _demo_ok = True  # don't penalize bring-up for a brain-decision crash
-            _demo_emit_declined = False
-            _demo_emit_decline_reason = ""
-
-        # B-FIX #1 (2026-05-31): propagate demo verification failure into
-        # the outcome rc. Without this, the iterate loop's rc=0 stays 0
-        # even when the emitted demo doesn't actually run end-to-end —
-        # OUTCOME would report SUCCESS on an unrunnable demo.
-        if _rc_loop == 0 and not _demo_ok:
-            _rc_loop = 1
-            print(
-                "  [brain G8] OUTCOME downgraded: per-component PCC passed "
-                "but end-to-end demo verification failed — reporting FAIL "
-                "so the user doesn't trust an unrunnable demo."
-            )
-
-        # Step 1->2->3 e2e orchestrator (Item 8). Opt-in via
-        # TT_HW_PLANNER_USE_E2E_ORCHESTRATOR=1. When enabled, attempts
-        # template reuse / verify / synthesis BEFORE the legacy strict
-        # gate runs. Result feeds into _path_a_outcome below.
-        _path_a_outcome: Optional[str] = None
-        if _rc_loop == 0:
-            _orch_result = _maybe_run_e2e_orchestrator(
-                model_id=MODEL,
-                demo_dir=_find_demo_dir_safe(MODEL),
-            )
-            if _orch_result is not None:
-                from ._cli_helpers.e2e_orchestrator import (
-                    STATUS_ERROR,
-                    STATUS_SYNTHESIS_CONVERGED,
-                    STATUS_SYNTHESIS_FAILED,
-                    STATUS_TEMPLATE_REUSED,
-                    STATUS_VERIFY_PASSED,
-                )
-
-                print()
-                print("=" * 72)
-                print(f"  [e2e-orchestrator] status={_orch_result.status}")
-                for step in _orch_result.steps:
-                    print(f"    - {step}")
-                if _orch_result.promoted:
-                    print(f"  [e2e-orchestrator] template promoted (family={_orch_result.family_key})")
-                print("=" * 72)
-                # Translate orchestrator status to Path A outcome.
-                if _orch_result.status in (STATUS_TEMPLATE_REUSED, STATUS_VERIFY_PASSED, STATUS_SYNTHESIS_CONVERGED):
-                    pass  # _rc_loop stays 0; legacy gate below will re-verify
-                elif _orch_result.status == STATUS_SYNTHESIS_FAILED:
-                    _rc_loop = _PCC_FAIL_RC
-                    print(f"  [e2e-orchestrator] synthesis failed: {_orch_result.diagnostic}")
-                elif _orch_result.status == STATUS_ERROR:
-                    _path_a_outcome = OUTCOME_UNVERIFIED
-                    print(f"  [e2e-orchestrator] errored: {_orch_result.diagnostic}")
-
-        # Gap 4 (2026-06-02 audit): per-component PCC + demo-runnable
-        # are necessary but not sufficient. Spec: SUCCESS requires the
-        # end-to-end strict PCC gate to also fire AND pass (logit-PCC
-        # ≥0.99 vs HF reference on the stitched pipeline). If the gate
-        # can't fire (e.g. logits not captured) the verdict is
-        # UNVERIFIED — explicitly NOT a SUCCESS, but not a FAIL either.
-        # Run prepare --execute to capture demo output, gate it via the
-        # shared helper, then route the result into the outcome label.
-        if _rc_loop == 0 and getattr(args, "auto", False) and getattr(args, "strict_pcc", True):
-            try:
-                _path_a_prepare_argv = argparse.Namespace(
-                    model_id=MODEL,
-                    box=BOX,
-                    mesh=getattr(args, "mesh", None),
-                    dtype=getattr(args, "dtype", None),
-                    batch=1,
-                    max_seq_len=1024,
-                    max_generated_tokens=200,
-                    accuracy=False,
-                    no_trace=False,
-                    no_paged_attention=False,
-                    no_instruct=False,
-                    format="text",
-                    write_script=None,
-                    execute=True,
-                    strict=False,
-                    download_first=False,
-                )
-                _path_a_rc, _path_a_captured = _run_prepare_capture(_path_a_prepare_argv)
-                # Same environmental short-circuit as the Path 2 / B sites.
-                # Per-component PCC passed, so weight failures would be a
-                # surprise — but if HF auth/network broke between the
-                # iterate loop and this verification, bail cleanly rather
-                # than mis-stamp UNVERIFIED for the wrong reason.
-                if _path_a_captured:
-                    _exit_if_hf_weight_failure(MODEL, _path_a_captured)
-                if _path_a_rc != 0 or not _path_a_captured:
-                    _path_a_outcome = OUTCOME_UNVERIFIED
-                    print(
-                        f"  [Path A] post-success demo run rc={_path_a_rc} or "
-                        f"empty capture — strict end-to-end PCC gate did NOT "
-                        f"fire. Per-component PCC passed but end-to-end "
-                        f"numerical correctness is not confirmed."
-                    )
-                else:
-                    _pcc_a, _pcc_a_prompt = _run_strict_pcc_gate(args, MODEL, _path_a_captured, auto_mode=True)
-                    if _pcc_a is None:
-                        _path_a_outcome = OUTCOME_UNVERIFIED
-                        print(
-                            "  [Path A] strict end-to-end PCC gate could not "
-                            "produce a verdict (probe/extract returned None). "
-                            "Stamping UNVERIFIED."
-                        )
-                    elif not _pcc_a.ok:
-                        _rc_loop = _PCC_FAIL_RC
-                        print(
-                            f"  [Path A] strict end-to-end PCC gate FAILED "
-                            f"after per-component graduation:\n    "
-                            f"{_pcc_a.reason}\n  Components individually "
-                            f"passed PCC≥0.99 but the stitched pipeline "
-                            f"diverged from HF reference."
-                        )
-                        # Chain-divergence diagnostic — localizes which
-                        # module diverged so the next iter can target it.
-                        _run_and_log_chain_divergence(MODEL, demo_dir=_find_demo_dir_safe(MODEL))
-            except Exception as _gate_exc:
-                # Defensive: post-success gate runs are diagnostic, not
-                # gating in the legacy sense. A crash here shouldn't
-                # erase the per-component graduation work, but we
-                # should NOT silently claim full SUCCESS either.
-                print(
-                    f"  [Path A] strict end-to-end gate run raised "
-                    f"{type(_gate_exc).__name__}: {_gate_exc}. "
-                    f"Stamping UNVERIFIED (per-component PCC still passed).",
-                    file=sys.stderr,
-                )
-                _path_a_outcome = OUTCOME_UNVERIFIED
-
-        if _rc_loop == 0:
-            _register_bringup_success(
-                MODEL,
-                path="A. Template + iterate (per-component PCC-validated graduation)",
-                sep=sep,
-                notes="Auto-iterate loop reached all-native graduation.",
-            )
-            # Register the chained template in the family registry
-            # (Item 6) regardless of whether the orchestrator path
-            # fired. Second sibling pass auto-promotes (Item 7).
-            # Best-effort: registry failures never downgrade the
-            # bring-up outcome.
-            try:
-                from ._cli_helpers.family_template_registry import register_template
-                from ._cli_helpers.template_promotion import auto_promote_after_register
-
-                _family_key = _resolve_model_type(MODEL)
-                _demo_dir_for_reg = _find_demo_dir_safe(MODEL)
-                _demo_path = (_demo_dir_for_reg / "demo.py") if _demo_dir_for_reg else None
-                if _family_key and _demo_path is not None and _demo_path.is_file():
-                    register_template(
-                        family_key=_family_key,
-                        template_demo_source=str(_demo_path),
-                        source_model_id=MODEL,
-                        notes="from Path A per-component graduation",
-                    )
-                    _promoted = auto_promote_after_register(family_key=_family_key)
-                    if _promoted is not None:
-                        print(
-                            f"  [family-registry] {_family_key}: template "
-                            f"auto-promoted ({len(_promoted.confirmed_models)} confirmed siblings)"
-                        )
-                    else:
-                        print(f"  [family-registry] {_family_key}: registered (awaiting more siblings)")
-            except Exception as _reg_exc:
-                print(
-                    f"  [family-registry] register/promote raised "
-                    f"{type(_reg_exc).__name__}: {_reg_exc} (non-fatal)",
-                    file=sys.stderr,
-                )
-            # B-FIX #2 (2026-05-31): surface brain G8 demo-emit decline in
-            # the OUTCOME extras so user knows the demo wasn't emitted.
-            _success_extra = []
-            if _demo_emit_declined:
-                _success_extra.append(f"brain G8 declined to emit demo: {_demo_emit_decline_reason}")
-            if _path_a_outcome == OUTCOME_UNVERIFIED:
-                _success_extra.append(
-                    "end-to-end strict PCC gate did not produce a verdict — "
-                    "re-run with logits capture enabled to confirm numerical correctness"
-                )
-            _final_outcome_banner(
-                rc=0,
-                model_id=MODEL,
-                path_label="A. Template + iterate (all components graduated to native TTNN)",
-                extra=_success_extra or None,
-                outcome=_path_a_outcome,
-            )
-        else:
-            _final_outcome_banner(
-                rc=_rc_loop,
-                model_id=MODEL,
-                path_label="A. Template + iterate (loop did NOT graduate all components)",
-                extra=[
-                    "Inspect the per-component PCC results above to see which" " block(s) failed.",
-                    f"Re-run the loop with more iterations / higher attempts-per-" f"component:",
-                    f"    python -m scripts.tt_hw_planner up {MODEL} --auto"
-                    f" --auto-agent claude --auto-model-tiered"
-                    f" --auto-max-iters 24 --auto-max-attempts-per-component 5",
-                ],
-            )
-        return _rc_loop
-
-    banner(f"Step 6/6  Scaffold done — bring-up not yet on device")
-    _print_bringup_summary(MODEL, box=BOX, sep=sep)
-    print(
-        "\n  NEW components are CPU-fallback stubs (not running on the device).\n"
-        "  Whatever ran above either:\n"
-        "    - printed a runnable pytest command (no --execute passed), or\n"
-        "    - actually ran it on TT hardware (--execute was passed),\n"
-        "  but the model is not yet running natively on the device because\n"
-        "  fallback components are still executing on CPU.\n"
-    )
-    if not ok:
-        print(
-            "  NOTE: pre-flight could not load this model in the env and the\n"
-            "  automatic transformers upgrade did not resolve it. CPU-fallback\n"
-            "  stubs will error at runtime until the underlying env issue is\n"
-            "  fixed (usually a missing dep — Pillow / sentencepiece / torchvision\n"
-            "  / a private repo token).\n"
-        )
-    print(
-        "  To finish bring-up to native TTNN, re-run with --auto:\n"
-        f"    python -m scripts.tt_hw_planner up {MODEL} --box {BOX} --execute \\\n"
-        "        --auto --auto-agent <cursor|claude> --auto-max-iters 8\n"
-        "\n  Or hand-write replacements via the handoff flow:\n"
-        f"    python -m scripts.tt_hw_planner bringup {MODEL} --handoff-to-chat\n"
-        f"    python -m scripts.tt_hw_planner bringup {MODEL} --apply-all-responses\n"
-        f"    python -m scripts.tt_hw_planner up {MODEL} --box {BOX} --execute\n"
-    )
-    return 0
-
 
 from .commands.promote import cmd_promote  # noqa: F401
 
@@ -10029,6 +9745,7 @@ from .commands.prepare import cmd_prepare  # noqa: F401
 
 
 from .commands.list_meshes import cmd_list_meshes  # noqa: F401  (re-export)
+from .commands.sync_registry import cmd_sync_registry  # noqa: F401
 
 
 def _load_bringup_status(model_id: str) -> Tuple[Path, Dict]:
@@ -10144,6 +9861,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pup.add_argument("--no-trace", action="store_true", help="disable trace for prepare/execute and auto reruns")
     pup.add_argument(
+        "--reverify",
+        action="store_true",
+        help="clear restored graduation snapshots at run start so every component re-runs its PCC gate and re-earns graduation this run (stubs kept; guards against trusting a stale marker after deps/hydration change)",
+    )
+    pup.add_argument(
         "--no-paged-attention",
         action="store_true",
         help="disable paged attention for prepare/execute and auto reruns",
@@ -10200,6 +9922,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             "main so the single command works for any HF model, including "
             "very new ones (e.g. sam2_video) the shipped transformers "
             "doesn't yet recognize. Use this flag in CI or sealed envs."
+        ),
+    )
+    pup.add_argument(
+        "--offline",
+        dest="offline",
+        action="store_true",
+        help=(
+            "Do NOT fetch the tenstorrent/tt-metal registry from the network; "
+            "use the local checkout tree (may be stale). Default: remote-first "
+            "sha-pinned sync so the mapping registry tracks upstream without a "
+            "manual git pull (fixes-plan Point 2a). Also honored via "
+            "TT_HW_PLANNER_OFFLINE=1."
         ),
     )
     pup.add_argument(
@@ -10305,31 +10039,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "spends all its iterations on a single hopeless component, and "
             "the demo always converges to an end-to-end-running state "
             "(mix of native TTNN + CPU fallback) within --auto-max-iters."
-        ),
-    )
-    pup.add_argument(
-        "--phase2",
-        action="store_true",
-        help=(
-            "After the standard auto-iterate loop finishes, run the Phase 2 "
-            "stage inside the same worktree: walk the persistent skip-list, "
-            "drop ModuleList components (their files moved to _phase2_dropped/), "
-            "retry capture-inputs for missing-arg/shape-mismatch components "
-            "with TT_PLANNER_AUTO_ONBOARD_DRIVER=1, then re-run PCC on any "
-            "newly-unblocked components. Successful changes persist via the "
-            "existing overlay-capture step. Use this to clean up the skip-list "
-            "AFTER Phase 1 has graduated all currently-testable components."
-        ),
-    )
-    pup.add_argument(
-        "--phase2-only",
-        action="store_true",
-        help=(
-            "Skip the standard auto-iterate loop and run ONLY the Phase 2 "
-            "stage (implies --phase2). Useful for validating skip-list "
-            "handling against an already-graduated model without re-running "
-            "Phase 1. The worktree, scaffold, and overlay-apply steps still "
-            "run -- Phase 2 needs the demo dir to operate on."
         ),
     )
     pup.add_argument(
@@ -10498,14 +10207,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "On failure, the worktree is preserved for debug. Pass --isolation none to opt out."
         ),
     )
-    pup.add_argument(
-        "--engine",
-        default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
-        "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
-        "graduation snapshot contract)",
-    )
     pup.set_defaults(func=cmd_up)
 
     # `auto-up` is a zero-flag entry-point: hands the model_id to `up`
@@ -10537,12 +10238,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Mesh shape, e.g. '1,4' or '2x2' (required); must be canonical for --box.",
     )
     paut.add_argument(
-        "--engine",
-        default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
-        "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
-        "graduation snapshot contract)",
+        "--reverify",
+        action="store_true",
+        help="clear restored graduation snapshots at run start so every component re-runs its PCC gate and re-earns graduation this run (stubs kept; guards against trusting a stale marker after deps/hydration change)",
     )
     paut.set_defaults(func=cmd_bringup)
 
@@ -10591,6 +10289,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     pprom.add_argument("--no-instruct", action="store_true")
     pprom.add_argument("--download-first", action="store_true")
     pprom.add_argument("--strict", action="store_true")
+    pprom.add_argument(
+        "--reverify",
+        action="store_true",
+        help="clear restored graduation snapshots at run start so every component re-runs its PCC gate and re-earns graduation this run (stubs kept; guards against trusting a stale marker after deps/hydration change)",
+    )
     pprom.add_argument(
         "--auto",
         action="store_true",
@@ -10714,14 +10417,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "pipelines that pass the flag through unconditionally; in "
             "`promote` it is a no-op because op-synth defaults to off here."
         ),
-    )
-    pprom.add_argument(
-        "--engine",
-        default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
-        "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
-        "graduation snapshot contract, agent+gate driven)",
     )
     pprom.set_defaults(func=cmd_promote, auto=True, auto_model_tiered=True)
 
@@ -11127,6 +10822,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     pl = sub.add_parser("list-meshes", help="print canonical mesh topology")
     pl.set_defaults(func=cmd_list_meshes)
 
+    psr = sub.add_parser(
+        "sync-registry",
+        help="check the deterministic registry (backends / building blocks) against the checkout for path drift",
+    )
+    psr.add_argument(
+        "--check", action="store_true", help="exit non-zero if any mapped registry path is missing from the tree"
+    )
+    psr.add_argument("--no-unmapped", action="store_true", help="skip the reverse 'unmapped reusable module' hints")
+    psr.add_argument(
+        "--add-source",
+        action="append",
+        metavar="PATH",
+        help="register an extra reusable-source root (e.g. models/tt_v3) — persisted and fetched+scanned on every "
+        "up/auto-up so a new library extends the reuse map + sibling families without a tool edit (Point 10b). Repeatable.",
+    )
+    psr.add_argument(
+        "--kind",
+        choices=("component", "family"),
+        default="component",
+        help="for --add-source: 'component' (modules become REUSE/ADAPT targets) or 'family' (subdirs become sibling families)",
+    )
+    psr.add_argument(
+        "--default",
+        dest="default",
+        choices=("reuse", "adapt"),
+        default="adapt",
+        help="for --add-source: default classification for manifest-declared entries in the root (heuristic stays ADAPT)",
+    )
+    psr.set_defaults(func=cmd_sync_registry)
+
     pe2e = sub.add_parser(
         "emit-e2e",
         help=(
@@ -11209,13 +10934,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     pe2e.add_argument(
-        "--engine",
-        default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current build→gates→fix loop (default); cc = drive the fix loop through the shared "
-        "Claude-Code harness against the e2e deterministic gate (same G1–G4 gates, agent+gate driven)",
-    )
-    pe2e.add_argument(
         "--mesh",
         default=None,
         help=(
@@ -11268,12 +10986,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="explicit perf test node id 'path::test_fn' to profile (overrides auto-generation); use for "
         "models whose e2e test overflows the profiler and that ship a bounded/layer-capped perf test",
     )
-    popt.add_argument(
-        "--engine",
-        default="cc",
-        choices=["cc", "fsm"],
-        help="cc = Claude-Code-native deterministic-gate engine (default); fsm = legacy state-machine loop",
-    )
     popt.add_argument("--devices", default="0,1", help="single | all | explicit ids like '0,1'")
     popt.add_argument("--mesh", help="mesh shape like '2x2' for roofline calibration (needs --box)")
     popt.add_argument("--box", help="declared TT box for roofline calibration (e.g. p300c, T3K, Galaxy)")
@@ -11289,6 +11001,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "lots of headroom. The deterministic gate can still stop earlier via can_stop.",
     )
     popt.add_argument("-k", "--case", dest="case", help="pytest -k case id override (e.g. device_params0)")
+    popt.add_argument(
+        "--hitl",
+        action="store_true",
+        dest="hitl",
+        help="human-in-the-loop: the agent applies ONE lever at a time, then PAUSES at a block-level "
+        "timing + rationale screen for your commit/revert/try decision before continuing (cc engine only). "
+        "Interactive — needs a live terminal; slower per lever but you steer every step.",
+    )
     popt.add_argument(
         "--in-place",
         action="store_true",
@@ -11325,6 +11045,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         dest="catalog_branch",
         help="branch on --catalog-remote that holds the shared catalog (default: perf-catalog). "
         "Kept separate from model-optimization commits.",
+    )
+    popt.add_argument(
+        "--module-level",
+        action="store_true",
+        dest="module_level",
+        help="optimize graduated native modules ONE AT A TIME (against each module's per-component PCC "
+        "test) instead of the full pipeline. Sidesteps the heavy e2e baseline; a coarse per-module "
+        "pre-pass. Composes with --modules, --hitl, --then-e2e.",
+    )
+    popt.add_argument(
+        "--modules",
+        default=None,
+        help="comma-separated subset of module names for --module-level (default: all graduated modules).",
+    )
+    popt.add_argument(
+        "--then-e2e",
+        action="store_true",
+        dest="then_e2e",
+        help="after --module-level, run one full-pipeline pass to confirm the per-module wins survive " "composition.",
+    )
+    popt.add_argument(
+        "--reverify",
+        action="store_true",
+        help="re-optimize modules already marked optimized in a prior --module-level run "
+        "(default: skip them, so a restart resumes at the next unoptimized module). Mirrors auto-up --reverify.",
     )
     popt.set_defaults(func=cmd_optimize)
 

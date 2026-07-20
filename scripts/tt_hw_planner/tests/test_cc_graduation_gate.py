@@ -69,3 +69,69 @@ def test_no_env_flag_changes_the_criterion(bmcp, monkeypatch):
     monkeypatch.setenv("E2E_ALLOW_HOST_DECODE", "1")
     assert m._graduation_block_reason(_write_stub(tmp, "wrap", TORCH_WRAPPER)) is not None
     assert m._graduation_block_reason(_write_stub(tmp, "nat", NATIVE)) is None
+
+
+OP_SYNTH_STUB = (
+    "class C:\n"
+    "    def __call__(self, *args, **kwargs):\n"
+    "        args = tuple(_coerce_to_torch(a) for a in args)\n"
+    "        kwargs = {k: _coerce_to_torch(v) for k, v in kwargs.items()}\n"
+    "        return self._op(*args, **kwargs)\n"
+)
+
+SELF_TORCH_MODULE_WRAPPER = (
+    "class C:\n" "    def __call__(self, *a, **k):\n" "        return self._torch_module(*a, **k)\n"
+)
+
+TORCH_NO_GRAD_WRAPPER = (
+    "import torch\n"
+    "class C:\n"
+    "    def forward(self, x):\n"
+    "        with torch.no_grad():\n"
+    "            return self._ref(x)\n"
+)
+
+
+def _place_snapshot(tmp, comp: str) -> None:
+    (tmp / "_stubs" / f"{comp}.py.last_good_native").write_text("")
+
+
+def test_is_graduated_rejects_stale_snapshot_over_torch_wrapper(bmcp):
+    m, tmp = bmcp
+    _write_stub(tmp, "comp", TORCH_WRAPPER)
+    _place_snapshot(tmp, "comp")
+    assert m._is_graduated("comp") is False
+
+
+def test_is_graduated_accepts_snapshot_over_native_stub(bmcp):
+    m, tmp = bmcp
+    _write_stub(tmp, "comp", NATIVE)
+    _place_snapshot(tmp, "comp")
+    assert m._is_graduated("comp") is True
+
+
+def test_is_graduated_false_without_snapshot(bmcp):
+    m, tmp = bmcp
+    _write_stub(tmp, "comp", NATIVE)
+    assert m._is_graduated("comp") is False
+
+
+def test_is_graduated_rejects_op_synth_coerce_to_torch(bmcp):
+    m, tmp = bmcp
+    _write_stub(tmp, "comp", OP_SYNTH_STUB)
+    _place_snapshot(tmp, "comp")
+    assert m._is_graduated("comp") is False
+
+
+def test_is_graduated_rejects_self_torch_module_wrapper(bmcp):
+    m, tmp = bmcp
+    _write_stub(tmp, "comp", SELF_TORCH_MODULE_WRAPPER)
+    _place_snapshot(tmp, "comp")
+    assert m._is_graduated("comp") is False
+
+
+def test_is_graduated_rejects_torch_no_grad_wrapper(bmcp):
+    m, tmp = bmcp
+    _write_stub(tmp, "comp", TORCH_NO_GRAD_WRAPPER)
+    _place_snapshot(tmp, "comp")
+    assert m._is_graduated("comp") is False

@@ -14,6 +14,7 @@ Stages (each prints a banner to stderr and appends to runs/<id>/events.jsonl):
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
@@ -41,7 +42,7 @@ DEFAULT_CACHE = PKG_ROOT / ".cache" / "playbook_index.json"
 FIXTURES = PKG_ROOT / "tests" / "fixtures"
 
 METRIC_UNITS = {"device_ms": "ms", "wall_ms": "ms", "fps": "fps", "throughput_tok_s": "tok/s"}
-N_STAGES = 8
+N_STAGES = 10
 
 
 _SHAPE_CONFIG_CRASH_RE = re.compile(
@@ -81,12 +82,12 @@ class _Stages:
         self._n += 1
         self._name = name
         self._t0 = time.monotonic()
-        print(f"[{self._n}/{N_STAGES}] {name:<18} {detail}", file=sys.stderr, flush=True)
+        print(f"  Step {self._n}/{N_STAGES}  {detail or name}", file=sys.stderr, flush=True)
         self._event("start", detail)
 
     def done(self, detail: str = "") -> None:
         dt = time.monotonic() - self._t0
-        print(f"      ✔ {self._name}: {detail}  ({dt:.1f}s)", file=sys.stderr, flush=True)
+        print(f"      ✔ {detail} ({dt:.1f}s)" if detail else f"      ✔ done ({dt:.1f}s)", file=sys.stderr, flush=True)
         self._event("done", detail, dt)
 
     def _event(self, kind: str, detail: str, dt: float | None = None) -> None:
@@ -199,9 +200,12 @@ def before_loop(
     run = Run.create(runs_root, config=None)
     stages = _Stages(run.dir / "events.jsonl")
     print(f"run: {run.run_id}  ->  {run.dir}", file=sys.stderr, flush=True)
+    _sep = "=" * 78
+    print(f"\n{_sep}\n  Setup & discovery — {model_root.name}\n{_sep}", file=sys.stderr, flush=True)
 
-    stages.start("environment_check")
+    stages.start("environment_check", "Checking the Tenstorrent device")
     env = environment_check(env_probe)
+    physical_chips = int(env.get("device_count") or 0)
     box = config.get("box")
     if box:
         try:
@@ -216,23 +220,23 @@ def before_loop(
             )
         except Exception as exc:
             print(f"      WARN --box {box}: {exc}; using auto-detected single-chip env", file=sys.stderr, flush=True)
-    stages.done(f"{env['card']} · {env['arch']} · {env['worker_cores']} cores")
+    stages.done(f"{env['card']} ({env['arch']}), {env['worker_cores']} cores")
+    from .probes import note_board
+
+    chips = max(physical_chips, int(env.get("mesh_chips") or env.get("device_count") or 0))
+    note_board(str(env.get("card") or ""), chips, box=str(box or ""))
 
     devices = str(config.get("devices") or "single")
-    if devices == "single":
-        visible = "0"
-    elif devices == "all":
-        visible = None
-    else:
-        visible = devices
+    # DEVICE VISIBILITY IS INTENTIONALLY NEVER RESTRICTED (chip-count / hardware agnostic): pinning
+    # TT_VISIBLE_DEVICES to a chip SUBSET makes fabric auto-discovery classify the board as a CUSTOM
+    # cluster and fatally demand a mesh-graph descriptor we don't provide — crashing device/fabric
+    # init before any forward on any multi-chip board. Leave the full topology visible; the mesh
+    # SHAPE (TT_PERF_MESH_ROWS/COLS) is the chip-count lever, not OS-level visibility.
+    visible = None
     sub_env = dict(os.environ)
-    if visible is not None:
-        # TT_VISIBLE_DEVICES is the UMD-level var the fabric/topology mapper
-        # honors (verified on 4xn300: the TT_METAL_* one alone does NOT gate
-        # topology discovery). Set both for safety.
-        sub_env["TT_VISIBLE_DEVICES"] = visible
-        sub_env["TT_METAL_VISIBLE_DEVICES"] = visible
-    config["visible_devices"] = visible
+    sub_env.pop("TT_VISIBLE_DEVICES", None)
+    sub_env.pop("TT_METAL_VISIBLE_DEVICES", None)
+    config["visible_devices"] = None
     print(
         f"      devices={devices} -> TT_VISIBLE_DEVICES="
         f"{visible if visible is not None else '(unset: full fabric)'}",
@@ -247,22 +251,24 @@ def before_loop(
     # committed HEAD before baselining. SCOPED to model_root (never touches unrelated repo changes);
     # disable with AGENT_NO_STARTUP_RESET=1.
     if os.environ.get("AGENT_NO_STARTUP_RESET", "").lower() not in ("1", "true", "yes"):
-        stages.start("startup_reset", "restore model demo to clean git state")
+        stages.start("startup_reset", "Resetting the model demo to a clean state")
         try:
             from . import gitio
 
             repo = gitio.repo_root(model_root)
             head = gitio.head_sha(repo)
             dirty = gitio.changed_files(repo, head, pathspec=str(model_root))
-            if dirty:
-                gitio.checkout(repo, head, pathspec=str(model_root))
-                stages.done(f"restored {len(dirty)} leftover-dirty file(s) to {head[:9]} (prior interrupted run?)")
+            _generated = {"RUN_REPORT.md", ".module_optimize_state.json"}
+            code_dirty = [d for d in dirty if os.path.basename(d) not in _generated]
+            if code_dirty:
+                gitio.checkout(repo, head, pathspec=code_dirty)
+                stages.done(f"restored {len(code_dirty)} leftover-dirty file(s) to {head[:9]} (prior interrupted run?)")
             else:
                 stages.done(f"clean ({head[:9]})")
         except Exception as exc:  # never block the run on the restore
             stages.done(f"skipped: {exc}")
 
-    stages.start("cache_playbook", str(playbook_dir))
+    stages.start("cache_playbook", "Loading the optimization playbook")
     cache_playbook(playbook_dir, cache_path)
     index = build_index(playbook_dir)
     stages.done(f"{len(index)} sections indexed")
@@ -271,7 +277,7 @@ def before_loop(
     # python claude-agent-sdk, after which EVERY agent call fails ("error result: success").
     # Detect that here (a trivial call in a clean subprocess) and, by default, auto-upgrade +
     # re-test BEFORE the first in-process SDK import (discover), so the run picks up the fix.
-    stages.start("agent_sdk_health", "verify claude-agent-sdk <-> CLI compatibility")
+    stages.start("agent_sdk_health", "Checking the agent toolchain")
     from .sdk_health import ensure_compatible
 
     sdk_status = ensure_compatible()
@@ -291,7 +297,7 @@ def before_loop(
             f"  fix: {installer_hint()} -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
         )
 
-    stages.start("ensure_tt_lang", "install the tt-lang kernel toolchain if missing (--no-deps, ttnn verified)")
+    stages.start("ensure_tt_lang", "Verifying the kernel toolchain (tt-lang)")
     try:
         from .ttlang import ensure_ttl
 
@@ -306,7 +312,7 @@ def before_loop(
             "the run HALTS later only if a material op actually reaches the tt-lang rung"
         )
 
-    stages.start("discover", f"sub-agent mapping {model_root}")
+    stages.start("discover", "Mapping the model's pipelines & building perf tests")
     agent_calls_path = run.dir / "agent_calls.jsonl"
     agent_totals = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
 
@@ -330,8 +336,8 @@ def before_loop(
             agent_totals[k] += usage.get(k) or 0
         agent_totals["cost_usd"] += usage.get("cost_usd") or 0.0
         if not usage:
-            return " · usage n/a"
-        return f" · tok {usage.get('tokens_in')}/{usage.get('tokens_out')} · ${usage.get('cost_usd') or 0:.4f}"
+            return ""
+        return f"  [{usage.get('tokens_in')}/{usage.get('tokens_out')} tok, ${usage.get('cost_usd') or 0:.4f}]"
 
     # discover is a non-deterministic sub-agent: it intermittently returns a glob/list instead of a
     # concrete file ("...test_*.py is not a file") or exhausts its turn budget ("Reached maximum
@@ -353,6 +359,9 @@ def before_loop(
             break
         except Exception as exc:  # noqa: BLE001 — glob/max-turns/transient: retry a fresh discover
             _last_exc = exc
+            if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+                print("      OUT OF DISK — free space and rerun", file=sys.stderr, flush=True)
+                raise
             print(
                 f"      discover attempt {_attempt + 1}/3 failed ({str(exc)[:120]}); retrying",
                 file=sys.stderr,
@@ -363,13 +372,17 @@ def before_loop(
     if pcc_abs is not None:
         from .perf_test_gen import generate_perf_test
 
-        perf_node = generate_perf_test(model_root, "main", None, force=True, source_abs=pcc_abs, source_kind="pcc")
+        _task = "main"
+        if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
+            _stem = Path(str(config["pcc_test"]).partition("::")[0]).stem
+            _task = (_stem[5:] if _stem.startswith("test_") else _stem) or "main"
+        perf_node = generate_perf_test(model_root, _task, None, force=True, source_abs=pcc_abs, source_kind="pcc")
         if not perf_node:
             raise RuntimeError("could not auto-generate a perf test from --pcc-test (see messages above)")
         _pp, _, _pf = perf_node.partition("::")
         pathmap["perf_test"] = {"path": _pp, "case": _pf, "note": "auto-gen from --pcc-test"}
         pathmap["perf_tests"] = [pathmap["perf_test"]]
-        pathmap["pipelines"] = [{"task": "main", "perf_test": perf_node, "pcc_test": pcc_override["path"]}]
+        pathmap["pipelines"] = [{"task": _task, "perf_test": perf_node, "pcc_test": pcc_override["path"]}]
         pathmap["is_multimodal"] = False
         print(f"      auto-gen perf from pcc -> {perf_node}", file=sys.stderr, flush=True)
     usage_suffix = record_agent_call(
@@ -397,11 +410,18 @@ def before_loop(
                 print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
                 stages._event("note", msg)
                 case = corrected
-    for w in pathmap.get("warnings", []):
-        print(f"      ⚠ {w.get('code')}: {w.get('detail')}", file=sys.stderr, flush=True)
+    _warnings = pathmap.get("warnings", [])
+    _verbose = bool(os.environ.get("TT_HW_PLANNER_VERBOSE"))
+    if _warnings and _verbose:
+        for w in _warnings:
+            print(f"      note - {w.get('code')}: {w.get('detail')}", file=sys.stderr, flush=True)
+    _gates = " and ".join(pathmap["pcc"]) or "none"
+    _caveats = ""
+    if _warnings and not _verbose:
+        _caveats = f", plus {len(_warnings)} caveats (run with TT_HW_PLANNER_VERBOSE to read them)"
     stages.done(
-        f"perf_test={perf_rel} -k {case} · pcc={list(pathmap['pcc'])} · "
-        f"components={list(pathmap['components'])} · {len(pathmap['model_files'])} files" + usage_suffix
+        f"built {Path(perf_rel).name} for '{case}', covering {len(pathmap['components'])} "
+        f"components across {len(pathmap['model_files'])} files; correctness gate(s): {_gates}{_caveats}" + usage_suffix
     )
 
     user_input = config.get("input")
@@ -431,16 +451,16 @@ def before_loop(
         print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
         stages._event("note", msg)
 
-    stages.start("lead_review", "lead agent reviewing discovery evidence")
+    stages.start("lead_review", "Reviewing the discovery plan")
     verdict = review(pathmap)
     usage_suffix = record_agent_call("lead_review", "lead", verdict.get("model", "?"), verdict.get("usage"))
     stages.done(f"{verdict['decision']}: {verdict['reasoning'][:90]}" + usage_suffix)
 
-    stages.start("preflight", f"pytest --collect-only -k {case}")
+    stages.start("preflight", "Final checks before optimizing")
     n_selected = preflight(tt_root, perf_rel, case, env=sub_env)
     stages.done(f"{n_selected} test(s) selected")
 
-    stages.start("resolve_signposts", f"scan {model_root.name}/tests/ for tracy signposts")
+    stages.start("resolve_signposts", "Locating profiler signposts")
     from .probes import resolve_signposts
 
     sp = resolve_signposts(model_root / "tests")
@@ -463,7 +483,56 @@ def before_loop(
     }
     run.manifest.write(manifest)
 
-    stages.start("tracy_baseline", f"runs={config.get('runs', 1)} · tail -f {run.profiles_dir}/run0_tracy.log")
+    try:
+        from models.experimental.perf_automation.cc_optimize.run import (
+            _bridge_depth_env,
+            _coverage_layers,
+            _llm_depth_env,
+            _model_root_from_node,
+        )
+
+        _bl_mr = _model_root_from_node(tt_root, perf_rel)
+        _bl_knob = _llm_depth_env(_bl_mr, 2) if _bl_mr is not None else {}
+        _bl_cov, _bl_facts = _coverage_layers(
+            tt_root,
+            sub_env,
+            devices,
+            perf_rel,
+            case,
+            model_name=str(config.get("model_name") or ""),
+            config_ref=str(config.get("config_ref") or ""),
+            depth_knob=_bl_knob,
+        )
+        if not _bl_cov:
+            _bl_cov = int(os.environ.get("PERF_MCP_DEPTH_DEFAULT_LAYERS", "4"))
+        _bl_full = int((_bl_facts or {}).get("full_signal") or 0)
+        _bl_blocks = int((_bl_facts or {}).get("full_blocks") or 0)
+        print(
+            f"      depth-bridge: node={perf_rel} case={case} cov={_bl_cov} full_signal={_bl_full} full_blocks={_bl_blocks} knob={bool(_bl_knob)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
+        _bl_depth = _bridge_depth_env(
+            tt_root,
+            sub_env,
+            devices,
+            perf_rel,
+            case,
+            _bl_cov,
+            full_hint=_bl_full,
+            full_blocks=_bl_blocks,
+            knob=_bl_knob,
+        )
+        if _bl_depth:
+            os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)
+    except Exception as _bl_e:  # noqa: BLE001
+        import traceback as _tb
+
+        print(f"      depth-bridge skipped: {str(_bl_e)[:160]}", file=sys.stderr, flush=True)
+        print(_tb.format_exc()[-600:], file=sys.stderr, flush=True)
+
+    stages.start("tracy_baseline", "Measuring the baseline latency (trace+2CQ)")
 
     def _run_baseline():
         return profile_model(
@@ -503,6 +572,12 @@ def before_loop(
         (run.dir / "perf_seq_len").write_text(_seq_env)
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
+    try:
+        import tempfile as _tf
+
+        (Path(_tf.gettempdir()) / "perf_mcp_baseline.json").write_text(json.dumps(profile))
+    except Exception:  # noqa: BLE001
+        pass
     _bk = {b.get("id"): int(b.get("count", 0)) for b in (profile.get("buckets") or [])}
     _struct_ops = sum(c for i, c in _bk.items() if i in STRUCTURAL_OP_CLASSES)
     if profile.get("device_ms", 0) <= 0 or _struct_ops == 0:
@@ -512,8 +587,8 @@ def before_loop(
             f"Inspect {run.profiles_dir}/run0_tracy.log for a crash or profiler-marker overflow."
         )
     stages.done(
-        f"device {profile['device_ms']:.3f} ms · wall {profile['wall_ms']:.0f} ms "
-        f"· {len(profile['buckets'])} buckets"
+        f"baseline {profile['device_ms']:.3f} ms on device "
+        f"(wall {profile['wall_ms']:.0f} ms incl. compile), {len(profile['buckets'])} op-class buckets"
     )
 
     metric_name = config.get("metric") or "device_ms"
@@ -711,15 +786,22 @@ def main(argv: list[str] | None = None) -> int:
             from .probes import make_run_profiled, preflight_collect
 
             tt_root = os.environ.get("TT_METAL_HOME", str(PKG_ROOT.parents[2]))
-            visible = "0" if args.devices == "single" else (None if args.devices == "all" else args.devices)
-            xenv = {"TT_VISIBLE_DEVICES": visible, "TT_METAL_VISIBLE_DEVICES": visible} if visible is not None else {}
+            # Visibility is NEVER restricted (see the devices block above): a chip-subset pin crashes
+            # fabric auto-discovery on multi-chip boards. Chip count is driven by the mesh shape, not
+            # OS visibility, so pass no visibility override here regardless of --devices.
+            xenv = {}
             factory = lambda perf, case: make_run_profiled(tt_root, perf, case, timeout_s=args.timeout, extra_env=xenv)
             preflight = preflight_collect
             from .probes import collect_cases as collect
 
         result = before_loop(config, env_probe, model_runner, factory, preflight, review, collect)
     except Exception as exc:
-        print(f"BEFORE-LOOP FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
+            print("\n  ✗ OUT OF DISK — free space and rerun", file=sys.stderr)
+            return 1
+        print(f"\n  ✗ discovery failed ({type(exc).__name__}):", file=sys.stderr)
+        for _ln in str(exc).splitlines():
+            print(f"      {_ln}", file=sys.stderr)
         return 1
 
     p = result["profile"]

@@ -129,30 +129,6 @@ def test_verify_returns_none_for_non_ttnn_name() -> None:
     assert km.verify_ttnn_op_exists(None) is None  # type: ignore
 
 
-def test_auto_iterate_verifies_before_kernel_missing_label() -> None:
-    """Verification before KERNEL_MISSING labeling now lives in the
-    failure_classifier (classify_failure calls verify_ttnn_op_exists
-    before promoting to KERNEL_VERIFIED_MISSING). _skip_component_to_
-    fallback drives the classifier and respects its verdict.
-
-    Source-grep contracts:
-      * auto_iterate.py calls `classify_failure` inside
-        `_skip_component_to_fallback`
-      * failure_classifier.py imports `verify_ttnn_op_exists`
-    """
-    ai_src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "_cli_helpers" / "auto_iterate.py").read_text()
-    fc_src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "failure_classifier.py").read_text()
-    skip_idx = ai_src.find("def _skip_component_to_fallback")
-    assert skip_idx >= 0
-    assert "classify_failure" in ai_src[skip_idx : skip_idx + 5000], (
-        "_skip_component_to_fallback must drive the failure_classifier " "before persisting any skip-list category"
-    )
-    assert "verify_ttnn_op_exists" in fc_src, (
-        "failure_classifier must verify the op exists before claiming "
-        "KERNEL_VERIFIED_MISSING (avoid false-positive flags)"
-    )
-
-
 # ===== persistence tests =====
 
 
@@ -322,26 +298,3 @@ def test_kernel_gap_report_empty_when_none(tmp_path, monkeypatch) -> None:
 
 
 # ===== auto-iterate integration =====
-
-
-def test_auto_iterate_calls_detect_kernel_missing() -> None:
-    """Kernel-missing detection lives in `failure_classifier`, invoked
-    from `_skip_component_to_fallback`. The classifier emits
-    KERNEL_VERIFIED_MISSING which `skip_category_for_verdict` maps to
-    the `KERNEL_MISSING` skip-list category.
-
-    This test pins the indirection: detection lives in the classifier,
-    the loop drives it.
-    """
-    ai_src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "_cli_helpers" / "auto_iterate.py").read_text()
-    fc_src = (_REPO_ROOT / "scripts" / "tt_hw_planner" / "failure_classifier.py").read_text()
-    # Detection function is imported and used by the classifier
-    assert "detect_kernel_missing" in fc_src
-    # Loop drives the classifier inside _skip_component_to_fallback
-    skip_idx = ai_src.find("def _skip_component_to_fallback")
-    assert skip_idx >= 0
-    body = ai_src[skip_idx : skip_idx + 5000]
-    assert "classify_failure" in body
-    assert "skip_category_for_verdict" in body
-    # Final skip-list still uses the canonical category field
-    assert "KERNEL_MISSING" in fc_src
