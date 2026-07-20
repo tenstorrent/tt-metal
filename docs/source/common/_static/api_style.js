@@ -244,24 +244,52 @@
       if (highlight) {
         var pre = highlight.querySelector("pre");
         if (pre) {
-          /* Split innerHTML by newlines — Pygments never spans tokens across lines */
-          var html = pre.innerHTML.replace(/\n$/, ""); /* trim trailing newline */
-          var htmlLines = html.split("\n");
-
-          /* Build table: lineno | code per row */
+          /* Build table: lineno | code per row.
+           * Walk the <pre> DOM nodes and split them into per-line cells
+           * (Pygments never spans a highlight token across lines), cloning the
+           * existing nodes. This preserves syntax highlighting without ever
+           * assigning innerHTML from a string. */
           var table = document.createElement("table");
           table.className = "tt-example-table";
 
-          htmlLines.forEach(function (lineHtml, idx) {
+          var lineCells = [];
+          function newLineCell() {
+            var td = document.createElement("td");
+            td.className = "tt-codeline";
+            lineCells.push(td);
+            return td;
+          }
+          var current = newLineCell();
+
+          Array.prototype.forEach.call(pre.childNodes, function (node) {
+            if (node.nodeType === 3) {
+              /* Text node: a newline starts a new line cell. */
+              var segments = node.nodeValue.split("\n");
+              segments.forEach(function (segment, i) {
+                if (i > 0) current = newLineCell();
+                if (segment) current.appendChild(document.createTextNode(segment));
+              });
+            } else {
+              /* Highlight span (or other element): clone into the current line. */
+              current.appendChild(node.cloneNode(true));
+            }
+          });
+
+          /* Drop the trailing empty line from Pygments' trailing newline. */
+          if (lineCells.length > 1 && !lineCells[lineCells.length - 1].textContent) {
+            lineCells.pop();
+          }
+
+          lineCells.forEach(function (tdCode, idx) {
             var tr = document.createElement("tr");
 
             var tdNum = document.createElement("td");
             tdNum.className = "tt-lineno";
             tdNum.textContent = idx + 1;
 
-            var tdCode = document.createElement("td");
-            tdCode.className = "tt-codeline";
-            tdCode.innerHTML = lineHtml || " "; /* nbsp for empty lines */
+            if (!tdCode.childNodes.length) {
+              tdCode.textContent = " "; /* keep height on empty lines */
+            }
 
             tr.appendChild(tdNum);
             tr.appendChild(tdCode);
