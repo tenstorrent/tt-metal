@@ -44,6 +44,15 @@ TILE_SIZE = 32
 # caught ``TT_THROW`` before the Python fallback engages, so we log once per
 # process to label that noise as benign rather than a real failure.
 _FALLBACK_WARNED = False
+_FALLBACK_COUNTS = {}
+
+
+def reset_sdpa_fallback_counts():
+    _FALLBACK_COUNTS.clear()
+
+
+def get_sdpa_fallback_counts():
+    return dict(_FALLBACK_COUNTS)
 
 
 def validate_q_rope_offset(q_rope_offset: int) -> None:
@@ -180,7 +189,7 @@ def _apply_rope_chunked(
     return out
 
 
-def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: int = TILE_SIZE):
+def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: int = TILE_SIZE, layer_idx=None):
     q_seq_len = tt_q.shape[-2]
     k_seq_len = tt_k.shape[-2]
     # Single fused-SDPA call over the full canvas instead of ceil(C/32) python-level
@@ -208,6 +217,8 @@ def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: i
             return ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)
         except RuntimeError as exc:
             if attn_mask is None and _is_sdpa_l1_cb_clash(exc):
+                key = int(layer_idx) if layer_idx is not None else -1
+                _FALLBACK_COUNTS[key] = _FALLBACK_COUNTS.get(key, 0) + 1
                 _warn_sdpa_fallback_once()
                 return _manual_gqa_attention(tt_q, tt_k, tt_v)
             raise
@@ -230,7 +241,15 @@ def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: i
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         chunks.append(
-            _sdpa_q_chunked(q_chunk, tt_k, tt_v, attn_mask=mask_chunk, head_dim=head_dim, chunk_size=chunk_size)
+            _sdpa_q_chunked(
+                q_chunk,
+                tt_k,
+                tt_v,
+                attn_mask=mask_chunk,
+                head_dim=head_dim,
+                chunk_size=chunk_size,
+                layer_idx=layer_idx,
+            )
         )
         q_chunk.deallocate(True)
         if mask_chunk is not None:
@@ -434,7 +453,14 @@ def denoise_attention(
         v_old = tt_v
     tt_v = tt_v_dram
 
-    tt_sdpa = _sdpa_q_chunked(tt_q, tt_k, tt_v, attn_mask=attn_mask, head_dim=config.head_dim)
+    tt_sdpa = _sdpa_q_chunked(
+        tt_q,
+        tt_k,
+        tt_v,
+        attn_mask=attn_mask,
+        head_dim=config.head_dim,
+        layer_idx=getattr(attn, "layer_idx", None),
+    )
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)

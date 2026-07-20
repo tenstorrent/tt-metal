@@ -347,6 +347,7 @@ def test_sdpa_q_chunked_warns_about_gqa_fallback_once(monkeypatch):
     warnings = []
 
     monkeypatch.setattr(DA, "_FALLBACK_WARNED", False)
+    DA.reset_sdpa_fallback_counts()
     monkeypatch.setattr(DA.logger, "warning", lambda msg: warnings.append(msg))
     monkeypatch.setattr(DA, "_manual_gqa_attention", lambda q, k, v: "staged")
 
@@ -360,10 +361,11 @@ def test_sdpa_q_chunked_warns_about_gqa_fallback_once(monkeypatch):
     tt_k = SimpleNamespace(shape=[1, 2, 288, 256])
     tt_v = SimpleNamespace(shape=[1, 2, 288, 256])
 
-    first = _sdpa_q_chunked(tt_q, tt_k, tt_v, head_dim=256)
-    second = _sdpa_q_chunked(tt_q, tt_k, tt_v, head_dim=256)
+    first = _sdpa_q_chunked(tt_q, tt_k, tt_v, head_dim=256, layer_idx=5)
+    second = _sdpa_q_chunked(tt_q, tt_k, tt_v, head_dim=256, layer_idx=5)
 
     assert first == "staged"
     assert second == "staged"
     assert len(warnings) == 1
     assert "staged GQA fallback" in warnings[0]
+    assert DA.get_sdpa_fallback_counts() == {5: 2}
