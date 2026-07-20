@@ -14,11 +14,17 @@ Therefore, the peak achieved flops changes based on the datatype, the size of th
 
 ### Running Benchmarks
 
-The matrix multiply TFLOPS results can be tested on any Wormhole or Blackhole card. The benchmark is gated behind `TTNN_RUN_GEMM_FLOPS_BENCHMARK=1` (it skips otherwise) and runs a single unified test, `test_matmul_2d_host_perf`, that sweeps three modes and writes them all to one CSV (`generated/matmul_benchmark_report.csv`):
+The matrix multiply TFLOPS results can be tested on any Wormhole or Blackhole card. The benchmark is gated behind `TTNN_RUN_GEMM_FLOPS_BENCHMARK=1` (it skips otherwise) and runs a single unified test, `test_matmul_2d_host_perf`, that sweeps benchmark modes and writes them all to one CSV (`generated/matmul_benchmark_report.csv`):
 
-- `oob` — out-of-box matmul configs (default auto-selected settings)
-- `tuned_2d_l1` — explicitly tuned 2D multicast config with L1-sharded in0 and output (best performance)
-- `tuned_2d_dram` — explicitly tuned 2D multicast config with DRAM-interleaved in0 and output
+- `oob` — out-of-box matmul (auto-selected program config)
+- `reuse_dram` — `MatmulMultiCoreReuseProgramConfig` (DRAM interleaved)
+- `mcast_2d_l1` — `MatmulMultiCoreReuseMultiCastProgramConfig` with L1-sharded in0 and output
+- `mcast_2d_dram` — `MatmulMultiCoreReuseMultiCastProgramConfig` with DRAM-interleaved in0 and output
+- `mcast_1d_in0` — `MatmulMultiCoreReuseMultiCast1DProgramConfig` with `mcast_in0=True`
+- `mcast_1d_out` — `MatmulMultiCoreReuseMultiCast1DProgramConfig` with `mcast_in0=False`
+- `dram_sharded` — `MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`
+
+Mode names and plot legend labels are defined in `tech_reports/GEMM_FLOPS/benchmark_modes.py`.
 
 The easiest way to run the full flow (benchmark + CSV placement + plot generation) is the provided runner, which sets all required env vars:
 
@@ -116,10 +122,12 @@ Blackhole (P150) achieves excellent utilization across the board, with peak util
 
 When a Tensix core executes an operation, it reads data from SRAM, forwards it to a register, performs the computation, and then writes the result back to SRAM. Each Tensix core on a WH ASIC has approximately 1.5MB of SRAM. When data fits within this SRAM, each Tensix can operate without contention. However, some problems require more working memory than SRAM can provide. In these cases, the Tensix core will instead map data to device memory or DRAM. Accessing data from DRAM is slower than SRAM, both in terms of bandwidth and latency.
 
-In this report, the developed Python scripts evaluate three separate configurations:
-1. All matrices stored on L1 (SRAM)
-2. One matrix on L1 and one on DRAM
-3. Both matrices on DRAM
+In this report, the developed Python scripts evaluate multiple explicit program configs against OOB auto-selection:
+1. Reuse optimized (DRAM interleaved)
+2. 2D multicast with L1-sharded activations and output
+3. 2D multicast with DRAM interleaved activations and output
+4. 1D multicast (`mcast_in0` and `mcast_in0=False` variants)
+5. DRAM-sharded multicast (width-sharded activation + DRAM-sharded weights)
 
 In most cases, storing all matrices on L1 is ideal, as it completely avoids accessing the slower DRAM. The configuration with one matrix on L1 and one on DRAM incurs a small performance penalty, typically in the single-digit percentage range at worst. DRAM-only performance is highly variable: small matrices suffer the largest performance penalty when stored in DRAM, while larger tensors achieve performance closer to an L1-only configuration.
 

@@ -5,7 +5,7 @@
 """
 Utilization Scatter Plot - Device-based utilization comparison between N150 and P150
 
-One subplot per benchmark mode (L1 tuned, DRAM tuned, OOB). No stitching across modes.
+One subplot per benchmark mode (program config). No stitching across modes.
 
 Usage:
 1. Run the benchmark via run_bench.sh on both devices
@@ -14,28 +14,26 @@ Usage:
 """
 
 from pathlib import Path
+import sys
 
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
-IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
+_GEMM_FLOPS_DIR = Path(__file__).resolve().parent
+if str(_GEMM_FLOPS_DIR) not in sys.path:
+    sys.path.insert(0, str(_GEMM_FLOPS_DIR))
+from benchmark_modes import MODE_DISPLAY, MODE_ORDER as ALL_MODE_ORDER, add_shape_column, normalize_modes
+
+DATA_DIR = _GEMM_FLOPS_DIR / "data"
+IMG_DIR = _GEMM_FLOPS_DIR / "images"
 
 DEVICE_FILES = {
     "N150": DATA_DIR / "wh.csv",
     "P150": DATA_DIR / "bh.csv",
 }
 
-BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
-
-MODE_ORDER = ["tuned_2d_l1", "tuned_2d_dram", "oob"]
-
-MODE_DISPLAY = {
-    "tuned_2d_l1": "L1 (tuned)",
-    "tuned_2d_dram": "DRAM (tuned)",
-    "oob": "OOB (auto)",
-}
+PLOT_MODE_ORDER = [mode for mode in ALL_MODE_ORDER if mode != "oob"] + ["oob"]
 
 dtype_configs = [
     ("BFLOAT4_B-LoFi", "#2ca02c"),  # Green
@@ -57,23 +55,6 @@ def safe_read_csv(path):
     return pd.DataFrame()
 
 
-def parse_grid_size(raw):
-    cleaned = str(raw).strip("() ")
-    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
-    return grid_x, grid_y
-
-
-def add_base_shape_columns(df):
-    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
-    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
-        grid_dims = df["grid_size"].apply(parse_grid_size)
-        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
-        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
-        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
-    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
-    return df
-
-
 def find_util_col(df, kind):
     """Find the utilization column that has data. kind is 'Host' or 'Device'."""
     prefix = f"{kind} based utilization"
@@ -81,6 +62,17 @@ def find_util_col(df, kind):
         if col.startswith(prefix) and "user selected grid" in col and df[col].notna().any():
             return col
     return None
+
+
+def get_best_utilization_by_shape(df_slice):
+    """Pick the highest-utilization row per (m, k, n) shape."""
+    best_rows = []
+    df_slice = df_slice.dropna(subset=["device_utilization"])
+    for _, group in df_slice.groupby("shape", sort=True):
+        best_rows.append(group.loc[group["device_utilization"].idxmax()])
+    if not best_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(best_rows).sort_values("matrix_elements")
 
 
 def load_device_data(path, device_name):
@@ -95,8 +87,8 @@ def load_device_data(path, device_name):
         print(f"WARNING: No utilization column found in {path}")
     else:
         df["device_utilization"] = pd.to_numeric(df[util_col], errors="coerce")
-    df = add_base_shape_columns(df)
-    return df
+    df = add_shape_column(df)
+    return normalize_modes(df)
 
 
 def get_dtype_label(row):
@@ -150,16 +142,6 @@ def build_legend_elements():
     return legend_elements
 
 
-def get_best_utilization_by_base_shape(df_slice):
-    best_rows = []
-    df_slice = df_slice.dropna(subset=["device_utilization"])
-    for _, group in df_slice.groupby("base_shape", sort=True):
-        best_rows.append(group.loc[group["device_utilization"].idxmax()])
-    if not best_rows:
-        return pd.DataFrame()
-    return pd.DataFrame(best_rows).sort_values("matrix_elements")
-
-
 def plot_mode_panel(ax, df_mode):
     """Plot utilization curves for one benchmark mode."""
     for dtype_label, dtype_color in dtype_configs:
@@ -168,7 +150,7 @@ def plot_mode_panel(ax, df_mode):
             if subset.empty:
                 continue
 
-            subset_sorted = get_best_utilization_by_base_shape(subset)
+            subset_sorted = get_best_utilization_by_shape(subset)
             if subset_sorted.empty:
                 continue
             if device_name == "N150":
@@ -218,7 +200,7 @@ df = df[df["use_trace"] == False].copy()
 df["dtype_label"] = df.apply(get_dtype_label, axis=1)
 df["matrix_elements"] = df["m"] * df["k"] * df["n"]
 
-available_modes = [mode for mode in MODE_ORDER if mode in df["mode"].values and not df[df["mode"] == mode].empty]
+available_modes = [mode for mode in PLOT_MODE_ORDER if mode in df["mode"].values and not df[df["mode"] == mode].empty]
 if not available_modes:
     print("ERROR: No mode data available after filtering. Exiting.")
     raise SystemExit(1)

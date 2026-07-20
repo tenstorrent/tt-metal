@@ -26,6 +26,7 @@ mkdir -p tech_reports/GEMM_FLOPS/data
 cp generated/matmul_benchmark_report.csv "tech_reports/GEMM_FLOPS/data/${ARCH}.csv"
 
 python tech_reports/GEMM_FLOPS/plot_util_grid.py
+python tech_reports/GEMM_FLOPS/plot_util_by_dim.py
 python tech_reports/GEMM_FLOPS/plot_utilization.py
 python tech_reports/GEMM_FLOPS/plot_scatter_tracing.py
 python tech_reports/GEMM_FLOPS/plot_scatter_performance.py

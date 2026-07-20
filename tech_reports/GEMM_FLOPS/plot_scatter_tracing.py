@@ -11,13 +11,19 @@ Usage:
 """
 
 from pathlib import Path
+import sys
 
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
-IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
+_GEMM_FLOPS_DIR = Path(__file__).resolve().parent
+if str(_GEMM_FLOPS_DIR) not in sys.path:
+    sys.path.insert(0, str(_GEMM_FLOPS_DIR))
+from benchmark_modes import add_shape_column, normalize_modes
+
+DATA_DIR = _GEMM_FLOPS_DIR / "data"
+IMG_DIR = _GEMM_FLOPS_DIR / "images"
 
 DEVICE_FILES = {
     "n150": DATA_DIR / "wh.csv",
@@ -28,8 +34,6 @@ DEVICE_LABELS = {
     "n150": "N150 (Wormhole)",
     "p150": "P150 (Blackhole)",
 }
-
-BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
 
 dtype_configs = [
     ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)", "#2ca02c"),  # Green
@@ -44,23 +48,6 @@ def safe_read_csv(path):
         return pd.read_csv(path)
     print(f"WARNING: {path} not found — skipping that device.")
     return pd.DataFrame()
-
-
-def parse_grid_size(raw):
-    cleaned = str(raw).strip("() ")
-    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
-    return grid_x, grid_y
-
-
-def add_base_shape_columns(df):
-    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
-    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
-        grid_dims = df["grid_size"].apply(parse_grid_size)
-        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
-        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
-        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
-    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
-    return df
 
 
 def load_and_prepare(path, source):
@@ -83,17 +70,17 @@ def load_and_prepare(path, source):
     df["matrix_elements"] = df["m"] * df["k"] * df["n"]
     if df["use_trace"].dtype == object:
         df["use_trace"] = df["use_trace"].astype(str).str.lower() == "true"
-    df = add_base_shape_columns(df)
-    return df
+    df = add_shape_column(df)
+    return normalize_modes(df)
 
 
 def get_best_trace_pairs(df_slice):
-    """Return plotted series and ratio points keyed by exact base matrix shape."""
+    """Return plotted series and ratio points keyed by exact matrix shape."""
     traced_perf = []
     nontraced_perf = []
     ratio_points = []
 
-    for _, shape_group in df_slice.groupby("base_shape", sort=True):
+    for _, shape_group in df_slice.groupby("shape", sort=True):
         traced_group = shape_group[shape_group["use_trace"]]
         nontraced_group = shape_group[~shape_group["use_trace"]]
 

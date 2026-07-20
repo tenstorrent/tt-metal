@@ -11,6 +11,7 @@ Usage:
 """
 
 from pathlib import Path
+import sys
 
 import matplotlib.colors as mcolors
 import pandas as pd
@@ -18,15 +19,18 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
-DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
-IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
+_GEMM_FLOPS_DIR = Path(__file__).resolve().parent
+if str(_GEMM_FLOPS_DIR) not in sys.path:
+    sys.path.insert(0, str(_GEMM_FLOPS_DIR))
+from benchmark_modes import add_shape_column, normalize_modes
+
+DATA_DIR = _GEMM_FLOPS_DIR / "data"
+IMG_DIR = _GEMM_FLOPS_DIR / "images"
 
 DEVICE_FILES = {
     "N150": DATA_DIR / "wh.csv",
     "P150": DATA_DIR / "bh.csv",
 }
-
-BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
 
 
 def safe_read_csv(path):
@@ -35,23 +39,6 @@ def safe_read_csv(path):
         return pd.read_csv(path)
     print(f"WARNING: {path} not found — skipping that device.")
     return pd.DataFrame()
-
-
-def parse_grid_size(raw):
-    cleaned = str(raw).strip("() ")
-    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
-    return grid_x, grid_y
-
-
-def add_base_shape_columns(df):
-    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
-    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
-        grid_dims = df["grid_size"].apply(parse_grid_size)
-        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
-        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
-        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
-    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
-    return df
 
 
 def load_and_prepare(path, source):
@@ -71,8 +58,8 @@ def load_and_prepare(path, source):
         + "_"
         + df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
     )
-    df = add_base_shape_columns(df)
-    return df
+    df = add_shape_column(df)
+    return normalize_modes(df)
 
 
 # Load data
@@ -93,10 +80,10 @@ if df_n150.empty or df_p150.empty:
 
 df = pd.concat([df_n150, df_p150], ignore_index=True)
 
-# Filter for square base matrices and get best performance per base shape/source/dtype.
-df_square = df[df["base_k"] == df["base_n"]].copy()
+# Filter for square matrices and get best performance per shape/source/dtype.
+df_square = df[df["k"] == df["n"]].copy()
 best_data = []
-for (_, source, dtype_fidelity), group in df_square.groupby(["base_shape", "source", "dtype_fidelity"]):
+for (_, source, dtype_fidelity), group in df_square.groupby(["shape", "source", "dtype_fidelity"]):
     best_row = group.loc[group["tflops"].idxmax()]
     best_data.append(best_row)
 
@@ -108,21 +95,21 @@ dtype_configs = [
     ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)"),
 ]
 
-# Pair N150 and P150 by base shape; use scaled M values only for display.
-n150_shapes = set(df_best[df_best["source"] == "N150"]["base_shape"])
-p150_shapes = set(df_best[df_best["source"] == "P150"]["base_shape"])
-paired_base_shapes = sorted(n150_shapes & p150_shapes)
+# Pair N150 and P150 by matrix shape; use M values for display.
+n150_shapes = set(df_best[df_best["source"] == "N150"]["shape"])
+p150_shapes = set(df_best[df_best["source"] == "P150"]["shape"])
+paired_shapes = sorted(n150_shapes & p150_shapes)
 
 combined_labels = []
-all_base_shapes = []
-for base_shape in paired_base_shapes:
-    n150_m = df_best[(df_best["source"] == "N150") & (df_best["base_shape"] == base_shape)]["m"].iloc[0]
-    p150_m = df_best[(df_best["source"] == "P150") & (df_best["base_shape"] == base_shape)]["m"].iloc[0]
+all_shapes = []
+for shape in paired_shapes:
+    n150_m = df_best[(df_best["source"] == "N150") & (df_best["shape"] == shape)]["m"].iloc[0]
+    p150_m = df_best[(df_best["source"] == "P150") & (df_best["shape"] == shape)]["m"].iloc[0]
     combined_labels.append(f"{n150_m} / {p150_m}")
-    all_base_shapes.append(base_shape)
+    all_shapes.append(shape)
 
-if not all_base_shapes:
-    print("ERROR: No paired base matrix shapes available for N150/P150 comparison. Exiting.")
+if not all_shapes:
+    print("ERROR: No paired matrix shapes available for N150/P150 comparison. Exiting.")
     raise SystemExit(1)
 
 print(f"✓ Matrix sizes: {len(combined_labels)} pairs")
@@ -150,15 +137,13 @@ bar_info = []
 
 current_pos = 0
 
-for pair_idx, base_shape in enumerate(all_base_shapes):
+for pair_idx, shape in enumerate(all_shapes):
     cluster_start = current_pos
 
     # N150 bars (lighter)
     for dtype_fidelity, label in dtype_configs:
         n150_data = df_best[
-            (df_best["base_shape"] == base_shape)
-            & (df_best["source"] == "N150")
-            & (df_best["dtype_fidelity"] == dtype_fidelity)
+            (df_best["shape"] == shape) & (df_best["source"] == "N150") & (df_best["dtype_fidelity"] == dtype_fidelity)
         ]
         if len(n150_data) > 0:
             val = n150_data["tflops"].values[0]
@@ -175,9 +160,7 @@ for pair_idx, base_shape in enumerate(all_base_shapes):
     # P150 bars (darker)
     for dtype_fidelity, label in dtype_configs:
         p150_data = df_best[
-            (df_best["base_shape"] == base_shape)
-            & (df_best["source"] == "P150")
-            & (df_best["dtype_fidelity"] == dtype_fidelity)
+            (df_best["shape"] == shape) & (df_best["source"] == "P150") & (df_best["dtype_fidelity"] == dtype_fidelity)
         ]
         if len(p150_data) > 0:
             val = p150_data["tflops"].values[0]
@@ -196,7 +179,7 @@ ax.bar(positions, heights, width=bar_width, color=colors_list, edgecolor="black"
 
 # Add performance multiplier annotations (baseline: N150 BFLOAT16-HiFi4 per matrix size)
 max_height = max(heights)
-for pair_idx in range(len(all_base_shapes)):
+for pair_idx in range(len(all_shapes)):
     baseline = None
     for info in bar_info:
         if info["pair_idx"] == pair_idx and info["dtype"] == "BFLOAT16_HiFi4" and info["source"] == "N150":

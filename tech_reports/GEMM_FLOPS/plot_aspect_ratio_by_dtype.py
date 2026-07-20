@@ -11,6 +11,7 @@ Usage:
 """
 
 from pathlib import Path
+import sys
 from functools import reduce
 from math import gcd
 
@@ -18,8 +19,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
-IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
+_GEMM_FLOPS_DIR = Path(__file__).resolve().parent
+if str(_GEMM_FLOPS_DIR) not in sys.path:
+    sys.path.insert(0, str(_GEMM_FLOPS_DIR))
+from benchmark_modes import add_shape_column, normalize_modes
+
+DATA_DIR = _GEMM_FLOPS_DIR / "data"
+IMG_DIR = _GEMM_FLOPS_DIR / "images"
 
 DEVICE_FILES = {
     "N150": DATA_DIR / "wh.csv",
@@ -30,8 +36,6 @@ DEVICE_LABELS = {
     "N150": "N150 (Wormhole)",
     "P150": "P150 (Blackhole)",
 }
-
-BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
 
 
 def safe_read_csv(path):
@@ -47,36 +51,14 @@ def gcd_of_three(a, b, c):
     return reduce(gcd, [a, b, c])
 
 
-def calculate_aspect_ratio(base_m, base_k, base_n):
-    """Calculate aspect ratio from base matrix dimensions."""
-    divisor = gcd_of_three(base_m, base_k, base_n)
-    ratio_m = base_m // divisor
-    ratio_k = base_k // divisor
-    ratio_n = base_n // divisor
+def calculate_aspect_ratio(m, k, n):
+    """Calculate aspect ratio from matrix dimensions."""
+    divisor = gcd_of_three(m, k, n)
+    ratio_m = m // divisor
+    ratio_k = k // divisor
+    ratio_n = n // divisor
 
     return f"{ratio_m}:{ratio_k}:{ratio_n}"
-
-
-def parse_grid_size(raw):
-    """Parse grid_x and grid_y from the grid_size column, e.g. '(12, 10)' → (12, 10)."""
-    cleaned = str(raw).strip("() ")
-    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
-    return grid_x, grid_y
-
-
-def extract_grid_dims(df):
-    return parse_grid_size(df["grid_size"].iloc[0])
-
-
-def add_base_shape_columns(df):
-    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
-    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
-        grid_dims = df["grid_size"].apply(parse_grid_size)
-        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
-        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
-        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
-    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
-    return df
 
 
 def load_and_prepare(path, source):
@@ -96,17 +78,9 @@ def load_and_prepare(path, source):
         + "_"
         + df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
     )
-    df = add_base_shape_columns(df)
-
-    gx, gy = extract_grid_dims(df)
-    df["grid_x"] = gx
-    df["grid_y"] = gy
-    print(f"{source} grid: {gx}x{gy}")
-
-    df["aspect_ratio"] = df.apply(
-        lambda row: calculate_aspect_ratio(row["base_m"], row["base_k"], row["base_n"]), axis=1
-    )
-    return df
+    df = add_shape_column(df)
+    df["aspect_ratio"] = df.apply(lambda row: calculate_aspect_ratio(row["m"], row["k"], row["n"]), axis=1)
+    return normalize_modes(df)
 
 
 # Load data
@@ -169,7 +143,7 @@ for source in available_sources:
 
             # Group by matrix size and get best TFLOPs for each size
             size_tflops = []
-            for _, group in filtered.groupby("base_shape"):
+            for _, group in filtered.groupby("shape"):
                 total_elements = group["m"].iloc[0] * group["k"].iloc[0] * group["n"].iloc[0]
                 best_tflops = group["tflops"].max()
                 size_tflops.append((total_elements, best_tflops))
