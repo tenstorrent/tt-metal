@@ -88,7 +88,6 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
-    TT_FATAL(operation_attributes.tile == tt::tt_metal::Tile{}, "Device tilize only supports the default tile");
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or

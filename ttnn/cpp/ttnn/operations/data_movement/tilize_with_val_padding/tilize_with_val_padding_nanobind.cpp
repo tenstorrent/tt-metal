@@ -37,6 +37,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                 dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 tile (tt.tt_metal.Tile, optional): Geometry of the tile to be tilized to. Defaults to the default tile.
+
             Returns:
                 ttnn.Tensor: the output tensor.
 
