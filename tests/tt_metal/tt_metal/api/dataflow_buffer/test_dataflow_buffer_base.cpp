@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Base single-DFB config sweep (legacy kept configs + full Metal 2.0 matrix).
+// Base single-DFB config sweep (full Metal 2.0 matrix).
 
 #include "dfb_test_common.hpp"
 
@@ -17,41 +17,6 @@ static std::string ImplicitSyncParamName(const ::testing::TestParamInfo<bool>& i
 static std::string M2ImplicitSyncParamName(const ::testing::TestParamInfo<bool>& info) {
     return info.param ? "ImplicitSyncTrue" : "ImplicitSyncFalse";
 }
-
-// legacy single-DFB config sweep macros + kept configs
-#define DFB_TEST(prefix, suffix, p_kind, c_kind, num_p, pap_kind, num_c, cap_kind, extra_skip)          \
-    TEST_P(DFBImplicitSyncParamFixture, prefix##Test1xDFB##suffix) {                                    \
-        DFB_SKIP_IF_UNSUPPORTED((num_p), (num_c));                                                      \
-        extra_skip;                                                                                     \
-        experimental::dfb::DataflowBufferConfig config{                                                 \
-            .entry_size = 1024,                                                                         \
-            .num_entries = dfb_default_num_entries((num_p), (num_c)),                                   \
-            .num_producers = (num_p),                                                                   \
-            .pap = dfb::AccessPattern::pap_kind,                                                        \
-            .num_consumers = (num_c),                                                                   \
-            .cap = dfb::AccessPattern::cap_kind,                                                        \
-            .enable_producer_implicit_sync = GetParam(),                                                \
-            .enable_consumer_implicit_sync = GetParam()};                                               \
-        run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind); \
-    }
-
-#define DFB_TEST_BUF(prefix, suffix, p_kind, c_kind, num_p, pap_kind, num_c, cap_kind, extra_skip, n_buf)     \
-    TEST_P(DFBImplicitSyncParamFixture, prefix##Test1xDFB##suffix) {                                          \
-        DFB_SKIP_IF_UNSUPPORTED((num_p), (num_c));                                                            \
-        extra_skip;                                                                                           \
-        experimental::dfb::DataflowBufferConfig config{                                                       \
-            .entry_size = 1024,                                                                               \
-            .num_entries = dfb_default_num_entries((num_p), (num_c)),                                         \
-            .num_producers = (num_p),                                                                         \
-            .pap = dfb::AccessPattern::pap_kind,                                                              \
-            .num_consumers = (num_c),                                                                         \
-            .cap = dfb::AccessPattern::cap_kind,                                                              \
-            .enable_producer_implicit_sync = GetParam(),                                                      \
-            .enable_consumer_implicit_sync = GetParam()};                                                     \
-        CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));                             \
-        run_single_dfb_program(                                                                               \
-            this->devices_.at(0), config, DFBPorCType::p_kind, DFBPorCType::c_kind, core_range_set, (n_buf)); \
-    }
 
 // All single-DFB configs now live in the Metal 2.0 sweep below. The 2.0 driver runs the
 // simple 1x1 explicit-sync cases on WH/BH too (a DFB lowers to a circular buffer there);
