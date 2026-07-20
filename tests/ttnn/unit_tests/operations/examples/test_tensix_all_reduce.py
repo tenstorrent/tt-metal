@@ -46,11 +46,15 @@ def _custom_case():
 
 def _default_perf_cases(device):
     grid = device.compute_with_storage_grid_size()
+    half_x = max(2, grid.x // 2)
+    half_y = max(2, grid.y // 2)
     candidates = [
         ("whole_rows", (1, grid.x), grid.y),
         ("whole_columns", (grid.y, 1), grid.x),
-        ("half_rows", (1, max(2, grid.x // 2)), (grid.x // max(2, grid.x // 2)) * grid.y),
+        ("half_rows", (1, half_x), (grid.x // half_x) * grid.y),
         ("two_rows", (min(2, grid.y), grid.x), max(1, grid.y // min(2, grid.y))),
+        ("two_columns", (grid.y, min(2, grid.x)), max(1, grid.x // min(2, grid.x))),
+        ("quad", (half_y, half_x), (grid.x // half_x) * (grid.y // half_y)),
     ]
     unique = []
     seen = set()
