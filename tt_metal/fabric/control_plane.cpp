@@ -1236,79 +1236,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
 
     this->collect_and_merge_router_port_directions_from_all_hosts();
 
-    // PARITY PROBE (temp, remove before merge): cross-rank uniformity of the two physically-derived maps the user
-    // asked about. There is no logical-only source to diff against (these come from physical eth cores + all_gather),
-    // so the meaningful question is whether every rank already agrees after the merge/all_gather. Order-independent
-    // SUM-fold checksum + element count, all_reduced MIN/MAX; min==max => UNIFORM.
-    {
-        const auto& ctx = this->distributed_context_.get();
-        auto fold = [](uint64_t h, uint64_t v) {
-            h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
-            return h;
-        };
-        auto probe = [&](const std::string& name, uint64_t count, uint64_t cksum) {
-            uint64_t in_min[2] = {count, cksum};
-            uint64_t in_max[2] = {count, cksum};
-            uint64_t out_min[2] = {0, 0};
-            uint64_t out_max[2] = {0, 0};
-            ctx.all_reduce(
-                ttsl::Span<uint64_t>(in_min, 2),
-                ttsl::Span<uint64_t>(out_min, 2),
-                tt::tt_metal::distributed::multihost::ReduceOp::MIN);
-            ctx.all_reduce(
-                ttsl::Span<uint64_t>(in_max, 2),
-                ttsl::Span<uint64_t>(out_max, 2),
-                tt::tt_metal::distributed::multihost::ReduceOp::MAX);
-            if (*ctx.rank() == 0) {
-                const bool uniform = (out_min[0] == out_max[0]) && (out_min[1] == out_max[1]);
-                log_warning(
-                    tt::LogFabric,
-                    "[parity] {}: count[min={},max={}] cksum[min={},max={}] -> {}",
-                    name,
-                    out_min[0],
-                    out_max[0],
-                    out_min[1],
-                    out_max[1],
-                    uniform ? "UNIFORM" : "DIVERGENT");
-            }
-        };
-        {
-            uint64_t cks = 0, count = 0;
-            for (const auto& [fn, dir_map] : router_port_directions_to_physical_eth_chan_map_) {
-                for (const auto& [dir, chans] : dir_map) {
-                    std::vector sorted_chans(chans.begin(), chans.end());
-                    std::sort(sorted_chans.begin(), sorted_chans.end());
-                    uint64_t h = 0;
-                    h = fold(h, *fn.mesh_id);
-                    h = fold(h, fn.chip_id);
-                    h = fold(h, static_cast<uint64_t>(dir));
-                    h = fold(h, sorted_chans.size());
-                    for (const auto ch : sorted_chans) {
-                        h = fold(h, static_cast<uint64_t>(ch));
-                    }
-                    cks += h;
-                    count++;
-                }
-            }
-            probe("router_port_directions", count, cks);
-        }
-        {
-            uint64_t cks = 0, count = 0;
-            for (const auto& [fn, dir_map] : router_port_directions_to_num_routing_planes_map_) {
-                for (const auto& [dir, n] : dir_map) {
-                    uint64_t h = 0;
-                    h = fold(h, *fn.mesh_id);
-                    h = fold(h, fn.chip_id);
-                    h = fold(h, static_cast<uint64_t>(dir));
-                    h = fold(h, static_cast<uint64_t>(n));
-                    cks += h;
-                    count++;
-                }
-            }
-            probe("num_routing_planes", count, cks);
-        }
-    }
-
     this->convert_fabric_routing_table_to_chip_routing_table();
     // After this, router_port_directions_to_physical_eth_chan_map_, intra_mesh_routing_tables_,
     // inter_mesh_routing_tables_ should be populated for all hosts in BigMesh
@@ -2821,24 +2748,6 @@ void ControlPlane::generate_intermesh_connectivity() {
     this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
     this->rebuild_intermesh_exit_maps_from_connections(intermesh_connections);
 
-    if (std::getenv("TT_INTERMESH_DEBUG") != nullptr && *(this->distributed_context_.get().rank()) == 0) {
-        for (const auto& [src_mesh, dst_map] : intermesh_exit_peer_fabric_node_id_pairs_) {
-            for (const auto& [dst_mesh, pairs] : dst_map) {
-                std::string s;
-                for (const auto& pr : pairs) {
-                    s += " (" + std::to_string(pr.first.chip_id) + "->" + std::to_string(pr.second.chip_id) + ")";
-                }
-                log_warning(
-                    tt::LogFabric,
-                    "[resolved-dbg] M{}->M{}: {} unique exit-peer chip pair(s):{}",
-                    *src_mesh,
-                    *dst_mesh,
-                    pairs.size(),
-                    s);
-            }
-        }
-    }
-
     this->validate_requested_intermesh_connections();
 }
 
@@ -3230,10 +3139,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     const auto& mesh_edge_ports_to_chip_id = mesh_graph.get_mesh_edge_ports_to_chip_id();
     const bool strict_intermesh_port_binding = !requested_intermesh_ports.empty();
 
-    // TODO(#50162): TT_INTERMESH_DEBUG diagnostics are temporary; remove once the allocator is
-    // validated and the single-host path is unified onto this allocator.
-    const bool intermesh_debug = std::getenv("TT_INTERMESH_DEBUG") != nullptr;
-
     auto is_z = [](RoutingDirection d) { return d == RoutingDirection::Z; };
 
     // Canonical boundary (min, max) mesh id pair; links are gathered with src on `first`, dst on `second`.
@@ -3284,60 +3189,16 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return std::nullopt;
     };
 
-    // TODO(#50162): temporary place_link failure diagnostics (6u-split 0-connections investigation).
-    auto dump_place_fail = [&](const char* side, FabricNodeId node, MeshId neighbor, uint32_t need, bool want_z) {
-        auto it = dir_ports_by_node.find(node);
-        if (it == dir_ports_by_node.end()) {
-            log_warning(
-                tt::LogFabric,
-                "[place-fail] {} node {} NOT in dir_ports_by_node (need={} want_z={} nbr M{})",
-                side,
-                node,
-                need,
-                want_z,
-                *neighbor);
-            return;
-        }
-        for (const auto& [dir, ports] : it->second) {
-            std::size_t freec = 0;
-            for (const auto& p : ports) {
-                if (!occupied[node].contains(p)) {
-                    ++freec;
-                }
-            }
-            auto oit = dir_owner.find({node, dir});
-            log_warning(
-                tt::LogFabric,
-                "[place-fail] {} node {} dir={} is_z={} total={} free={} owner={} (need={} want_z={} nbr M{})",
-                side,
-                node,
-                static_cast<int>(dir),
-                is_z(dir),
-                ports.size(),
-                freec,
-                oit == dir_owner.end() ? std::string("none") : ("M" + std::to_string(*oit->second)),
-                need,
-                want_z,
-                *neighbor);
-        }
-    };
-
     // Place both endpoints of a link into one direction of the requested Z-ness; on success, occupy the
     // ports, record direction ownership, and emit symmetric annotated entries (one pair per channel).
     auto place_link = [&](Link& link, bool want_z) -> bool {
         const uint32_t need = static_cast<uint32_t>(link.connection_hashes.size());
         auto src_ports = find_free_dir(link.src_node, link.dst_node.mesh_id, need, want_z);
         if (!src_ports) {
-            if (intermesh_debug) {
-                dump_place_fail("src", link.src_node, link.dst_node.mesh_id, need, want_z);
-            }
             return false;
         }
         auto dst_ports = find_free_dir(link.dst_node, link.src_node.mesh_id, need, want_z);
         if (!dst_ports) {
-            if (intermesh_debug) {
-                dump_place_fail("dst", link.dst_node, link.src_node.mesh_id, need, want_z);
-            }
             return false;
         }
         const RoutingDirection src_dir = src_ports->front().first;
@@ -3363,17 +3224,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 link.connection_hashes[k]);
         }
         link.placed = true;
-        if (intermesh_debug) {
-            log_warning(
-                tt::LogFabric,
-                "[place-dbg] src {} (dir {}) <-> dst {} (dir {}) nch={} hash0={}",
-                link.src_node,
-                static_cast<int>(src_dir),
-                link.dst_node,
-                static_cast<int>(dst_dir),
-                need,
-                link.connection_hashes.front());
-        }
         return true;
     };
 
@@ -3533,24 +3383,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     }
 
-    if (intermesh_debug && strict_intermesh_port_binding) {
-        for (const auto& [node, b] : budget_per_src_node) {
-            log_warning(tt::LogFabric, "[budget-dbg] budget_per_src_node[{}] = {}", node, b);
-        }
-        for (const auto& [boundary, links] : links_by_boundary) {
-            for (const auto& l : links) {
-                log_warning(
-                    tt::LogFabric,
-                    "[budget-dbg] link M{}<->M{}: src {} dst {} nch={}",
-                    boundary.first,
-                    boundary.second,
-                    l.src_node,
-                    l.dst_node,
-                    l.connection_hashes.size());
-            }
-        }
-    }
-
     auto is_marked = [&](const Boundary& boundary) {
         return mesh_graph.should_assign_z_direction(MeshId{boundary.first}, MeshId{boundary.second});
     };
@@ -3561,12 +3393,12 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
             auto bit = budget_per_src_node.find(link.src_node);
             const std::size_t budget = (bit == budget_per_src_node.end()) ? 0 : bit->second;
             const std::size_t placed =
-                placed_per_src_node.count(link.src_node) ? placed_per_src_node.at(link.src_node) : 0;
+                placed_per_src_node.contains(link.src_node) ? placed_per_src_node.at(link.src_node) : 0;
             return budget > placed ? budget - placed : 0;
         }
         auto bit = budget_channels.find(boundary);
         const std::size_t budget = (bit == budget_channels.end()) ? 0 : bit->second;
-        const std::size_t placed = placed_channels.count(boundary) ? placed_channels.at(boundary) : 0;
+        const std::size_t placed = placed_channels.contains(boundary) ? placed_channels.at(boundary) : 0;
         return budget > placed ? budget - placed : 0;
     };
 
@@ -3664,59 +3496,12 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     }
 
-    if (intermesh_debug) {
-        for (const auto& [boundary, links] : links_by_boundary) {
-            std::size_t total_channels = 0, placed_ch = 0, placed_links = 0;
-            for (const auto& l : links) {
-                total_channels += l.connection_hashes.size();
-                if (l.placed) {
-                    placed_ch += l.connection_hashes.size();
-                    ++placed_links;
-                }
-            }
-            std::size_t budget = 0;
-            if (!strict_intermesh_port_binding) {
-                budget = budget_channels.count(boundary) ? budget_channels.at(boundary) : 0;
-            } else {
-                std::set<FabricNodeId> src_nodes;
-                for (const auto& l : links) {
-                    src_nodes.insert(l.src_node);
-                }
-                for (const auto& n : src_nodes) {
-                    budget += budget_per_src_node.count(n) ? budget_per_src_node.at(n) : 0;
-                }
-            }
-            log_warning(
-                tt::LogFabric,
-                "[intermesh-dbg] M{}<->M{}{}: links={} placed_links={} channels={} placed_channels={} budget={}{}",
-                boundary.first,
-                boundary.second,
-                is_marked(boundary) ? " (assign_z)" : "",
-                links.size(),
-                placed_links,
-                total_channels,
-                placed_ch,
-                budget,
-                (placed_ch == 0 ? "  <<< STRANDED (zero resolved -- fatal boundary)" : ""));
-        }
-        // Direction ownership summary; the Z lanes are the crux of ring-closing-hop contention.
-        log_warning(tt::LogFabric, "[contention] === direction owners ({} claimed) ===", dir_owner.size());
-        for (const auto& [node_dir, neighbor] : dir_owner) {
-            if (!is_z(node_dir.second)) {
-                continue;
-            }
-            log_warning(tt::LogFabric, "[contention]   {} Z-lane -> M{}", node_dir.first, *neighbor);
-        }
-    }
     return annotated_intermesh;
 }
 
 // Multi-host: apply rank-0 intermesh broadcast, then bind ports to PSD cables via connection_hash.
 AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
-    // TODO(#50162): temporary apply-path diagnostics for the multi-host exit-peer asymmetry investigation.
-    const bool intermesh_debug = std::getenv("TT_INTERMESH_DEBUG") != nullptr;
-    std::map<std::pair<uint32_t, uint32_t>, std::size_t> dbg_applied, dbg_skipped_nocable, dbg_skipped_hash;
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
 
@@ -3783,25 +3568,6 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
                 create_port_tag(new_port_id),
                 *peer_mesh_id,
                 create_port_tag(peer_side.second));
-            if (intermesh_debug) {
-                dbg_skipped_nocable[{*my_mesh_id, *peer_mesh_id}]++;
-                std::string have;
-                for (const auto& [fn, _cables] : cable_lookup) {
-                    if (fn.mesh_id == my_mesh_id) {
-                        have += " D" + std::to_string(fn.chip_id);
-                    }
-                }
-                log_warning(
-                    tt::LogFabric,
-                    "[apply-dbg] rank{} SKIP_NOCABLE M{}->M{}: allocator put port on {} (hash={}), but this rank's "
-                    "PSD exit chips toward the peer are:{}",
-                    my_rank,
-                    *my_mesh_id,
-                    *peer_mesh_id,
-                    my_fn,
-                    conn_hash,
-                    have.empty() ? " (none)" : have);
-            }
             continue;
         }
         auto cable_it = chip_it->second.find(conn_hash);
@@ -3814,9 +3580,6 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
                 my_chip,
                 create_port_tag(new_port_id),
                 conn_hash);
-            if (intermesh_debug) {
-                dbg_skipped_hash[{*my_mesh_id, *peer_mesh_id}]++;
-            }
             continue;
         }
         const auto& info = cable_it->second;
@@ -3838,42 +3601,6 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
         // Committed inter-mesh state for this host: direction per physical chan, per-chan peer.
         exit_node_directions_[my_fn][info.my_chan] = new_port_id.first;
         intermesh_chan_to_peer_[my_fn].insert_or_assign(info.my_chan, std::make_pair(info.peer_fn, info.peer_chan));
-        if (intermesh_debug) {
-            dbg_applied[{*my_mesh_id, *peer_mesh_id}]++;
-            log_warning(
-                tt::LogFabric,
-                "[apply-dbg] rank{} BIND M{}->M{}: my_fn {} <-> peer_fn {} (hash={})",
-                my_rank,
-                *my_mesh_id,
-                *peer_mesh_id,
-                my_fn,
-                info.peer_fn,
-                conn_hash);
-        }
-    }
-
-    if (intermesh_debug) {
-        std::set<std::pair<uint32_t, uint32_t>> keys;
-        for (const auto& [b, _n] : dbg_applied) {
-            keys.insert(b);
-        }
-        for (const auto& [b, _n] : dbg_skipped_nocable) {
-            keys.insert(b);
-        }
-        for (const auto& [b, _n] : dbg_skipped_hash) {
-            keys.insert(b);
-        }
-        for (const auto& b : keys) {
-            log_warning(
-                tt::LogFabric,
-                "[apply-dbg] rank{} M{}->M{}: applied={} skip_nocable={} skip_hash={}",
-                my_rank,
-                b.first,
-                b.second,
-                dbg_applied.count(b) ? dbg_applied.at(b) : 0,
-                dbg_skipped_nocable.count(b) ? dbg_skipped_nocable.at(b) : 0,
-                dbg_skipped_hash.count(b) ? dbg_skipped_hash.at(b) : 0);
-        }
     }
 
     return intermesh_connections;
