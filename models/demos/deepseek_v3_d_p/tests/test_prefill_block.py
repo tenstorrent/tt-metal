@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -1003,7 +1004,24 @@ def test_glm_prefill_block(
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors(seq_len)
+    # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
+    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
+    # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
+    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_2 cross-layer reuse — matching the
+    # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len, chunk_size_global=seq_len
+    )
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # --- input (full, host) + sharded device copy ---
     torch.manual_seed(7)
@@ -1021,7 +1039,9 @@ def test_glm_prefill_block(
     )
 
     logger.info(f"[glm block {layer_type}] running device block")
-    out = block.forward(tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len)
+    out = block.forward(
+        tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
+    )
     if isinstance(out, tuple):
         out = out[0]
     tt_out = ttnn.to_torch(
