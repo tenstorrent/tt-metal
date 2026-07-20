@@ -37,11 +37,11 @@ void kernel_main() {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 ckl::eltwise_chain<ckl::SetupOwner::Caller>(
                     ckl::EltwiseShape::single(),
+                    // The caller owns setup, so the chain must not reconfigure formats.
                     ckl::UnaryBcast<
                         ckl::BroadcastDim::Col,
                         cb_id_src,
-                        ckl::InputLifecycle::Streaming,
-                        ckl::UnaryBcastReconfig::None>{},  // Caller owns setup -> no chain reconfig
+                        ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
                     ckl::PackTile<
                         cb_id_dst,
                         ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});

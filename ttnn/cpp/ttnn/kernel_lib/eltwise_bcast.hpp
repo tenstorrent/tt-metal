@@ -12,26 +12,10 @@
 
 namespace compute_kernel_lib {
 
-enum class UnaryBcastReconfig : uint8_t {
-    None,
-    Input,
-};
-
-template <
-    BroadcastDim Dim,
-    uint32_t Cb,
-    InputLifecycle Policy = InputLifecycle::Streaming,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input,
-    Dst DstSlot = Dst::D0>
+template <BroadcastDim Dim, uint32_t Cb, InputSpec Input = input(), Dst DstSlot = Dst::D0>
 struct UnaryBcast;
 
-template <
-    BroadcastDim Dim,
-    uint32_t CbIn,
-    uint32_t CbOut,
-    InputLifecycle Lifecycle = InputLifecycle::Streaming,
-    OutputSpec Output = output(),
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
+template <BroadcastDim Dim, uint32_t CbIn, uint32_t CbOut, InputSpec Input = input(), OutputSpec Output = output()>
 ALWI void unary_bcast(EltwiseShape shape);
 
 }  // namespace compute_kernel_lib
