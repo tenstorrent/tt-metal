@@ -3136,6 +3136,11 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
     const auto& mesh_edge_ports_to_chip_id = mesh_graph.get_mesh_edge_ports_to_chip_id();
+    // NOTE: strict (device-level, per-exit-chip) and relaxed (mesh-pair count) binding cannot currently be
+    // mixed within one Mesh Graph Descriptor - it must specify either Graph or RelaxedGraph connections, not
+    // both (enforced by the TT_FATAL in generate_intermesh_connectivity). The whole allocation therefore runs
+    // in a single mode, and only that mode's budget/placed maps are ever touched. Mixing is tracked by
+    // https://github.com/tenstorrent/tt-metal/issues/49960.
     const bool strict_intermesh_port_binding = !requested_intermesh_ports.empty();
 
     auto is_z = [](RoutingDirection d) { return d == RoutingDirection::Z; };
@@ -3387,18 +3392,21 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     };
 
     // Remaining budget for placing (more of) a link: strict counts per src exit node, relaxed per boundary.
+    // Counts are size_t (unsigned) and a missing key reads as 0, so guard the subtraction against underflow.
+    // NOTE: strict (device-level, per-exit-chip) and relaxed (mesh-pair count) binding cannot currently be
+    // mixed within one Mesh Graph Descriptor - it must specify either Graph or RelaxedGraph connections, not
+    // both (enforced by the TT_FATAL in generate_intermesh_connectivity). The whole allocation therefore runs
+    // in a single mode, and only that mode's budget/placed maps are ever touched. Mixing is tracked by
+    // https://github.com/tenstorrent/tt-metal/issues/49960.
     auto budget_remaining = [&](const Boundary& boundary, const Link& link) -> std::size_t {
         if (strict_intermesh_port_binding) {
-            auto bit = budget_per_src_node.find(link.src_node);
-            const std::size_t budget = (bit == budget_per_src_node.end()) ? 0 : bit->second;
-            const std::size_t placed =
-                placed_per_src_node.contains(link.src_node) ? placed_per_src_node.at(link.src_node) : 0;
-            return budget > placed ? budget - placed : 0;
+            const std::size_t cap = budget_per_src_node[link.src_node];
+            const std::size_t used = placed_per_src_node[link.src_node];
+            return used >= cap ? 0 : cap - used;
         }
-        auto bit = budget_channels.find(boundary);
-        const std::size_t budget = (bit == budget_channels.end()) ? 0 : bit->second;
-        const std::size_t placed = placed_channels.contains(boundary) ? placed_channels.at(boundary) : 0;
-        return budget > placed ? budget - placed : 0;
+        const std::size_t cap = budget_channels[boundary];
+        const std::size_t used = placed_channels[boundary];
+        return used >= cap ? 0 : cap - used;
     };
 
     // A physical cable can expose more channels than the count the MGD requested (e.g. a 4-channel cable
