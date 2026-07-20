@@ -1,6 +1,6 @@
 # CB → DFB Kernel Audit (Quasar uplift)
 
-> **Status:** Living document (2026-07-14). **Standalone device-side audit** — classifies legacy **kernel** CB usage and its CB→DFB portability per op or ProgramFactory. **This is a Quasar-uplift readiness audit:** on WH/BH the Metal 2.0 port swaps `CircularBuffer` → `DataflowBuffer` **mechanically** (via `evil_*`, no semantic change), so nothing here blocks the WH/BH port — the redesign it flags is deferred to the **Quasar uplift** step. Does **not** audit host `ProgramSpec`, binding multiplicity, or factory refactors ([`audit/metal2.md`](metal2.md) covers host/spec). **Scope is machine-discovered** from program factories and PR diffs — see [Automated scope discovery](#automated-scope-discovery).
+> **Status:** Living document (2026-07-14). **Standalone device-side audit** — classifies legacy **kernel** CB usage and its CB→DFB portability per op or ProgramFactory. **This is a Quasar-uplift readiness audit:** on WH/BH the Metal 2.0 port swaps `CircularBuffer` → `DataflowBuffer` **mechanically** (via `evil_*`, no semantic change), so nothing here blocks the WH/BH port — the redesign it flags is deferred to the **Quasar uplift** step. Does **not** audit host `ProgramSpec`, binding multiplicity, or factory refactors ([`audit/metal2_audit.md`](metal2_audit.md) covers host/spec). **Scope is machine-discovered** from program factories and PR diffs — see [Automated scope discovery](#automated-scope-discovery).
 >
 > **Companion docs:** [CB→DFB API whitelist](../shared/cb_dfb_api_whitelist.md) (CB API → DFB / evil_get|set mapping), [CB→DFB flowchart](../../human/CB-to-DFB-flowchart.svg), [Metal 2.0 port patterns](../shared/port_patterns.md) (host binding — cross-ref only), repo-root inventory `2026-07-07 Quasar CB port-readiness audit — illegal CB usage by op.md`.
 
@@ -10,7 +10,7 @@
 
 **What this is.** A **kernel-only** auditor: given an op or factory slice, discover in-scope device kernels, scan for illegal / weird CB patterns, classify **every CB**, and produce a **CB portability** report with **1xx** and **2xx** status columns.
 
-**What this is not.** Host-side Metal 2.0 feasibility (SPSC, endpoint counts, `DataflowBufferSpec` legality, tensor binding cases). Do not block or roll up on host issues here — cross-reference [`audit/metal2.md`](metal2.md) separately when doing a full op port.
+**What this is not.** Host-side Metal 2.0 feasibility (SPSC, endpoint counts, `DataflowBufferSpec` legality, tensor binding cases). Do not block or roll up on host issues here — cross-reference [`audit/metal2_audit.md`](metal2_audit.md) separately when doing a full op port.
 
 **When to run.**
 
@@ -78,7 +78,7 @@ Record status and workaround in the **CB portability** table for every buffer (s
 
 ### Port-recipe rollup (LTA vs scratchpad)
 
-Aligned with [`port/metal2.md`](../port/metal2.md):
+Aligned with [`port/metal2_port.md`](../port/metal2_port.md):
 
 | End-state | Port recipe treatment | Report status | Op rollup |
 |-----------|----------------------|---------------|-----------|
@@ -122,7 +122,7 @@ Kernel discovery follows the same **follow factory references, not directory bou
 - **Follow kernel references, not directory boundaries.** Every path assigned to `KernelDescriptor::kernel_source` (or equivalent string literal / helper that builds a kernel path) in the op's program factories is in scope — including cross-op donor kernels. Factory `.cpp` files are read **only to extract kernel paths**, not audited for host/spec legality.
 - **Unreferenced files under `*/kernels/*` in the op tree are out of scope.** List them in the report as *unreferenced* only if their presence could confuse a reader; do not scan or RED-gate on them.
 - **Multiple `DeviceOperation` types** in one directory: one combined report when they share factories/kernels; separate reports when independent (ask user only if bundling is ambiguous).
-- **Atomic unit:** one **ProgramFactory** (or factory helper bundle) at a time when the op has several factories — same as `[port/metal2.md](../port/metal2.md)`.
+- **Atomic unit:** one **ProgramFactory** (or factory helper bundle) at a time when the op has several factories — same as `[port/metal2_port.md](../port/metal2_port.md)`.
 
 **Path exclusions (mark OUT-OF-SCOPE, never RED-roll up):**
 
@@ -513,7 +513,7 @@ Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTe
 
 > **Scope:** `ScratchpadSpec` is **private L1** that is **not** a DFB — no FIFO credits, no canonical producer/consumer endpoint model. Pair it with `**SemaphoreSpec`** bindings (`sem::name` in kernel) when kernels must coordinate who may read or write a region **without** pretending the handoff is `push_back` / `wait_front` on a linear FIFO.
 >
-> **Port recipe:** Scratchpad + semaphores is **autoportable** — audit as **Portable** → op rollup stays **GREEN** (standard port move per [`port/metal2.md`](../port/metal2.md)).
+> **Port recipe:** Scratchpad + semaphores is **autoportable** — audit as **Portable** → op rollup stays **GREEN** (standard port move per [`port/metal2_port.md`](../port/metal2_port.md)).
 
 **Litmus:** Would expressing this buffer as a DFB force pointer surgery, fake FIFO credits, window jumps, or a fabricated self-loop endpoint? If yes → classify the **memory** as scratchpad and the **handshake** as semaphores (or program semaphores + stallwait inside compute), not as a hacked DFB.
 
@@ -945,7 +945,7 @@ rg -l 'get_cb_tiles_acked_ptr|get_cb_tiles_received_ptr' \
 ## Relationship to other docs
 
 
-| Concern                            | Host/spec ([`audit/metal2.md`](metal2.md)) | This audit (device kernels)                                                         |
+| Concern                            | Host/spec ([`audit/metal2_audit.md`](metal2_audit.md)) | This audit (device kernels)                                                         |
 | ---------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | SPSC / endpoint legality           | **In scope**                                                            | Cross-ref only — not gated here                                                     |
 | Self-loop / sync-free CB           | `port_patterns.md`                               | Class 6 + DM vs compute fork                                                        |
@@ -958,7 +958,7 @@ rg -l 'get_cb_tiles_acked_ptr|get_cb_tiles_received_ptr' \
 | Self-loop / LTA / borrowed         | `port_patterns.md`                               | Class 4/6 strategies                                                                |
 
 
-**Rule of thumb:** Host binding legality → [`audit/metal2.md`](metal2.md). Kernel `LocalCBInterface` / CB memory model → **this doc**.
+**Rule of thumb:** Host binding legality → [`audit/metal2_audit.md`](metal2_audit.md). Kernel `LocalCBInterface` / CB memory model → **this doc**.
 
 ---
 
@@ -966,8 +966,8 @@ rg -l 'get_cb_tiles_acked_ptr|get_cb_tiles_received_ptr' \
 
 - [How to use this doc](#how-to-use-this-doc) — start here
 - [Metal 2.0 op-porting recipe README](../../README.md) — full op port workflow (host audit + recipe)
-- [audit/metal2.md](metal2.md) — host/spec feasibility (separate from this kernel audit)
-- [port/metal2.md](../port/metal2.md) — port execution after audit
+- [audit/metal2_audit.md](metal2_audit.md) — host/spec feasibility (separate from this kernel audit)
+- [port/metal2_port.md](../port/metal2_port.md) — port execution after audit
 - [port_patterns.md](../shared/port_patterns.md) — binding patterns (self-loop, sync-free, borrowed)
 - [migration_guide.md](../shared/migration_guide.md) — CB→DFB concepts
 - [CB-to-DFB-flowchart.svg](../../human/CB-to-DFB-flowchart.svg) — decision flowchart
