@@ -49,6 +49,7 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    const auto& tile = a.tensor_spec().tile();
     uint32_t page_size = output.buffer()->page_size();
     uint32_t multi_buffering_size = 2;
     uint32_t input_cb_index = tt::CBIndex::c_0;
@@ -64,6 +65,7 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(input_cb_index),
             .data_format = cb_data_format,
             .page_size = page_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -74,6 +76,7 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = cb_data_format,
             .page_size = page_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -84,6 +87,7 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(pad_val_cb_index),
             .data_format = cb_data_format,
             .page_size = page_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -188,13 +192,13 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
     // initialize id_per_dims to vectors of length num_dims filled with 0
     input_id_per_dim.resize(a_shape.rank(), 0);
     output_id_per_dim.resize(output_padded_shape.rank(), 0);
-    // instantiate the input and output tensor padded shapes
+    // instantiate the input and output tensor padded shapes (in pages / tiles)
     auto input_page_shape = a.padded_shape();
     auto output_page_shape = output_padded_shape;
-    input_page_shape[-1] /= tt::constants::TILE_HEIGHT;
-    input_page_shape[-2] /= tt::constants::TILE_HEIGHT;
-    output_page_shape[-1] /= tt::constants::TILE_HEIGHT;
-    output_page_shape[-2] /= tt::constants::TILE_HEIGHT;
+    input_page_shape[-1] /= tile.get_width();
+    input_page_shape[-2] /= tile.get_height();
+    output_page_shape[-1] /= tile.get_width();
+    output_page_shape[-2] /= tile.get_height();
     bool within_input_region;
     uint32_t input_page_offset = 0;
     uint32_t output_page_offset = 0;
