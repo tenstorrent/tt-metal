@@ -118,9 +118,9 @@ experimental::DataflowBuffer dfb_scratch(dfb::scratch);  // (B) same
 
 **The verdict can flip per config — classify per instantiation, not per CB.** Whether a CB lands here (sync-free / single-ended) or is a genuine producer→consumer FIFO is *not* a fixed property of the CB; it can change across an op's configs. The same `buffer_index` can be a sync-free **scratchpad** (compute tilizes in place → self-loop) under one sharding and a **real FIFO** (a DM reader produces, compute consumes → ordinary DFB) under another. Re-run the litmus per code-path — one verdict applied across all configs mis-classifies the rest. **Canonical confuser:** conv2d `ACT_TILIZED` — height-sharded → sync-free scratchpad (self-loop); block/width-sharded → real FIFO.
 
-**Orthogonal — endpoint multiplicity.** A self-loop resolves too *few* endpoints (single-ended / sync-free). The opposite case — a CB with **2+ FIFO endpoints of one kind on a node** — is *not* a self-loop case; it is a **multi-binding** CB, port work in its own right (set the DFB multi-binding advanced option). See [DFB endpoint legality](../audit/metal2_audit.md#dfb-endpoint-legality-spsc).
+**Orthogonal — endpoint multiplicity.** A self-loop resolves too *few* endpoints (single-ended / sync-free). The opposite case — a CB with **2+ FIFO endpoints of one kind on a node** — is *not* a self-loop case; it is a **multi-binding** CB, port work in its own right (set the DFB multi-binding advanced option). See [CB endpoints](../audit/metal2_audit.md#cb-endpoints).
 
-**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [DFB endpoint legality](../audit/metal2_audit.md#dfb-endpoint-legality-spsc).
+**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [CB endpoints](../audit/metal2_audit.md#cb-endpoints).
 
 ---
 
@@ -128,7 +128,7 @@ experimental::DataflowBuffer dfb_scratch(dfb::scratch);  // (B) same
 
 **Category**: Pattern
 
-**Recognition signal**: A resource — a DFB, a tensor (`TensorAccessor`), or a semaphore — is used by a kernel only on some code paths, with the configuration known at host time (e.g. a `cb_scaled` DFB used only when `do_scale = true`, a `cb_fusion` used only when `FUSE_PRE_ADD`, or an optional `batch_offset` tensor read only when a feature flag is set). The compile-time tell, in a build where the feature is *off*, is a name-resolution failure on the generated token: `'cb_scaled' is not a member of 'dfb'`, `'batch_offset' is not a member of 'ta'`, or the `sem::` equivalent.
+**Recognition signal**: A resource — a DFB, a tensor (`TensorAccessor`), or a semaphore — is used by a kernel only on some code paths, with the configuration known at host time (e.g. a `cb_scaled` DFB used only when `do_scale = true`, a `cb_fusion` used only when `FUSE_PRE_ADD`, or an optional `batch_offset` tensor read only when a feature flag is set). The compile-time tell, in a build where the feature is *off*, is a name-resolution failure on the generated token: `'cb_scaled' is not a member of 'dfb'`, `'batch_offset' is not a member of 'tensor'`, or the `sem::` equivalent.
 
 **Why this is hard.** Metal 2.0's `dfb::<name>` namespace is generated from the actual host bindings: if the host omits SCALED from `dfb_bindings`, `dfb::cb_scaled` is not declared in `kernel_bindings_generated.h`. C++ `if constexpr` in a non-template function (which `kernel_main()` is) still performs name lookup on the discarded branch — so `if constexpr (false) { ... dfb::cb_scaled ... }` fails to compile at parse time even though the branch is dead at codegen. The same constraint hits kernels that reference the conditional DFB name from file-scope contexts like ternaries: both operands resolve at parse time regardless of which branch the constant condition selects. The fix is to gate the kernel-side references at the **preprocessor** level, before C++ parsing sees them.
 
@@ -176,7 +176,7 @@ The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the co
 
 **Category**: Pattern
 
-**Recognition signal**: Legacy code that places two or more `buffer_index` values on the *same* `CBDescriptor` — multi-element `format_descriptors`, multi-key `data_format_spec` map in the imperative form, or repeated `set_page_size` calls with different `buffer_index` arguments on the same `CircularBufferConfig`. The legacy intent is two logically distinct buffers sharing one L1 region. The audit's [Aliased Circular Buffers entry](../audit/metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed) catches this in the legacy inventory.
+**Recognition signal**: Legacy code that places two or more `buffer_index` values on the *same* `CBDescriptor` — multi-element `format_descriptors`, multi-key `data_format_spec` map in the imperative form, or repeated `set_page_size` calls with different `buffer_index` arguments on the same `CircularBufferConfig`. The legacy intent is two logically distinct buffers sharing one L1 region. The port's [legacy inventory](../port/metal2_port.md#legacy-inventory) surfaces this — a legacy `CBDescriptor` with multi-element `format_descriptors`.
 
 **Decision**: Declare one `DataflowBufferSpec` per legacy `buffer_index`. Aliasing is an **advanced/ninja feature** — the `alias_with` field lives on `DFBAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)), reached via `DataflowBufferSpec::advanced_options.alias_with`. Set each spec's `advanced_options.alias_with` to mutually reference the others — the alias group must be a *strict clique* (every member names every other member). All members of the alias group share these legality constraints:
 - Same `num_entries * entry_size` (total backing size identical).
@@ -200,7 +200,7 @@ For larger alias groups (three or more), every member names every other member i
 
 **Don't split** the aliased CB into independent, non-aliased DFBs. That changes the L1 footprint and breaks any kernel assumption that the indices shared an address.
 
-**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](../audit/metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed); [Same-FIFO aliasing](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names) (the *other* kind of "aliasing" — don't confuse them).
+**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](migration_guide.md#dataflowbufferspec); [Same-FIFO aliasing](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names) (the *other* kind of "aliasing" — don't confuse them).
 
 ---
 
