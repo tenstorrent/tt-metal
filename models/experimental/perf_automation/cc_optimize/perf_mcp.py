@@ -94,6 +94,43 @@ def _note_device_ok() -> None:
     _CONSEC_CRASH["n"] = 0
 
 
+def _l1_sig(text) -> bool:
+    s = (str(text) or "").lower()
+    return ("circular buffer" in s or "max l1" in s or "l1 size" in s) and (
+        "beyond max l1" in s or "grow to" in s or "l1 size of" in s
+    )
+
+
+def _is_l1_overflow(msg) -> bool:
+    if _l1_sig(msg):
+        return True
+    import re as _re2
+
+    for lp in _re2.findall(r"(/\S+run\d+_tracy\.log)", str(msg) or ""):
+        try:
+            if _l1_sig(Path(lp).read_text(errors="ignore")):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _reclaim_mesh(where: str) -> None:
+    try:
+        _sp.run([_TT_SMI, "-r"], capture_output=True, text=True, timeout=420)
+        sys.stderr.write(f"[perf-mcp] full-mesh reset (L1 overflow) at {where}\n")
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[perf-mcp] full-mesh reset failed at {where}: {exc}\n")
+    _CONSEC_CRASH["n"] = 0
+
+
+_L1_OVERFLOW_MSG = (
+    "L1_OVERFLOW: this config's circular buffers exceed the per-core L1 budget (~1.5MB on Wormhole) "
+    "and crashed the run; the mesh was reset. Reduce the L1 footprint (smaller in0_block_w / per_core_N, "
+    "or spread the matmul over more cores) and retry — do NOT keep this config."
+)
+
+
 # ---------------------------------------------------------------------------
 # DETERMINISTIC TERMINATION GATE — the "no reasoning off-ramp" guard
 # ---------------------------------------------------------------------------
@@ -569,7 +606,11 @@ def profile_model() -> dict:
     try:
         prof = _profile_once()
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)[-800:]}
+        _msg = str(exc)
+        if _is_l1_overflow(_msg):
+            _reclaim_mesh("profile_model")
+            return {"ok": False, "error": _L1_OVERFLOW_MSG}
+        return {"ok": False, "error": _msg[-800:]}
     if prof.get("capture_partial"):
         return {
             "ok": False,
@@ -622,8 +663,12 @@ def measure_candidate() -> dict:
     try:
         prof = _profile_once()
     except Exception as exc:  # noqa: BLE001
+        _msg = str(exc)
+        if _is_l1_overflow(_msg):
+            _reclaim_mesh("measure_candidate")
+            return {"verdict": "REJECTED", "reason": _L1_OVERFLOW_MSG}
         _note_device_crash("measure_candidate")  # may tt-smi reset if this is a repeat (wedge)
-        return {"verdict": "REJECTED", "reason": f"profiler crashed: {str(exc)[-600:]}"}
+        return {"verdict": "REJECTED", "reason": f"profiler crashed: {_msg[-600:]}"}
     _note_device_ok()
     dev = round(float(prof.get("device_ms", 0.0)), 4)
     if prof.get("capture_partial"):
