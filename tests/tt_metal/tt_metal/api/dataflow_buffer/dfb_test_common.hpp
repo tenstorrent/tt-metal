@@ -668,8 +668,15 @@ inline void run_single_dfb_program(
 
 inline void run_single_dfb_program_2_0(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const M2SingleDFBParams& p) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only";
+    // The DFB 2.0 host/device path is arch-abstracted: on WH/BH a DFB has no tile-counter
+    // registers so it lowers to a 4-word circular-buffer config, and the _2_0 kernels' explicit
+    // path is arch-agnostic (only the implicit async_read/write<TXN_ID> path is #ifdef ARCH_QUASAR).
+    // So the simple 1x1 explicit-sync cases run on WH/BH too; only implicit-sync and multi-core
+    // are Quasar-only (mirrors the legacy DFB_SKIP_IF_UNSUPPORTED gate).
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR &&
+        (p.implicit_sync || p.num_producers > 1 || p.num_consumers > 1)) {
+        GTEST_SKIP() << "M2 non-Quasar: only 1x1 explicit-sync DFB runs on WH/BH "
+                        "(implicit-sync + multi-core are Quasar-only)";
     }
     // Tensix→Tensix is unsupported (legacy parity).
     if (p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::TENSIX) {
@@ -767,16 +774,35 @@ inline void run_single_dfb_program_2_0(
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = p.cap}};
 
-    // Restore the all-pass `dfb_spec.disable_implicit_sync = !p.implicit_sync` semantics.
-    // #45160 moved that flag off DataflowBufferSpec onto the Gen2 DM config, so it is now
-    // expressed per-DM-kernel via disable_implicit_sync_for. For ImplicitSyncFalse this keeps
-    // the host from programming implicit-sync ISR/txn metadata on top of the kernels' explicit
-    // credit-flow path. Only DM endpoints carry the flag; Tensix endpoints have no DM side.
-    if (p.producer_type == M2PorCType::DM) {
-        maybe_disable_implicit_sync(producer, p.implicit_sync, DFB);
-    }
-    if (p.consumer_type == M2PorCType::DM) {
-        maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
+    // Config is arch-specific (the _2_0 kernels are the same either way): Gen2 on Quasar,
+    // Gen1 on WH/BH. On WH/BH a DFB lowers to a circular buffer and ValidateProgramSpec rejects
+    // a Gen2 config, so mirror the legacy driver -- DM producer -> RISCV_0, DM consumer ->
+    // RISCV_1/NOC_1, Tensix -> ComputeGen1. The make_*_kernel helpers default to Gen2; override
+    // to Gen1 on WH/BH here (only 1x1 explicit-sync cases reach WH/BH per the skip gate above).
+    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+        // Gen2 implicit-sync opt-out (#45160): only DM endpoints carry the per-kernel flag; for
+        // ImplicitSyncFalse it keeps the host from programming implicit ISR/txn metadata over the
+        // kernels' explicit credit-flow path. Tensix endpoints have no DM side.
+        if (p.producer_type == M2PorCType::DM) {
+            maybe_disable_implicit_sync(producer, p.implicit_sync, DFB);
+        }
+        if (p.consumer_type == M2PorCType::DM) {
+            maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
+        }
+    } else {
+        // WH/BH: Gen1 config (Gen1 has no implicit sync, so no disable knob needed).
+        if (p.producer_type == M2PorCType::DM) {
+            producer.hw_config =
+                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+        } else {
+            producer.hw_config = m2::ComputeGen1Config{};
+        }
+        if (p.consumer_type == M2PorCType::DM) {
+            consumer.hw_config = m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+        } else {
+            consumer.hw_config = m2::ComputeGen1Config{};
+        }
     }
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
