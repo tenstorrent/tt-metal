@@ -56,6 +56,9 @@ inline std::string get_core_descriptor_file(
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             env.get_rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
+        if (arch == tt::ARCH::QUASAR && grid_size.x == 9 && grid_size.y == 4) {
+            return core_desc_dir + "quasar_simulation_9x4_arch.yaml";
+        }
         if (grid_size.y <= 2 || grid_size.x <= 2) {  // small simulation grids (any dimension <= 2)
             switch (arch) {
                 default:
