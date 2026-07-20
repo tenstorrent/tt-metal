@@ -168,24 +168,23 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Temporarily disabled until fixes go in.
-  # - filter: "DevicePrintOutputFixture.PrintConcurrentBabyRiscs"
-  #   config: 1x3
-  #   back2back: true
-  #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "DevicePrintOutputFixture.PrintConcurrentBabyRiscs"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # - filter: "DevicePrintOutputFixture.PrintConcurrentRocketRiscs"
-  #   config: 1x3
-  #   back2back: true
-  #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "DevicePrintOutputFixture.PrintConcurrentRocketRiscs"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # - filter: "DevicePrintOutputFixture.PrintConcurrentAllRiscs"
-  #   config: 1x3
-  #   back2back: true
-  #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "DevicePrintOutputFixture.PrintConcurrentAllRiscs"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
   - filter: "*QuasarCRTASharedL1Address*"

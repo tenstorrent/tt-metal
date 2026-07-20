@@ -302,7 +302,15 @@ protected:
         DebugToolsMeshFixture::TearDown();
         ExtraTearDown();
 
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_feature_targets(tt::llrt::RunTimeDebugFeatureDprint, dprint_previous_targets_);
+        rtoptions.set_test_mode_enabled(test_mode_previous_);
+        rtoptions.set_watcher_enabled(watcher_previous_enabled);
+
+        if (memfd_ >= 0) {
+            close(memfd_);
+            memfd_ = -1;
+        }
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
