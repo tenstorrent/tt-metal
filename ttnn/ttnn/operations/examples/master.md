@@ -17,16 +17,20 @@ on. They are illustrative of the *effect*, not CI bounds.
 
 ---
 
-## ⭐ T1 — [`reader_placement`](reader_placement/README.md)
-**Concept:** core placement → DRAM-traffic (read+write) NoC contention.
-**Situation:** you spread a *line* of reader/worker cores over an interleaved-DRAM tensor (grid-
-filling copies, or the reader line of an mcast) and it is slower than it should be.
-**Measured win:** placing the line as a **row** or **diagonal** instead of a **column** is
-**~2.2–2.8× faster** (Wormhole B0, 4–8 cores); the gap grows with core count. A column line
-saturates its shared NoC links and stops scaling.
-**Gist:** a column line is what `split_work_to_cores(..., row_wise=False)` (the **default**) gives
-you — pass **`row_wise=True`** to spread across the DRAM-facing axis. (Diagonal only beats row on
-asymmetric grids like Blackhole.)
+## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
+**Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
+and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.
+**Situation:** you spread a *line* of cores over an interleaved-DRAM tensor (grid-filling copies, or the
+reader line of an mcast) and it is slower than it should be; and/or you are unsure whether reads/writes
+belong on NoC0 vs NoC1.
+**Measured win:** placing the line as a **row**/**diagonal** instead of a **column** is **~2.9× faster**
+(WH B0, 8 cores); and **reads on NoC0 / writes on NoC1** (the default) is **2.5–4.8× faster** than the
+reverse for those spread placements. Reads and writes are mirror images (read·NoC0 ≈ write·NoC1).
+**Gist:** a column line is what `split_work_to_cores(..., row_wise=False)` (the **default**) gives you —
+pass **`row_wise=True`** to spread across the DRAM-facing axis; keep reads on NoC0 / writes on NoC1
+(the `ReaderConfigDescriptor`/`WriterConfigDescriptor` default). NoC0's east→south routing disperses
+column-localized DRAM traffic; NoC1's north→west concentrates it. The `noc_placement_matrix.html`
+report is reconstructed from code + tt-npe (`--report`). (Diagonal only beats row on asymmetric grids like Blackhole.)
 
 ## ⭐⭐ T2 — [`double_buffer`](double_buffer/README.md)
 **Concept:** keeping bytes in flight on the NoC for a DRAM reader→compute→writer pipeline, via three
