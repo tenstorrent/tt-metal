@@ -225,4 +225,7 @@
   hard-check gaps: none. The reviewer independently matched source, runner,
   artifact, profile, raw-log, and rebuilt `libtt_metal.so` hashes to the final
   manifest and reproduced the static gates without touching hardware.
-- Stage implementation commit: recorded in the post-commit entry below.
+- Post-hook read-only rereview: `clean-pass reaffirmed`; all 82 stage-owned
+  indexed paths and every manifest hash matched, with no vLLM path present.
+- Stage implementation and evidence commit:
+  `a0cf84aa42969526872411d470dd781b08607c6b`.
