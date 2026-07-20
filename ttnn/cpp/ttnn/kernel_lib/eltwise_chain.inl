@@ -1585,7 +1585,7 @@ namespace detail {
 // scope there), which is fine because pack init never needs runtime state.
 
 // =============================================================================
-// emit_pre_element_transitions<E, I, Es...>()
+// emit_pre_element_transitions<E, PrevA, PrevB, PrevP, PackHetero>()
 //
 // Emits srca / srcb / pack reconfig for element I, each compile-time-elided when
 // prev_*_cb == curr_*_cb. A chain that shares a CB on a side thus reconfigs it once (at
@@ -1602,18 +1602,20 @@ namespace detail {
 // DEST accumulation is build-flag-driven (no per-element fp32 fold here).
 // =============================================================================
 
-template <class E, std::size_t I, class... Es>
+// De-templated from the full chain pack: takes only the compile-time facts it consumes — the
+// element's prev-CB descriptors (srca/srcb/pack) and pack-heterogeneity — precomputed by the caller
+// from `ChainTraits<Es...>` at the element's index. This keeps the per-element mangled name (and thus
+// the -g debug info that records it) proportional to the ELEMENT, not the whole chain. The values
+// passed in are exactly what this function used to read internally, so reconfig behavior is identical.
+template <class E, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
 ALWI void emit_pre_element_transitions() {
     constexpr uint32_t curr_a = dfb_for_side<Side::SrcA, E>();
     constexpr uint32_t curr_b = dfb_for_side<Side::SrcB, E>();
     constexpr uint32_t curr_p = dfb_for_side<Side::Pack, E>();
 
-    constexpr uint32_t prev_a =
-        (curr_a != NO_PREV_DFB) ? ChainTraits<Es...>::prev.srca[I] : NO_PREV_DFB;
-    constexpr uint32_t prev_b =
-        (curr_b != NO_PREV_DFB) ? ChainTraits<Es...>::prev.srcb[I] : NO_PREV_DFB;
-    constexpr uint32_t prev_p =
-        (curr_p != NO_PREV_DFB) ? ChainTraits<Es...>::prev.pack[I] : NO_PREV_DFB;
+    constexpr uint32_t prev_a = (curr_a != NO_PREV_DFB) ? PrevA : NO_PREV_DFB;
+    constexpr uint32_t prev_b = (curr_b != NO_PREV_DFB) ? PrevB : NO_PREV_DFB;
+    constexpr uint32_t prev_p = (curr_p != NO_PREV_DFB) ? PrevP : NO_PREV_DFB;
 
     constexpr bool reconf_a = (curr_a != NO_PREV_DFB) && (curr_a != prev_a);
     constexpr bool reconf_b = (curr_b != NO_PREV_DFB) && (curr_b != prev_b);
@@ -1625,7 +1627,7 @@ ALWI void emit_pre_element_transitions() {
     // handles intra-stage transitions cheaply and the per-iter wraparound from
     // last-pack-cb to first-pack-cb is correctly programmed.
     constexpr bool defer_pack_to_per_stage =
-        ChainTraits<Es...>::pack_hetero && (prev_p != NO_PREV_DFB);
+        PackHetero && (prev_p != NO_PREV_DFB);
 
     // ---- srca + srcb: coalesce when both sides share prev-state ----
     if constexpr (reconf_a && reconf_b) {
@@ -1672,7 +1674,7 @@ ALWI void emit_pre_element_transitions() {
     }
 }
 
-// emit_per_stage_pack_reconfig<E, I, Es...>()
+// emit_per_stage_pack_reconfig<E, PrevPack, LastPackCb, PackHetero>()
 //
 // Per-stage pack reconfig used only when the chain has heterogeneous opt-in
 // pack CBs (boot can't program all of them). For every opt-in pack site,
@@ -1681,17 +1683,17 @@ ALWI void emit_pre_element_transitions() {
 // (so iter k+1's site 0 sees iter k's site N-1 as the previous descriptor
 // state). The LLK's compare-and-skip on matching formats keeps the cost to
 // a few cycles when adjacent stages happen to share a dtype.
-template <class E, std::size_t I, class... Es>
+template <class E, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
 ALWI void emit_per_stage_pack_reconfig() {
-    if constexpr (!ChainTraits<Es...>::pack_hetero) return;
+    if constexpr (!PackHetero) return;
     constexpr uint32_t curr_p = dfb_for_side<Side::Pack, E>();
     if constexpr (curr_p == NO_PREV_DFB) return;
-    constexpr uint32_t prev_chain = ChainTraits<Es...>::prev.pack[I];
+    constexpr uint32_t prev_chain = PrevPack;
     // Wraparound: first opt-in pack site has no in-chain prev; on iter ≥ 1 the
     // packer ended the previous iter on `last_pack_cb`. The LLK 2-arg form does
     // the right thing on iter 0 too (cache check vs. boot-initialized state).
     constexpr uint32_t prev_p =
-        (prev_chain != NO_PREV_DFB) ? prev_chain : ChainTraits<Es...>::last_pack_cb;
+        (prev_chain != NO_PREV_DFB) ? prev_chain : LastPackCb;
     if constexpr (prev_p != NO_PREV_DFB) {
         pack_reconfig_data_format(prev_p, curr_p);
     }
@@ -1702,19 +1704,26 @@ ALWI void emit_per_stage_pack_reconfig() {
 // Reconfig is fold-driven (see emit_pre_element_transitions): homogeneous chains program
 // the packer once at boot; heterogeneous chains defer later sites to per-stage emission so
 // the per-iter wraparound stays correct.
-template <std::size_t I, class E, class... Es>
+template <uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero, class E>
 ALWI void elem_pack_init() {
     if constexpr (is_pack_tile_op_v<E>) {
-        emit_pre_element_transitions<E, I, Es...>();
+        emit_pre_element_transitions<E, PrevA, PrevB, PrevP, PackHetero>();
         E::init();
     }
 }
 
-// Hoisted pack-init dispatcher — visits each chain element by compile-time index
-// and forwards (Is, Es, Es...) into the per-element pack init.
+// Hoisted pack-init dispatcher — visits each chain element by compile-time index and precomputes the
+// element's reconfig facts from `ChainTraits<Es...>` so the per-element init carries only those ints
+// (not the whole chain type) in its mangled name.
 template <class... Es, std::size_t... Is>
 ALWI void pack_init_for_each(std::index_sequence<Is...>) {
-    (elem_pack_init<Is, Es, Es...>(), ...);
+    (elem_pack_init<
+         ChainTraits<Es...>::prev.srca[Is],
+         ChainTraits<Es...>::prev.srcb[Is],
+         ChainTraits<Es...>::prev.pack[Is],
+         ChainTraits<Es...>::pack_hetero,
+         Es>(),
+     ...);
 }
 
 // =============================================================================
@@ -1746,20 +1755,28 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // PackTile is intentionally excluded from this walk — pack-side reconfig is
 // emitted unconditionally at boot via `pack_init_for_each` (PACK cohort is
 // disjoint from compute cohorts and is always hoisted).
+template <bool HoistMath, bool HoistSfpu, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero, class ElemT>
+ALWI void hoist_compute_init_one([[maybe_unused]] ElemT& elem) {
+    constexpr bool emit =
+        (is_math_mop_op_v<ElemT> && HoistMath) ||
+        (is_dest_only_op_v<ElemT> && HoistSfpu);
+    if constexpr (emit) {
+        emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
+        elem.init();  // instance dispatch (see convention note above): a runtime-stateful init reads its members here
+    }
+}
+
+// Direct indexed fold (no generic-lambda closure): precompute each element's reconfig facts from
+// `ChainTraits<Es...>` and hand them to the de-templated per-element init.
 template <bool HoistMath, bool HoistSfpu, std::size_t... Is, class... Es>
 ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
-    auto run_one = [&](auto idx, [[maybe_unused]] auto& elem) {
-        constexpr std::size_t II = decltype(idx)::value;
-        using ElemT = std::remove_reference_t<decltype(elem)>;
-        constexpr bool emit =
-            (is_math_mop_op_v<ElemT> && HoistMath) ||
-            (is_dest_only_op_v<ElemT> && HoistSfpu);
-        if constexpr (emit) {
-            emit_pre_element_transitions<ElemT, II, Es...>();
-            elem.init();  // instance dispatch (see convention note above): a runtime-stateful init reads its members here
-        }
-    };
-    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+    (hoist_compute_init_one<HoistMath, HoistSfpu,
+         ChainTraits<Es...>::prev.srca[Is],
+         ChainTraits<Es...>::prev.srcb[Is],
+         ChainTraits<Es...>::prev.pack[Is],
+         ChainTraits<Es...>::pack_hetero,
+         std::remove_reference_t<Es>>(elts),
+     ...);
 }
 
 }  // namespace detail
@@ -1791,7 +1808,7 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
 
 namespace detail {
 
-template <bool EmitMathInit, bool EmitSfpuInit, std::size_t I, class ElemT, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero, class ElemT>
 ALWI void elem_apply_compute(
     const ElemT& elem,
     uint32_t i_flat,
@@ -1815,7 +1832,7 @@ ALWI void elem_apply_compute(
         elem.wait_per_tile(i_flat + inner_count);
         elem.wait_per_block(inner_count);
         if constexpr (EmitMathInit) {
-            emit_pre_element_transitions<ElemT, I, Es...>();
+            emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
         }
         constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
@@ -1837,7 +1854,7 @@ ALWI void elem_apply_compute(
         elem.pop_per_block(inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
         if constexpr (EmitSfpuInit) {
-            emit_pre_element_transitions<ElemT, I, Es...>();
+            emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
         }
         for (uint32_t j = 0; j < inner_count; ++j) {
@@ -1846,7 +1863,7 @@ ALWI void elem_apply_compute(
     }
 }
 
-template <std::size_t I, class ElemT, class... Es>
+template <uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero, class ElemT>
 ALWI void elem_apply_pack(
     const ElemT& elem,
     uint32_t i_flat,
@@ -1859,7 +1876,7 @@ ALWI void elem_apply_pack(
     constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
-        emit_per_stage_pack_reconfig<ElemT, I, Es...>();
+        emit_per_stage_pack_reconfig<ElemT, PrevPack, LastPackCb, PackHetero>();
         elem.reserve_per_tile(i_flat);
         elem.reserve_per_block(inner_count);
         for (uint32_t j = 0; j < inner_count; ++j) {
@@ -1885,13 +1902,16 @@ ALWI void apply_compute_phase(
     uint32_t Ht,
     uint32_t Wt,
     Es&... elts) {
-    auto run_one = [&](auto idx_const, auto& elem) {
-        constexpr std::size_t II = decltype(idx_const)::value;
-        using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute<EmitMathInit, EmitSfpuInit, II, ElemT, Es...>(
-            elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
-    };
-    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+    // Direct indexed fold: precompute each element's reconfig facts from `ChainTraits<Es...>` and call
+    // the de-templated worker. No generic-lambda closure, and the worker's name no longer embeds Es....
+    (elem_apply_compute<EmitMathInit, EmitSfpuInit,
+         ChainTraits<Es...>::prev.srca[Is],
+         ChainTraits<Es...>::prev.srcb[Is],
+         ChainTraits<Es...>::prev.pack[Is],
+         ChainTraits<Es...>::pack_hetero,
+         std::remove_reference_t<Es>>(
+         elts, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt),
+     ...);
 }
 
 template <std::size_t... Is, class... Es>
@@ -1905,13 +1925,14 @@ ALWI void apply_pack_phase(
     uint32_t Ht,
     uint32_t Wt,
     Es&... elts) {
-    auto run_one = [&](auto idx_const, auto& elem) {
-        constexpr std::size_t II = decltype(idx_const)::value;
-        using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_pack<II, ElemT, Es...>(
-            elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
-    };
-    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+    // Direct indexed fold (see apply_compute_phase): de-templated pack worker fed precomputed facts.
+    (elem_apply_pack<
+         ChainTraits<Es...>::prev.pack[Is],
+         ChainTraits<Es...>::last_pack_cb,
+         ChainTraits<Es...>::pack_hetero,
+         std::remove_reference_t<Es>>(
+         elts, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt),
+     ...);
 }
 
 template <class E>
@@ -2055,38 +2076,22 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
 }
 
 // =============================================================================
-// 11c. Public eltwise_chain — strips compile-time-disabled optional elements (those
-// carrying `is_disabled = true`, i.e. OptionalChainElement<false, _>) from the pack before
-// any stage runs, so the impl and every stage (static_asserts, hoist, reconfig fold,
-// per-tile loop) only ever see enabled elements. Detection is member-based, so the chain
-// needs no knowledge of OptionalChainElement (the dependency runs one way).
+// 11c. Public eltwise_chain — forwards every element straight to eltwise_chain_impl.
 //
-// Each chain_keep yields a 0- or 1-tuple; we tuple-cat and expand via a direct std::get<I>
-// call into eltwise_chain_impl. We deliberately do NOT use std::apply — its INVOKE
-// indirection routes through a callable and can defeat `always_inline`, which on a Tensix
-// MATH kernel pushes the compute body out of line and miscompiles it (nan). The std::get
-// expansion calls eltwise_chain_impl directly, no closure.
+// A compile-time-disabled optional (`OptionalChainElement<false, _>`) is a members-less,
+// tag-less marker. Every op-kind trait (is_cb_reader / is_pack / is_dest_only / is_math_mop
+// = std::is_base_of on a tag it lacks) is false for it, and every ElemDesc accessor is
+// SFINAE-guarded (dfb_* gate on the op-kind, lane_width defaults to 1, etc.), so it reflects
+// into a NEUTRAL ElemDesc — no CB, no reconfig, no pack, lane_width 1 — and every stage
+// (planner, hoist, reconfig fold, per-tile loop) treats it as inert. It is transparent to
+// the prev-CB sweep too: its NO_PREV_DFB sides never update the running prev, so a later
+// element sees the same previous CB as if the marker were absent.
+//
+// We deliberately do NOT filter the marker out with `std::tuple_cat` / `std::get` (the old
+// approach): that pulled the entire std::tuple template family into every chain kernel's -g
+// debug info (~2/3 of .debug_str) solely to strip a no-op. Passing it through inert folds
+// away to nothing at runtime and in code, and removes that debug bloat.
 // =============================================================================
-
-template <class T, class = void>
-struct chain_element_disabled : std::false_type {};
-template <class T>
-struct chain_element_disabled<T, std::void_t<decltype(T::is_disabled)>>
-    : std::bool_constant<T::is_disabled> {};
-
-template <class E>
-ALWI auto chain_keep(E e) {
-    if constexpr (chain_element_disabled<E>::value) {
-        return std::tuple<>{};
-    } else {
-        return std::tuple<E>{e};
-    }
-}
-
-template <SetupOwner SO, class Tup, std::size_t... I>
-ALWI void chain_dispatch(EltwiseShape shape, Tup tup, std::index_sequence<I...>) {
-    eltwise_chain_impl<SO>(shape, std::get<I>(tup)...);
-}
 
 // Public entry. `SetupOwner SO` (default Chain) says who emits the chain's one-time setup:
 // Chain = this call emits it; Caller = the caller emitted it once, outside its loop (see the
@@ -2094,8 +2099,7 @@ ALWI void chain_dispatch(EltwiseShape shape, Tup tup, std::index_sequence<I...>)
 // declaration in eltwise_chain.hpp.)
 template <SetupOwner SO, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
-    auto kept = std::tuple_cat(chain_keep(elts)...);
-    chain_dispatch<SO>(shape, kept, std::make_index_sequence<std::tuple_size_v<decltype(kept)>>{});
+    eltwise_chain_impl<SO>(shape, elts...);
 }
 
 // =============================================================================
