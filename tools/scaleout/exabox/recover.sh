@@ -31,9 +31,10 @@ Optional:
                                             (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
-    --output <directory>                    Output directory for logs and validation artifacts (default: recover-logs).
-                                            Passed to run_cluster_validation as --output-path so the
-                                            unretrainable_channels.yaml artifact lands here too.
+    --output <directory>                    Output directory for logs and validation artifacts (passed to
+                                            run_cluster_validation as --output-path). If omitted, defaults to
+                                            a per-run dir recover-logs/recover_<timestamp>_<first-host>/ so
+                                            concurrent runs don't clobber each other. Used verbatim if given.
 
     --cabling-descriptor-path <path>        Path to cabling descriptor file (4x32 only, overrides --config default)
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
@@ -92,6 +93,7 @@ MPI_IF=""
 MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 OUTPUT_DIR="recover-logs"
+OUTPUT_DIR_EXPLICIT=false
 RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
@@ -200,6 +202,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             OUTPUT_DIR="$2"
+            OUTPUT_DIR_EXPLICIT=true
             shift 2
             ;;
         --cabling-descriptor-path)
@@ -303,13 +306,21 @@ else
     fi
 fi
 
-# Set log file path inside output directory (captures actual start time).
-# Resolve to an absolute path so it can be bind-mounted into Docker containers
-# (regen runs inside the image in --use-docker mode) and referenced identically
-# inside and outside the container.
+# Give each run its own output dir by default so concurrent runs from a shared
+# checkout don't clobber fixed-name artifacts (unretrainable_channels.yaml, etc).
+RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
+RUN_HOST_TAG="$(printf '%s' "$FIRST_HOST" | tr -c 'A-Za-z0-9._-' '_')"
+if [[ "$OUTPUT_DIR_EXPLICIT" == false ]]; then
+    OUTPUT_DIR="$OUTPUT_DIR/recover_${RUN_STAMP}_${RUN_HOST_TAG}"
+fi
+
+# Resolve to an absolute path so it works when bind-mounted into Docker (regen).
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
-LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="$OUTPUT_DIR/recover_${RUN_STAMP}.log"
+
+# Drop any stale yaml so regen below only fires on this run's validation output.
+rm -f "$OUTPUT_DIR/unretrainable_channels.yaml"
 
 # Redirect all output: terminal sees colors, log file gets ANSI/CR stripped
 exec > >(tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
