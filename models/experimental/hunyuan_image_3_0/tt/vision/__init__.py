@@ -7,6 +7,9 @@ from .i2i import (
     inject_cond_vision,
 )
 from .i2i_bundle import (
+    CondEncodeCache,
+    apply_cond_encode_cache,
+    build_cond_encode_cache_tt,
     build_i2i_inputs_embeds_tt,
     load_tt_cond_patch_embed,
     load_tt_cond_timestep_embedders,
@@ -53,6 +56,9 @@ __all__ = [
     "inject_cond_vision",
     "build_i2i_inputs_embeds",
     "build_i2i_inputs_embeds_tt",
+    "CondEncodeCache",
+    "build_cond_encode_cache_tt",
+    "apply_cond_encode_cache",
     "load_tt_vae_encoder",
     "get_tt_vae_encoder",
     "load_tt_cond_patch_embed",

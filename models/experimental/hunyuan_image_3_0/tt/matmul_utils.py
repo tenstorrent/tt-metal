@@ -220,6 +220,38 @@ def _width_shard_specs_match(a: ttnn.MemoryConfig, b: ttnn.MemoryConfig) -> bool
         return False
 
 
+def _pad_m_to_tile(x: ttnn.Tensor, m_dim: int) -> ttnn.Tensor:
+    """Pad the M (seq/batch) dim of ``x`` up to ``TILE_SIZE``.
+
+    ``ttnn.pad`` requires one (before, after) pair per rank. lm_head last-token
+    paths pass rank-3 ``[B,1,H]``; timestep / 4D paths use ``[1,1,M,K]``.
+    """
+    pad_amt = TILE_SIZE - m_dim
+    rank = len(list(x.shape))
+    if rank == 4:
+        padding = [(0, 0), (0, 0), (0, pad_amt), (0, 0)]
+    elif rank == 3:
+        padding = [(0, 0), (0, pad_amt), (0, 0)]
+    elif rank == 2:
+        padding = [(0, pad_amt), (0, 0)]
+    else:
+        raise ValueError(f"unsupported activation rank {rank} for M-pad (shape={list(x.shape)})")
+    return ttnn.pad(x, padding, 0.0)
+
+
+def _slice_m_rows(out: ttnn.Tensor, batch_rows: int, n: int) -> ttnn.Tensor:
+    """Trim padded M rows back to ``batch_rows`` (rank-aware)."""
+    shape = list(out.shape)
+    rank = len(shape)
+    if rank == 4:
+        return ttnn.slice(out, [0, 0, 0, 0], [shape[0], shape[1], batch_rows, n])
+    if rank == 3:
+        return ttnn.slice(out, [0, 0, 0], [shape[0], batch_rows, n])
+    if rank == 2:
+        return ttnn.slice(out, [0, 0], [batch_rows, n])
+    raise ValueError(f"unsupported activation rank {rank} for M-unpad (shape={shape})")
+
+
 def _ensure_width_sharded_act(
     x: ttnn.Tensor,
     act_mc: ttnn.MemoryConfig,
@@ -228,7 +260,11 @@ def _ensure_width_sharded_act(
 
     When ``x`` is already WIDTH_SHARDED with M≥32 and a matching shard spec, returns
     it as-is (``owns_tensor=False``) so callers can leave resident embeddings alive.
-    Otherwise consumes ``x`` (frees pad / I2S sources) and returns a fresh shard.
+
+    Never frees the caller's interleaved activation. MoE gate + every local expert
+    reuse the same ``x`` (decode M=1). TTNN Python wrappers are not reliable for
+    ``is`` identity, so ownership is tracked with an explicit ``owns_work`` flag
+    instead of comparing tensor objects.
     """
     m_dim = int(list(x.shape)[-2])
     already_ws = ttnn.is_sharded(x) and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -236,27 +272,28 @@ def _ensure_width_sharded_act(
     if already_ws and m_dim >= TILE_SIZE and _width_shard_specs_match(x.memory_config(), act_mc):
         return x, False
 
+    # ``work`` starts as the caller tensor. ``owns_work`` means we allocated
+    # ``work`` and may free it; the original caller tensor must stay alive.
+    work = x
+    owns_work = False
+
     if already_ws:
-        prev = x
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if prev is not x:
-            ttnn.deallocate(prev)
+        # Copy to interleaved for pad/I2S. Never free the caller's WIDTH_SHARDED
+        # tensor — MoE (and other multi-use acts) may still need it.
+        work = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        owns_work = True
 
-    m_dim = int(list(x.shape)[-2])
+    m_dim = int(list(work.shape)[-2])
     if m_dim < TILE_SIZE:
-        # Pad M (the -2 dim) up to a full tile. Build the pad spec to match the
-        # tensor's actual rank — the decode lm_head path feeds a 3D [B, 1, H] slice,
-        # while the backbone linears feed 4D; ttnn.pad requires len(spec) == rank.
-        rank = len(x.shape)
-        pad_spec = [(0, 0)] * rank
-        pad_spec[-2] = (0, TILE_SIZE - m_dim)
-        padded = ttnn.pad(x, pad_spec, 0.0)
-        if padded is not x:
-            ttnn.deallocate(x)
-        x = padded
+        padded = _pad_m_to_tile(work, m_dim)
+        if owns_work:
+            ttnn.deallocate(work)
+        work = padded
+        owns_work = True
 
-    x_sh = ttnn.interleaved_to_sharded(x, act_mc)
-    ttnn.deallocate(x)
+    x_sh = ttnn.interleaved_to_sharded(work, act_mc)
+    if owns_work:
+        ttnn.deallocate(work)
     return x_sh, True
 
 
@@ -383,13 +420,7 @@ def act_width_sharded_linear(
 
     out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if batch_rows < int(list(out.shape)[-2]):
-        # Build the slice spec to match the tensor's rank (lm_head feeds 3D).
-        out_rank = len(out.shape)
-        begins = [0] * out_rank
-        ends = list(out.shape)
-        ends[-2] = batch_rows
-        ends[-1] = n
-        out = ttnn.slice(out, begins, ends)
+        out = _slice_m_rows(out, batch_rows, n)
     return out
 
 
@@ -413,17 +444,19 @@ def decode_width_sharded_linear(
         batch_rows = int(list(x.shape)[-2])
 
     # DRAM-sharded matmul expects M padded to TILE_SIZE on the batch/seq dim.
-    x_shape = list(x.shape)
-    m_dim = int(x_shape[-2])
+    # Do not free caller-owned ``x`` (MoE reuses it across gate/experts).
+    # Avoid ``is`` checks on TTNN wrappers — use an ownership flag instead.
+    work = x
+    owns_work = False
+    m_dim = int(list(x.shape)[-2])
     if m_dim < TILE_SIZE:
-        # Build the pad spec to match the tensor's rank (decode lm_head feeds 3D).
-        pad_spec = [(0, 0)] * len(x_shape)
-        pad_spec[-2] = (0, TILE_SIZE - m_dim)
-        x = ttnn.pad(x, pad_spec, 0.0)
+        work = _pad_m_to_tile(x, m_dim)
+        owns_work = True
 
     act_mc, _, num_cores = width_sharded_act_mem_config(k)
-    x_sh = ttnn.interleaved_to_sharded(x, act_mc)
-    ttnn.deallocate(x)
+    x_sh = ttnn.interleaved_to_sharded(work, act_mc)
+    if owns_work:
+        ttnn.deallocate(work)
 
     program_config = decode_width_sharded_matmul_program_config(m, k, n, num_cores)
     kwargs = {
@@ -438,13 +471,7 @@ def decode_width_sharded_linear(
 
     out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if batch_rows < TILE_SIZE:
-        # Build the slice spec to match the tensor's rank (decode lm_head feeds 3D).
-        out_rank = len(out.shape)
-        begins = [0] * out_rank
-        ends = list(out.shape)
-        ends[-2] = batch_rows
-        ends[-1] = n
-        out = ttnn.slice(out, begins, ends)
+        out = _slice_m_rows(out, batch_rows, n)
     return out
 
 
