@@ -1,0 +1,18 @@
+{
+  "hf_model": "tiiuae/Falcon3-7B-Base",
+  "revision": "bf3d7ed586cb22a921520e2d681a9d3d7642cde8",
+  "tokenizer_chat_template": null,
+  "apply_chat_template_result": "ValueError: Cannot use chat template functions because tokenizer.chat_template is not set and no template argument was passed!",
+  "prompt_contract": "native base-model completion",
+  "prompt_source": "aime24",
+  "prompt_tokens": 155,
+  "generated_tokens": 100,
+  "top_k": 100,
+  "bos_id": null,
+  "eos_id": 11,
+  "pad_id": 11,
+  "reference": "aime24_plain_100.refpt",
+  "reference_sha256": "45637a3d5f7c41146d267fe6eb0678d48e588fb9d3a6d7d3a2ca32838de720fa",
+  "freshly_generated_utc": "2026-07-19",
+  "chat_template_exception_reason": "Exact tokenizer metadata proves that this base model defines no chat template; inventing one would not be an exact HF-tokenizer reference."
+}

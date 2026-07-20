@@ -1,0 +1,85 @@
+{
+  "status": "pass",
+  "target": "4x Blackhole P300c, 1x4 FABRIC_1D_RING, TP4, batch 1",
+  "standard_workload": {
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "max_context": 32768,
+    "cold_ttft_ms": 78.07332028169185,
+    "warm_ttft_ms": 25.08325765375048,
+    "caller_visible_token_out_ms_per_token": 13.260732765047576,
+    "caller_visible_token_out_t_s_u": 75.41061400737851,
+    "queued_device_only_trace_pair_ms_per_token": 13.212337202276103,
+    "queued_device_only_trace_pair_t_s_u": 75.68683607528038,
+    "model_trace_ms_per_token": 12.416047102306038,
+    "sampling_trace_ms_per_token": 0.7939002171042375,
+    "sampling_fraction": 0.06009866639950228,
+    "teacher_forcing_trace_t_s_u": 75.67564906863583,
+    "readiness_teacher_forcing_callback_t_s_u": 40.85,
+    "source": "full_model_evidence.json and run_teacher_forcing.log"
+  },
+  "depth_attribution": {
+    "workload": "128-token prompt, 128 warmed replays, max_context=256, otherwise identical model/terminal/sampler policy",
+    "depths": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      28
+    ],
+    "model_trace_linear_fit": {
+      "slope_ms_per_layer": 0.28536277980309954,
+      "intercept_ms": 0.2697278182265679,
+      "r_squared": 0.9999984531214032
+    },
+    "full_depth_max_context_256_model_trace_ms": 8.261743663751986,
+    "full_depth_max_context_256_sampling_trace_ms": 0.793822982814163,
+    "full_depth_max_context_256_caller_visible_t_s_u": 109.75277502240391,
+    "isolated_selected_decoder_ms": 0.286596501,
+    "interpretation": "The near-unit-R2 fit proves that model-trace time scales linearly with depth and that its slope matches the inherited isolated decoder. The 8.262 ms max-context-256 result and 12.416 ms standard max-context-32768 result use different cache/page-table shapes, so their absolute difference is reported but not assigned to a specific op without a matching profiler run."
+  },
+  "reduced_tracy": {
+    "layers": 1,
+    "real_weights": true,
+    "prefill_wall_ms": 4.636798985302448,
+    "decode_wall_ms_per_token": 1.4417416726549466,
+    "decode_profile_iterations": 3,
+    "leading_device_categories_over_three_decode_replays": {
+      "width_sharded_matmul_us": 1053.72,
+      "l1_argmax_us": 984.28,
+      "local_max_reduce_us": 897.37
+    },
+    "artifacts": [
+      "profile/reduced/prefill_perf_report.csv",
+      "profile/reduced/decode_perf_report.csv",
+      "profile/reduced/prefill_summary.csv",
+      "profile/reduced/decode_summary.csv",
+      "profile/reduced/reports/2026_07_20_02_47_40/ops_perf_results_2026_07_20_02_47_40.csv"
+    ]
+  },
+  "analytical_roofline": {
+    "classification": "analytical lower bound inferred from inherited decoder profiler data; not a full-stack profiler measurement",
+    "modeled_per_device_dram_bandwidth_bytes_per_second": 292000000000.0,
+    "physical_bfp4_matrix_payload_bytes_per_device_per_token": 989331456,
+    "matrix_payload_floor_ms_per_token": 3.3881214246575344,
+    "kv_position_range": [
+      128,
+      255
+    ],
+    "average_physical_sequence_tiles": 6.5,
+    "bfp8_kv_payload_bytes_per_layer_per_device": 113152,
+    "bfp8_kv_payload_floor_ms_per_layer": 0.0003875068493150685,
+    "bfp8_kv_payload_floor_ms_all_28_layers": 0.010850191780821918,
+    "measured_sampling_ms_per_token": 0.7939002171042375,
+    "composite_matrix_kv_sampling_floor_ms_per_token": 4.192871833542594,
+    "measured_standard_caller_visible_ms_per_token": 13.260732765047576,
+    "scope_note": "The lower bound omits non-matrix activation traffic, collectives, synchronization, dispatch dependencies, and terminal operations. It is used only to reconcile scale, not to claim attainable throughput."
+  },
+  "sampling_dominance_gate": {
+    "threshold_fraction": 0.5,
+    "measured_fraction": 0.06009866639950228,
+    "passed": true,
+    "decision": "Keep canonical split sampling; LM-head/sampling does not dominate token-out decode."
+  }
+}

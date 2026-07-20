@@ -1,0 +1,3 @@
+ supervised learning is a form of machine learning in which the algorithm is trained on a labeled dataset, while unsupervised learning is a form of machine learning in which the algorithm is trained on an unlabeled dataset.
+
+In the context of the extract, the supervised learning algorithm is used to classify the data into two classes based on the input features. The algorithm is trained on a dataset that is labeled, meaning that the correct output for each input is known. The algorithm then uses this training to make predictions on

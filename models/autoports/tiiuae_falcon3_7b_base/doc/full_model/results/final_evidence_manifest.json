@@ -1,0 +1,90 @@
+{
+  "status": "source-frozen evidence complete",
+  "evidence_window_utc": {
+    "start": "2026-07-20T02:08:37Z",
+    "end": "2026-07-20T02:48:11Z"
+  },
+  "repository": {
+    "branch": "mvasiljevic/model/tiiuae-falcon3-7b-base",
+    "pre_stage_head": "4b1bb58f3ca85b424e807d462f2ed52e176e4cc1",
+    "push_performed": false
+  },
+  "hugging_face": {
+    "model": "tiiuae/Falcon3-7B-Base",
+    "snapshot": "/home/mvasiljevic/hf-cache/hub/models--tiiuae--Falcon3-7B-Base/snapshots/bf3d7ed586cb22a921520e2d681a9d3d7642cde8",
+    "revision": "bf3d7ed586cb22a921520e2d681a9d3d7642cde8",
+    "reference": "aime24_plain_100.refpt",
+    "reference_sha256": "45637a3d5f7c41146d267fe6eb0678d48e588fb9d3a6d7d3a2ca32838de720fa"
+  },
+  "hardware": {
+    "mesh": "1x4 Blackhole p300c",
+    "fabric": "FABRIC_1D_RING",
+    "tensor_parallel_degree": 4,
+    "links": 2,
+    "firmware_bundle": "19.8.0.0",
+    "kmd": "2.8.0",
+    "tt_smi": "5.3.1",
+    "final_health_log_sha256": "acb1aa959ba90a06e2e256a0f7ea34947e25da97dc86f5db94e9f30538e8f888"
+  },
+  "environment": {
+    "fallback_policy": "TTNN_CONFIG_OVERRIDES={\"throw_exception_on_fallback\": true}",
+    "watcher": "TT_METAL_WATCHER=1 TT_METAL_WATCHER_DISABLE_ETH=1",
+    "profiler": "TT_METAL_DEVICE_PROFILER=1",
+    "hardware_commands_serialized": true,
+    "watcher_and_profiler_separated": true
+  },
+  "frozen_source_sha256": {
+    "tt/model.py": "a9abcf403a1c2db0ce171beace6296383efde18078d0ab1b5537354dc0a1c41d",
+    "tt/generator.py": "71d780c306beb6f2a701aaa83bfc62e14ca681ae6c270ad36e9b04949706f35a",
+    "tt/multichip_decoder.py": "24e7c175c0071506a551b719b334d92cf3ca5aa0c58fbca4d05bd1282708dcdc",
+    "models/common/modules/sampling/sampling_1d.py": "f7a31be9871309ab92eb89f3612bb7a2b9051e6b0c5afe90b61108f211232c56",
+    "models/common/readiness_check/mesh_device.py": "a5f62238fd79be13f33cfe209dbcbbe68a486a60235bcabd70f4c18fd835e7d0",
+    "minimal_default_writer.cpp": "81bb98973a1228916b883e047debe33784f5a0d354b8a449b34b15379536f28c",
+    "watcher_device_reader.cpp": "9e96baaf105a5c0c584df3862b79b1d77a26d85a924e59a2ff2e0f480663c753",
+    "watcher_server.cpp": "a68fea544ab11230a3df069edceb7d0d4e0a47b3170da370332591cf2badbcc8",
+    "build_Release/lib/libtt_metal.so": "4a6561d521e602c9fad6f19dd087048acc4d4c34dbda3d97558bc8f80ed8c1e6"
+  },
+  "runner_source_sha256": {
+    "full_context_coverage.py": "4962671fe69634ba04839656c76dedec01bfcff8140de8838766b2e8f6d51aef",
+    "full_model_batch32.py": "11a992232fc7b1c0fd8c529580f816644cfa3e3734af3d7885be0b86467680bf",
+    "full_model_contract_coverage.py": "639740780dc9b6cfb5ece47db685d2609150ba44a5a2ef3b8906e349bef44cfa",
+    "full_model_depth_sweep.py": "d3e02afe46bf3d561ad21d84065f82d337ccee8c4f203eae53988ded84f4d926",
+    "full_model_evidence.py": "4589f4e8a65168a8a4ea694b872ed20236871eab654f0e2e4b90ef821c3a2f05",
+    "full_model_profile.py": "41b9d4ec7402e59b0334105bea6e2d4629cdf603339fcd2a17465b33c89df041",
+    "full_model_qualitative.py": "c69b57a2e5ad2479a267c60863a61f42bc900515c9fe70013afc5219f64f2f85",
+    "full_model_qualitative_control.py": "de4f9f868df062ba3c2e0ac501171885a8842e479216171b2e39c5814a2d16e6",
+    "full_model_sampler_watcher.py": "1b63c540af76b2ff55cef1510d04927ababfaf45fd0d63414c72e59cfa782f7d"
+  },
+  "canonical_artifact_sha256": {
+    "full_model_evidence.json": "ddd770d274675ee795b5871bae0c81bf682d964a2ed1c24121aa94b641a3bc1f",
+    "full_context_coverage.json": "036ed7db475126e10cb7861faf2bc3bd9f32e07c7638bfd9ca1b4e09e7b8c58d",
+    "full_model_contract_coverage.json": "c2d1fbb1f2cc591bc107d9e7533fa82b71f7dde30336ce1ee8a58fec1035af1c",
+    "full_model_batch32.json": "70351be0c0972aa1ba615f4625a3186ab0d0b6fb5ad1ff0891faff27c3e4ad46",
+    "full_model_depth_sweep.json": "e1ca7df46c9119fd0add606a4d94cedf87765e84a701d39bb4017de00dd40a8a",
+    "full_model_profile.json": "ef66e5fa6f1c87271125969cd7d2650cc4110af61118ae379cad7c038f16b742",
+    "full_model_qualitative_control.json": "a616d14fb00bfb7b0a6700b00a44d405e1df47659674da6d5b44d8faf9ec665b",
+    "full_model_sampler_watcher.json": "f89791b5f04da4933eab85af1fa460453be27e06c00918fd61b8b1e068970237",
+    "full_model_watcher.json": "810e3aa29f60b6fd8c5cabcac4e291bdc94cb3fa8feed91b2b72049041050862",
+    "tracy_ops_perf_results.csv": "1006f8d3bc7a1474806823e7353eec575d0bbd4111f57eb84d5cf1c0d35b03a1"
+  },
+  "raw_log_sha256": {
+    "run_prefill_check.log": "9fa4cce5fbb8ebd66574c41857439b3f3c6b529283171e4e44cebd30002e820d",
+    "run_teacher_forcing.log": "d3ddc55e0e582a2441487866529f59efcd8ac4ab8d821e054d328ee16c596f7d",
+    "run_autoregressive.log": "391d5a02ed6a29b1e5211312e8d3a4fe4b9d21288cba2205beba7a8f990d210b",
+    "full_model_evidence.log": "dbca60aa59f69dc1940624796d025ca8f9a5ad489334aaf014e830dd000587e7",
+    "full_context_coverage.log": "a5dbd532723e51f54a95a5e565cfc2634837a0e03da54dfb084d5a1649e4ae77",
+    "full_model_contract_coverage.log": "151f183a58f3ada85345da4b11ace08fb1cefe1725b814f67f9a1df52bc593be",
+    "full_model_batch32.log": "83a1352faf28c10f820c3ed54a3574d1a0c0604dbea8dccb04ae981e7b38a7cb",
+    "full_model_depth_sweep.log": "223109868abdd617995ff1bafe0f295ab7486a883298fea57eecb99d2bc2ad41",
+    "full_model_profile.log": "81c2b96e5b56cea8eda0718d05be0e0bed11c74129af42848ff91a89b1944482",
+    "full_model_qualitative.log": "54e0f1c019088fa9b9612526c86ba7cae533f875170ee393f38c47644076d24c",
+    "full_model_qualitative_control.log": "a05bea1b8258795a171580b5e3128bb330a05853d8fcd3fd95b0d6891e20dfec",
+    "full_model_sampler_watcher.log": "bed2efd937c35eeafe07215ca302a716cc17b75703b75766a66f3f0da603041d",
+    "full_model_watcher.log": "e287b9d2ba5fb8a0af0f0c34a27c856cca2125a318c67c9f79208613d4721ae1",
+    "watcher_trace_control_regression.log": "e1017d28c193ff77c3e02211f6673746297e74ea9df1e584340ca61dfd11bc1f"
+  },
+  "post_evidence_normalization": "Repository hooks removed unused imports, reordered imports, and normalized text EOF/trailing whitespace only; runtime statements and behavior are unchanged.",
+  "all_required_hardware_gates_exit_zero": true,
+  "all_required_json_gates_passed": true,
+  "watcher_log_critical_scan_clean": true
+}

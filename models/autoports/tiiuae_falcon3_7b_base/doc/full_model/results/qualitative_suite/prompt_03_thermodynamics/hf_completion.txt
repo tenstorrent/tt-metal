@@ -1,0 +1,6 @@
+ **Zeroth Law of Thermodynamics:**
+   - If two systems are each in thermal equilibrium with a third system, they are in thermal equilibrium with each other.
+   - This law allows the definition of temperature.
+
+2. **First Law of Thermodynamics (Conservation of Energy):**
+   - The change in internal energy of a system (ΔU) is equal to the heat added to the system (Q) minus the work done by the system

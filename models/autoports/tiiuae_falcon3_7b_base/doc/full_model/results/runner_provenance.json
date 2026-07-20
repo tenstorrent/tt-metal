@@ -1,0 +1,38 @@
+{
+  "evidence_window_utc": "2026-07-20T02:08:37Z/2026-07-20T02:48:11Z",
+  "branch": "mvasiljevic/model/tiiuae-falcon3-7b-base",
+  "pre_stage_head": "4b1bb58f3ca85b424e807d462f2ed52e176e4cc1",
+  "hf_revision": "bf3d7ed586cb22a921520e2d681a9d3d7642cde8",
+  "mesh": "P300X2 (1x4 Blackhole p300c), FABRIC_1D_RING, TP4",
+  "fallback_policy": "TTNN_CONFIG_OVERRIDES={\"throw_exception_on_fallback\": true}",
+  "reference": {
+    "path": "results/aime24_plain_100.refpt",
+    "sha256": "45637a3d5f7c41146d267fe6eb0678d48e588fb9d3a6d7d3a2ca32838de720fa"
+  },
+  "runs": [
+    {
+      "runner": "models.common.readiness_check.run_prefill_check",
+      "command": "python -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/aime24_plain_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+      "exit_code": 0,
+      "result": "top1=92/100 top5=100/100 top100=100/100",
+      "log": "results/run_prefill_check.log",
+      "log_sha256": "9fa4cce5fbb8ebd66574c41857439b3f3c6b529283171e4e44cebd30002e820d"
+    },
+    {
+      "runner": "models.common.readiness_check.run_teacher_forcing",
+      "command": "python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/aime24_plain_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING",
+      "exit_code": 0,
+      "result": "top1=93/100 top5=100/100 top100=100/100 TTFT=3686.51ms decode=40.85t/s/u",
+      "log": "results/run_teacher_forcing.log",
+      "log_sha256": "d3ddc55e0e582a2441487866529f59efcd8ac4ab8d821e054d328ee16c596f7d"
+    },
+    {
+      "runner": "models.common.readiness_check.run_autoregressive",
+      "command": "python -m models.common.readiness_check.run_autoregressive --model-dir models/autoports/tiiuae_falcon3_7b_base --hf-model /home/mvasiljevic/hf-cache/hub/models--tiiuae--Falcon3-7B-Base/snapshots/bf3d7ed586cb22a921520e2d681a9d3d7642cde8 --mesh-device P300X2 --fabric-config FABRIC_1D_RING --max-new-tokens 100 --output-dir models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/autoregressive",
+      "exit_code": 0,
+      "result": "HF=100 tokens TT=100 tokens first_divergence=5 qualitative=pass",
+      "log": "results/run_autoregressive.log",
+      "log_sha256": "391d5a02ed6a29b1e5211312e8d3a4fe4b9d21288cba2205beba7a8f990d210b"
+    }
+  ]
+}

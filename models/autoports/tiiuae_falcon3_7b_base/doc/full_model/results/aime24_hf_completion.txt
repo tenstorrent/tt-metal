@@ -1,0 +1,5 @@
+Step 1: Determine the time spent walking at speed $s$
+Aya walks $9$ kilometers at a speed of $s$ kilometers per hour, so the time spent walking is $\frac{9}{s}$ hours.
+
+Step 2: Determine the time spent walking at speed $s+2$
+Aya walks $9$ kilometers at a speed of $s+2$ kilometers per hour, so the time spent walking

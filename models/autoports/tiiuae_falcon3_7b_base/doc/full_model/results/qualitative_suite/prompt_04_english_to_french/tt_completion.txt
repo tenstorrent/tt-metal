@@ -1,0 +1,6 @@
+Bonjour, comment vas-tu aujourd'hui ?"
+Spanish: "Hola, ¿cómo estás hoy?"
+German: "Hallo, wie geht es heute?"
+Italian: "Ciao, come stai oggi?"
+Japanese: "こんにちは、今日はどうですか？(Konnichiwa, dōdesu ka?)"
+Chinese: "你

@@ -30,10 +30,10 @@ from models.autoports.tiiuae_falcon3_7b_base.tt.functional_decoder import (
 from models.autoports.tiiuae_falcon3_7b_base.tt.optimized_decoder import (
     PRECISION_POLICIES,
     OptimizedDecoder,
-    _compute_config,
-    _core_grid_for_tiles,
     _advisor_matmul_program_config,
     _advisor_norm_memory_config,
+    _compute_config,
+    _core_grid_for_tiles,
     _dram_matmul_program_config,
     _dram_sharded_memory_config,
     _largest_divisor,
@@ -852,14 +852,16 @@ class MultichipDecoder(LightweightModule):
         ttnn.deallocate(sin_2d, False)
         return cos, sin
 
-    def _decode_rotary_positions(self, cache_position):
+    def _decode_rotary_positions(self, rotary_position):
         """Gather one RoPE row per user without a host scalar dependency."""
-        position_u32 = ttnn.typecast(cache_position, ttnn.uint32)
+        converted = rotary_position.dtype != ttnn.uint32
+        position_u32 = ttnn.typecast(rotary_position, ttnn.uint32) if converted else rotary_position
         position_u32_2d = ttnn.reshape(position_u32, (1, self.batch))
         cos_3d = ttnn.embedding(position_u32_2d, self.cos_cache, layout=ttnn.TILE_LAYOUT)
         sin_3d = ttnn.embedding(position_u32_2d, self.sin_cache, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(position_u32_2d, False)
-        ttnn.deallocate(position_u32, True)
+        if converted:
+            ttnn.deallocate(position_u32, True)
         cos = ttnn.unsqueeze_to_4D(cos_3d)
         sin = ttnn.unsqueeze_to_4D(sin_3d)
         ttnn.deallocate(cos_3d, False)
@@ -995,7 +997,26 @@ class MultichipDecoder(LightweightModule):
         ttnn.deallocate(unpadded, True)
         return prepared
 
-    def _fill_prefill_cache(self, cache, fill, *, user_id: int, page_table) -> None:
+    def _fill_prefill_cache(
+        self,
+        cache,
+        fill,
+        *,
+        user_id: int,
+        page_table,
+        valid_len: int | None = None,
+        chunk_start_idx: int = 0,
+        chunk_page_table=None,
+    ) -> None:
+        if valid_len is not None:
+            if valid_len <= 0:
+                return
+            if valid_len < int(fill.shape[2]):
+                fill = ttnn.slice(
+                    fill,
+                    [0, 0, 0, 0],
+                    [1, self.local_num_kv_heads, valid_len, self.head_dim],
+                )
         if fill.dtype != cache.dtype:
             typed = ttnn.typecast(fill, cache.dtype)
             # A batch-one full-user slice aliases the parent K/V allocation,
@@ -1003,9 +1024,12 @@ class MultichipDecoder(LightweightModule):
             ttnn.deallocate(fill, False)
             fill = typed
         if page_table is None:
+            if chunk_start_idx:
+                raise ValueError("chunked prefill requires a paged KV cache")
             ttnn.fill_cache(cache, fill, batch_idx=user_id)
         else:
-            ttnn.experimental.paged_fill_cache(cache, fill, page_table, batch_idx=user_id)
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            ttnn.experimental.paged_fill_cache(cache, fill, fill_page_table, batch_idx=user_id)
         ttnn.deallocate(fill, fill.dtype == cache.dtype and cache.dtype != ttnn.bfloat16)
 
     def _prefill_linear_chunked(self, tensor, weight, *, k: int, n: int, compute_kernel_config):
@@ -1054,7 +1078,19 @@ class MultichipDecoder(LightweightModule):
             ttnn.deallocate(chunk, True)
         return output
 
-    def _prefill_attention(self, residual, *, batch, seq_len, key_cache, value_cache, page_table):
+    def _prefill_attention(
+        self,
+        residual,
+        *,
+        batch,
+        seq_len,
+        key_cache,
+        value_cache,
+        page_table,
+        prompt_lens=None,
+        chunk_start_idx: int = 0,
+        chunk_page_table=None,
+    ):
         m = batch * seq_len
         normed = ttnn.rms_norm(
             residual,
@@ -1085,7 +1121,7 @@ class MultichipDecoder(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(fused_qkv, True)
-        cos, sin = self._rotary_slice(0, seq_len)
+        cos, sin = self._rotary_slice(chunk_start_idx, seq_len)
         key_rotated = ttnn.experimental.rotary_embedding(key, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         query_rotated = ttnn.experimental.rotary_embedding(query, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(key, True)
@@ -1100,6 +1136,11 @@ class MultichipDecoder(LightweightModule):
         )
 
         for user_id in range(batch):
+            valid_len = seq_len
+            if prompt_lens is not None:
+                valid_len = min(seq_len, max(0, int(prompt_lens[user_id]) - chunk_start_idx))
+                if valid_len == 0:
+                    continue
             value_user = ttnn.slice(
                 value, [user_id, 0, 0, 0], [user_id + 1, self.local_num_kv_heads, seq_len, self.head_dim]
             )
@@ -1108,21 +1149,40 @@ class MultichipDecoder(LightweightModule):
                 [user_id, 0, 0, 0],
                 [user_id + 1, self.local_num_kv_heads, seq_len, self.head_dim],
             )
-            self._fill_prefill_cache(value_cache, value_user, user_id=user_id, page_table=page_table)
-            self._fill_prefill_cache(key_cache, key_user, user_id=user_id, page_table=page_table)
+            fill_kwargs = dict(
+                user_id=user_id,
+                page_table=page_table,
+                valid_len=valid_len,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+            )
+            self._fill_prefill_cache(value_cache, value_user, **fill_kwargs)
+            self._fill_prefill_cache(key_cache, key_user, **fill_kwargs)
 
-        attention = ttnn.transformer.scaled_dot_product_attention(
-            query_rotated,
-            key_rotated,
-            value,
-            is_causal=True,
-            scale=self.scale,
-            compute_kernel_config=self.attention_compute_config,
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=64, k_chunk_size=64
-            ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=64, k_chunk_size=64
         )
+        if chunk_start_idx:
+            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
+                input_tensor_q=query_rotated,
+                input_tensor_k=key_cache,
+                input_tensor_v=value_cache,
+                page_table_tensor=page_table,
+                chunk_start_idx=chunk_start_idx,
+                compute_kernel_config=self.attention_compute_config,
+                program_config=sdpa_program_config,
+            )
+        else:
+            attention = ttnn.transformer.scaled_dot_product_attention(
+                query_rotated,
+                key_rotated,
+                value,
+                is_causal=True,
+                scale=self.scale,
+                compute_kernel_config=self.attention_compute_config,
+                program_config=sdpa_program_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         ttnn.deallocate(query_rotated, True)
         ttnn.deallocate(key_rotated, True)
         ttnn.deallocate(value, True)
@@ -1145,7 +1205,7 @@ class MultichipDecoder(LightweightModule):
         ttnn.deallocate(projected, True)
         return output
 
-    def _decode_qkv(self, residual, *, cache_position):
+    def _decode_qkv(self, residual, *, rotary_position):
         normed = self._decode_norm(residual, self.input_norm_weight)
         qkv_input = self._move_owned(normed, self.qkv_input_memory_config)
         fused_qkv = ttnn.matmul(
@@ -1180,7 +1240,7 @@ class MultichipDecoder(LightweightModule):
             value = self._prepare_decode_heads(
                 value, self.local_num_kv_heads, memory_config=self.decode_head_memory_config
             )
-        cos, sin = self._decode_rotary_positions(cache_position)
+        cos, sin = self._decode_rotary_positions(rotary_position)
         if self.batch == 1:
             cos_l1 = ttnn.to_memory_config(cos, ttnn.L1_MEMORY_CONFIG)
             sin_l1 = ttnn.to_memory_config(sin, ttnn.L1_MEMORY_CONFIG)
@@ -1212,8 +1272,18 @@ class MultichipDecoder(LightweightModule):
         ttnn.deallocate(sin, True)
         return query_rotated, key_rotated, value
 
-    def _decode_attention(self, residual, *, key_cache, value_cache, cache_position, position_index: int, page_table):
-        query, key, value = self._decode_qkv(residual, cache_position=cache_position)
+    def _decode_attention(
+        self,
+        residual,
+        *,
+        key_cache,
+        value_cache,
+        cache_position,
+        rotary_position,
+        position_index: int,
+        page_table,
+    ):
+        query, key, value = self._decode_qkv(residual, rotary_position=rotary_position)
         ttnn.experimental.paged_update_cache(
             value_cache, value, update_idxs_tensor=cache_position, share_cache=False, page_table=page_table
         )
@@ -1425,9 +1495,28 @@ class MultichipDecoder(LightweightModule):
         ttnn.deallocate(down, True)
         return output
 
-    def prefill_forward(self, hidden_states, *, key_cache, value_cache, page_table=None):
+    def prefill_forward(
+        self,
+        hidden_states,
+        *,
+        key_cache,
+        value_cache,
+        page_table=None,
+        prompt_lens=None,
+        chunk_start_idx: int = 0,
+        chunk_page_table=None,
+    ):
         batch, seq_len = self._validate_hidden(hidden_states, decode=False)
         self._validate_caches(key_cache, value_cache, page_table=page_table)
+        if prompt_lens is not None and len(prompt_lens) != batch:
+            raise ValueError(f"prompt_lens must contain {batch} entries")
+        if chunk_start_idx < 0 or chunk_start_idx + seq_len > self.max_cache_len:
+            raise ValueError("prefill chunk lies outside the supported context")
+        required_pages = math.ceil((chunk_start_idx + seq_len) / self.page_block_size)
+        if page_table is not None and required_pages > int(page_table.shape[1]):
+            raise ValueError("page_table does not cover the logical prefill length")
+        if chunk_start_idx and (page_table is None or chunk_page_table is None):
+            raise ValueError("chunked prefill requires full and chunk page tables")
         residual = ttnn.reshape(hidden_states, (1, 1, batch * seq_len, self.hidden_size))
         residual = self._prefill_attention(
             residual,
@@ -1436,6 +1525,9 @@ class MultichipDecoder(LightweightModule):
             key_cache=key_cache,
             value_cache=value_cache,
             page_table=page_table,
+            prompt_lens=prompt_lens,
+            chunk_start_idx=chunk_start_idx,
+            chunk_page_table=chunk_page_table,
         )
         residual = self._prefill_mlp(residual)
         output = ttnn.reshape(residual, (1, batch, seq_len, self.hidden_size))
@@ -1451,10 +1543,18 @@ class MultichipDecoder(LightweightModule):
         cache_position,
         position_index: int,
         page_table=None,
+        rotary_position=None,
     ):
         batch, _ = self._validate_hidden(hidden_states, decode=True)
         self._validate_caches(key_cache, value_cache, page_table=page_table)
         self._validate_cache_position(cache_position)
+        if rotary_position is None:
+            rotary_position = cache_position
+        elif tuple(int(v) for v in rotary_position.shape) != (self.batch,) or rotary_position.dtype not in (
+            ttnn.int32,
+            ttnn.uint32,
+        ):
+            raise ValueError(f"rotary_position must be int32/uint32[{self.batch}]")
         if not 0 <= position_index < self.max_cache_len:
             raise ValueError(f"position_index={position_index} is outside configured cache")
         residual = ttnn.reshape(hidden_states, (1, 1, batch, self.hidden_size))
@@ -1477,6 +1577,7 @@ class MultichipDecoder(LightweightModule):
             key_cache=key_cache,
             value_cache=value_cache,
             cache_position=cache_position,
+            rotary_position=rotary_position,
             position_index=position_index,
             page_table=page_table,
         )

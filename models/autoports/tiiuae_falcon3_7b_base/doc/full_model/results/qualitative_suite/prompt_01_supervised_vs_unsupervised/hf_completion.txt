@@ -1,0 +1,7 @@
+ supervised learning uses labeled data to train a model, while unsupervised learning uses unlabeled data to find patterns and relationships.
+
+### Clustering
+
+Clustering is a type of unsupervised learning that involves grouping similar data points together. The goal of clustering is to find natural groupings in the data, without any prior knowledge of what those groupings might be.
+
+One popular clustering algorithm is called K-means clustering. The basic idea behind K-means clustering is to divide the data into K clusters,
