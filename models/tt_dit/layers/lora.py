@@ -58,10 +58,26 @@ swap cycles. In production this is bounded automatically by
 on every page-in). For static pipelines (``dynamic_load=False``) that
 need bit-exact restore across many swaps, snapshot the state dict once
 at construction and call ``load_torch_state_dict`` to re-seed W when
-drift becomes material.
+drift becomes material. (With the A/B cache enabled — ``cache_capacity>0``
+— unbind subtracts the *same* device delta that bind added for a cached
+adapter, so those swap cycles are exact and do not drift.)
+
+Fuse-mode A/B cache (``cache_capacity``)
+----------------------------------------
+Each bind/unbind/reload otherwise re-uploads A and B from host and
+re-lays them out for W's sharding. With ``cache_capacity>0`` the uploaded
+device factors are kept in a per-module LRU (keyed by bank index), so a
+re-bind of an already-seen adapter — and, under ``dynamic_load``, the
+re-merge after every page-in — skips the host upload. The cache holds
+only the rank-sized A/B (never the full delta), survives page-out (the
+factors are plain tensors, not tracked ``Parameters``, so
+``deallocate_weights`` leaves them alone), and is bounded to
+``cache_capacity`` adapters per Linear. ``cache_capacity=0`` disables it
+and restores the upload-then-free behavior.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import torch
@@ -99,13 +115,18 @@ class LoRAMixin:
     LORA_MODES = ("fuse", "runtime")
 
     # ---- one-time state init ----
-    def _init_lora_state(self, mode: str = "fuse") -> None:
+    def _init_lora_state(self, mode: str = "fuse", cache_capacity: int = 0) -> None:
         if mode not in self.LORA_MODES:
             raise ValueError(f"lora_mode must be one of {self.LORA_MODES}; got {mode!r}")
         self.lora_mode = mode
         self.lora_bank: list[LoRAAdapter | None] = []
         self.active_idx: int | None = None
         self.active_scale: float = 1.0
+        # Fuse-mode LRU of device-resident A/B factors, keyed by bank index:
+        # {idx: (A_dev, B_dev, scale)}, MRU last. Bounded to ``lora_cache_capacity``
+        # adapters; 0 disables caching (upload-then-free per bind).
+        self.lora_cache_capacity: int = int(cache_capacity)
+        self._ab_cache: OrderedDict[int, tuple[ttnn.Tensor, ttnn.Tensor, float]] = OrderedDict()
         # ``active_idx`` records intent (which adapter should be used).
         # ``_delta_applied`` (fuse mode) records whether the merge is
         # currently present on the on-device weight. These can diverge
@@ -168,7 +189,18 @@ class LoRAMixin:
             return
         if self.active_idx == idx:
             self.unbind_active()
+        self._drop_cached_ab(idx)
         self.lora_bank[idx] = None
+
+    def set_lora_cache_capacity(self, n: int) -> None:
+        """Set how many adapters keep their device A/B factors resident (LRU).
+        Shrinking evicts the least-recently-used down to ``n``; ``n<=0`` frees
+        the whole cache and disables further caching."""
+        self.lora_cache_capacity = int(n)
+        if self.lora_cache_capacity <= 0:
+            self._free_ab_cache()
+        else:
+            self._evict_ab_cache()
 
     # ---- bind / unbind ----
     def bind_active(self, idx: int, scale: float | None = None) -> None:
@@ -212,19 +244,18 @@ class LoRAMixin:
         fuse → add the delta into ``W``. runtime → upload ``A`` and ``B``
         for the forward path to consume.
         """
-        adapter = self.lora_bank[self.active_idx]
         if self.lora_mode == "fuse":
-            self._apply_delta(adapter.A, adapter.B, self.active_scale, sign=+1)
+            self._apply_delta(self.active_idx, self.active_scale, sign=+1)
             self._delta_applied = True
         else:  # runtime
+            adapter = self.lora_bank[self.active_idx]
             self._upload_runtime_ab(adapter.A, adapter.B)
 
     def _undo_active(self) -> None:
         if self.is_loaded():
             if self.lora_mode == "fuse" and self._delta_applied:
-                adapter = self.lora_bank[self.active_idx]
-                if adapter is not None:
-                    self._apply_delta(adapter.A, adapter.B, self.active_scale, sign=-1)
+                if self.lora_bank[self.active_idx] is not None:
+                    self._apply_delta(self.active_idx, self.active_scale, sign=-1)
             elif self.lora_mode == "runtime":
                 self._free_runtime_ab()
         self._delta_applied = False
@@ -257,6 +288,7 @@ class LoRAMixin:
     def deallocate_lora(self) -> None:
         if self.active_idx is not None:
             self.unbind_active()
+        self._free_ab_cache()
         self.lora_bank = []
 
     # ---- forward override (runtime mode) ----
@@ -320,21 +352,63 @@ class LoRAMixin:
         return super().forward_fused_addcmul(*args, **kwargs)
 
     # ---- internals ----
-    def _apply_delta(
-        self,
-        A_torch: torch.Tensor,
-        B_torch: torch.Tensor,
-        scale: float,
-        sign: int,
-    ) -> None:
-        """Compute ``sign * scale * A.T @ B.T`` on device with W's sharding
-        and add it into ``self.weight.data`` in-place (fuse mode)."""
-        A_dev, B_dev = self._upload_ab_for_w_sharding(A_torch, B_torch, scale=float(sign) * float(scale))
+    def _apply_delta(self, idx: int, scale: float, sign: int) -> None:
+        """Add (``sign>0``) or subtract (``sign<0``) bank[idx]'s ``+scale`` delta
+        into ``self.weight.data`` in place (fuse mode). The device A/B factors
+        come from the LRU cache when enabled, so a re-bind or a post-reload
+        re-merge skips the host upload; the same cached ``+scale`` delta serves
+        both bind and unbind, making the pair an exact negation. The full-size
+        delta itself is never cached (that would cost a whole weight per adapter)."""
+        A_dev, B_dev, owned = self._acquire_delta_ab(idx, float(scale))
         delta = ttnn.matmul(A_dev, B_dev, compute_kernel_config=self.compute_config)
-        ttnn.deallocate(A_dev)
-        ttnn.deallocate(B_dev)
-        ttnn.add(self.weight.data, delta, output_tensor=self.weight.data)
+        if owned:
+            ttnn.deallocate(A_dev)
+            ttnn.deallocate(B_dev)
+        if sign > 0:
+            ttnn.add(self.weight.data, delta, output_tensor=self.weight.data)
+        else:
+            ttnn.subtract(self.weight.data, delta, output_tensor=self.weight.data)
         ttnn.deallocate(delta)
+
+    def _acquire_delta_ab(self, idx: int, scale: float) -> tuple[ttnn.Tensor, ttnn.Tensor, bool]:
+        """Return ``(A_dev, B_dev, owned)`` for bank[idx]'s ``+scale`` delta
+        factors, uploading + laying them out for W's sharding on a miss.
+        ``owned=True`` means the factors are uncached and the caller must
+        deallocate them; cached factors are owned by the LRU (``owned=False``)."""
+        adapter = self.lora_bank[idx]
+        if self.lora_cache_capacity <= 0:
+            A_dev, B_dev = self._upload_ab_for_w_sharding(adapter.A, adapter.B, scale=scale)
+            return A_dev, B_dev, True
+        cached = self._ab_cache.get(idx)
+        if cached is not None and cached[2] == scale:
+            self._ab_cache.move_to_end(idx)  # mark most-recently-used
+            return cached[0], cached[1], False
+        if cached is not None:  # same slot bound at a new scale → rebuild
+            self._drop_cached_ab(idx)
+        A_dev, B_dev = self._upload_ab_for_w_sharding(adapter.A, adapter.B, scale=scale)
+        self._ab_cache[idx] = (A_dev, B_dev, scale)  # inserted at the MRU end
+        self._evict_ab_cache()
+        return A_dev, B_dev, False
+
+    def _evict_ab_cache(self) -> None:
+        # Trim from the LRU end. The active adapter is always the MRU (just
+        # inserted or touched), so for capacity >= 1 it is never evicted.
+        while len(self._ab_cache) > self.lora_cache_capacity:
+            _, (A_old, B_old, _) = self._ab_cache.popitem(last=False)
+            ttnn.deallocate(A_old)
+            ttnn.deallocate(B_old)
+
+    def _drop_cached_ab(self, idx: int) -> None:
+        entry = self._ab_cache.pop(idx, None)
+        if entry is not None:
+            ttnn.deallocate(entry[0])
+            ttnn.deallocate(entry[1])
+
+    def _free_ab_cache(self) -> None:
+        for A_dev, B_dev, _ in self._ab_cache.values():
+            ttnn.deallocate(A_dev)
+            ttnn.deallocate(B_dev)
+        self._ab_cache.clear()
 
     def _upload_runtime_ab(self, A_torch: torch.Tensor, B_torch: torch.Tensor) -> None:
         """Upload A and B for the runtime forward path. The active scale

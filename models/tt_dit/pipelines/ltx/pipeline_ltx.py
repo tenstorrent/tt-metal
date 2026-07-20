@@ -210,6 +210,7 @@ class LTXPipeline:
         traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
         lora_enabled: bool = False,
+        lora_cache_capacity: int = 2,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
@@ -250,6 +251,11 @@ class LTXPipeline:
         # Linears (weight.data += A@B), not the host-fuse+reload path used by
         # extra_transformer_variants.
         self.lora_enabled = lora_enabled
+        # How many registered adapters keep their A/B factors resident on device
+        # (per-Linear LRU). Larger = fewer host re-uploads on swap and after each
+        # dynamic_load page-in, at the cost of holding that many rank-sized factor
+        # sets in DRAM. 0 disables the cache.
+        self.lora_cache_capacity = int(lora_cache_capacity)
         self._active_lora: LTXAdapterHandle | None = None
 
         self.num_attention_heads = num_attention_heads
@@ -661,25 +667,55 @@ class LTXPipeline:
             raise RuntimeError("pipeline was built with lora_enabled=False; on-device LoRA swap is unavailable")
         if self.transformer is None:
             raise RuntimeError("transformer not instantiated; call the pipeline's build/prime path first")
-        return load_ltx_adapter_into(self.transformer, path, scale=scale, name=name)
+        handle = load_ltx_adapter_into(self.transformer, path, scale=scale, name=name)
+        self._apply_lora_cache_capacity()
+        return handle
+
+    def _apply_lora_cache_capacity(self) -> None:
+        """Push the pipeline's cache capacity onto every LoRA Linear (attn/ffn
+        built with ``lora_enabled`` plus the promoted globals)."""
+        if self.transformer is None:
+            return
+        for _, mod in iter_lora_modules(self.transformer):
+            mod.set_lora_cache_capacity(self.lora_cache_capacity)
+
+    def set_lora_cache_capacity(self, n: int) -> None:
+        """Set how many registered adapters keep their A/B factors resident on
+        device (per-Linear LRU). Applies immediately to the current transformer."""
+        self.lora_cache_capacity = int(n)
+        self._apply_lora_cache_capacity()
 
     def set_active_lora(self, handle: LTXAdapterHandle | None) -> None:
         """Bind ``handle`` (or unbind, if None) on device: ``weight.data += scale*A@B``
         per LoRA Linear. No host fuse, no weight reload."""
         if not self.lora_enabled:
             raise RuntimeError("pipeline was built with lora_enabled=False; on-device LoRA swap is unavailable")
+        if self.transformer is None:
+            # Nothing resident to unbind on teardown; a real bind needs the transformer built.
+            if handle is None:
+                self._active_lora = None
+                return
+            raise RuntimeError("transformer not instantiated; call the pipeline's build/prime path first")
         mods = dict(iter_lora_modules(self.transformer))
         if handle is None:
             for mod in mods.values():
                 mod.unbind_active()
             self._active_lora = None
             return
-        for module_path, idx in handle.target_indices.items():
-            mod = mods.get(module_path)
-            if mod is None:
-                logger.warning(f"set_active_lora: {module_path} not found on transformer — skipping.")
-                continue
-            mod.bind_active(idx)
+        # Bind every module the handle targets; unbind the rest so a delta merged
+        # by a previously-active adapter (whose coverage the new handle doesn't
+        # share) is removed rather than left stale on the base weight.
+        for module_path, mod in mods.items():
+            idx = handle.target_indices.get(module_path)
+            if idx is None:
+                mod.unbind_active()
+            else:
+                mod.bind_active(idx)
+        missing = [p for p in handle.target_indices if p not in mods]
+        if missing:
+            logger.warning(
+                f"set_active_lora: {len(missing)} handle target(s) not found on transformer — skipping: {missing[:5]}"
+            )
         self._active_lora = handle
 
     def load_lora_weights(self, path: str, *, strength: float = 1.0, name: str = "") -> LTXAdapterHandle:

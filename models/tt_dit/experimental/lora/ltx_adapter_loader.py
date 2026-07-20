@@ -250,15 +250,20 @@ def _alpha_key(block_idx: int, attn_name: str, sub: str) -> str:
 # Module resolution
 # --------------------------------------------------------------------
 def _get_attn(transformer, block_idx: int, attn_name: str):
-    block = transformer.transformer_blocks[block_idx]
-    return getattr(block, attn_name, None)
+    blocks = transformer.transformer_blocks
+    if not (0 <= block_idx < len(blocks)):
+        return None
+    return getattr(blocks[block_idx], attn_name, None)
 
 
 def _resolve_singleton(transformer, block_idx: int, container: str, sub: str):
     """Return (module, canonical_path, permute_dims) where permute_dims is
     (num_heads, head_dim) if the base weight is _permute_qk'd, else None.
     (None, None, None) when the target does not exist."""
-    block = transformer.transformer_blocks[block_idx]
+    blocks = transformer.transformer_blocks
+    if not (0 <= block_idx < len(blocks)):
+        return None, None, None
+    block = blocks[block_idx]
     if sub in ("to_q", "to_out", "to_gate_logits"):
         attn = getattr(block, container, None)
         if attn is None:
