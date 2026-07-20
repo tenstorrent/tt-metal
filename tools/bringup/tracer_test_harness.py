@@ -131,6 +131,7 @@ def open_device(
     legacy_device_env: str = "TT_DEVICE_ID",
     default_device_id: int = 0,
     device_candidates: Sequence[int] = (0, 1, 2, 3, 4, 5, 6, 7),
+    l1_small_size: int = 32768,
     verbose: bool = True,
 ) -> Tuple[Any, int]:
     """
@@ -156,11 +157,14 @@ def open_device(
         nonlocal last_exc
         tried.append(dev_id)
         if verbose:
-            print(f"[ttnn] Trying open_device(device_id={dev_id})")
+            print(f"[ttnn] Trying open_device(device_id={dev_id}, l1_small_size={l1_small_size})")
         try:
-            dev = ttnn.open_device(device_id=dev_id)
+            dev = ttnn.open_device(device_id=dev_id, l1_small_size=int(l1_small_size))
             if verbose:
-                print(f"[ttnn] Opened device_id={dev_id} (source={source}, env={os.environ.get(device_env)!r})")
+                print(
+                    f"[ttnn] Opened device_id={dev_id} (source={source}, "
+                    f"env={os.environ.get(device_env)!r}, l1_small_size={l1_small_size})"
+                )
             return dev
         except BaseException as e:
             last_exc = e
