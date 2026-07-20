@@ -9,9 +9,19 @@ void kernel_main() {
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t n = get_compile_time_arg_val(0);
-    compute_kernel_hw_startup(cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        EltwiseShape::tiles(n), CopyTile<cb_in>{}, PackTile<cb_out, output(OutputLifecycle::L1Accumulation)>{});
+        EltwiseShape::tiles(n),
+        BinaryFpu<
+            cb_in,
+            cb_in,
+            BinaryFpuOp::Add,
+            BroadcastDim::None,
+            input(),
+            input(),
+            Dst::D0,
+            DestAccumulation::Enabled>{},
+        PackTile<cb_out>{});
 }

@@ -14,7 +14,10 @@ template <
     InputSpec BInput,
     OutputSpec Output>
 ALWI void add(EltwiseShape shape) {
-    eltwise_chain(shape, BinaryFpu<CbA, CbB, BinaryFpuOp::Add, Bcast, AInput, BInput>{}, PackTile<CbOut, Output>{});
+    eltwise_chain(
+        shape,
+        BinaryFpu<CbA, CbB, BinaryFpuOp::Add, Bcast, AInput, BInput, Dst::D0, Output.dest_accumulation>{},
+        PackTile<CbOut, Output>{});
 }
 
 template <
@@ -26,7 +29,10 @@ template <
     InputSpec BInput,
     OutputSpec Output>
 ALWI void sub(EltwiseShape shape) {
-    eltwise_chain(shape, BinaryFpu<CbA, CbB, BinaryFpuOp::Sub, Bcast, AInput, BInput>{}, PackTile<CbOut, Output>{});
+    eltwise_chain(
+        shape,
+        BinaryFpu<CbA, CbB, BinaryFpuOp::Sub, Bcast, AInput, BInput, Dst::D0, Output.dest_accumulation>{},
+        PackTile<CbOut, Output>{});
 }
 
 template <
@@ -38,13 +44,18 @@ template <
     InputSpec BInput,
     OutputSpec Output>
 ALWI void mul(EltwiseShape shape) {
-    eltwise_chain(shape, BinaryFpu<CbA, CbB, BinaryFpuOp::Mul, Bcast, AInput, BInput>{}, PackTile<CbOut, Output>{});
+    eltwise_chain(
+        shape,
+        BinaryFpu<CbA, CbB, BinaryFpuOp::Mul, Bcast, AInput, BInput, Dst::D0, Output.dest_accumulation>{},
+        PackTile<CbOut, Output>{});
 }
 
 template <uint32_t CbIn, uint32_t CbOut, InputSpec Input, OutputSpec Output>
 ALWI void square(EltwiseShape shape) {
     eltwise_chain(
-        shape, BinaryFpu<CbIn, CbIn, BinaryFpuOp::Mul, BroadcastDim::None, Input, Input>{}, PackTile<CbOut, Output>{});
+        shape,
+        BinaryFpu<CbIn, CbIn, BinaryFpuOp::Mul, BroadcastDim::None, Input, Input, Dst::D0, Output.dest_accumulation>{},
+        PackTile<CbOut, Output>{});
 }
 
 template <class SfpuOp, uint32_t CbIn, uint32_t CbOut, InputSpec Input, OutputSpec Output>

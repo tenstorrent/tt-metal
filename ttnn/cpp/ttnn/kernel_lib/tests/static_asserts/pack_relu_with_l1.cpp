@@ -13,5 +13,13 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        EltwiseShape::tiles(n), CopyTile<cb_in>{}, PackTile<cb_out, output(OutputLifecycle::L1Accumulation)>{});
+        EltwiseShape::tiles(n),
+        CopyTile<cb_in>{},
+        PackTile<
+            cb_out,
+            output(
+                OutputLifecycle::L1Accumulation,
+                DataFormatReconfig::Enabled,
+                PackRelu::Zero,
+                L1Accumulation::Enabled)>{});
 }
