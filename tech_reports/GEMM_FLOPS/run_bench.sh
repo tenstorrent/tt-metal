@@ -28,6 +28,7 @@ cp generated/matmul_benchmark_report.csv "tech_reports/GEMM_FLOPS/data/${ARCH}.c
 python tech_reports/GEMM_FLOPS/plot_util_grid.py
 python tech_reports/GEMM_FLOPS/plot_util_by_dim.py
 python tech_reports/GEMM_FLOPS/plot_utilization.py
+python tech_reports/GEMM_FLOPS/plot_util_mn_3d.py
 python tech_reports/GEMM_FLOPS/plot_scatter_tracing.py
 python tech_reports/GEMM_FLOPS/plot_scatter_performance.py
 python tech_reports/GEMM_FLOPS/plot_bar.py
