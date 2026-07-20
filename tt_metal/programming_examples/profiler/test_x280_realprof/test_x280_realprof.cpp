@@ -148,7 +148,9 @@ int main(int argc, char** argv) {
                                // full RING_CAP buffer per (core,risc). Deterministic max-drain load; LOSSY.
     bool bulkcore = false;     // --bulkcore: one bulk NoC read of the whole core (all 5 rings, 2560 words) --
                                // amortizes NoC latency (rdrbench >2GB/s regime), drops per-risc round-robin. LOSSY.
-    bool dualrelay = false;    // --dualrelay: one relay hart PER reader (decouple the two chip halves)
+    bool dualrelay = true;     // DEFAULT: one relay hart PER reader (2 D2H sockets, decouple the chip halves).
+                               // Lifts the single-relay funnel -> the drain becomes NoC-read-bound, not
+                               // relay-bound. --singlerelay reverts to one shared relay for A/B.
     bool adaptive = false;     // --adaptive: per-core switch -- bulk read when the core is mostly full, else per-risc
     int mpmc = 0;              // --mpmc M: real host pipeline -- 2 per-socket flush+demux threads -> record MPMC
                                // -> M consumer threads (0 = old offline capture+demux path)
@@ -205,7 +207,9 @@ int main(int argc, char** argv) {
         } else if (a == "--bulkcore") {
             bulkcore = true;  // force the lossless bulk path for every core (drains real [head,tail))
         } else if (a == "--dualrelay") {
-            dualrelay = true;
+            dualrelay = true;  // default; kept explicit for clarity
+        } else if (a == "--singlerelay") {
+            dualrelay = false;  // opt out: one shared relay hart (the old funnel) for A/B comparison
         } else if (a == "--adaptive") {
             adaptive = true;
         } else if (a == "--mpmc") {
@@ -383,9 +387,12 @@ int main(int argc, char** argv) {
         }
     }
     if (direct) {
-        printf("[boot] idle up, profstream RUNNING, %llu direct drain hart(s)\n", (unsigned long long)ndrain);
+        printf("[boot] idle up, profzone RUNNING, %llu direct drain hart(s)\n", (unsigned long long)ndrain);
     } else {
-        printf("[boot] idle up, profstream RUNNING, %llu readers + 1 relay\n", (unsigned long long)nread);
+        printf(
+            "[boot] idle up, profzone RUNNING, %llu readers + %llu relay(s)\n",
+            (unsigned long long)nread,
+            (unsigned long long)nrelay);
     }
 
     // ---- host consumer: drain the ONE host ring into a RAW capture buffer as fast as possible; the
