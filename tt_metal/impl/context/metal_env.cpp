@@ -426,19 +426,19 @@ void MetalEnvImpl::initialize_control_plane_impl() {
     }
 }
 
-// Opt-in: when TT_FABRIC_USE_COORDINATOR is set, route the control
-// plane's cross-host fabric-coordination through a SystemCoordinator instead of the raw
-// DistributedContext collectives. Using CollectiveCoordinator here is behaviour-preserving
-// (it wraps the same DistributedContext), so it exercises the injection seam end-to-end under
-// MPI before the gRPC ServiceCoordinator exists. Default (unset) leaves the workload path
-// untouched.
-void MetalEnvImpl::maybe_inject_system_coordinator() {
-    if (control_plane_ == nullptr || std::getenv("TT_FABRIC_USE_COORDINATOR") == nullptr) {
-        return;
+// Opt-in: when TT_FABRIC_USE_COORDINATOR is set, route the control plane's cross-host
+// fabric-coordination through a SystemCoordinator instead of the raw DistributedContext collectives.
+// Using CollectiveCoordinator here is behaviour-preserving (it wraps the same DistributedContext),
+// so it exercises the injection seam end-to-end under MPI before the gRPC ServiceCoordinator exists.
+// The coordinator is passed into the ControlPlane constructor so it is available for construction-time
+// exchanges (physical discovery, intermesh connectivity, per-mesh sub-context registration). Default
+// (unset) returns nullptr, leaving the workload path untouched.
+std::shared_ptr<tt::tt_fabric::coordination::SystemCoordinator> MetalEnvImpl::make_system_coordinator() const {
+    if (std::getenv("TT_FABRIC_USE_COORDINATOR") == nullptr) {
+        return nullptr;
     }
     log_info(tt::LogDistributed, "TT_FABRIC_USE_COORDINATOR set: injecting CollectiveCoordinator into ControlPlane");
-    control_plane_->set_system_coordinator(
-        std::make_shared<tt::tt_fabric::coordination::CollectiveCoordinator>(distributed_context_));
+    return std::make_shared<tt::tt_fabric::coordination::CollectiveCoordinator>(distributed_context_);
 }
 
 void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
@@ -456,7 +456,8 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             this->fabric_tensix_config_,
             this->fabric_udm_mode_,
             this->fabric_router_config_,
-            this->fabric_manager_);
+            this->fabric_manager_,
+            make_system_coordinator());
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             get_cluster(),
@@ -469,9 +470,9 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             this->fabric_tensix_config_,
             this->fabric_udm_mode_,
             this->fabric_router_config_,
-            this->fabric_manager_);
+            this->fabric_manager_,
+            make_system_coordinator());
     }
-    maybe_inject_system_coordinator();
 }
 
 void MetalEnvImpl::construct_control_plane() {
@@ -493,8 +494,8 @@ void MetalEnvImpl::construct_control_plane() {
         this->fabric_tensix_config_,
         this->fabric_udm_mode_,
         this->fabric_router_config_,
-        this->fabric_manager_);
-    maybe_inject_system_coordinator();
+        this->fabric_manager_,
+        make_system_coordinator());
 }
 
 // ─── System mesh ──────────────────────────────────────────────────────────────

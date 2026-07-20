@@ -19,6 +19,10 @@ namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
 
+namespace tt::tt_fabric::coordination {
+class SystemCoordinator;
+}  // namespace tt::tt_fabric::coordination
+
 namespace tt::tt_metal::distributed {
 class SystemMesh;
 }  // namespace tt::tt_metal::distributed
@@ -134,9 +138,9 @@ private:
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
-    // Opt-in (TT_FABRIC_USE_COORDINATOR) injection of a SystemCoordinator into the control
-    // plane; no-op by default. See metal_env.cpp (Option B2-i).
-    void maybe_inject_system_coordinator();
+    // Opt-in (TT_FABRIC_USE_COORDINATOR) factory for a SystemCoordinator passed into the control
+    // plane constructor; returns nullptr by default. See metal_env.cpp (Option B2-i).
+    std::shared_ptr<tt::tt_fabric::coordination::SystemCoordinator> make_system_coordinator() const;
     void initialize_control_plane_impl();
 
     static std::mutex s_registry_mutex_;

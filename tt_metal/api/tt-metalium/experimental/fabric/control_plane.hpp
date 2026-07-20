@@ -105,7 +105,8 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
         FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+        std::shared_ptr<coordination::SystemCoordinator> coordinator = nullptr);
 
     // Create control plane with custom mesh graph descriptor
     explicit ControlPlane(
@@ -119,7 +120,8 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
         FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+        std::shared_ptr<coordination::SystemCoordinator> coordinator = nullptr);
 
     // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
     explicit ControlPlane(
@@ -134,7 +136,8 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
         FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+        std::shared_ptr<coordination::SystemCoordinator> coordinator = nullptr);
 
     ~ControlPlane();
 
@@ -349,10 +352,6 @@ private:
     std::reference_wrapper<const ::tt::tt_metal::Hal> hal_;
     std::reference_wrapper<const tt_metal::distributed::multihost::DistributedContext> distributed_context_;
 
-    // Optional domain-level coordination backend (Option B2-i). Null => legacy
-    // DistributedContext path. See set_system_coordinator().
-    std::shared_ptr<coordination::SystemCoordinator> coordinator_;
-
     // Fabric Settings
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
 
@@ -367,6 +366,11 @@ private:
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
+
+    // Optional domain-level coordination backend (Option B2-i). Null => legacy DistributedContext
+    // path. Injected via the constructor (available for construction-time exchanges) or the
+    // set_system_coordinator() setter. Declared last so the constructor init-list order matches.
+    std::shared_ptr<coordination::SystemCoordinator> coordinator_;
 
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;

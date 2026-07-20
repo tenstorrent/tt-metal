@@ -18,15 +18,22 @@ CollectiveCoordinator::CollectiveCoordinator(std::shared_ptr<DistributedContext>
     TT_FATAL(world_ != nullptr, "CollectiveCoordinator requires a non-null world context");
 }
 
+void CollectiveCoordinator::register_mesh_context(
+    tt::tt_fabric::MeshId mesh_id, std::shared_ptr<DistributedContext> ctx) {
+    TT_FATAL(ctx != nullptr, "register_mesh_context requires a non-null context for mesh {}", *mesh_id);
+    mesh_contexts_[mesh_id] = std::move(ctx);
+}
+
 const CollectiveCoordinator::DistributedContext& CollectiveCoordinator::context_for(const Scope& scope) const {
     if (scope.is_world()) {
         return *world_;
     }
-    // Per-mesh sub-contexts are resolved by ControlPlane::initialize_distributed_contexts today.
-    // In the step-2 "soak" that logic is lifted here (create_sub_context, cached). Until then the
-    // collective backend only serves world scope; the service backend handles mesh scoping via the
-    // controller's known mesh membership.
-    TT_THROW("CollectiveCoordinator: mesh-scoped operations are not yet implemented (draft)");
+    auto it = mesh_contexts_.find(*scope.mesh_id);
+    TT_FATAL(
+        it != mesh_contexts_.end(),
+        "CollectiveCoordinator: no registered context for mesh {} (call register_mesh_context first)",
+        **scope.mesh_id);
+    return *it->second;
 }
 
 bool CollectiveCoordinator::is_distributed() const { return *world_->size() > 1; }

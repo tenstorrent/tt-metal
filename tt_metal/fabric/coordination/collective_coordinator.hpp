@@ -20,6 +20,7 @@
 //
 
 #include <memory>
+#include <unordered_map>
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/system_coordinator.hpp>
@@ -30,10 +31,16 @@ class CollectiveCoordinator final : public SystemCoordinator {
 public:
     using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
-    // `world` is typically MetalContext::global_distributed_context(). For scoped
-    // (per-mesh) operations the coordinator resolves/creates the matching
-    // sub-context on demand, mirroring ControlPlane::initialize_distributed_contexts().
+    // `world` is typically MetalContext::global_distributed_context(). Per-mesh
+    // sub-contexts are supplied via register_mesh_context() (ControlPlane already
+    // builds them in initialize_distributed_contexts()); mesh-scoped ops then
+    // resolve to the registered sub-context.
     explicit CollectiveCoordinator(std::shared_ptr<DistributedContext> world);
+
+    // Register the DistributedContext (sub-communicator) backing a mesh scope.
+    // Called by ControlPlane::initialize_distributed_contexts once the per-mesh
+    // sub-contexts exist. Re-registration overwrites.
+    void register_mesh_context(tt::tt_fabric::MeshId mesh_id, std::shared_ptr<DistributedContext> ctx);
 
     [[nodiscard]] bool is_distributed() const override;
     [[nodiscard]] int participant_count(const Scope& scope) const override;
@@ -55,12 +62,11 @@ public:
 
 private:
     // Resolves the DistributedContext for a scope. World -> world_. Mesh -> the
-    // per-mesh sub-context (built via create_sub_context, cached).
+    // registered per-mesh sub-context.
     const DistributedContext& context_for(const Scope& scope) const;
 
     std::shared_ptr<DistributedContext> world_;
-    // Per-mesh sub-contexts are created lazily and cached here in the full
-    // implementation; omitted from this draft header for brevity.
+    std::unordered_map<tt::tt_fabric::MeshId, std::shared_ptr<DistributedContext>> mesh_contexts_;
 };
 
 }  // namespace tt::tt_fabric::coordination
