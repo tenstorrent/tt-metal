@@ -1,12 +1,12 @@
 # Porting an Op to Metal 2.0 — TTNN Integration
 
-> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the two device-op-class edits the port forces (custom-hash deletion, pybind cleanup). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](port_op_to_metal2_recipe.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
+> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the two device-op-class edits the port forces (custom-hash deletion, pybind cleanup). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](../port/metal2.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
 
 ## Read this first
 
-**Primary audience**: AI agents performing the [audit](port_op_to_metal2_audit.md) on a TTNN op. The audit's final step is to confirm the op fits the Metal 2.0 factory concept and record the choice in the audit report.
+**Primary audience**: AI agents performing the [audit](../audit/metal2.md) on a TTNN op. The audit's final step is to confirm the op fits the Metal 2.0 factory concept and record the choice in the audit report.
 
-**Secondary audience**: AI agents performing the [port](port_op_to_metal2_recipe.md). The port inherits the audit's decision and implements the factory entry point against it. The "Port plan" and "Port report" deliverable sections at the bottom of this document carry the decision forward through the port artifacts.
+**Secondary audience**: AI agents performing the [port](../port/metal2.md). The port inherits the audit's decision and implements the factory entry point against it. The "Port plan" and "Port report" deliverable sections at the bottom of this document carry the decision forward through the port artifacts.
 
 **The division of labor with the recipe.** The recipe owns the *contents* of the artifact — how you build a `ProgramSpec` (kernels, DFBs, semaphores, tensor parameters, work units) and its paired `ProgramRunArgs`. This document owns the *wrapper* — the factory method that returns those two objects to the framework, how the framework caches and dispatches it, and the handful of device-operation-class edits the port forces. When the recipe says "return the artifact," the shape of that return lives here.
 
@@ -62,7 +62,7 @@ The cache key is the op itself — its type, attributes, and tensor args (the fr
 
 ### Extracting the tensor
 
-The factory receives device-resident `ttnn::Tensor`s through `tensor_args` and `tensor_return_value`. **Extract the underlying `MeshTensor` from each at the top of the factory and work with it throughout.** A ProgramFactory builds against Metalium APIs, so its body should hold a Metalium memory object — the `MeshTensor` — rather than the TTNN wrapper. `ttnn::Tensor::mesh_tensor()` returns a `const MeshTensor&` (the rvalue overload is deleted, so call it on the named arguments, never a temporary); extract once at entry and pass `const MeshTensor&` to helpers instead of reaching back through `.mesh_tensor()` at each site. See [migration guide — Factory skeleton](../metal2_migration_guide.md#factory-skeleton) for the worked example and the full tensor-type story.
+The factory receives device-resident `ttnn::Tensor`s through `tensor_args` and `tensor_return_value`. **Extract the underlying `MeshTensor` from each at the top of the factory and work with it throughout.** A ProgramFactory builds against Metalium APIs, so its body should hold a Metalium memory object — the `MeshTensor` — rather than the TTNN wrapper. `ttnn::Tensor::mesh_tensor()` returns a `const MeshTensor&` (the rvalue overload is deleted, so call it on the named arguments, never a temporary); extract once at entry and pass `const MeshTensor&` to helpers instead of reaching back through `.mesh_tensor()` at each site. See [migration guide — Factory skeleton](migration_guide.md#factory-skeleton) for the worked example and the full tensor-type story.
 
 Declare each `TensorParameter` from the tensor's `tensor_spec()`, and reference the same tensor from the paired `TensorArgument` in `ProgramRunArgs::tensor_args`. The adapter matches a `TensorArgument` back to its input by `MeshTensor` identity — so a `TensorArgument` must reference a tensor reachable from the factory's parameters (an io tensor, or one of the `op_owned_tensors`), never a copy. (Constructing or copying a tensor and referencing the copy fails at runtime.)
 
@@ -88,13 +88,13 @@ Op-owned *tensors* are supported on this concept; the remaining gaps — op-owne
 
 Every `TensorParameter` enforces an exact `TensorSpec` match by default. **Don't deviate during a port.** The relaxation infrastructure exists (`TensorParameter::advanced_options`, holding `dynamic_tensor_shape` / `match_padded_shape_only`), and the per-dispatch legality check respects it, but relaxations are a deliberate correctness-sensitive opt-in: the kernel must *actually* tolerate the relaxation, and declaring one the kernel doesn't tolerate is a silent wrong-answer bug. The bias of mistakes favors strict — forgetting to relax is merely slower (narrower cache equivalence, still correct); relaxing incorrectly is wrong output. A port is not the context to make that call. If you notice a kernel that *would* tolerate a relaxation (e.g. padding-only dimension differences), capture it in the port report under "Open items for downstream" — don't bake it into the port.
 
-**The exception is a *known-required* relaxation the docs already call out.** Where a kernel is known to need one, it is flagged for you — the [pre-migration `ArgConfig::Runtime*` check](../metal2_migration_guide.md#tensorparameter) and its op-family heads-ups (e.g. `eltwise` → `dynamic_tensor_shape = true`). Those are faithful mirrors of a relaxation the legacy op *already* declared, not a judgment call you're making. So the rule is two-sided: don't *self-decide* a relaxation, but *do* apply the ones the docs flag as required — follow the hint rather than DIY-ing it (or, conversely, ignoring it).
+**The exception is a *known-required* relaxation the docs already call out.** Where a kernel is known to need one, it is flagged for you — the [pre-migration `ArgConfig::Runtime*` check](migration_guide.md#tensorparameter) and its op-family heads-ups (e.g. `eltwise` → `dynamic_tensor_shape = true`). Those are faithful mirrors of a relaxation the legacy op *already* declared, not a judgment call you're making. So the rule is two-sided: don't *self-decide* a relaxation, but *do* apply the ones the docs flag as required — follow the hint rather than DIY-ing it (or, conversely, ignoring it).
 
 ---
 
 ## Device-operation-class edits the port forces
 
-The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](port_op_to_metal2_recipe.md#scope-discipline)). There are **three** sanctioned exceptions, each forced by the port, each recorded prominently in the port report.
+The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](../port/metal2.md#scope-discipline)). There are **three** sanctioned exceptions, each forced by the port, each recorded prominently in the port report.
 
 ### 1. Delete a custom `compute_program_hash`
 
@@ -108,7 +108,7 @@ Delete it as part of the port. Do **not** patch it to add `TensorSpec` (that pat
 
 ### 2. Remove pybound legacy factory entry points
 
-When the port causes a legacy factory entry point to vanish (`create_program_descriptor` is the canonical case), any pybind line referencing it must be deleted — leaving it would break the post-port build. This is a *user-visible* API surface change: downstream Python consumers (tests, notebooks, internal tooling) may reference the removed entry point. The exception is narrow — it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op. See [Pattern: Removing pybound legacy factory entry points](metal2_port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the procedure, and record the removal in the port report under Handoff points (cite the pybind file, the function name, and what it was for).
+When the port causes a legacy factory entry point to vanish (`create_program_descriptor` is the canonical case), any pybind line referencing it must be deleted — leaving it would break the post-port build. This is a *user-visible* API surface change: downstream Python consumers (tests, notebooks, internal tooling) may reference the removed entry point. The exception is narrow — it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op. See [Pattern: Removing pybound legacy factory entry points](port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the procedure, and record the removal in the port report under Handoff points (cite the pybind file, the function name, and what it was for).
 
 ### 3. Drop a factory parameter that exists only for a pybind hook
 
@@ -179,8 +179,8 @@ If the port stayed on the default concept with no device-op edits, these section
 
 ## Cross-references
 
-- [Audit doc](port_op_to_metal2_audit.md) — the feasibility audit that invokes this document as its final step.
-- [Port recipe](port_op_to_metal2_recipe.md) — builds the `ProgramSpec` + `ProgramRunArgs` this document's factory entry point returns.
-- [Migration guide — Design Principles](../metal2_migration_guide.md#design-principles) — the named-binding model the spec is built on.
+- [Audit doc](../audit/metal2.md) — the feasibility audit that invokes this document as its final step.
+- [Port recipe](../port/metal2.md) — builds the `ProgramSpec` + `ProgramRunArgs` this document's factory entry point returns.
+- [Migration guide — Design Principles](migration_guide.md#design-principles) — the named-binding model the spec is built on.
 - [`ttnn/api/ttnn/operation_concepts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/operation_concepts.hpp) — `MetalV2FactoryConcept` definition in code.
 - [`ttnn/api/ttnn/metal_v2_artifacts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/metal_v2_artifacts.hpp) — `ProgramArtifacts` field layout.
