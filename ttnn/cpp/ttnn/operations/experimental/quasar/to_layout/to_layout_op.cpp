@@ -154,13 +154,6 @@ Tensor to_layout_impl(
 
         if (converting_to_row_major) {
             TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
-            TT_FATAL(
-                tensor.tensor_spec().tile() == tt::tt_metal::Tile{},
-                "ttnn::experimental::quasar::to_layout: device untilize only supports the default tile in this PR");
-        } else if (converting_to_tile) {
-            TT_FATAL(
-                effective_tile == tt::tt_metal::Tile{},
-                "ttnn::experimental::quasar::to_layout: device tilize only supports the default tile in this PR");
         }
 
         if (not requires_padding_change(tensor, layout, effective_tile)) {

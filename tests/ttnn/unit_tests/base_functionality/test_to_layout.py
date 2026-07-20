@@ -1051,46 +1051,6 @@ def test_to_layout_rejects_transpose_only_tile_mismatch(expect_error):
         ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32), transpose_tile=True))
 
 
-def test_to_layout_device_rejects_custom_tilize(device, expect_error):
-    input_tensor = ttnn.from_torch(
-        torch.rand((32, 64), dtype=torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
-    )
-
-    with expect_error(RuntimeError, "device tilize only supports the default tile"):
-        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32)))
-
-
-def test_to_layout_device_rejects_custom_untilize(device, expect_error):
-    tile = ttnn.Tile((16, 32))
-    input_tensor = ttnn.from_torch(
-        torch.rand((32, 64), dtype=torch.bfloat16),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        tile=tile,
-    )
-    input_tensor = ttnn.to_device(input_tensor, device)
-
-    with expect_error(RuntimeError, "device untilize only supports the default tile"):
-        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-
-
-def test_from_torch_device_typecast_preserves_custom_tile(device):
-    tile = ttnn.Tile((16, 32))
-    torch_input_tensor = torch.rand((32, 64), dtype=torch.float32)
-
-    output_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-    )
-
-    assert output_tensor.layout == ttnn.TILE_LAYOUT
-    assert output_tensor.tile == tile
-    assert_equal(torch_input_tensor.to(torch.bfloat16), ttnn.to_torch(output_tensor))
-
-
 # ---------------------------------------------------------------------------
 # to_layout on ND-sharded tensors
 #
