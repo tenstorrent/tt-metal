@@ -247,40 +247,36 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     else:
         ubuntu_version = None
 
-    # Clean up ephemeral runner names
+    # Resolve the host_name for CIv2 (tt-ubuntu) runners. The ephemeral runner identity is
+    # not useful for data analysis since it changes every pod, so prefer the physical
+    # <node name>_<serial> emitted by the job-start hook annotations, falling back to the
+    # job log when annotations are unavailable (e.g. not downloaded).
     if host_name and host_name.startswith("tt-ubuntu"):
-        parts = host_name.split("-")
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/26445
-        # Remove non-constant ephemeral runner suffix from tt-beta/tt-ubuntu runner names only if the second last part is "runner"
-        # We don't want to remove the suffix for non-ephemeral runners (e.g. tt-beta-ubuntu-2204-xlarge)
-        # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
-        if len(parts) >= 2 and parts[-2] == "runner":
-            host_name = "-".join(parts[:-1])
-
-        # For CIv2 runners (tt-ubuntu), the ephemeral runner identity is not useful for data
-        # analysis since it changes every pod. Instead, identify the physical node/card that ran
-        # the job using the <node name>_<serial> emitted by the job-start hook annotations
-        # Fall back to the truncated name above when the
-        # annotations are unavailable (e.g. not downloaded)
-        if host_name.startswith("tt-ubuntu"):
-            node_name, serial = get_civ2_node_name_and_serial_from_annotations(
-                github_job_id_to_annotations.get(github_job_id)
+        node_name, serial = get_civ2_node_name_and_serial_from_annotations(
+            github_job_id_to_annotations.get(github_job_id)
+        )
+        if not (node_name and serial):
+            log_node_name, log_serial = get_civ2_node_name_and_serial_from_job_log(
+                workflow_outputs_dir, github_job["run_id"], github_job_id
             )
-            # When annotations are unavailable, fall back to parsing the job log
-            if not (node_name and serial):
-                log_node_name, log_serial = get_civ2_node_name_and_serial_from_job_log(
-                    workflow_outputs_dir, github_job["run_id"], github_job_id
-                )
-                node_name = node_name or log_node_name
-                serial = serial or log_serial
-            # Prefer <node>_<serial>; if only the node name is available (e.g. CPU-only
-            # runners have no card serial), use the node name alone. Otherwise keep the
-            # truncated name above.
-            if node_name and serial:
-                host_name = f"{node_name}_{serial}"
-            elif node_name:
-                host_name = node_name
+            node_name = node_name or log_node_name
+            serial = serial or log_serial
+
+        if node_name and serial:
+            host_name = f"{node_name}_{serial}"
+        elif node_name:
+            # CPU-only runners have no card serial; the node name alone identifies the host
+            host_name = node_name
+        else:
+            # No node/serial info: strip the non-constant ephemeral suffix so host aggregation
+            # stays stable, but only when the second-last part is "runner" so we don't touch
+            # non-ephemeral runners (e.g. tt-ubuntu-2204-xlarge).
+            # E.g. tt-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-ubuntu-2204-n150-large-stable-nk6pd
+            # Issues: https://github.com/tenstorrent/tt-metal/issues/21694
+            #         https://github.com/tenstorrent/tt-metal/issues/26445
+            parts = host_name.split("-")
+            if len(parts) >= 2 and parts[-2] == "runner":
+                host_name = "-".join(parts[:-1])
 
     # Cleanup GitHub-hosted runner names because we're sending the whole thing, which is unnecessary
     # and clogs up the data with 1000s of hosts
