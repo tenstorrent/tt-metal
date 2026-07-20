@@ -164,6 +164,35 @@ const std::vector<std::shared_ptr<IGraphProcessor>>& GraphTracker::get_processor
 
 const std::shared_ptr<IGraphHooks>& GraphTracker::get_hook() const { return hook; }
 
+CaptureContext GraphTracker::capture_context() const { return CaptureContext{processors, hook}; }
+
+CaptureContext GraphTracker::install_context(CaptureContext context) {
+    CaptureContext previous{std::move(processors), std::move(hook)};
+    processors = std::move(context.processors);
+    hook = std::move(context.hook);
+    return previous;
+}
+
+std::function<void()> GraphTracker::wrap_with_current_context(std::function<void()> task) {
+    // Fast path: no capture active on this thread, so nothing to propagate.
+    // Keeps the dispatch hot path free of extra allocations / copies.
+    if (processors.empty() && hook == nullptr) {
+        return task;
+    }
+    CaptureContext context{processors, hook};
+    return [context = std::move(context), task = std::move(task)]() mutable {
+        auto& tracker = GraphTracker::instance();
+        CaptureContext previous = tracker.install_context(context);
+        // Restore the worker thread's previous state even if `task` throws.
+        struct Restore {
+            GraphTracker& tracker;
+            CaptureContext& previous;
+            ~Restore() { tracker.install_context(std::move(previous)); }
+        } restore{tracker, previous};
+        task();
+    };
+}
+
 void GraphTracker::clear() {
     processors.clear();
     clear_hook();

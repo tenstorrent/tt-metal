@@ -931,7 +931,8 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
 
     for_each_local(mesh_device_, event.device_range(), [&](const auto& coord) {
         dispatch_thread_pool_->enqueue(
-            [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->impl().get_device(coord)->id());
+            GraphTracker::instance().wrap_with_current_context([&dispatch_lambda, coord]() { dispatch_lambda(coord); }),
+            mesh_device_->impl().get_device(coord)->id());
     });
     dispatch_thread_pool_->wait();
     return event;

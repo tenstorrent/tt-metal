@@ -102,6 +102,17 @@ public:
     virtual ~IGraphHooks() = default;
 };
 
+// Snapshot of the per-thread capture state (`processors` + `hook`). Copyable so
+// it can be moved onto a worker thread and installed there for the duration of
+// an offloaded task, letting that thread observe the same capture as the thread
+// that enqueued the work. See GraphTracker::wrap_with_current_context().
+struct CaptureContext {
+    std::vector<std::shared_ptr<IGraphProcessor>> processors;
+    std::shared_ptr<IGraphHooks> hook;
+
+    bool empty() const { return processors.empty() && hook == nullptr; }
+};
+
 // Process-wide singleton that fans out op-dispatch events to registered
 // processors and consults an optional hook to intercept buffer / program
 // operations.
@@ -110,7 +121,18 @@ public:
 //   * The processor stack (`processors`) and `hook` are *per-thread*. A
 //     `push_processor` / capture / `pop_processor` sequence is scoped to the
 //     calling thread; ops dispatched on other threads are not observed by
-//     that capture.
+//     that capture unless the capturing thread's context is explicitly
+//     propagated (see below).
+//   * Work that is offloaded onto worker/dispatch threads while a capture is
+//     active (e.g. multi-threaded MeshWorkload compile, CCL/collective
+//     dispatch) would otherwise run with an empty per-thread `processors`
+//     list and silently drop its events. `wrap_with_current_context()`
+//     snapshots the enqueuing thread's context and installs it on the worker
+//     thread for the duration of the task (restoring the worker's previous
+//     state afterwards). Storage stays per-thread, so this does not
+//     reintroduce the concurrent push/pop race that motivated making
+//     `processors` / `hook` thread_local (#44668); the shared `IGraphProcessor`
+//     is itself internally synchronized.
 //   * `hooked_buffers` is process-wide and guarded by `hooked_buffers_mutex`.
 //     This is the only piece of GraphTracker state that is shared across
 //     threads.
@@ -194,6 +216,22 @@ public:
     const std::vector<std::shared_ptr<IGraphProcessor>>& get_processors() const;
 
     const std::shared_ptr<IGraphHooks>& get_hook() const;
+
+    // Return a copy of the calling thread's capture state (processors + hook).
+    CaptureContext capture_context() const;
+
+    // Replace the calling thread's capture state with `context`, returning the
+    // previous state so a caller can restore it later.
+    CaptureContext install_context(CaptureContext context);
+
+    // Wrap `task` so that, when it later runs (possibly on another thread), the
+    // calling thread's *current* capture context is installed for the duration
+    // of the task and then restored. When no capture is active on the calling
+    // thread this returns `task` unchanged (zero added overhead on the hot
+    // dispatch path). Snapshotting happens now, on the calling thread, so it
+    // must be invoked on the thread that owns the capture (i.e. at enqueue
+    // time, before the work is handed to a worker thread).
+    std::function<void()> wrap_with_current_context(std::function<void()> task);
 
     void clear();
 

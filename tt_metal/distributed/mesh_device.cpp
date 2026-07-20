@@ -18,6 +18,7 @@
 #include <tt_metal.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -435,7 +436,13 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     return mesh_device;
 }
 
-void MeshDeviceImpl::enqueue_to_thread_pool(std::function<void()>&& f) { dispatch_thread_pool_->enqueue(std::move(f)); }
+void MeshDeviceImpl::enqueue_to_thread_pool(std::function<void()>&& f) {
+    // Propagate any active graph-capture context onto the worker thread so that
+    // events fired during offloaded work (e.g. multi-threaded MeshWorkload
+    // compile for CCL/collective ops) are not dropped by the worker's empty
+    // thread-local processor list. No-op when no capture is active.
+    dispatch_thread_pool_->enqueue(GraphTracker::instance().wrap_with_current_context(std::move(f)));
+}
 
 void MeshDeviceImpl::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
 

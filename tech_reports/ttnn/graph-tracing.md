@@ -659,6 +659,8 @@ Circular buffer events for streaming/multi-buffering.
 
 The C++ graph processor does not emit error nodes directly. Instead, the Python importer detects **orphan operations** — `function_start` nodes without a matching `function_end` — and records them as `incomplete_operation` errors. Legacy JSON files with explicit error nodes are also supported.
 
+> **Multi-threaded capture**: The capture state (`GraphTracker`'s `processors` and `hook`) is `thread_local`, so events fired on a thread other than the one that started the capture would be dropped. Operations that offload work onto worker/dispatch threads — notably CCL/collective ops like `all_gather` and multi-threaded `MeshWorkload` compilation — could therefore leave an unbalanced `function_start` and surface as a spurious `incomplete_operation`. To prevent this, tasks handed to the dispatch thread pool are wrapped with `GraphTracker::wrap_with_current_context()`, which snapshots the enqueuing thread's capture context and installs it on the worker thread for the duration of the task (restoring the worker's prior state afterwards). Storage stays per-thread, so this does not reintroduce the concurrent push/pop race that motivated the `thread_local` design.
+
 **Database `errors` table columns:**
 - `operation_id`: The operation where the error was detected
 - `operation_name`: Name of the operation
