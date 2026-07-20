@@ -23,6 +23,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
@@ -56,12 +57,11 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
-            // ----- Phase 1: input_e4m3 row-major -> fp32 row-major (one tile at a time, index 0) -----
+            // ----- Phase 1 (fp32): decode e4m3 -> fp32 row-major, then tilize fp32 -> tile -----
+            // tilize cannot decode e4m3 into a Float32 dest, so decode first via copy_tile.
             reconfig_data_format_srca(cb_input_e4m3_id);
             pack_reconfig_data_format(cb_in_rm_id);
             copy_tile_init(cb_input_e4m3_id);
-            // One input_e4m3 page is one 32x32 row-major tile. A 128-wide block contains
-            // tiles_per_block such pages.
             for (uint32_t s = 0; s < tiles_per_block; ++s) {
                 cb_input_e4m3.wait_front(1);
                 cb_in_rm.reserve_back(1);
@@ -75,7 +75,6 @@ void kernel_main() {
                 cb_input_e4m3.pop_front(1);
             }
 
-            // ----- Phase 2a: tilize fp32 input row-major -> tile -----
             reconfig_data_format_srca(cb_in_rm_id);
             pack_reconfig_data_format(cb_in_tile_id);
             tilize_init(cb_in_rm_id, tiles_per_block, cb_in_tile_id);
@@ -86,39 +85,29 @@ void kernel_main() {
             cb_in_rm.pop_front(tiles_per_block);
             tilize_uninit(cb_in_rm_id, cb_in_tile_id);
 
-            // ----- Phase 2c: block broadcast multiply -----
-            // cb_scale_bcast holds block_ht tiles; tile block_h_idx has column 0 = scale[:, block_h_idx].
+            // ----- Phase 2c+3: broadcast multiply, then untilize straight from DEST -----
+            // The mul writes all tiles_per_block(=4) tiles into DEST (indices 0..3); pack_untilize_dest then
+            // untilizes them to the row-major output in the packer. This removes the separate cb_out_tile
+            // round-trip and the standalone untilize datacopy pass. In 32-bit DEST (fp32_dest_acc), the
+            // half-sync pack-untilize block cap is 4 tiles, which is exactly one 128-wide block.
             reconfig_data_format(cb_in_tile_id, cb_scale_bcast_id);
-            pack_reconfig_data_format(cb_out_tile_id);
             mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_bcast_id);
+            pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_fp32_id);
             cb_in_tile.wait_front(tiles_per_block);
             cb_scale_bcast.wait_front(block_ht);
-            cb_out_tile.reserve_back(tiles_per_block);
-            for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
-                for (uint32_t k = 0; k < block_wt; ++k) {
-                    uint32_t in_idx = block_h_idx * block_wt + k;
-                    tile_regs_acquire();
-                    mul_tiles_bcast_cols(cb_in_tile_id, cb_scale_bcast_id, in_idx, block_h_idx, IDST0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(IDST0, cb_out_tile_id);
-                    tile_regs_release();
-                }
+            cb_out_fp32.reserve_back(tiles_per_block);
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < block_wt; ++k) {
+                mul_tiles_bcast_cols(cb_in_tile_id, cb_scale_bcast_id, k, 0, k);
             }
-            cb_out_tile.push_back(tiles_per_block);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_untilize_dest<tiles_per_block>(cb_out_fp32_id);
+            tile_regs_release();
+            cb_out_fp32.push_back(tiles_per_block);
             cb_in_tile.pop_front(tiles_per_block);
             cb_scale_bcast.pop_front(block_ht);
-
-            // ----- Phase 3: untilize cb_out_tile -> fp32 row-major output -----
-            reconfig_data_format_srca(cb_out_tile_id);
-            pack_reconfig_data_format(cb_out_fp32_id);
-            untilize_init(cb_out_tile_id);
-            cb_out_tile.wait_front(tiles_per_block);
-            cb_out_fp32.reserve_back(tiles_per_block);
-            untilize_block(cb_out_tile_id, tiles_per_block, cb_out_fp32_id);
-            cb_out_fp32.push_back(tiles_per_block);
-            cb_out_tile.pop_front(tiles_per_block);
-            untilize_uninit(cb_out_tile_id);
+            pack_untilize_uninit(cb_out_fp32_id);
         }
     }
 }

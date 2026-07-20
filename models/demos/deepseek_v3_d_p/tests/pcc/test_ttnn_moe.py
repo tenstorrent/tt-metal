@@ -86,6 +86,7 @@ def run_model(
     request,
     is_balanced=False,
     padded_percent=0,
+    use_fp8_compression=False,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -150,6 +151,8 @@ def run_model(
         num_devices,
         dispatch_group_size,
         dispatch_buffer_capacity_factor,
+        emb_dim=emb_dim,
+        fp8_scaled_input=use_fp8_compression,
     )
     logger.debug(f"experts_per_chip={experts_per_chip}, metadata_len={metadata_len}")
     logger.debug(
@@ -345,6 +348,7 @@ def run_model(
         n_limited_groups=config.topk_group,
         route_scale=config.routed_scaling_factor,
         is_balanced=is_balanced,
+        use_fp8_compression=use_fp8_compression,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")

@@ -133,6 +133,7 @@ class TtPrefillTransformer(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only_last_layer: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        use_fp8_compression: bool = False,
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
@@ -218,6 +219,7 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                use_fp8_compression=use_fp8_compression,
             )
             self.layers.append(layer)
 

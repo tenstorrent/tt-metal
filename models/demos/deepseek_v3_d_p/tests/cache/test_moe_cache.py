@@ -69,6 +69,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     # ceil(N/2) of the most conservative integer N such that dgs*seq*N >= theoretical
     # worst-case dispatch buffer. Real traffic never approaches the worst case.
     dispatch_buffer_capacity_factor = 6
+    # Flip to True (Blackhole only) to cache-check the fp8-compressed dispatch path.
+    use_fp8_compression = False
 
     # Compute constants
     num_devices = mesh_device.get_num_devices()
@@ -88,6 +90,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         num_devices,
         dispatch_group_size,
         dispatch_buffer_capacity_factor,
+        emb_dim=emb_dim,
+        fp8_scaled_input=use_fp8_compression,
     )
     total_experts = num_devices * experts_per_chip
 
@@ -151,6 +155,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        use_fp8_compression=use_fp8_compression,
     )
     output1_tt, _ = moe_from_weights(create_input(), return_intermediates=False)
     output1 = to_torch_tp(output1_tt)
@@ -219,6 +224,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        use_fp8_compression=use_fp8_compression,
     )
     profiler.end("cold_load")
     output2_tt, _ = moe_cold(create_input(), return_intermediates=False)
@@ -260,6 +266,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        use_fp8_compression=use_fp8_compression,
     )
     profiler.end("warm_load")
     output3_tt, _ = moe_warm(create_input(), return_intermediates=False)

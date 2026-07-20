@@ -40,13 +40,15 @@ void kernel_main() {
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t face_h = get_compile_time_arg_val(8);
     constexpr uint32_t face_w = get_compile_time_arg_val(9);
+    // Scale is FLOAT32 (4 bytes/elem); the bcast operand keeps the fp32 scale (raw copy, no conversion).
+    constexpr uint32_t scale_elem_shift = 2;  // byte offset -> fp32 word index
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;
-    constexpr uint32_t face_elems = face_h * face_w;                // fp32 per face
+    constexpr uint32_t face_elems = face_h * face_w;                // scale elems per face
     constexpr uint32_t faces_per_row = tile_w / face_w;             // face columns per tile
-    constexpr uint32_t FACE_ROWS = tile_h / face_h;                                         // face rows per tile
-    constexpr uint32_t FACE_ROW_STRIDE_BYTES = faces_per_row * face_elems * sizeof(float);  // per face row
-    constexpr uint32_t FACE_W_BYTES = face_w * sizeof(float);                               // per in-face row
+    constexpr uint32_t FACE_ROWS = tile_h / face_h;                 // face rows per tile
+    constexpr uint32_t FACE_ROW_STRIDE_BYTES = faces_per_row * face_elems * 4;  // fp32 bytes per face row
+    constexpr uint32_t FACE_W_BYTES = face_w * 4;                               // fp32 bytes per in-face row
 
     (void)block_ht;  // kept as a compile-time layout arg for tensor accessor offset stability
 
@@ -120,31 +122,34 @@ void kernel_main() {
         noc.async_read_barrier();
 
         // --- build the bcast operand: column 0 row r = scale[token_r][block_r] (face-aware walk) ---
-        // (tok_off, block_idx_b) cursor walks the block rows in face order -> no per-row div/mod.
+        // (tok_off, block_idx_b) cursor walks the block rows in face order -> no per-row div/mod. The
+        // operand keeps the fp32 scale (raw copy, no conversion), so the multiply's SrcB matches the
+        // fp32 input tile.
         cb_scale_bcast_obj.reserve_back(1);
-        CoreLocalMem<volatile uint32_t> scratch_mem(scratch);
-        CoreLocalMem<volatile uint32_t> page(cb_scale_bcast_obj.get_write_ptr());
-        uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
-        uint32_t block_idx_b = block_start_idx;
-        uint32_t s = 0;
-        uint32_t face_base_off = 0;
-        for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
-            uint32_t col0_off = face_base_off;
-            for (uint32_t r = 0; r < face_h; ++r) {
-                if (s < real_in_block) {
-                    uint32_t val = scratch_mem[(tok_off >> 2) + block_idx_b];
-                    page[col0_off >> 2] = val;
-                    ++block_idx_b;
-                    if (block_idx_b >= blocks_per_row) {
-                        block_idx_b = 0;
-                        tok_off += scale_aligned_page_bytes;
+        const uint32_t page_ptr = cb_scale_bcast_obj.get_write_ptr();
+        auto build_bcast = [&](auto scratch_mem, auto page) {
+            uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
+            uint32_t block_idx_b = block_start_idx;
+            uint32_t s = 0;
+            uint32_t face_base_off = 0;
+            for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+                uint32_t col0_off = face_base_off;
+                for (uint32_t r = 0; r < face_h; ++r) {
+                    if (s < real_in_block) {
+                        page[col0_off >> scale_elem_shift] = scratch_mem[(tok_off >> scale_elem_shift) + block_idx_b];
+                        ++block_idx_b;
+                        if (block_idx_b >= blocks_per_row) {
+                            block_idx_b = 0;
+                            tok_off += scale_aligned_page_bytes;
+                        }
                     }
+                    col0_off += FACE_W_BYTES;
+                    ++s;
                 }
-                col0_off += FACE_W_BYTES;
-                ++s;
+                face_base_off += FACE_ROW_STRIDE_BYTES;
             }
-            face_base_off += FACE_ROW_STRIDE_BYTES;
-        }
+        };
+        build_bcast(CoreLocalMem<volatile uint32_t>(scratch), CoreLocalMem<volatile uint32_t>(page_ptr));
         cb_scale_bcast_obj.push_back(1);
         cb_input_e4m3_obj.push_back(tiles_per_block);
     }

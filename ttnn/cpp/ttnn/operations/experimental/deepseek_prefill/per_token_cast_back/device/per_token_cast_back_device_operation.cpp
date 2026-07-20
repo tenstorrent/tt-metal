@@ -59,7 +59,8 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         "per_token_cast_back: input_e4m3 dtype must be FP8_E4M3");
     TT_FATAL(
         input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "per_token_cast_back: input_scale dtype must be FLOAT32");
+        "per_token_cast_back: input_scale dtype must be FLOAT32, got {}",
+        input_scale.dtype());
     const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
