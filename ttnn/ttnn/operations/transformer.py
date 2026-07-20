@@ -7,6 +7,7 @@ from typing import Optional
 import ttnn
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
+PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
 
 
 def _golden_function(

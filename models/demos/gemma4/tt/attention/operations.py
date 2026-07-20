@@ -271,7 +271,7 @@ def chunked_prefill_sdpa(
         cache_block_size = k_cache.padded_shape[2]
         cache_num_kv_heads = k_cache.padded_shape[1]
         if eff_bs != cache_block_size or num_kv_heads != cache_num_kv_heads:
-            paged_cache_geometry = ttnn.transformer.PagedCacheGeometryOverride(
+            paged_cache_geometry = ttnn.PagedCacheGeometryOverride(
                 block_size=eff_bs,
                 num_kv_heads=num_kv_heads,
             )

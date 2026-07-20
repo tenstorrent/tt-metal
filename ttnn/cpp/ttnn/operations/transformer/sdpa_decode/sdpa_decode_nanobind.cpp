@@ -95,7 +95,7 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         // Read the K/V cache through a different (block_size, num_kv_heads, head_dim) view
         // than its declared shape; needed for vLLM's shared kv-cache groups. Same type as
-        // chunked prefill SDPA. See ttnn.transformer.PagedCacheGeometryOverride.
+        // chunked prefill SDPA. See ttnn.PagedCacheGeometryOverride.
         nb::arg("paged_cache_geometry") = nb::none(),
         // cache_position_modulo (in tokens) treats the cache as a circular buffer:
         // every page_table lookup uses cur_pos % cache_position_modulo. Required when

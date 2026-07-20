@@ -527,7 +527,7 @@ def test_chunked_sdpa_geometry_override_hma_shared_buffer(device):
             start,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
-            paged_cache_geometry=ttnn.transformer.PagedCacheGeometryOverride(
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
                 block_size=block_size,
                 num_kv_heads=nkv_view,
             ),
@@ -584,7 +584,7 @@ def test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch(device,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             # 1*32*256 != 2*64*128
-            paged_cache_geometry=ttnn.transformer.PagedCacheGeometryOverride(
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
                 block_size=32,
                 num_kv_heads=1,
             ),
