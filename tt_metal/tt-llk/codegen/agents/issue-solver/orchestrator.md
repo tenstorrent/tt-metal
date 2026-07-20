@@ -202,6 +202,7 @@ export GIT_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || 
 export CODEGEN_VERSION=$(tr -d '[:space:]' < codegen/agents/issue-solver/VERSION 2>/dev/null || echo "")
 export COMPILATION_ATTEMPTS=0
 export DEBUG_CYCLES=0
+export MAX_DEBUG_CYCLES=5
 export TESTS_TOTAL=0
 export TESTS_PASSED=0
 export PERF_RETRIES=0
@@ -445,9 +446,13 @@ The tester must write `${LOG_DIR}/agent_tester.md` and report one of:
 
 Parse the tester report and update `TESTS_TOTAL` / `TESTS_PASSED` when counts are available. If the tester only reports a single command-level verdict, record `TESTS_TOTAL=1` and `TESTS_PASSED=1` for `SUCCESS`, otherwise `TESTS_PASSED=0`.
 
-## Step 5: Debug Once, Then Re-test
+## Step 5: Debug and Re-test
 
-If the tester returns `COMPILE_FAILED` or `TESTS_FAILED`, record the failure and spawn `issue-worker.md` once more in debug/retry mode:
+If the tester returns `COMPILE_FAILED` or `TESTS_FAILED`, enter the debug/retry
+loop: spawn `issue-worker.md` in debug/retry mode, re-run Step 4, and repeat
+while the tester stays red — up to `MAX_DEBUG_CYCLES` (default 5) worker attempts.
+
+On each failing cycle, record the failure and spawn the retry worker:
 
 ```bash
 python codegen/scripts/run_json_writer.py failure \
@@ -461,13 +466,19 @@ python codegen/scripts/run_json_writer.py failure \
 python codegen/scripts/run_json_writer.py advance \
   --log-dir "$LOG_DIR" \
   --new-step "fix_tests" \
-  --new-message "Debugging test or compile failure for issue #${ISSUE_NUMBER}" \
+  --new-message "Debugging test or compile failure for issue #${ISSUE_NUMBER} (attempt $((DEBUG_CYCLES+1))/${MAX_DEBUG_CYCLES})" \
   --prev-result "test_failure" \
   --prev-message "$FAILURE_SUMMARY" \
   --agent "tester"
 ```
 
-The retry worker reads the existing plan plus tester evidence, patches the implementation or updates the plan scope when evidence supports that, and writes `${LOG_DIR}/agent_issue_worker_debug.md`. After it returns, increment `DEBUG_CYCLES`, then re-run Step 4 once. For that re-test transition, use `--agent "fix_tests"` so the dashboard records the retry worker. If the second tester run is still red, finalize as `failed` with the tester/worker evidence. If the worker returns `HYPOTHESIS_REFUTED`, finalize as `failed` with that evidence instead of looping.
+The retry worker reads the existing plan plus tester evidence, patches the implementation or updates the plan scope when evidence supports that, and writes `${LOG_DIR}/agent_issue_worker_debug.md`. After it returns, increment `DEBUG_CYCLES`, then re-run Step 4. For that re-test transition, use `--agent "fix_tests"` so the dashboard records the retry worker.
+
+Repeat the loop while the tester is still red and `DEBUG_CYCLES < MAX_DEBUG_CYCLES`. Terminate the loop when:
+
+- the tester returns `SUCCESS` — proceed to Step 5.3;
+- `DEBUG_CYCLES == MAX_DEBUG_CYCLES` and the tester is still red — finalize as `failed` with the tester/worker evidence;
+- the worker returns `HYPOTHESIS_REFUTED` — finalize as `failed` with that evidence instead of continuing to loop.
 
 Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Finalize as `failed` unless the caller explicitly reruns with `TEST_BACKEND=local`.
 
