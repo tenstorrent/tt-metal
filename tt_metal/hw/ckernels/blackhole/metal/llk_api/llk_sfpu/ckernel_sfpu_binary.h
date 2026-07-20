@@ -115,6 +115,11 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
             v_endif;
         }
 
+        if constexpr (
+            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en) {
+            result = float32_to_bf16_rne(result);
+        }
+
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
