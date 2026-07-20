@@ -125,15 +125,14 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    uint32_t num_rows = operation_attributes.output_padded_shape[-1];
-    uint32_t inner_dim = operation_attributes.output_padded_shape[-2];
+    const uint32_t height = operation_attributes.output_padded_shape[-2];
+    const uint32_t width = operation_attributes.output_padded_shape[-1];
     TT_FATAL(
-        inner_dim % operation_attributes.tile.get_width() == 0 &&
-            num_rows % operation_attributes.tile.get_height() == 0,
+        height % operation_attributes.tile.get_height() == 0 && width % operation_attributes.tile.get_width() == 0,
         "To be tilizable output tensor shape {} must be divisible by tile size ({}, {})",
         operation_attributes.output_padded_shape,
-        operation_attributes.tile.get_width(),
-        operation_attributes.tile.get_height());
+        operation_attributes.tile.get_height(),
+        operation_attributes.tile.get_width());
 
     const uint32_t alignment_requirement = hal::get_l1_alignment();
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||

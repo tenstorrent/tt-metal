@@ -53,6 +53,10 @@ ttnn::Tensor tilize(
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids,
     tt::tt_metal::Tile tile) {
+    TT_FATAL(
+        tile == tt::tt_metal::Tile{},
+        "Custom tile is not supported for tilize, please use `tt::tt_metal::to_tile_layout` on host tensor instead.");
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
