@@ -11,9 +11,12 @@ it says where M3's config / weights / trace live and how to build its runtime; a
 
 M3 subclasses ``PrefillModelAdapter`` directly (not the DeepSeek MLA base): it is a different
 architecture (GQA + block-sparse MSA) with a REGULAR TP-head-sharded triple KV cache (K / V / index_k),
-not the DeepSeek merged/replicated kvpe cache. Only single-rank prefill is wired — no pipeline (D2D).
-KV-chunk-table migration IS wired: the multi-tensor cache is described by a multi-config table (one
-config per (tensor, head-shard); see ``tt/runners/kv_chunk_table.py``).
+not the DeepSeek merged/replicated kvpe cache. Single-rank AND pipeline-parallel (multi-galaxy D2D)
+prefill are wired: the runtime slices the model by rank (first_layer_idx / is_first_rank / is_last_rank),
+and the D2D activation ships emb-replicated across TP (pipeline_activation_emb_tp_sharded=False) to match
+M3's SP residual layout. KV-chunk-table migration IS wired for the single-rank case: the multi-tensor
+cache is described by a multi-config table (one config per (tensor, head-shard); see
+``tt/runners/kv_chunk_table.py``); pipelined migration is not yet wired (same limit as DeepSeek).
 
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
@@ -79,6 +82,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
 
     l1_small_size = 0
 
+    # M3's sequence-parallel residual keeps the full embedding on every TP col (emb replicated, seq
+    # SP-sharded), so the D2D hidden state ships emb-replicated across TP.
+    pipeline_activation_emb_tp_sharded = False
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------
@@ -142,7 +149,15 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         force_load = os.environ.get("M3_FORCE_LOAD_WEIGHTS") == "1"
         cache_only = not force_load and (
             os.environ.get("M3_WEIGHTS_FROM_CACHE") == "1"
-            or weight_cache_is_complete(cache_path, hf_config, params.num_layers, expert_dtype)
+            or weight_cache_is_complete(
+                cache_path,
+                hf_config,
+                params.num_layers,
+                expert_dtype,
+                first_layer_idx=params.first_layer_idx,
+                is_first_rank=params.is_first_rank,
+                is_last_rank=params.is_last_rank,
+            )
         )
         if cache_only:
             logger.info(f"[minimax_m3] tilized weight cache complete at {cache_path}; loading from cache")

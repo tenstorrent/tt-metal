@@ -46,9 +46,22 @@ def _is_sparse_layer(hf_config, layer_idx: int) -> bool:
     return bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
 
 
-def weight_cache_is_complete(weight_cache_path, hf_config, num_layers: int, expert_weight_dtype) -> bool:
-    """True iff the tilized cache at ``weight_cache_path`` holds every tensor the model builds for
-    layers 0..num_layers-1 (so the caller may pass an empty state_dict and skip the bf16 source read).
+def weight_cache_is_complete(
+    weight_cache_path,
+    hf_config,
+    num_layers: int,
+    expert_weight_dtype,
+    first_layer_idx: int = 0,
+    is_first_rank: bool = True,
+    is_last_rank: bool = True,
+) -> bool:
+    """True iff the tilized cache at ``weight_cache_path`` holds every tensor the model builds for THIS
+    instance's slice (so the caller may pass an empty state_dict and skip the bf16 source read).
+
+    Layers are checked at GLOBAL indices ``first_layer_idx .. first_layer_idx+num_layers-1`` (cache keys are
+    global). A pipeline rank builds the embedding only on the first rank and the final norm + LM head only
+    on the last, so those top-level tensors are required only for the rank that loads them. All defaults =>
+    single-rank (embed + all layers 0..num_layers-1 + norm + LM head), unchanged.
 
     Conservative: a missing file returns False (the caller then loads weights normally — slow but
     correct). A populated cache returns True quickly (one directory walk)."""
@@ -75,10 +88,16 @@ def weight_cache_is_complete(weight_cache_path, hf_config, num_layers: int, expe
 
     use_qk_norm = bool(getattr(hf_config, "use_qk_norm", True))
 
-    # Top-level (embed / final norm / lm head).
-    required = ["model.embed_tokens.weight", "lm_head_padded_pow2.weight", "norm/weight"]
+    # Top-level tensors are rank-scoped: embed only on the first rank, final norm + LM head only on the
+    # last (a middle rank builds neither and never loads them).
+    required = []
+    if is_first_rank:
+        required.append("model.embed_tokens.weight")
+    if is_last_rank:
+        required += ["lm_head_padded_pow2.weight", "norm/weight"]
 
-    for L in range(num_layers):
+    for local_L in range(num_layers):
+        L = first_layer_idx + local_L  # GLOBAL layer index — cache keys are global
         base = f"model.layers.{L}"
         required += [
             f"{base}/input_layernorm/weight",

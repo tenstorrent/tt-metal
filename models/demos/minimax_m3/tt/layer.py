@@ -32,7 +32,10 @@ class DecoderLayer:
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
         sequence_parallel=False,
+        cache_layer_idx=None,
     ):
+        # layer_idx is global (weights + dense/MoE/sparse selection); cache_layer_idx is the local index
+        # for the KV-cache slot (None => single-rank, equal to layer_idx).
         self.input_layernorm = RMSNorm(
             mesh_device,
             hf_config,
@@ -133,7 +136,8 @@ class DecoderLayer:
             ccl_manager=ccl_manager,
             mesh_config=mesh_config,
             program_config=attention_program_config,
-            layer_idx=layer_idx,
+            global_layer_idx=layer_idx,
+            local_layer_idx=cache_layer_idx,
             transformation_mats=transformation_mats,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
         )
