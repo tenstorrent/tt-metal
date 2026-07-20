@@ -1357,6 +1357,23 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
             }
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
+            // Diagnostic: print kernel names so the failing op can be identified.
+            std::string kernel_names;
+            for (const auto &km : this->kernels_) {
+                for (const auto &[kid, kernel] : km) {
+                    if (!kernel_names.empty())
+                        kernel_names += ", ";
+                    kernel_names += kernel->name();
+                }
+            }
+            fprintf(
+                stderr,
+                "[CB_CLASH] program=%lu cores=%s L1_buf=%lu cb_end=%lu kernels=[%s]\n",
+                (unsigned long)this->id,
+                cb_allocator.core_range.str().c_str(),
+                (unsigned long)lowest_address.value(),
+                (unsigned long)cb_region_end,
+                kernel_names.c_str());
             TT_THROW(
                 "Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer "
                 "allocated at {} and static circular buffer region ends at {}",

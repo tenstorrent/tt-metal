@@ -564,7 +564,9 @@ static uint32_t get_tilize_cycles_per_tile(
 
     auto output_it = input_it->second.find(output_dtype);
     if (output_it == input_it->second.end()) {
-        TT_THROW("Unsupported output data type when calculating tilize cycles");
+        // BFP4/BFP2 and other compressed formats not in table: return 0 as
+        // sentinel so caller (is_split_reader_viable) can disable split reader.
+        return 0;
     }
 
     return output_it->second[fp32_dest_acc ? 1 : 0];
@@ -668,8 +670,13 @@ bool is_split_reader_viable(
 
     // Calculate tilization cost in cycles (get_tilize_cycles_per_tile already returns cycles per tile)
     const uint32_t total_tiles = act_block_w_ntiles * act_block_h_ntiles;
-    const float tilize_cycles =
-        get_tilize_cycles_per_tile(arch, halo_datatype, output_datatype, fp32_dest_acc) * total_tiles;
+    const uint32_t tilize_cycles_per_tile =
+        get_tilize_cycles_per_tile(arch, halo_datatype, output_datatype, fp32_dest_acc);
+    if (tilize_cycles_per_tile == 0) {
+        // Unsupported output dtype (e.g. BFP4/BFP2): disable split reader.
+        return false;
+    }
+    const float tilize_cycles = static_cast<float>(tilize_cycles_per_tile) * total_tiles;
 
     // Compare scenarios:
     // Single reader: max(activation_cycles + tilize_cycles, weight_cycles)
