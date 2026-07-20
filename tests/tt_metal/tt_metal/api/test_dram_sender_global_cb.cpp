@@ -10,7 +10,10 @@
 
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <exception>
+#include <cstdlib>
+#include <iterator>
+#include <memory>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -19,6 +22,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/buffers/dram_sender_state_block.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"  // DramConfig
@@ -55,6 +60,104 @@ protected:
     distributed::MeshDevice* mesh_device_{};
     IDevice* device_{};
 };
+
+class DramSenderGCBMultiDeviceFixture : public MeshDispatchFixture {
+protected:
+    void SetUp() override {
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+            GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE=1";
+        }
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "Requires Blackhole";
+        }
+
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const auto& available_ids = cluster.user_exposed_chip_ids();
+        if (available_ids.size() < 2) {
+            GTEST_SKIP() << "Requires at least two devices";
+        }
+        std::vector<ChipId> device_ids(available_ids.begin(), std::next(available_ids.begin(), 2));
+        mesh_device_ = distributed::MeshDevice::create(
+            distributed::MeshDeviceConfig(distributed::MeshShape{1, 2}, std::nullopt, device_ids));
+        if (!MetalContext::instance(mesh_device_->impl().get_context_id())
+                 .hal()
+                 .has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            GTEST_SKIP() << "DRAM programmable cores not enabled";
+        }
+    }
+
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+};
+
+TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopology) {
+    constexpr uint32_t kGcbSize = 1024;
+    constexpr uint32_t kBankId = 0;
+    constexpr uint32_t kNumReceivers = 2;
+    CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
+        *mesh_device_, {{kBankId, receiver_cores}}, kGcbSize, BufferType::L1, /*dual_senders_per_bank=*/true);
+    ASSERT_EQ(gcb.sender_receiver_core_mapping().size(), kNumReceivers);
+
+    const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+    const uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    const uint64_t sender_state_addr =
+        dram_l1_noc_offset + static_cast<uint64_t>(experimental::sender_state_drisc_l1_base(gcb));
+    const auto receiver_logical_cores =
+        corerange_to_cores(receiver_cores, /*max_cores=*/std::nullopt, /*row_wise=*/true);
+
+    for (IDevice* device : mesh_device_->get_devices()) {
+        const std::vector<CoreCoord> device_senders = mesh_device_->impl().dram_sender_logical_cores(device, kBankId);
+        ASSERT_EQ(device_senders.size(), kNumReceivers);
+
+        for (uint32_t sender_role = 0; sender_role < kNumReceivers; ++sender_role) {
+            const CoreCoord expected_sender_virtual =
+                device->virtual_core_from_logical_core(device_senders[sender_role], CoreType::DRAM);
+
+            // Each receiver's config page stores the NOC XY to increment when returning
+            // pages_acked credits. With dual senders and two receivers, role s owns receiver s.
+            std::vector<uint32_t> receiver_config;
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device,
+                receiver_logical_cores[sender_role],
+                gcb.config_address(),
+                10 * sizeof(uint32_t),
+                receiver_config,
+                CoreType::WORKER);
+            ASSERT_GE(receiver_config.size(), 10u);
+            EXPECT_EQ(receiver_config[8], expected_sender_virtual.x)
+                << "device " << device->id() << ", sender role " << sender_role;
+            EXPECT_EQ(receiver_config[9], expected_sender_virtual.y)
+                << "device " << device->id() << ", sender role " << sender_role;
+
+            const CoreCoord expected_receiver_phys =
+                device->worker_core_from_logical_core(receiver_logical_cores[sender_role]);
+            const size_t sender_state_size = sizeof(DramSenderStateBlock) + 2 * sizeof(uint32_t);
+            std::vector<uint8_t> sender_state_bytes(sender_state_size, 0);
+            MetalContext::instance(mesh_device_->impl().get_context_id())
+                .get_cluster()
+                .read_core(
+                    sender_state_bytes.data(),
+                    sender_state_bytes.size(),
+                    tt_cxy_pair(device->id(), expected_sender_virtual),
+                    sender_state_addr);
+            const auto* sender_state = reinterpret_cast<const DramSenderStateBlock*>(sender_state_bytes.data());
+            EXPECT_EQ(sender_state->num_receivers, 1u);
+            const auto* receiver_xy =
+                reinterpret_cast<const uint32_t*>(sender_state_bytes.data() + sizeof(DramSenderStateBlock));
+            EXPECT_EQ(receiver_xy[0], expected_receiver_phys.x)
+                << "device " << device->id() << ", sender role " << sender_role;
+            EXPECT_EQ(receiver_xy[1], expected_receiver_phys.y)
+                << "device " << device->id() << ", sender role " << sender_role;
+        }
+    }
+}
 
 TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     // Layout: 4 receivers, each receives one 64-byte page.

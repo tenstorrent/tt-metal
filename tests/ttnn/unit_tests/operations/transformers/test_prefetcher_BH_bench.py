@@ -64,9 +64,7 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip(
-            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
-        )
+        pytest.skip("programmable DRAM cores unavailable (need Blackhole and firmware >= 19.12.0.0)")
 
 
 def _select_num_dram_banks(available_banks: int) -> int:

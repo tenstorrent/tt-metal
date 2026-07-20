@@ -30,6 +30,7 @@ from models.tt_transformers.tt.prefetcher import (
 )
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 
 def round_up(n, multiple):
@@ -581,6 +582,66 @@ def run_prefetcher_all_matmuls(
 # =============================================================================
 # Test Cases
 # =============================================================================
+@pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
+    """Minimal public-API data-flow test for per-device harvested DRAM sender placement."""
+    if not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
+        pytest.skip("programmable DRAM cores unavailable (need Blackhole and firmware >= 19.12.0.0)")
+
+    num_dram_banks = mesh_device.dram_grid_size().x
+    ring_size = num_dram_banks
+    K = 448
+    K_padded = round_up(K, ring_size * ttnn.TILE_SIZE)
+    n_tiles_per_receiver = 8
+    N = num_dram_banks * n_tiles_per_receiver * ttnn.TILE_SIZE
+    k_block_w_tiles = (K_padded // ttnn.TILE_SIZE) // ring_size
+    push_page_size = k_block_w_tiles * n_tiles_per_receiver * 2048  # bfloat16 tile bytes
+
+    torch.manual_seed(0xC0FFEE)
+    pt_weight = torch.zeros(1, 1, K_padded, N)
+    pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
+    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+    weight_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_grid,
+            [K_padded, N // num_dram_banks],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_weight = ttnn.as_tensor(
+        pt_weight,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=weight_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    bank_to_receivers = [
+        (
+            bank,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0))}),
+        )
+        for bank in range(num_dram_banks)
+    ]
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        mesh_device, bank_to_receivers, 4 * push_page_size
+    )
+
+    with tensor_prefetcher_session(mesh_device):
+        ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            mesh_device,
+            tt_weight,
+            num_layers=1,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+        )
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
 @pytest.mark.parametrize("enable_trace", [True])
 @pytest.mark.parametrize(
