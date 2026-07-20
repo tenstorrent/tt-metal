@@ -66,11 +66,12 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - UINT16, UINT32
+                    * - UINT16, UINT32, INT32
                       - TILE
 
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
-                The :attr:`output_index_tensor` will be UINT16 if the dimension size is less than or equal to 65535, otherwise it will be UINT32. It will be in TILE layout.
+                The :attr:`output_index_tensor` will be in TILE layout. Its data type is UINT16 or UINT32 by default (chosen
+                based on the reduced dimension size), or matches the preallocated index tensor dtype (UINT16, UINT32, or INT32) when one is provided.
 
             Memory Support:
                 - Interleaved: DRAM and L1

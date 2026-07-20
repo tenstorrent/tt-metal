@@ -80,8 +80,15 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Data format configuration for all circular buffers
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
-    const tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
-    const bool is32_bit_data = index_cb_data_format == tt::DataFormat::UInt32;
+    tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
+    const bool is32_bit_data =
+        index_cb_data_format == tt::DataFormat::UInt32 || index_cb_data_format == tt::DataFormat::Int32;
+    // The sort datapath handles 32-bit indices as UInt32. INT32 shares the same 4-byte little-endian layout for
+    // the non-negative positions TopK produces, so run the compute in UInt32 and let the writer copy the raw tile
+    // bytes into the (INT32-typed) output buffer unchanged.
+    if (index_cb_data_format == tt::DataFormat::Int32) {
+        index_cb_data_format = tt::DataFormat::UInt32;
+    }
 
     // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
     // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
@@ -450,13 +457,15 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
     };
-
     KernelDescriptor compute_local_desc;
     compute_local_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp";
     compute_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
+    // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
+    // survive the transpose/sort datapath without truncation.
     compute_local_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = is32_bit_data,
         .dst_full_sync_en = false,
     };
 
@@ -479,13 +488,15 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
     };
-
     KernelDescriptor compute_final_desc;
     compute_final_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp";
     compute_final_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     compute_final_desc.compile_time_args = compute_args_final;
+    // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
+    // survive the merge datapath without truncation.
     compute_final_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = is32_bit_data,
         .dst_full_sync_en = false,
     };
 

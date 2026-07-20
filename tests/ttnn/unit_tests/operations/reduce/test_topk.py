@@ -351,7 +351,7 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tensor_dtype, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # allow-pytest.raises: invalid dtypes raise distinct validation errors
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
 
 
@@ -361,7 +361,6 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
         (ttnn.float32, ttnn.uint16),
         (ttnn.uint32, ttnn.uint16),
         (ttnn.int32, ttnn.uint16),
-        (ttnn.bfloat16, ttnn.int32),
         (ttnn.bfloat16, ttnn.float32),
         (ttnn.bfloat16, ttnn.bfloat16),
     ],
@@ -376,5 +375,55 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
     value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
     index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # allow-pytest.raises: invalid dtype combos raise distinct validation errors
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W, dim, k",
+    (
+        (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
+        (1, 1, 32, 4096, 3, 32),  # larger dim, still single-core
+        (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
+    ),
+)
+@pytest.mark.parametrize("index_dtype", (ttnn.int32, ttnn.uint32))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_int32_indices(N, C, H, W, dim, k, index_dtype, largest, device):
+    # Exercises 32-bit (UINT32/INT32) index outputs on both the single-core and multi-core paths.
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+
+    input = torch.randn(shape, dtype=torch.bfloat16) * 0.9
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    pyt_topk_values, _ = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
+
+    # Preallocate the value and (int32/uint32) index output tensors.
+    out_shape = shape.copy()
+    out_shape[dim] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), index_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input,
+        k,
+        dim=dim,
+        largest=largest,
+        sorted=True,
+        output_tensor=(value_tensor, index_tensor),
+    )
+
+    assert ttnn_indices.dtype == index_dtype
+
+    # The index dtype does not change which elements are selected; validate that the returned
+    # indices point at the correct top-k values (gather + cosine similarity, as in run_topk_test).
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32)
+    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
+    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
