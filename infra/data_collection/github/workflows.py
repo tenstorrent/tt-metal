@@ -393,6 +393,29 @@ _CIV2_NODE_NAME_LOG_MARKER = "is running on Kubernetes node:"
 _CIV2_SERIAL_LOG_MARKER = "serial number(s):"
 
 
+def get_civ2_node_name_and_serial_from_annotations(annotation_info):
+    """Extract the (node_name, serial) a CIv2 runner emitted at job start.
+
+    CIv2 runners emit GitHub Actions notice annotations at job start
+    (see tenstorrent/github-ci-infra#1408):
+        ::notice title=k8s-node-name::CIV2 runner <name> is running on Kubernetes node: <node>
+        ::notice title=tt-card-serial::CIV2 runner <name> has serial number(s): <serial>
+
+    Returns (node_name, serial), each None if its annotation is absent (e.g. CPU-only
+    runners have no card serial).
+    """
+    node_name, serial = None, None
+    for _annot in annotation_info or []:
+        title = _annot.get("title") or ""
+        message = _annot.get("message") or ""
+        if title == "k8s-node-name" and "Kubernetes node:" in message:
+            node_name = message.rsplit("Kubernetes node:", 1)[-1].strip() or None
+        elif title == "tt-card-serial" and _CIV2_SERIAL_LOG_MARKER in message:
+            serial = message.rsplit(_CIV2_SERIAL_LOG_MARKER, 1)[-1].strip() or None
+    logger.info(f"Extracted node name and serial from annotations: {node_name}, {serial}")
+    return node_name, serial
+
+
 def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_run_id: int, github_job_id: int):
     """Fallback parser for the CIv2 (node_name, serial) read from the job log.
 

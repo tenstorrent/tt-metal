@@ -14,6 +14,7 @@ from loguru import logger
 
 from infra.data_collection.github.workflows import (
     is_job_hanging_from_job_log,
+    get_civ2_node_name_and_serial_from_annotations,
     get_civ2_node_name_and_serial_from_job_log,
 )
 from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityErrorV1
@@ -211,29 +212,6 @@ def get_failure_signature_and_description_from_annotations(
                     )
                     return failure_signature, failure_description
     return failure_signature, failure_description
-
-
-def get_civ2_node_name_and_serial_from_annotations(annotation_info):
-    """Extract the (node_name, serial) a CIv2 runner emitted at job start.
-
-    CIv2 runners emit GitHub Actions notice annotations at job start
-    (see tenstorrent/github-ci-infra#1408):
-        ::notice title=k8s-node-name::CIV2 runner <name> is running on Kubernetes node: <node>
-        ::notice title=tt-card-serial::CIV2 runner <name> has serial number(s): <serial>
-
-    Returns (node_name, serial), each None if its annotation is absent (e.g. CPU-only
-    runners have no card serial).
-    """
-    node_name, serial = None, None
-    for _annot in annotation_info or []:
-        title = _annot.get("title") or ""
-        message = _annot.get("message") or ""
-        if title == "k8s-node-name" and "Kubernetes node:" in message:
-            node_name = message.rsplit("Kubernetes node:", 1)[-1].strip() or None
-        elif title == "tt-card-serial" and "serial number(s):" in message:
-            serial = message.rsplit("serial number(s):", 1)[-1].strip() or None
-    logger.info(f"Extracted node name and serial from annotations: {node_name}, {serial}")
-    return node_name, serial
 
 
 def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workflow_outputs_dir):

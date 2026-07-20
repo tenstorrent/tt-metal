@@ -7,7 +7,6 @@ from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.github.utils import (
     get_job_failure_signature_,
     get_job_row_from_github_job,
-    get_civ2_node_name_and_serial_from_annotations,
     _card_type_from_job_labels,
     _generic_runner_labels,
     _load_sku_config_skus,
@@ -391,7 +390,10 @@ def test_get_civ2_node_name_and_serial_from_annotations():
         {"title": "tt-card-serial", "message": "CIV2 runner foo has serial number(s): TT-BH-00111:TT-BH-00222"},
         {"title": "", "message": "some unrelated infra annotation"},
     ]
-    assert get_civ2_node_name_and_serial_from_annotations(annotations) == ("aus-glx-03", "TT-BH-00111:TT-BH-00222")
+    assert workflows.get_civ2_node_name_and_serial_from_annotations(annotations) == (
+        "aus-glx-03",
+        "TT-BH-00111:TT-BH-00222",
+    )
 
     # CPU-only runner: a tt-card-serial notice is still emitted, but with a
     # "Not a Tenstorrent card runner" message that carries no serial
@@ -405,10 +407,10 @@ def test_get_civ2_node_name_and_serial_from_annotations():
             "message": "CIV2 runner tt-ubuntu-2204-large-stable-w77km-runner-djpn9 is running on Kubernetes node: f10-cpu-01",
         },
     ]
-    assert get_civ2_node_name_and_serial_from_annotations(cpu_annotations) == ("f10-cpu-01", None)
+    assert workflows.get_civ2_node_name_and_serial_from_annotations(cpu_annotations) == ("f10-cpu-01", None)
 
     # No annotations at all
-    assert get_civ2_node_name_and_serial_from_annotations(None) == (None, None)
+    assert workflows.get_civ2_node_name_and_serial_from_annotations(None) == (None, None)
 
 
 def _make_completed_civ2_job(job_id, runner_name, labels):
