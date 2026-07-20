@@ -261,7 +261,7 @@ jobs:
             "https://api.github.com/repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/reviews" \
             -d "{\"event\":\"APPROVE\",\"body\":\"🤖 Auto-approved: UMD submodule bump from @${PR_AUTHOR} (tenstorrent/umd-admins member). Only tt_metal/third_party/umd was modified.\"}" \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print('Approved, review ID:', d[chr(105)+chr(100)]) if chr(105)+chr(100) in d else print('Error:', d)"
-  
+
   # ---------------------------------------------------------------------------
   # Tracy — @mo-tenstorrent bumping tt_metal/third_party/tracy
   # ---------------------------------------------------------------------------
@@ -330,4 +330,3 @@ jobs:
             "https://api.github.com/repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/reviews" \
             -d "{\"event\":\"APPROVE\",\"body\":\"🤖 Auto-approved: Tracy submodule bump from @${PR_AUTHOR} (component author). Only tt_metal/third_party/tracy was modified.\"}" \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print('Approved, review ID:', d[chr(105)+chr(100)]) if chr(105)+chr(100) in d else print('Error:', d)"
-
