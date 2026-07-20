@@ -97,7 +97,10 @@ struct AllShardVolumes {
 };
 
 tt::tt_metal::ShardSpec adjust_to_shape(
-    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+    const tt::tt_metal::ShardSpec& shard_spec,
+    const ttnn::Shape& from_shape,
+    const ttnn::Shape& to_shape,
+    const tt::tt_metal::Tile& tile = tt::tt_metal::Tile());
 
 tt::tt_metal::MemoryConfig compute_mem_config_actual(
     const Tensor& input_tensor, const ttnn::Shape& output_logical_shape);
