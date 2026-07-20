@@ -277,6 +277,49 @@ instruction set. New instructions (Quasar's `MVMULDI`, for instance) need to
 exist in the stream producer before tt-mop can optimise a stream that contains
 them.
 
+### 7. `--suggest` offsets drift once a plan contains a MOP fold
+
+`run_suggest` advances its source cursor for direct emits and replay ops but not
+for MOP runs, so a plan containing a fold prints neither the fold itself nor
+correct offsets for anything after it. `--opt` is unaffected, since the verifier
+checks that stream word for word, but `--suggest` is advisory text the verifier
+never sees. Check its offsets against `--dump` before hand-applying anything.
+
+**The fix:** give every plan op a source span and advance by it for all op kinds,
+recovering a MOP run's word count by expanding the `[config, run]` pair through
+the verifier's own expander into a scratch arena.
+
+### 8. The scratch arena is fixed at ~2 MiB
+
+Plan IR and verifier expansion both scale with the input, so a large but
+perfectly valid stream of tens of thousands of words can exhaust the static
+arena. `ka_alloc` returns NULL, the tool falls back to an unverified all-direct
+plan and exits 8, which reads like "nothing to optimise" rather than "ran out of
+room". kauri already supports `KA_CHAIN` for growing past the head block; it is
+not wired up here.
+
+### 9. Candidate generation is ~O(max_len·n²)
+
+For each block length the stream is rescanned from every starting position, so
+cost climbs sharply with input size. Around 40k words that is tens of seconds,
+which is precisely the whole-fused-kernel scale where the real headroom is meant
+to be. A rolling hash per length, clustering equal-content windows
+before the exact compare, would bring it to roughly O(max_len · n log n) without
+changing which candidates get picked.
+
+### 10. The candidate cap biases toward long blocks
+
+Candidates are capped at `TM_MAX_PATS` (256), replay candidates are generated
+longest-first, and MOP candidates only get whatever room is left over. A
+replay-rich stream can therefore fill the list before a single MOP fold is
+weighed, and a short block with a high total saving can lose its slot to a longer
+one worth less. Generation order is acting as selection priority, which was never
+the intent.
+
+Items 7 to 10 came out of a review on the tt-metal PR. They are real and worth
+doing; they are not stream-correctness bugs, since the verifier still guarantees
+anything emitted round-trips. Fixes land upstream.
+
 ## References
 
 - Upstream tt-mop: [github.com/Zaneham/tt-mop](https://github.com/Zaneham/tt-mop) (Apache 2.0)
