@@ -345,7 +345,7 @@ class _TtDecoderLayer:
         return q, k
 
     # ------------------------------------------------------------------
-    def _attention(self, x, custom_pos_emb):
+    def _attention(self, x, custom_pos_emb, attn_mask=None):
         S = x.shape[1]
         qkv = ttnn.linear(x, self.qkv_w)  # [1, S, 6144] = q|k|v
         # nlp_create_qkv_heads expects a 4D [B, 1, S, dim] fused-qkv tensor.
@@ -368,10 +368,14 @@ class _TtDecoderLayer:
             q = ttnn.rms_norm(q, epsilon=self.eps, weight=self.q_norm_w)
             k = ttnn.rms_norm(k, epsilon=self.eps, weight=self.k_norm_w)
 
+        # gen_image threads a per-sample additive block mask (0 attend / -inf
+        # masked) here; text-prefix is causal, image tokens attend bidirectionally.
+        # attn_mask=None (gen_text / graduated path) => full non-causal SDPA (unchanged).
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
+            attn_mask=attn_mask,
             is_causal=False,
             scale=self.scale,
         )
@@ -386,7 +390,7 @@ class _TtDecoderLayer:
         return out
 
     # ------------------------------------------------------------------
-    def _attention_sharded(self, x, custom_pos_emb):
+    def _attention_sharded(self, x, custom_pos_emb, attn_mask=None):
         S = x.shape[1]
         qkv = ttnn.linear(x, self.qkv_w)  # [1, S, tp_qkv] per device
         qkv = ttnn.reshape(qkv, [1, 1, S, qkv.shape[-1]])
@@ -406,7 +410,9 @@ class _TtDecoderLayer:
             q = ttnn.rms_norm(q, epsilon=self.eps, weight=self.q_norm_w)
             k = ttnn.rms_norm(k, epsilon=self.eps, weight=self.k_norm_w)
 
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, is_causal=False, scale=self.scale
+        )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
@@ -495,12 +501,13 @@ class _TtDecoderLayer:
     # ------------------------------------------------------------------
     def __call__(self, hidden_states, custom_pos_emb=None, return_l_aux=False, **kwargs):
         self.num_calls += 1
+        attn_mask = kwargs.get("attn_mask")
         if self.is_mesh:
-            return self._forward_sharded(hidden_states, custom_pos_emb, return_l_aux)
+            return self._forward_sharded(hidden_states, custom_pos_emb, return_l_aux, attn_mask=attn_mask)
 
         residual = hidden_states
         x = ttnn.rms_norm(hidden_states, epsilon=self.eps, weight=self.input_ln_w)
-        attn = self._attention(x, custom_pos_emb)
+        attn = self._attention(x, custom_pos_emb, attn_mask=attn_mask)
         ttnn.deallocate(x)
         hidden = ttnn.add(residual, attn)
         ttnn.deallocate(attn)
@@ -524,10 +531,10 @@ class _TtDecoderLayer:
         return out
 
     # ------------------------------------------------------------------
-    def _forward_sharded(self, hidden_states, custom_pos_emb=None, return_l_aux=False):
+    def _forward_sharded(self, hidden_states, custom_pos_emb=None, return_l_aux=False, attn_mask=None):
         residual = hidden_states
         x = ttnn.rms_norm(hidden_states, epsilon=self.eps, weight=self.input_ln_w)
-        attn = self._attention_sharded(x, custom_pos_emb)
+        attn = self._attention_sharded(x, custom_pos_emb, attn_mask=attn_mask)
         ttnn.deallocate(x)
         hidden = ttnn.add(residual, attn)
         ttnn.deallocate(attn)

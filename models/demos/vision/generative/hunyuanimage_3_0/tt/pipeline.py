@@ -456,6 +456,93 @@ class HunyuanImage3Pipeline:
             "hidden_ref": hidden_ref,
         }
 
+    # -- image-mode (gen_image / diffusion) forward -----------------------
+    # The ONLY net-new TT path for text->image: same graduated decoder blocks as
+    # the gen_text forward, differing ONLY in (a) inputs_embeds instead of wte
+    # (host builds the image+text interleaved embeds incl. noised VAE-latent
+    # tokens), (b) 2D image-grid RoPE instead of the 1D/text RoPE, and (c) a
+    # block attention mask (text causal + image-bidirectional) threaded into
+    # SDPA. ln_f + the velocity head (ragged_final_layer) stay on host.
+    def _upload_embeds(self, inputs_embeds):
+        """Upload host [1, S, hidden] inputs_embeds -> device residual stream
+        (REPLICATED on a mesh, TILE, bf16 -- the dtype the decoder stubs consume)."""
+        return ttnn.from_torch(
+            inputs_embeds.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._mesh_kw(),
+        )
+
+    def _upload_pos_img(self, cos, sin, S):
+        """Upload 2D-image-grid RoPE cos/sin as [1,1,S,head_dim] (REPLICATED),
+        the shape the decoder-stub attention consumes directly."""
+
+        def up(t):
+            return ttnn.from_torch(
+                t.reshape(1, 1, S, self.head_dim).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **self._mesh_kw(),
+            )
+
+        return up(cos), up(sin)
+
+    def _upload_mask(self, attn_mask, S, neg=-1e30):
+        """Additive SDPA mask [1,1,S,S] (REPLICATED, bf16, TILE) from a bool/float
+        block mask: bool True (attend)->0, False (masked)->neg. None => no mask
+        (full non-causal, i.e. the gen_text/graduated behaviour)."""
+        if attn_mask is None:
+            return None
+        m = attn_mask
+        if m.dtype == torch.bool:
+            m = torch.where(
+                m,
+                torch.zeros((), dtype=torch.float32),
+                torch.full((), float(neg), dtype=torch.float32),
+            )
+        m = m.reshape(1, 1, S, S).to(torch.bfloat16)
+        return ttnn.from_torch(
+            m,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._mesh_kw(),
+        )
+
+    def forward_image(self, inputs_embeds, cos, sin, attn_mask=None):
+        """gen_image forward for ONE CFG sample (batch=1). Runs the N graduated
+        decoder layers on TT; returns post-layer hidden states as host torch
+        [1, S, hidden] (NO ln_f / velocity head -- those run on host).
+
+        inputs_embeds: host [1, S, hidden] (image+text interleaved).
+        cos, sin:      host 2D image RoPE, reshapeable to [1,1,S,head_dim].
+        attn_mask:     host [1,1,S,S] / [S,S] bool block mask, or None.
+        """
+        S = int(inputs_embeds.shape[1])
+        hidden = self._upload_embeds(inputs_embeds)
+        cos_tt, sin_tt = self._upload_pos_img(cos, sin, S)
+        mask_tt = self._upload_mask(attn_mask, S)
+        for layer in self.layers:
+            hidden = layer(
+                hidden,
+                custom_pos_emb=(cos_tt, sin_tt),
+                return_l_aux=False,
+                attn_mask=mask_tt,
+            )
+        out = _mesh_to_torch(hidden, self.device).to(torch.float32)
+        if out.dim() == 4:
+            out = out.reshape(out.shape[0], out.shape[-2], out.shape[-1])
+        ttnn.deallocate(cos_tt)
+        ttnn.deallocate(sin_tt)
+        if mask_tt is not None:
+            ttnn.deallocate(mask_tt)
+        return out
+
     # ====================================================================
     # DECODE — real autoregressive incremental-KV decode (Option B).
     # prefill-via-decode: feed prompt tokens one-by-one through the per-layer
