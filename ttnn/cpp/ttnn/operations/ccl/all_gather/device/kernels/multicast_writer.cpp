@@ -50,8 +50,9 @@ void kernel_main() {
     constexpr uint32_t bank_owned_num_links = get_compile_time_arg_val(21);
     constexpr uint32_t bank_owned_coalesce_mask = get_compile_time_arg_val(22);
     constexpr uint32_t receiver_cores_per_link = get_compile_time_arg_val(23);
+    constexpr bool ring_fast_control_atomics = get_compile_time_arg_val(24) != 0;
     constexpr bool bank_owned_coalesce_local = (bank_owned_coalesce_mask & 2) != 0;
-    constexpr auto output_tensor_args = TensorAccessorArgs<24>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<25>();
 
     constexpr bool enable_fabric = (num_connections > 0);
     constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
@@ -290,7 +291,8 @@ void kernel_main() {
     uint32_t bank_owned_output_batch = 0;
     uint32_t bank_owned_output_page_in_batch = 0;
     auto bank_owned_pages_in_batch = [&](uint32_t batch) __attribute__((always_inline)) {
-        const uint32_t run_in_bank = batch % bank_owned_runs_per_bank;
+        const uint32_t run_in_bank =
+            receiver_cores_per_link > 1 ? batch / receiver_cores_per_link : batch % bank_owned_runs_per_bank;
         return std::min(outputs_per_cb_page, bank_owned_pages_per_bank - run_in_bank * outputs_per_cb_page);
     };
     auto valid_output_chunk = [&]() __attribute__((always_inline)) { return output_chunks_sent < num_output_chunks; };
@@ -298,8 +300,10 @@ void kernel_main() {
         if constexpr (bank_owned_links) {
             const uint32_t batch = bank_owned_output_batch;
             const uint32_t page_in_run = bank_owned_output_page_in_batch;
-            const uint32_t owned_bank_slot = batch / bank_owned_runs_per_bank;
-            const uint32_t run_in_bank = batch % bank_owned_runs_per_bank;
+            const uint32_t owned_bank_slot =
+                receiver_cores_per_link > 1 ? batch % receiver_cores_per_link : batch / bank_owned_runs_per_bank;
+            const uint32_t run_in_bank =
+                receiver_cores_per_link > 1 ? batch / receiver_cores_per_link : batch % bank_owned_runs_per_bank;
             const uint32_t bank = bank_owned_link_index + owned_bank_slot * bank_owned_num_links;
             const uint32_t page_id = device_idx * output_source_page_stride + bank +
                                      (run_in_bank * outputs_per_cb_page + page_in_run) * bank_owned_num_banks;
@@ -328,6 +332,16 @@ void kernel_main() {
 
     uint32_t receiver_batches_sent[receiver_cores_per_link] = {};
     uint32_t credit_groups_proxied[receiver_cores_per_link] = {};
+    auto send_control_credit = [&](uint64_t noc_addr) __attribute__((always_inline)) {
+        if constexpr (ring_fast_control_atomics) {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<
+                UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Flush>(
+                fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_addr, 0, false});
+        } else {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_addr, 0});
+        }
+    };
     auto proxy_ready_credit_groups = [&](uint32_t receiver_idx) __attribute__((always_inline)) {
         if constexpr (receiver_l1_mode && enable_fabric && receiver_credit_enabled && receiver_proactive_credit) {
             const uint32_t interval_start = attribution_timestamp();
@@ -337,10 +351,7 @@ void kernel_main() {
                 safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, credit_sems[receiver_idx], 0);
             const uint32_t ready_groups = __atomic_load_n(consumed_sem_ptr, __ATOMIC_ACQUIRE);
             while (credit_groups_proxied[receiver_idx] < ready_groups) {
-                fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_connection,
-                    sem_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_credit_sem_addr, 0});
+                send_control_credit(remote_credit_sem_addr);
                 ++credit_groups_proxied[receiver_idx];
                 if constexpr (receiver_attribution) {
                     ++credit_command_count;
@@ -386,10 +397,7 @@ void kernel_main() {
             if (reclaim_sequence > 0) {
                 const uint32_t interval_start = attribution_timestamp();
                 noc_semaphore_wait_min(consumed_sem_ptr, reclaim_sequence);
-                fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_connection,
-                    sem_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_credit_sem_addr, 0});
+                send_control_credit(remote_credit_sem_addr);
                 if constexpr (receiver_attribution) {
                     ++credit_command_count;
                 }
@@ -490,7 +498,7 @@ void kernel_main() {
 
             if constexpr (enable_fabric && receiver_l1_mode && receiver_send_payload) {
                 const uint32_t receiver_idx =
-                    receiver_cores_per_link == 1 ? 0 : output_batch / bank_owned_runs_per_bank;
+                    receiver_cores_per_link == 1 ? 0 : output_batch % receiver_cores_per_link;
                 const uint32_t receiver_slot = prepare_receiver_slot(receiver_idx);
                 const uint64_t remote_l1_addr = safe_get_noc_addr(
                     receiver_noc_xs[receiver_idx],

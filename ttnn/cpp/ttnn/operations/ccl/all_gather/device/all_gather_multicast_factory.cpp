@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
+#include <cstdlib>
 #include <set>
 #include <string_view>
 
@@ -150,7 +151,18 @@ ReceiverL1Plan make_receiver_l1_plan(
     if (plan.num_links == 0) {
         return reject("receiver requires at least one active Fabric link");
     }
-    constexpr uint32_t receiver_cores_per_link = 1;
+    if (attrs.receiver_policy.interleaved_bank_receivers) {
+        if (!attrs.receiver_policy.bank_owned_links) {
+            return reject("interleaved bank receivers require bank-owned links");
+        }
+        if (active_topology != tt::tt_fabric::Topology::Ring || plan.num_links != 2 || attrs.num_devices % 2 != 0) {
+            return reject("interleaved bank receivers require an even 1D ring with two active links");
+        }
+        if (input.device()->num_dram_channels() != 8) {
+            return reject("interleaved bank receivers require eight DRAM banks");
+        }
+    }
+    const uint32_t receiver_cores_per_link = attrs.receiver_policy.interleaved_bank_receivers ? 4 : 1;
     plan.required_worker_cores = (1 + receiver_cores_per_link) * plan.num_links;
     auto subdevice_id = attrs.subdevice_id.value_or(input.device()->get_sub_device_ids().at(0));
     auto available_cores = input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
@@ -159,7 +171,7 @@ ReceiverL1Plan make_receiver_l1_plan(
     }
     plan.available_worker_cores = available_cores.num_cores();
     if (plan.available_worker_cores < plan.required_worker_cores) {
-        return reject("receiver sub-core grid does not contain two legal workers per active link");
+        return reject("receiver sub-core grid does not contain the required sender and receiver workers per link");
     }
 
     // Receiver payloads live in ordinary L1, but all of its control state must
@@ -322,7 +334,8 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
         // present only for the bank-owned path. Generic routing uses the forward
         // sequence for both workers and does not pay this L1-small cost.
         // The final entry is present only for dual-RISC receiver drain.
-        constexpr uint32_t receiver_cores_per_link = 1;
+        const uint32_t receiver_cores_per_link =
+            operation_attributes.receiver_policy.interleaved_bank_receivers ? 4 : 1;
         const uint32_t receiver_control_sem_count =
             operation_attributes.num_devices +
             (operation_attributes.receiver_policy.bank_owned_links ? operation_attributes.num_devices : 0) +
@@ -422,7 +435,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         receiver_stage_mode == ReceiverL1StageMode::Combined || receiver_stage_mode == ReceiverL1StageMode::L1Sink;
     const bool receiver_attribution = operation_attributes.receiver_policy.attribution_enabled;
     const bool receiver_address_attribution = operation_attributes.receiver_policy.address_attribution_enabled;
-    constexpr uint32_t receiver_cores_per_link = 1;
+    const uint32_t receiver_cores_per_link = operation_attributes.receiver_policy.interleaved_bank_receivers ? 4 : 1;
     const uint32_t receiver_drain_risc_count =
         receiver_l1_mode ? receiver_l1_drain_risc_count(operation_attributes.receiver_policy, input_tensor) : 1;
     TT_FATAL(
@@ -433,6 +446,13 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         receiver_drain_risc_count == 1 || receiver_stage_mode == ReceiverL1StageMode::Combined ||
             receiver_stage_mode == ReceiverL1StageMode::DrainOnly,
         "dual-RISC receiver drain is supported only for combined or drain_only stages");
+    TT_FATAL(
+        !operation_attributes.receiver_policy.interleaved_bank_receivers ||
+            operation_attributes.receiver_policy.bank_owned_links,
+        "interleaved bank receivers require bank-owned links");
+    TT_FATAL(
+        !operation_attributes.receiver_policy.interleaved_bank_receivers || !fabric_is_2d,
+        "interleaved bank receivers require a 1D ring");
     uint32_t receiver_slot_count = receiver_l1_mode ? operation_attributes.receiver_policy.slot_count : 1;
     TT_FATAL(
         !receiver_l1_mode || receiver_control_sems.size() ==
@@ -802,6 +822,9 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
+    const char* ring_fast_env = std::getenv("TT_METAL_FABRIC_RING_TERMINAL_OFFLOAD_DEPTH");
+    const bool ring_fast_control_atomics =
+        receiver_l1_mode && ring_fast_env != nullptr && std::string_view(ring_fast_env) != "0";
     std::vector<uint32_t> reader_compile_args = {
         input_page_size,                 // input tensor page size
         output_chunk_size,               // NOC write size = min(input, output)
@@ -832,6 +855,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         min_num_links,                     // number of bank ownership groups
         bank_owned_coalesce,               // bit 0: source, bit 1: local output, bit 2: receiver
         receiver_cores_per_link,           // independent receiver/credit streams per link
+        ring_fast_control_atomics,         // returned credits do not order terminal payload writes
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -864,6 +888,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         min_num_links,                     // number of bank ownership groups
         bank_owned_coalesce,               // bit 0: source, bit 1: local output, bit 2: receiver
         receiver_cores_per_link,           // independent receiver/credit streams per link
+        ring_fast_control_atomics,         // returned credits do not order terminal payload writes
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -955,8 +980,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         // Map this worker's slice of input pages to its slice of output chunks.
         // num_output_chunks already accounts for split_factor, so in matched/concat
         // modes the ratio cancels back to num_input_pages.
-        uint32_t local_output_start = (selected_input_page_start * num_output_chunks) / num_input_pages;
-        uint32_t local_output_end = (selected_input_page_end * num_output_chunks) / num_input_pages;
+        uint32_t local_output_start =
+            (static_cast<uint64_t>(selected_input_page_start) * num_output_chunks) / num_input_pages;
+        uint32_t local_output_end =
+            (static_cast<uint64_t>(selected_input_page_end) * num_output_chunks) / num_input_pages;
         uint32_t num_worker_output_chunks = local_output_end - local_output_start;
         // s_start = global chunk index of this worker's first write:
         //     stripe_index  = local / output_chunks_per_stripe
@@ -1258,8 +1285,10 @@ void AllGatherMulticastFactory::override_runtime_arguments(
             const uint32_t selected_input_page_start = (link * input_pages_per_link) + std::min(link, remainder);
             const uint32_t selected_input_page_end =
                 ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
-            const uint32_t local_output_start = (selected_input_page_start * num_output_chunks) / num_input_pages;
-            const uint32_t local_output_end = (selected_input_page_end * num_output_chunks) / num_input_pages;
+            const uint32_t local_output_start =
+                (static_cast<uint64_t>(selected_input_page_start) * num_output_chunks) / num_input_pages;
+            const uint32_t local_output_end =
+                (static_cast<uint64_t>(selected_input_page_end) * num_output_chunks) / num_input_pages;
             const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
             const uint32_t device_idx = reader_args[9];
             const uint32_t s_start = (local_output_start / output_chunks_per_stripe) * stripe_distance_chunks +

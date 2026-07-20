@@ -181,6 +181,24 @@ def _reference_bank_owned_schedule(total_pages, num_banks, num_links, rows_per_r
     return schedules
 
 
+def _reference_interleaved_bank_owned_runs(total_pages, num_banks, num_links, rows_per_run):
+    """Round-robin one physical run from every link-owned bank."""
+    assert total_pages > 0 and total_pages % num_banks == 0
+    assert num_banks > 0 and num_links > 0 and num_banks % num_links == 0
+    assert rows_per_run > 0
+    pages_per_bank = total_pages // num_banks
+    runs = []
+    for link in range(num_links):
+        link_runs = []
+        for run_start in range(0, pages_per_bank, rows_per_run):
+            pages_in_run = min(rows_per_run, pages_per_bank - run_start)
+            for owned_bank_slot in range(num_banks // num_links):
+                bank = link + owned_bank_slot * num_links
+                link_runs.append(tuple(bank + (run_start + page) * num_banks for page in range(pages_in_run)))
+        runs.append(link_runs)
+    return runs
+
+
 def _reference_bank_owned_rows_per_run(max_rows, pages_per_bank, run_policy):
     """Mirror the bounded host policy used to isolate exact divisors from tail runs."""
     assert max_rows > 0 and pages_per_bank > 0
@@ -255,6 +273,27 @@ def test_all_gather_bank_owned_schedule_reference(total_pages, rows_per_run):
                 assert {page % num_banks for page in run} == {expected_bank}
                 assert all(next_page - page == num_banks for page, next_page in zip(run, run[1:]))
         assert schedule_offset == len(pages)
+
+
+@pytest.mark.parametrize("total_pages,rows_per_run", [(128, 4), (32768, 20), (65536, 20)])
+def test_all_gather_interleaved_bank_receiver_schedule_reference(total_pages, rows_per_run):
+    num_banks = 8
+    num_links = 2
+    receiver_cores_per_link = num_banks // num_links
+    slot_count = 12
+    schedules = _reference_interleaved_bank_owned_runs(total_pages, num_banks, num_links, rows_per_run)
+
+    assert sorted(page for link_runs in schedules for run in link_runs for page in run) == list(range(total_pages))
+    for link, link_runs in enumerate(schedules):
+        assert all(run and len(run) <= rows_per_run for run in link_runs)
+        for batch, run in enumerate(link_runs):
+            receiver_idx = batch % receiver_cores_per_link
+            assert {page % num_banks for page in run} == {link + receiver_idx * num_links}
+            assert all(next_page - page == num_banks for page, next_page in zip(run, run[1:]))
+        first_reuse = receiver_cores_per_link * slot_count
+        assert [batch % receiver_cores_per_link for batch in range(first_reuse)] == list(
+            range(receiver_cores_per_link)
+        ) * slot_count
 
 
 def _all_gather_profile_ns(mesh_device, run_fn, expected_receiver_l1=None):
@@ -953,6 +992,7 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     bank_owned_links = os.environ.get("TTNN_ALL_GATHER_BANK_OWNED_LINKS", "0")
     bank_owned_coalesce = os.environ.get("TTNN_ALL_GATHER_BANK_OWNED_COALESCE", "none")
     bank_owned_run_policy = os.environ.get("TTNN_ALL_GATHER_BANK_OWNED_RUN_POLICY", "max_tail")
+    interleaved_bank_receivers = os.environ.get("TTNN_ALL_GATHER_INTERLEAVED_BANK_RECEIVERS", "0")
     perf_core_rect = _parse_perf_core_rect(os.environ.get("TTNN_AG_PERF_CORE_RECT", "auto"))
     perf_fabric_config = os.environ.get("TTNN_AG_PERF_FABRIC_CONFIG", "mesh")
     perf_l1_small_size = _parse_perf_l1_small_size(os.environ.get("TTNN_AG_PERF_L1_SMALL_SIZE"))
@@ -969,6 +1009,7 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     assert bank_owned_links in {"0", "1"}
     assert bank_owned_coalesce in {"none", "source", "source_receiver", "source_local", "all"}
     assert bank_owned_run_policy in {"divisor", "max_tail"}
+    assert interleaved_bank_receivers in {"0", "1"}
     assert receiver_stage == "combined" or receiver_mode != "force_direct", "receiver stage mode requires receiver path"
     assert (
         receiver_slots_env in {"auto", "1"} or receiver_mode != "force_direct"
@@ -1076,6 +1117,7 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
         f"credit_group_batches={receiver_credit_group_batches} "
         f"drain_riscs={receiver_drain_riscs} bank_owned_links={bank_owned_links} "
         f"bank_owned_coalesce={bank_owned_coalesce} bank_owned_run_policy={bank_owned_run_policy} "
+        f"interleaved_bank_receivers={interleaved_bank_receivers} "
         f"core_rect={perf_core_rect or 'auto'} fabric={perf_fabric_config} l1_small={perf_l1_small_size}B "
         f"dtype={dtype} rows_per_device={rows_per_device} rows_per_page={rows_per_page} "
         f"valid_gather_extent={valid_gather_extent or 'full'} "

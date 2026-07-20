@@ -130,6 +130,13 @@ AllGatherReceiverPolicy read_receiver_policy_from_environment() {
         policy.bank_owned_run_policy =
             std::string_view(value) == "divisor" ? BankOwnedRunPolicy::Divisor : BankOwnedRunPolicy::MaxTail;
     }
+    if (const char* value = std::getenv("TTNN_ALL_GATHER_INTERLEAVED_BANK_RECEIVERS")) {
+        TT_FATAL(
+            std::string_view(value) == "0" || std::string_view(value) == "1",
+            "TTNN_ALL_GATHER_INTERLEAVED_BANK_RECEIVERS must be 0 or 1; got '{}'",
+            value);
+        policy.interleaved_bank_receivers = std::string_view(value) == "1";
+    }
     if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS")) {
         if (std::string_view(value) == "1") {
             policy.drain_risc_count = 1;

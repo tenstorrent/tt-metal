@@ -64,8 +64,10 @@ enum class UnicastFusedAtomicIncUpdateMask : uint32_t {
     Val = 1u << 2,
     Flush = 1u << 3,
     PayloadSize = 1u << 4,
+    DeferNotification = 1u << 5,
     All = static_cast<uint32_t>(WriteDstAddr) | static_cast<uint32_t>(SemaphoreAddr) |
-          static_cast<uint32_t>(Val) | static_cast<uint32_t>(Flush) | static_cast<uint32_t>(PayloadSize),
+          static_cast<uint32_t>(Val) | static_cast<uint32_t>(Flush) | static_cast<uint32_t>(PayloadSize) |
+          static_cast<uint32_t>(DeferNotification),
 };
 
 // Fused scatter write + atomic inc dynamic mask
@@ -325,7 +327,8 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
             !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::WriteDstAddr) &&
                 !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::SemaphoreAddr) &&
                 !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Val) &&
-                !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Flush),
+                !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Flush) &&
+                !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::DeferNotification),
             "UnicastFusedAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
     }
 
@@ -344,6 +347,9 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
     }
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Flush)) {
         packet_header->command_fields.unicast_seminc_fused.flush = command_header.flush;
+    }
+    if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::DeferNotification)) {
+        packet_header->command_fields.unicast_seminc_fused.defer_notification = command_header.defer_notification;
     }
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::PayloadSize)) {
         packet_header->payload_size_bytes = packet_size_bytes;

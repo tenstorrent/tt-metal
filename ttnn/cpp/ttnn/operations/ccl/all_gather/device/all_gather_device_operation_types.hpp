@@ -38,6 +38,10 @@ struct AllGatherReceiverPolicy {
     bool bank_owned_links = false;
     uint32_t bank_owned_coalesce_mask = 0;
     BankOwnedRunPolicy bank_owned_run_policy = BankOwnedRunPolicy::MaxTail;
+    // Experimental bank-interleaved receiver fan-out. Each link owns one
+    // receiver core and independent slot ring per DRAM bank assigned to that
+    // link, and sender batches rotate across those banks by run index.
+    bool interleaved_bank_receivers = false;
     // Zero means dtype-aware automatic selection.
     uint32_t drain_risc_count = 0;
     // Zero means derive the maximum safe value from ordinary-L1 capacity.

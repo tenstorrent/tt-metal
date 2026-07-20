@@ -238,14 +238,15 @@ public:
         uint8_t starts[1] = {1};
         if constexpr (fused_notify) {
             fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
-                UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush |
+                UnicastFusedAtomicIncUpdateMask::DeferNotification>(
                 fabric_connection,
                 payload_route_id_1,
 #ifndef FABRIC_2D
                 starts,
 #endif
                 ranges,
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, 1, true});
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, 1, true, true});
         } else {
             fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
                 fabric_connection,
@@ -268,14 +269,15 @@ public:
         if constexpr (alternate_routes) {
             if constexpr (fused_notify) {
                 fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
-                    UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                    UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush |
+                    UnicastFusedAtomicIncUpdateMask::DeferNotification>(
                     fabric_connection,
                     payload_route_id_2,
 #ifndef FABRIC_2D
                     starts,
 #endif
                     ranges_alt,
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, 1, true});
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, 1, true, true});
             } else {
                 fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
                     fabric_connection,

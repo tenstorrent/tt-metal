@@ -52,8 +52,9 @@ void kernel_main() {
     constexpr uint32_t bank_owned_num_links = get_compile_time_arg_val(24);
     constexpr uint32_t bank_owned_coalesce_mask = get_compile_time_arg_val(25);
     constexpr uint32_t receiver_cores_per_link = get_compile_time_arg_val(26);
+    constexpr bool ring_fast_control_atomics = get_compile_time_arg_val(27) != 0;
     constexpr bool bank_owned_coalesce_source = (bank_owned_coalesce_mask & 1) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<27>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<28>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
@@ -265,6 +266,16 @@ void kernel_main() {
 
     uint32_t receiver_batches_sent[receiver_cores_per_link] = {};
     uint32_t credit_groups_proxied[receiver_cores_per_link] = {};
+    auto send_control_credit = [&](uint64_t noc_addr) __attribute__((always_inline)) {
+        if constexpr (ring_fast_control_atomics) {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<
+                UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Flush>(
+                fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_addr, 0, false});
+        } else {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_addr, 0});
+        }
+    };
     auto proxy_ready_credit_groups = [&](uint32_t receiver_idx) __attribute__((always_inline)) {
         if constexpr (receiver_l1_mode && enable_fabric && receiver_credit_enabled && receiver_proactive_credit) {
             const uint32_t interval_start = attribution_timestamp();
@@ -274,10 +285,7 @@ void kernel_main() {
                 safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, credit_sems[receiver_idx], 0);
             const uint32_t ready_groups = __atomic_load_n(consumed_sem_ptr, __ATOMIC_ACQUIRE);
             while (credit_groups_proxied[receiver_idx] < ready_groups) {
-                fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_connection,
-                    sem_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_credit_sem_addr, 0});
+                send_control_credit(remote_credit_sem_addr);
                 ++credit_groups_proxied[receiver_idx];
                 if constexpr (receiver_attribution) {
                     ++credit_command_count;
@@ -323,10 +331,7 @@ void kernel_main() {
             if (reclaim_sequence > 0) {
                 const uint32_t interval_start = attribution_timestamp();
                 noc_semaphore_wait_min(consumed_sem_ptr, reclaim_sequence);
-                fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_connection,
-                    sem_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_credit_sem_addr, 0});
+                send_control_credit(remote_credit_sem_addr);
                 if constexpr (receiver_attribution) {
                     ++credit_command_count;
                 }
@@ -407,15 +412,18 @@ void kernel_main() {
         auto valid_input_page_id = [&]()
                                        __attribute__((always_inline)) { return input_pages_read < worker_input_pages; };
         auto bank_owned_pages_in_batch = [&](uint32_t batch) __attribute__((always_inline)) {
-            const uint32_t run_in_bank = batch % runs_per_bank;
+            const uint32_t run_in_bank =
+                receiver_cores_per_link > 1 ? batch / receiver_cores_per_link : batch % runs_per_bank;
             return std::min(inputs_per_cb_page, pages_per_bank - run_in_bank * inputs_per_cb_page);
         };
         auto next_input_page_id = [&]() __attribute__((always_inline)) {
             if constexpr (bank_owned_links) {
                 const uint32_t batch = bank_owned_input_batch;
                 const uint32_t page_in_run = bank_owned_input_page_in_batch;
-                const uint32_t owned_bank_slot = batch / runs_per_bank;
-                const uint32_t run_in_bank = batch % runs_per_bank;
+                const uint32_t owned_bank_slot =
+                    receiver_cores_per_link > 1 ? batch % receiver_cores_per_link : batch / runs_per_bank;
+                const uint32_t run_in_bank =
+                    receiver_cores_per_link > 1 ? batch / receiver_cores_per_link : batch % runs_per_bank;
                 const uint32_t bank = bank_owned_link_index + owned_bank_slot * bank_owned_num_links;
                 ++input_pages_read;
                 if (++bank_owned_input_page_in_batch == bank_owned_pages_in_batch(batch)) {
@@ -569,7 +577,7 @@ void kernel_main() {
                                              : std::min(outputs_per_cb_page, num_output_chunks - output_chunks_sent);
                         if constexpr (receiver_send_payload) {
                             const uint32_t receiver_idx =
-                                receiver_cores_per_link == 1 ? 0 : output_batches_processed / runs_per_bank;
+                                receiver_cores_per_link == 1 ? 0 : output_batches_processed % receiver_cores_per_link;
                             const uint32_t receiver_slot = prepare_receiver_slot(receiver_idx);
                             fabric_start = attribution_timestamp();
                             const uint64_t remote_l1_addr = safe_get_noc_addr(
@@ -637,7 +645,7 @@ void kernel_main() {
                                                : std::min(outputs_per_cb_page, num_output_chunks - output_chunks_sent);
                     if constexpr (receiver_send_payload) {
                         const uint32_t receiver_idx =
-                            receiver_cores_per_link == 1 ? 0 : output_batches_processed / runs_per_bank;
+                            receiver_cores_per_link == 1 ? 0 : output_batches_processed % receiver_cores_per_link;
                         const uint32_t receiver_slot = prepare_receiver_slot(receiver_idx);
                         fabric_start = attribution_timestamp();
                         const uint64_t remote_l1_addr = safe_get_noc_addr(

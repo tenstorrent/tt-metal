@@ -289,13 +289,22 @@ struct NocUnicastAtomicIncCommandHeader {
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
     NocUnicastAtomicIncFusedCommandHeader(
-        uint64_t noc_address, uint64_t semaphore_noc_address, uint32_t val, bool flush = true) :
-        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {}
+        uint64_t noc_address,
+        uint64_t semaphore_noc_address,
+        uint32_t val,
+        bool flush = true,
+        bool defer_notification = false) :
+        noc_address(noc_address),
+        semaphore_noc_address(semaphore_noc_address),
+        val(val),
+        flush(flush),
+        defer_notification(defer_notification) {}
 
     uint64_t noc_address;
     uint64_t semaphore_noc_address;
     uint32_t val;
     bool flush;
+    bool defer_notification;
 };
 struct NocMulticastCommandHeader {
     uint32_t address;

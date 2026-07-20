@@ -106,6 +106,10 @@ struct WriteTransactionIdTracker {
                    ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);
         }
     }
+    FORCE_INLINE bool local_transaction_flushed(tt::tt_fabric::BufferIndex buffer_index) const {
+        const auto trid = this->get_buffer_slot_trid(buffer_index);
+        return ncrisc_noc_nonposted_write_with_transaction_id_flushed(EDM_TO_LOCAL_NOC, trid);
+    }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
         for (uint8_t trid = OFFSET_PARAM; trid < INVALID_TRID; ++trid) {
             if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {

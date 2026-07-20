@@ -151,7 +151,8 @@ void kernel_main() {
                                (receiver_cores_per_link == 1 ? bank_owned_num_banks / bank_owned_num_links : 1)
                          : (worker_pages + inputs_per_cb_page - 1) / inputs_per_cb_page;
     auto bank_owned_pages_in_batch = [&](uint32_t batch) __attribute__((always_inline)) {
-        const uint32_t run_in_bank = batch % bank_owned_runs_per_bank;
+        const uint32_t run_in_bank =
+            receiver_cores_per_link > 1 ? batch / receiver_cores_per_link : batch % bank_owned_runs_per_bank;
         return std::min(inputs_per_cb_page, bank_owned_pages_per_bank - run_in_bank * inputs_per_cb_page);
     };
     constexpr uint32_t batches_per_window = receiver_credit_group_batches;
@@ -163,7 +164,7 @@ void kernel_main() {
         for (uint32_t batch = batch_start + receiver_drain_risc_index; batch < batch_end;
              batch += receiver_drain_risc_count) {
             const uint32_t logical_bank_owned_batch =
-                receiver_cores_per_link == 1 ? batch : receiver_bank_slot * bank_owned_runs_per_bank + batch;
+                receiver_cores_per_link == 1 ? batch : batch * receiver_cores_per_link + receiver_bank_slot;
             const uint32_t page_in_worker = batch * inputs_per_cb_page;
             const uint32_t pages_in_batch = bank_owned_links
                                                 ? bank_owned_pages_in_batch(batch)
@@ -185,7 +186,7 @@ void kernel_main() {
                             (forward_distance == half_ring && (logical_bank_owned_batch & 1) != 0)) {
                             source_produced_sem = produced_sem_backward[source];
                         }
-                        if (forward_distance == half_ring) {
+                        if (forward_distance == half_ring && receiver_cores_per_link == 1) {
                             produced_sequence = batch / 2 + 1;
                         }
                     }
