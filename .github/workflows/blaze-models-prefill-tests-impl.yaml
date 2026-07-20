@@ -18,8 +18,8 @@ on:
       sp-config:
         required: false
         type: string
-        default: "spsg"
-        description: "Single pod configuration (spsg)"
+        default: "sc1"
+        description: "Supercluster configuration (sc1)"
       test-type:
         required: false
         type: string
@@ -40,7 +40,7 @@ permissions:
 jobs:
   load-test-matrix:
     name: Load Test Matrix for ${{ inputs.sp-config }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
     env:
@@ -232,11 +232,11 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user
-          sudo chown "$(id -u):$(id -g)" /home/user
-          cp -r /ci/tt-metal /home/user/
+          sudo mkdir -p /home/user/tt-metal
+          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
