@@ -20,12 +20,12 @@ Owner:
 
 from dataclasses import dataclass
 from typing import Any
-from inspector_data import run as get_inspector_data, InspectorException
-from triage import ScriptConfig, ScriptPriority, log_check, triage_field, run_script
+from configuration_provider import run as get_configuration
+from triage import ScriptConfig, ScriptPriority, triage_field, run_script
 
 
 script_config = ScriptConfig(
-    depends=["inspector_data"],
+    depends=["configuration_provider"],
     priority=ScriptPriority.HIGH,
 )
 
@@ -40,14 +40,7 @@ class ConfigEntry:
 def run(args, context):
     scope_filter = args["--scope"]
 
-    try:
-        inspector = get_inspector_data(args, context)
-        result = inspector.getConfiguration()
-    except InspectorException as e:
-        log_check(False, f"Failed to get configuration from Inspector: {e}")
-        return None
-
-    entries = result.entries
+    entries = get_configuration(args, context).all()
 
     # Group by scope
     by_scope: dict[str, list[Any]] = {}
