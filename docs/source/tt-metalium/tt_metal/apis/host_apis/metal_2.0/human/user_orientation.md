@@ -9,9 +9,9 @@ A Metal 2.0 port is done in two steps:
  1. Audit (evaluate the op's readiness for porting)
  2. Actually port the op
 
-The porting recipes are available on the branch `akertesz/metal2-documentation` (they are not checked into main; this facilitates rapid iteration). The recipes are designed to be AI-facing, not human-friendly.
+The porting recipes are available on the branch `akertesz/op-porting-recipe` (they are not checked into main; this facilitates rapid iteration). The recipes are designed to be AI-facing, not human-friendly.
 
-Please familiarize yourself with Metal 2.0 by reading the introduction to `metal2_migration_guide.md`, and by browsing the (self-documenting) header files in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`.
+Please familiarize yourself with Metal 2.0 by reading the introduction to `ai/shared/migration_guide.md`, and by browsing the (self-documenting) header files in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`.
 
 ## Google Drive MCP setup
 
@@ -26,7 +26,7 @@ The porting recipe relies on data stored in Google Sheets. For your Claude to ac
 You must supply the `tt-metal` workspace for op porting. You'll launch the audit and port from the root of your checkout.
 
 To setup your workspace:
- 1. Create a branch off `akertesz/metal2-documentation` (to get the recipes).
+ 1. Create a branch off `akertesz/op-porting-recipe` (to get the recipes).
  2. Merge main into your branch (to ensure you have the latest fixes).
 
 Run only one op port per workspace. Trust me, trying to run simultaneous ports within the same workspace will end in tears.
@@ -68,7 +68,7 @@ Audit the TTNN op (OP NAME HERE) for Metal 2.0 portability.
 
 Op directory: `ttnn/cpp/ttnn/operations/...family.../...op.../`
 
-Read and follow `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/port_op_to_metal2_audit.md`.
+Read and follow `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/audit/metal2.md`.
 
 Produce METAL2_PREPORT_AUDIT.md (and METAL2_PORT_BRIEF.md if the audit clears) in the op
 directory, then stop. Do not begin the port — that runs as a separate session after I review the audit.
@@ -82,7 +82,7 @@ Tests:        `tests/ttnn/unit_tests/operations/...wherever.../`
 Audit report:  METAL2_PREPORT_AUDIT.md in the op directory (GREEN)
 Audit brief:   METAL2_PORT_BRIEF.md in the op directory
 
-Read and follow docs`/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/port_op_to_metal2_recipe.md`.
+Read and follow `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2.md`.
 
 Delegate every build and test run to a subagent. The builds and tests are spammy; this preserves your context for the effort of the port itself.
 
