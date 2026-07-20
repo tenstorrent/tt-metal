@@ -32,7 +32,7 @@ from .bringup_loop import (
     render_text as render_bringup_loop_text,
     run_bringup_loop,
     _safe_id,
-    _stub_has_graduated_from_autofill,
+    _stub_has_graduated_any,
 )
 from .op_classifier import (
     classify_ops_in_component,
@@ -637,7 +637,7 @@ def _auto_iteration_blockers(model_id: str) -> Tuple[List[str], List[str]]:
             continue
         safe = _safe_id(name)
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
-        if not _stub_has_graduated_from_autofill(stub_path):
+        if not _stub_has_graduated_any(stub_path):
             ungraduated.append(name)
         test_path = demo_dir / "tests" / "pcc" / f"test_{safe}.py"
         if test_path.is_file():
@@ -712,7 +712,7 @@ def _classify_components(model_id: str) -> Dict[str, List[str]]:
         elif status == "NEW":
             safe = _safe_id(name)
             stub_path = demo_dir / "_stubs" / f"{safe}.py"
-            if _stub_has_graduated_from_autofill(stub_path):
+            if _stub_has_graduated_any(stub_path):
                 out["new_native"].append(name)
             else:
                 out["new_fallback"].append(name)
@@ -986,7 +986,7 @@ def _compute_split(model_id: str) -> Dict[str, int]:
     graduated = len(cats["new_native"])
     if _demo is not None:
         for _n in cats["adapt"]:
-            if _stub_has_graduated_from_autofill(_demo / "_stubs" / f"{_safe_id(_n)}.py"):
+            if _stub_has_graduated_any(_demo / "_stubs" / f"{_safe_id(_n)}.py"):
                 graduated += 1
     return {
         "reuse": len(reuse_dev),
@@ -1134,7 +1134,7 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
             n_adapt = int(counts.get("op-ADAPT", 0))
             n_new = int(counts.get("op-NEW", 0))
             comp_total = n_reuse + n_adapt + n_new
-            graduated = _stub_has_graduated_from_autofill(stub_path)
+            graduated = _stub_has_graduated_any(stub_path)
             if graduated:
                 runtime_cpu = min(_runtime_fallback_helper_count(model_id, safe), comp_total)
                 row = {
@@ -1177,7 +1177,7 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
                     }
                 )
         else:
-            graduated = _stub_has_graduated_from_autofill(stub_path)
+            graduated = _stub_has_graduated_any(stub_path)
             if graduated:
                 runtime_cpu = _runtime_fallback_helper_count(model_id, safe)
                 if runtime_cpu > 0:
