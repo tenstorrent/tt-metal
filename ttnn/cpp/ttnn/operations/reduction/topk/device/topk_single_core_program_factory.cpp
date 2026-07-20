@@ -42,6 +42,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
     // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
     // elements in that block encode to 0, corrupting the sort result).
+    // fp32 is kept as-is: with fp32_dest_acc_en + UnpackToDestFp32 the value CBs stay fp32 and the
+    // sort's default SFPLOAD mode resolves to FP32 under fp32 dest-acc, so no downcast is needed.
+    const bool is_fp32_input = input_cb_data_format == tt::DataFormat::Float32;
     const tt::DataFormat compute_cb_data_format =
         (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
             ? tt::DataFormat::Float16_b
@@ -184,12 +187,16 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
 
     // Kernel Creations:
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,                       // Input values
-        index_cb_index,                       // Generated indices
-        Ht,                                   // Height in tiles
-        Wt,                                   // Width in tiles
-        total_number_of_cores,                // Total number of cores
-        static_cast<uint32_t>(uint16_output)  // Index format flag
+        input_cb_index,         // Input values
+        index_cb_index,         // Generated indices
+        Ht,                     // Height in tiles
+        Wt,                     // Width in tiles
+        total_number_of_cores,  // Total number of cores
+        // Index element width must match the index tensor dtype, not the width heuristic:
+        // fp32 forces UInt32 indices even for small W, and the reader must emit 32-bit iota
+        // (16-bit iota in a UInt32 tile would pack two-per-word and the INT32 sort read would
+        // return garbage). Mirrors the multi-core factory's is32_bit_data derivation.
+        static_cast<uint32_t>(output_ind_cb_data_format == tt::DataFormat::UInt16)  // Index format flag
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
     if (tensor_args.indices.has_value()) {
@@ -247,9 +254,20 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_range;
     compute_desc.compile_time_args = compute_args;
+    // fp32 input: unpack the value-holding CBs straight to fp32 dest (fp32 dest acc) so the sort's
+    // default SFPLOAD mode resolves to FP32 and compares full-precision values.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (is_fp32_input) {
+        unpack_to_dest_mode[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[transposed_val_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[result_prep_val_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = !uint16_output,
+        .fp32_dest_acc_en = !uint16_output || is_fp32_input,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
 
     uint32_t id = 0;  // Offset for the next core in the group

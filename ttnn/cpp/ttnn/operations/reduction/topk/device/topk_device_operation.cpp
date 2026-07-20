@@ -82,7 +82,9 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
         // Determine data formats for memory cost calculation
         const tt::DataFormat value_cb_data_format =
             tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        const tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;  // Multi-core always uses UInt16
+        // fp32 forces UInt32 indices (see compute_output_specs); size them so the cost isn't undercounted.
+        const tt::DataFormat index_cb_data_format =
+            input_tensor.dtype() == DataType::FLOAT32 ? tt::DataFormat::UInt32 : tt::DataFormat::UInt16;
 
         // Calculate tile sizes for memory cost analysis
         const uint32_t value_tile_size = tile_size(value_cb_data_format);
@@ -154,8 +156,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     // Data type validation
     const auto input_tensor_dtype = input_tensor.dtype();
     TT_FATAL(
-        input_tensor_dtype == DataType::BFLOAT16 || input_tensor_dtype == DataType::BFLOAT8_B,
-        "Input tensor must be BFLOAT16, or BFLOAT8_B, got: {}",
+        input_tensor_dtype == DataType::BFLOAT16 || input_tensor_dtype == DataType::BFLOAT8_B ||
+            input_tensor_dtype == DataType::FLOAT32,
+        "Input tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32, got: {}",
         input_tensor_dtype);
 
     // Optional indices tensor validation (for pre-allocated indices)
@@ -172,8 +175,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         const auto output_tensor0_dtype = std::get<0>(preallocated_outputs.value()).dtype();  // Values tensor
         const auto output_tensor1_dtype = std::get<1>(preallocated_outputs.value()).dtype();  // Indices tensor
         TT_FATAL(
-            output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B,
-            "Preallocated output tensor must be BFLOAT16 or BFLOAT8_B got: {}",
+            output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B ||
+                output_tensor0_dtype == DataType::FLOAT32,
+            "Preallocated output tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32 got: {}",
             output_tensor0_dtype);
         TT_FATAL(
             output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32,
@@ -200,7 +204,10 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     // Execution feasibility validation
     // Verify that the operation can be executed with available hardware resources
     bool can_run = false;
-    bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());
+    // fp32 forces UInt32 indices (see compute_output_specs), so exclude it here too — otherwise
+    // verify_single_core_cost models UInt16 index CBs and undercounts the fp32 single-core L1 footprint.
+    bool uint16_output =
+        (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) && (input_tensor.dtype() != DataType::FLOAT32);
 
     // Try multi-core execution first if dimension is large enough
     if (input_shape[args.dim] >= ttnn::prim::constants::multi_core_min_width) {
@@ -208,7 +215,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
         // Set up data formats for memory cost calculations
         tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
+        // fp32 forces UInt32 indices (see compute_output_specs); size them so the cost isn't undercounted.
+        tt::DataFormat index_cb_data_format =
+            input_tensor.dtype() == DataType::FLOAT32 ? tt::DataFormat::UInt32 : tt::DataFormat::UInt16;
 
         uint32_t value_tile_size = tile_size(value_cb_data_format);
         uint32_t index_tile_size = tile_size(index_cb_data_format);
@@ -263,8 +272,11 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
     output_shape[-1] = args.k;  // Set last dimension to K (number of top elements)
 
     ttnn::Shape input_shape = input_tensor.padded_shape();
-    // Choose index data type based on dimension size (16-bit vs 32-bit indices)
-    const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());  // 65535
+    // Choose index data type based on dimension size (16-bit vs 32-bit indices).
+    // fp32 input sorts with fp32 dest accumulation, which loads indices as INT32, so it
+    // requires 32-bit (UINT32) indices regardless of dimension size.
+    const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) &&
+                               (input_tensor.dtype() != DataType::FLOAT32);  // 65535
 
     // Create values tensor specification (same data type as input)
     const auto values_spec = TensorSpec(
