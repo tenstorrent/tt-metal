@@ -114,7 +114,7 @@ void kernel_main() {
                 // the RISCV core and NoC are different L1 clients with no program-order guarantee between
                 // them (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). load_blocking the 32-bit word
                 // holding the last filled byte (blocking load + memory clobber) to drain the fill so the
-                // NoC write cannot source a stale index buffer. See issue #50154 (finding #27).
+                // NoC write cannot source a stale index buffer.
                 {
                     const uint32_t idx_bytes = tile_width * (is_32_bit_data ? sizeof(uint32_t) : sizeof(uint16_t));
                     (void)ckernel::load_blocking(
