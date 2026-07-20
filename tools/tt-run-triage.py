@@ -67,13 +67,7 @@ def _probe_rank_count(tt_run_args: list[str]) -> int:
 
 
 class TextStreamingRenderer:
-    """Renders each triage script's per-rank output in canonical execution order.
-
-    Triage emits a section for every script a rank runs *or* skips (a skipped one
-    prints "Skipping: dependency ... failed"), so the only silent scripts are data
-    providers that succeeded. A rank missing a checker section therefore means it
-    stopped before reaching it, not that output was dropped — so there is nothing
-    to infer: emitted sections are shown, missing ones are reported as no output."""
+    """Renders each triage script's per-rank output in canonical execution order."""
 
     def __init__(self, expected_ranks: int, scripts: dict):
         from rich.console import Console
