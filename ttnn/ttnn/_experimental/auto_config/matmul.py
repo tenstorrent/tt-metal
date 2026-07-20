@@ -763,7 +763,24 @@ def _sync_device(device: Any) -> None:
         pass
 
 
+# minimal_matmul is an experimental op whose device kernel does not build on every
+# LLK / toolchain version (e.g. an ambiguous ``copy_block`` overload between the
+# kernel's local helper and ``ckernel::copy_block`` in ``tile_move_copy.h``). A
+# kernel build failure is a fatal, uncatchable crash, so the selector must never
+# compile minimal_matmul candidates unless the operator opts in on a known-good
+# build via ``TTNN_AUTO_MATMUL_ENABLE_MINIMAL=1``.
+_ENABLE_MINIMAL_MATMUL_ENV = "TTNN_AUTO_MATMUL_ENABLE_MINIMAL"
+
+
+def _minimal_matmul_enabled() -> bool:
+    return _env_flag_enabled(_ENABLE_MINIMAL_MATMUL_ENV)
+
+
 def _can_use_minimal_matmul_common(signature: AutoMatmulSignature, bias: Any | None) -> bool:
+    if not _minimal_matmul_enabled():
+        # Opt-in only; see _ENABLE_MINIMAL_MATMUL_ENV above. Keeps the selector to the
+        # stable default / program_config candidate families by default.
+        return False
     ttnn = _ttnn()
     if signature.transpose_a or signature.transpose_b:
         return False
