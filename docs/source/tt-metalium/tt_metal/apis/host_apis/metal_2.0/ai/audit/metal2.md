@@ -705,7 +705,7 @@ Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *wit
 
 ### CBDescriptor `address_offset` set to non-zero — UNSUPPORTED (current form not planned)
 
-**Status**: Not supported in Metal 2.0, and **not slated for support in its current form**. The `address_offset` field on `CBDescriptor` is a recently introduced interim mechanism for placing a CB at a non-zero offset within a `Buffer` (or at an absolute address, when used without a `buffer`). Metal 2.0 will not carry this construct forward as-is. The functional capability the field provides will be available in a **semantically different way** in Metal 2.0; a direct translation is not possible. The user must consult the runtime team about their actual use case before this op can be ported.
+**Status**: Not supported in Metal 2.0, and **not slated for support in its current form**. The `address_offset` field on `CBDescriptor` is an interim mechanism for placing a CB at a non-zero offset within a `Buffer` (or at an absolute address, when used without a `buffer`). Metal 2.0 will not carry this construct forward as-is. The functional capability the field provides will be available in a **semantically different way** in Metal 2.0; a direct translation is not possible. The user must consult the runtime team about their actual use case before this op can be ported.
 
 This offset is most often used with a Buffer-backed CB (the legacy borrowed-memory pattern — now a mechanical porting-recipe translation, no longer an Appendix A entry), but `address_offset` gets its own entry because:
 - It is severable: a CB can use a non-zero `address_offset` without a Buffer-backed CB (placing the CB at an absolute L1 address — the "manually placed CB" mode documented in `ttnn/api/ttnn/tensor/tensor_utils.hpp`).
@@ -726,7 +726,7 @@ This offset is most often used with a Buffer-backed CB (the legacy borrowed-memo
 
 **Action**: STOP. **Flag prominently in the audit report** — do not bury this among other RED entries. Use stronger emphasis than for routine UNSUPPORTED items, and surface the following message to the user **verbatim**:
 
-> The `address_offset` field is a recently introduced interim mechanism that will not survive into Metal 2.0 in its current form. The underlying capability you need will be available, but only via a different API that is not a direct translation. Please reach out to the runtime team to discuss your use case before proceeding with this port.
+> The `address_offset` field is an interim mechanism that will not survive into Metal 2.0 in its current form. The underlying capability you need will be available, but only via a different API that is not a direct translation. Please reach out to the runtime team to discuss your use case before proceeding with this port.
 
 Recommended report shape when this rule fires:
 
@@ -749,7 +749,7 @@ If you find no concrete non-zero usage in the op being ported, this rule is gree
 
 ### GlobalSemaphore — UNSUPPORTED
 
-**Status**: Not yet supported in Metal 2.0. The Metal 2.0 source confirms this with a TODO at `tt_metal/api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp` (search for `TODO -- GlobalSemaphore bindings`).
+**Status**: Not yet supported in Metal 2.0. The `KernelSpec` source confirms it: `GlobalSemaphore bindings` is listed under *"Additional program parameter binding types (coming soon)"* in `tt_metal/api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp`, alongside the not-yet-implemented `GlobalDataflowBuffer` and `MeshBuffer` bindings.
 
 **Recognition — definitely this feature** (refuse and report):
 
