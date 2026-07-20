@@ -1195,9 +1195,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 in0_mcast_no_work_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
             }
         } else if (in1_idx == 0) {
+            // in0 tensor base address (common idx 0) and sparsity address (common idx 1) are core-invariant
+            // and registered once as common runtime args after this loop.
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
@@ -1212,19 +1213,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 mm_in0_sender_args.push_back(out_block_h);
             }
 
-            // sparsity args
-            mm_in0_sender_args.push_back(0);  // sparsity_addr
-
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
-            {
-                std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>> in0_args(
-                    mm_in0_sender_args.begin(), mm_in0_sender_args.end());
-                in0_args[0] = in0_tensor;
-                in0_sender_kernel_desc.emplace_runtime_args(core, in0_args);
-            }
+            in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
 
             // in0 receiver
         } else {
@@ -1487,6 +1480,16 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 }
             }
         }
+    }
+
+    // in0 tensor base address + sparsity address (0 here) are identical on every core. Register once as common
+    // runtime args; the in0 tensor is a MeshTensor entry so the framework auto-patches its address per dispatch.
+    // Only the interleaved sender kernel reads these; the sharded path uses a different kernel.
+    if (!in0_block_sharded) {
+        KernelDescriptor::RTArgList in0_sender_common_args;
+        in0_sender_common_args.push_back(in0_tensor);   // common idx 0: in0 base address
+        in0_sender_common_args.push_back((uint32_t)0);  // common idx 1: sparsity address
+        in0_sender_kernel_desc.emplace_common_runtime_args(in0_sender_common_args);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -2653,9 +2656,10 @@ create_program_mcast_in0_in1(
                     mm_in0_sender_args);  // RISCV_0_default
             }
         } else if (in1_idx == 0) {
+            // in0 tensor base address (common idx 0) and sparsity address (common idx 1) are core-invariant
+            // and set once as common runtime args after this loop.
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
@@ -2669,9 +2673,6 @@ create_program_mcast_in0_in1(
             } else {
                 mm_in0_sender_args.push_back(out_block_h);
             }
-
-            // sparsity args
-            mm_in0_sender_args.push_back(0);  // sparsity_addr
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -2932,6 +2933,13 @@ create_program_mcast_in0_in1(
         }
     }
 
+    // in0 tensor base address + sparsity address (0 here) are identical on every core; dispatch once as common
+    // runtime args. Only the interleaved sender kernel reads them; the sharded path uses a different kernel.
+    if (!in0_block_sharded) {
+        tt_metal::SetCommonRuntimeArgs(
+            program, mm_kernel_in0_sender_id, {(std::uint32_t)in0_tensor.address(), (std::uint32_t)0});
+    }
+
     return {
         std::move(program),
         {mm_kernel_in0_sender_id,
@@ -2999,11 +3007,8 @@ void override_runtime_arguments_impl(
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddress(program, cb_src2, in0);
     } else {
-        auto& reader_sender_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_sender_id);
-        for (const auto& core : in0_sender_interleaved_cores) {
-            auto& reader_runtime_args = reader_sender_runtime_args_by_core[core.x][core.y];
-            reader_runtime_args[0] = in0.address();
-        }
+        // in0 base address is a common runtime arg (identical on every core), so patch it once.
+        GetCommonRuntimeArgs(program, mm_kernel_in0_sender_id)[0] = in0.address();
     }
 
     // in1 sender

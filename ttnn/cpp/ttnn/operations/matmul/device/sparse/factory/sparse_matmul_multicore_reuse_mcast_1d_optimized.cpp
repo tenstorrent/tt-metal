@@ -654,9 +654,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
         // in0 sender and in1 sender
         if (core == start_core) {
+            // in0 tensor base address (common idx 0) and sparsity buffer address (common idx 1) are
+            // core-invariant and set once as common runtime args after this loop.
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_buffer->address(),
                 (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -666,8 +667,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
                 // padding args
                 (std::uint32_t)out_block_h,  // last_block_h
-                // sparsity args
-                (std::uint32_t)sparsity_buffer->address()  // sparsity_addr
             };
 
             tt_metal::SetRuntimeArgs(
@@ -755,6 +754,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         }
     }
 
+    // in0 tensor base address + sparsity buffer address are identical on every core; dispatch once.
+    tt_metal::SetCommonRuntimeArgs(
+        program,
+        mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
+        {(std::uint32_t)in0_buffer->address(), (std::uint32_t)sparsity_buffer->address()});
+
     auto shared_vars = SparseMatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
         {cb_src1, cb_src2, cb_output},
@@ -780,11 +785,13 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
     auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
     auto* dst_buffer = tensor_return_value.at(0).buffer();
 
-    // Manually unroll sender core
-    // in0 sender
-    auto& reader_sender_runtime_args = GetRuntimeArgs(program, shared_vars.kernels.at(0), shared_vars.start_core);
-    reader_sender_runtime_args[0] = src_buffer_a->address();
-    reader_sender_runtime_args[7] = sparsity_buffer->address();
+    // in0 sender: base address (common idx 0) and sparsity address (common idx 1) are common runtime args
+    // (identical on every core), so patch them once.
+    {
+        auto& reader_common_runtime_args = GetCommonRuntimeArgs(program, shared_vars.kernels.at(0));
+        reader_common_runtime_args[0] = src_buffer_a->address();
+        reader_common_runtime_args[1] = sparsity_buffer->address();
+    }
 
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.kernels.at(1));
 

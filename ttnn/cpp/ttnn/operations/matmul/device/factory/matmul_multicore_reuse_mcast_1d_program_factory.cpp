@@ -976,9 +976,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
         // in0 sender and in1 sender
         else if (core == start_core) {
+            // in0_tensor_addr (common idx 0) and sparsity_addr (common idx 1) are core-invariant and set
+            // once as common runtime args after this loop (see reader_bmm_tile_layout_in0_sender_padding.cpp).
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -988,9 +989,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
                 // padding args
                 (std::uint32_t)in0_last_out_block_h,  // last_block_h
-
-                // sparsity args
-                (std::uint32_t)0,  // sparsity_addr
             };
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
@@ -1083,6 +1081,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
+    }
+
+    // in0 tensor base address + sparsity address (0 here) are identical on every core; dispatch once as
+    // common runtime args. Only the interleaved sender kernel (reader_bmm_tile_layout_in0_sender_padding.cpp)
+    // reads them; the sharded path uses a different kernel that does not.
+    if (!in0_is_sharded) {
+        tt_metal::SetCommonRuntimeArgs(
+            program,
+            mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
+            {(std::uint32_t)in0_tensor.address(), (std::uint32_t)0});
     }
 
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
@@ -1908,9 +1916,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 core,
                 mm_in1_receiver_writer_args);  // RISCV_0_default
         }
+        // in0_tensor_addr (common idx 0) and sparsity_addr (common idx 1) are core-invariant and dispatched
+        // once as common runtime args after this loop (see reader_bmm_tile_layout_in0_sender_padding.cpp).
         std::vector<uint32_t> mm_in0_sender_args = {
             // in0 tensor args
-            (std::uint32_t)in0_tensor.address(),
             (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
             // in0 mcast args
             (std::uint32_t)0,  // in0_mcast_dest_noc_start_x
@@ -1920,12 +1929,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
             // padding args
             (std::uint32_t)per_core_M,  // last_block_h
-
-            // sparsity args
-            (std::uint32_t)0,  // sparsity_addr
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_1_default
     }
+    // in0 tensor base address + sparsity address (0 here) are identical on every core; dispatch once.
+    tt_metal::SetCommonRuntimeArgs(
+        program, mm_kernel_in0_sender_id, {(std::uint32_t)in0_tensor.address(), (std::uint32_t)0});
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in0_sender_id, mm_kernel_in1_sender_writer_id, mm_kernel_in1_receiver_writer_id},
         {cb_src0, cb_src2, cb_output},
@@ -2746,15 +2755,11 @@ inline void override_mcast_in1_program_parameters(
     bool src0_sharded = input_tensors[0].is_sharded();
     bool out_sharded = output_tensors[0].is_sharded();
 
-    auto& reader_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
+    // in0 sender: base address is a common runtime arg (identical on every core), so patch it once.
+    GetCommonRuntimeArgs(program, override_variables.kernels.at(0))[0] = src_a_tensor.address();
 
     // Manually unroll sender core
     {
-        // in0 sender
-        auto& reader_runtime_args =
-            reader_runtime_args_by_core[override_variables.start_core.x][override_variables.start_core.y];
-        reader_runtime_args[0] = src_a_tensor.address();
-
         // in1 sender
         auto& sender_writer_runtime_args =
             GetRuntimeArgs(program, override_variables.kernels.at(1), override_variables.start_core);
@@ -2770,12 +2775,8 @@ inline void override_mcast_in1_program_parameters(
     for (uint32_t i = 1; i < override_variables.cores.size(); ++i) {
         const CoreCoord& core = override_variables.cores[i];
 
-        auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
-
         auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
 
-        // in0 sender
-        reader_runtime_args[0] = src_a_tensor.address();
         // in1 receiver
         writer_runtime_args[2] = dst_tensor.address();
     }
@@ -2829,10 +2830,8 @@ static void override_mcast_in0_program_parameters(
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(1), src_a_tensor);
     } else {
-        // in0 sender
-        auto& reader_sender_runtime_args =
-            GetRuntimeArgs(program, override_variables.kernels.at(0), override_variables.start_core);
-        reader_sender_runtime_args[0] = src_a_tensor.address();
+        // in0 sender: base address is a common runtime arg (identical on every core), so patch it once.
+        GetCommonRuntimeArgs(program, override_variables.kernels.at(0))[0] = src_a_tensor.address();
     }
 
     if (src1_sharded) {
@@ -3819,9 +3818,10 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
         // in0 sender and in1 sender
         else if (core == start_core) {
+            // in0 tensor base address (common idx 0) and sparsity address (common idx 1) are core-invariant
+            // and registered once as common runtime args after this loop.
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -3831,21 +3831,13 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
                 // padding args
                 (std::uint32_t)in0_last_out_block_h,  // last_block_h
-
-                // sparsity args
-                (std::uint32_t)0,  // sparsity_addr
             };
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
-            {
-                std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(
-                    mm_in0_sender_args.begin(), mm_in0_sender_args.end());
-                in0_sender_variant[0] = in0_tensor;
-                in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
-            }
+            in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
         }
         // in0 receiver and in 1 sender
         else {
@@ -3934,6 +3926,16 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
             }
         }
+    }
+
+    // in0 tensor base address + sparsity address (0 here) are identical on every core. Register them once as
+    // common runtime args; the in0 tensor is a MeshTensor entry so the framework auto-patches its address on
+    // every dispatch. Only the interleaved sender kernel reads these; the sharded path uses another kernel.
+    if (!in0_is_sharded) {
+        KernelDescriptor::RTArgList in0_sender_common_args;
+        in0_sender_common_args.push_back(in0_tensor);   // common idx 0: in0 base address
+        in0_sender_common_args.push_back((uint32_t)0);  // common idx 1: sparsity address
+        in0_sender_kernel_desc.emplace_common_runtime_args(in0_sender_common_args);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -4763,9 +4765,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
             }
         }
-        std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in0_sender_args = {
+        // in0 tensor base address (common idx 0) and sparsity address (common idx 1) are core-invariant and
+        // registered once as common runtime args after this loop.
+        std::vector<uint32_t> mm_in0_sender_args = {
             // in0 tensor args
-            in0_tensor,
             (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
             // in0 mcast args
             (std::uint32_t)0,  // in0_mcast_dest_noc_start_x
@@ -4775,16 +4778,17 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
             // padding args
             (std::uint32_t)per_core_M,  // last_block_h
-
-            // sparsity args
-            (std::uint32_t)0,  // sparsity_addr
         };
-        {
-            std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(
-                mm_in0_sender_args.begin(), mm_in0_sender_args.end());
-            in0_sender_variant[0] = in0_tensor;
-            in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
-        }
+        in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
+    }
+
+    // in0 tensor base address + sparsity address (0 here) are identical on every core. Register once as common
+    // runtime args; the in0 tensor is a MeshTensor entry so the framework auto-patches its address per dispatch.
+    {
+        KernelDescriptor::RTArgList in0_sender_common_args;
+        in0_sender_common_args.push_back(in0_tensor);   // common idx 0: in0 base address
+        in0_sender_common_args.push_back((uint32_t)0);  // common idx 1: sparsity address
+        in0_sender_kernel_desc.emplace_common_runtime_args(in0_sender_common_args);
     }
 
     ////////////////////////////////////////////////////////////////////////////
