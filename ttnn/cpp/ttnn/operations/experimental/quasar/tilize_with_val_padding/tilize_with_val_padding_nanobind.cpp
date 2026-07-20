@@ -36,6 +36,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                tile (tt.tt_metal.Tile, optional): Geometry of the tile to be tilized to. Defaults to the default tile.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -81,6 +82,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor.
                 * :attr:`dtype`: Data type of the output tensor.
                 * :attr:`use_multicore`: Whether to use multicore.
+                * :attr:`tile`: Geometry of the tile to be tilized to. Defaults to the default tile.
         )doc";
 
     ttnn::bind_function<"tilize_with_zero_padding", "ttnn.experimental.quasar.">(
