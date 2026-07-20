@@ -10,9 +10,8 @@ print_usage() {
     echo "  --mpi-interface <iface>   (Optional) Network interface to pin MPI to (default: ens5f0np0)"
     echo "                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include."
     echo "                            Interface names vary by site; override on non-Markham clusters."
-    echo "  --no-tag-host             (Optional) Disable per-rank [hostname] output tagging"
-    echo "                            (tagging is ON by default and replaces mpirun's [jobid,rank] tag;"
-    echo "                            --no-tag-host restores the plain --tag-output [jobid,rank] behavior)"
+    echo "  --tag-host                (Optional) Prefix each rank's output with [hostname]"
+    echo "                            instead of mpirun's [jobid,rank] --tag-output (off by default)"
     echo "  --print                   Print the command alongside execution"
     echo "  --print-only              Print the command without executing it"
     echo "  [global-mpi-args]     Global MPI arguments applied to all ranks"
@@ -51,8 +50,9 @@ default() {
     local print_flag=false
     local print_only=false
     # Host-tag each rank's output (replaces mpirun's [jobid,rank] --tag-output).
-    # On by default; disable with --no-tag-host.
-    local tag_host=true
+    # Off by default to preserve [jobid,rank] for callers that parse it; enable
+    # with --tag-host.
+    local tag_host=false
     # Interface names differ between sites; default works on Markham,
     # override elsewhere via --mpi-interface.
     local mpi_interface="ens5f0np0"
@@ -118,8 +118,8 @@ default() {
                 print_only=true
                 shift
                 ;;
-            --no-tag-host)
-                tag_host=false
+            --tag-host)
+                tag_host=true
                 shift
                 ;;
             *)

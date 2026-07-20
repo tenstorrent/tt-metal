@@ -474,9 +474,10 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
 
     run_cluster_validation() {
         if [[ -n "$DOCKER_IMAGE" ]]; then
-            # mpi-docker host-tags each rank at the source by default.
+            # --tag-host makes mpi-docker prefix each rank with [hostname]; tag_stream adds the time.
             ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
                 --empty-entrypoint \
+                --tag-host \
                 --mpi-interface "$MPI_IF" \
                 --volume /data/scaleout_configs \
                 "${MPI_EXTRA_ARGS[@]}" \

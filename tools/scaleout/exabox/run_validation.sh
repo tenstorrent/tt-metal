@@ -291,9 +291,10 @@ run_cluster_validation() {
             "${MPI_EXTRA_ARGS[@]}" \
             bash -c "set -o pipefail; h=\$(hostname); $bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
     else
-        # mpi-docker host-tags each rank at the source by default.
+        # --tag-host makes mpi-docker prefix each rank with [hostname]; tag_stream adds the time.
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --tag-host \
             --mpi-interface "$MPI_IF" \
             "${volume_args[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
