@@ -275,15 +275,19 @@ def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
 
-    # 3. Sharded sub-case gating (Refinement 2 / 2b / 2c).
+    # 3. Sharded sub-case gating (Refinement 2 / 2b / 2c / 2d).
     if in_mc.is_sharded() and out_mc.is_sharded():
-        if in_mc.buffer_type != ttnn.BufferType.L1 or out_mc.buffer_type != ttnn.BufferType.L1:
-            raise UnsupportedAxisValue("tilize: sharded path requires L1 buffers")
+        both_l1 = in_mc.buffer_type == ttnn.BufferType.L1 and out_mc.buffer_type == ttnn.BufferType.L1
         if _same_shard_spec(in_mc, out_mc):
-            # --- same-spec zero-copy (multi-shard + cliff/padded capable) ---
-            # Each core tilizes its whole PHYSICAL bank (ceil(n_shards/n_cores)
-            # slots, padded cliff slots included) straight into the same-spec
-            # output bank; identity holds because in/out share the slot layout.
+            # --- same-spec ---
+            # L1 -> zero-copy: each core tilizes its whole PHYSICAL bank
+            # (ceil(n_shards/n_cores) slots, padded cliff slots included) straight
+            # into the same-spec output bank; identity holds because in/out share
+            # the slot layout. DRAM (Refinement 2d lever #2) -> general cross-core
+            # path via TensorAccessor (a DRAM shard cannot be CB-aliased, but the
+            # accessor resolves DRAM shard banks fine; the op allocates a distinct
+            # output tensor so there is no aliasing). Both require tile-aligned
+            # shards (each tile maps to one bank slot).
             shard_h, shard_w = _folded_shard_shape(in_mc)
             if shard_h % TILE != 0 or shard_w % TILE != 0:
                 raise UnsupportedAxisValue(
@@ -293,8 +297,11 @@ def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True
             # --- cross-spec resharding (Refinement 2c general cross-core path) ---
             # Input shard on one core, output shard on another; each compute core
             # reads its output tile-rows' RM sticks and writes its output tiles
-            # via TensorAccessor (resolves to remote L1 banks). Requires a
-            # tile-aligned output shard so each tile maps to one bank slot.
+            # via TensorAccessor (resolves to remote L1 banks). L1-only (DRAM
+            # cross-spec resharding is a separate axis, out of 2d scope). Requires
+            # a tile-aligned output shard so each tile maps to one bank slot.
+            if not both_l1:
+                raise UnsupportedAxisValue("tilize: cross-spec sharded resharding requires L1 buffers")
             osh, osw = _folded_shard_shape(out_mc)
             if osh % TILE != 0 or osw % TILE != 0:
                 raise UnsupportedAxisValue(

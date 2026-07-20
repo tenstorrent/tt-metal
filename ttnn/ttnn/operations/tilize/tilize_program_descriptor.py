@@ -389,11 +389,15 @@ def create_program_descriptor(
     in_sharded = in_mc.is_sharded()
     out_sharded = out_mc.is_sharded()
     # Same-spec sharded I/O + multicore -> zero-copy compute-only path (fastest:
-    # both CBs aliased onto resident L1 shards, no NoC).
-    if in_sharded and out_sharded and use_multicore and _pd_same_shard_spec(in_mc, out_mc):
+    # both CBs aliased onto resident L1 shards, no NoC). Requires L1 on both sides
+    # (the CBs alias resident L1 shard banks; a DRAM shard cannot be CB-aliased) —
+    # same-spec DRAM (Refinement 2d lever #2) falls through to the general path,
+    # which reads/writes DRAM shard banks via TensorAccessor with zero aliasing.
+    both_l1 = in_mc.buffer_type == ttnn.BufferType.L1 and out_mc.buffer_type == ttnn.BufferType.L1
+    if in_sharded and out_sharded and both_l1 and use_multicore and _pd_same_shard_spec(in_mc, out_mc):
         return _create_sharded_program_descriptor(input_tensor, output_tensor)
     # Any other sharded case (crossover either direction, cross-spec both-sharded,
-    # nd->legacy, single-core sharded) -> general cross-core path via TensorAccessor.
+    # same-spec DRAM, nd->legacy, single-core sharded) -> general cross-core path.
     if in_sharded or out_sharded:
         return _create_general_program_descriptor(input_tensor, output_tensor, use_multicore)
 
