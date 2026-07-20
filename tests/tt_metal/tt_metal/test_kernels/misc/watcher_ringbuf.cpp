@@ -15,9 +15,9 @@
 
 void kernel_main() {
     // Conditionally enable using defines for each trisc
-#if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
-    (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
-    (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
+#if (defined(UCK_CHLKC_UNPACK) and defined(TEST_TRISC_0)) or \
+    (defined(UCK_CHLKC_MATH) and defined(TEST_TRISC_1)) or \
+    (defined(UCK_CHLKC_PACK) and defined(TEST_TRISC_2)) or \
     (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || \
      defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DRISC))
     for (uint32_t idx = 0; idx < 40; idx++) {

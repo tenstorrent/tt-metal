@@ -86,7 +86,7 @@ void RunTest(
                         program,
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                         logical_core,
-                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
+                        ComputeConfig{.defines = {{fmt::format("TEST_TRISC_{}", processor.processor_type), "1"}}});
                     break;
             }
             break;
