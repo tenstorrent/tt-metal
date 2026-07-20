@@ -7,22 +7,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 
-# Single place that prefixes each output line with a [hostname] tag, plus a
-# [HH:MM:SS] time only when the line does not already carry its own
-# "YYYY-MM-DD HH:MM:SS" timestamp (Metal/UMD/tt-smi logs), so the time is never
-# printed twice on one line. Ranks prepend a bare "[host] " tag at the source
-# (mpirun merges all ranks into one stream, so only the rank knows its own
-# hostname); this function keeps that host, decides the time, and also tags the
-# orchestrator's own local lines. The leading-timestamp check tolerates leading
-# ANSI colour codes (tt-smi runs under a pty and colourises its output). Lines
-# already fully tagged as "[host][time] " (e.g. from an earlier pass through this
-# function) are emitted unchanged so nothing is double-tagged.
+# Tag each line with [hostname], adding [HH:MM:SS] only when the line has no
+# timestamp of its own so tool logs aren't stamped twice. Ranks prepend a bare
+# "[host] " prefix at the source; this keeps that host, adds the time, and passes
+# already fully-tagged lines through unchanged (idempotent under a second pass).
 tag_stream() {
     local line host rest
     local esc=$'\x1b'
-    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '
-    local rank_re='^\[([^][]*)\] (.*)$'
-    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"
+    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '   # already [host][time]
+    local rank_re='^\[([^][]*)\] (.*)$'                                # rank's bare [host] prefix
+    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"  # leading timestamp, ANSI-tolerant
     local self="${HOSTNAME:-$(hostname)}"
     while IFS= read -r line; do
         if [[ "$line" =~ $done_re ]]; then
@@ -348,8 +342,7 @@ mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
 
-# Redirect all output: every line is tagged with [hostname][time] (already-tagged
-# reset lines pass through untouched), terminal sees colors, log file gets ANSI/CR stripped
+# Tag all output; terminal keeps colors, log file gets ANSI/CR stripped.
 exec > >(tag_stream | tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
 echo "Logging to: $LOG_FILE"
 
@@ -428,8 +421,8 @@ echo ""
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
-    # Host-tag every reset line for attribution. tt-smi writes key progress to the tty (not stdout) so
-    # run under `script`; the tr/sed/awk pipeline collapses its animated \r/spinner output, keeps colors.
+    # tt-smi writes progress to the tty (not stdout), so run under `script`; the
+    # tr/sed/awk pipeline collapses its animated \r/spinner output and keeps colors.
     read -r -d '' RESET_CMD <<'RESET_CMD' || true
 set -o pipefail
 h=$(hostname)
@@ -481,8 +474,7 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
 
     run_cluster_validation() {
         if [[ -n "$DOCKER_IMAGE" ]]; then
-            # mpi-docker tags each rank's output with [hostname][time] at the source
-            # by default (real host, replacing mpirun's [jobid,rank] tag).
+            # mpi-docker host-tags each rank at the source by default.
             ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
                 --empty-entrypoint \
                 --mpi-interface "$MPI_IF" \
@@ -492,10 +484,8 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
                 ./build/tools/scaleout/run_cluster_validation \
                 "${VALIDATION_ARGS[@]}"
         else
-            # Self-tag each rank's output with a bare [hostname] at the source (mpirun
-            # merges all ranks into one stream at the launcher, so only the rank knows
-            # its own hostname). tag_stream adds the time and avoids duplicating any
-            # timestamp the line already carries. pipefail keeps the real exit code.
+            # Bare [host] tag on the rank (only the rank knows its hostname); tag_stream
+            # adds the time. pipefail keeps run_cluster_validation's real exit code.
             local _bin_cmd
             _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation "${VALIDATION_ARGS[@]}")
             mpirun --host "$HOSTS" \

@@ -10,7 +10,7 @@ print_usage() {
     echo "  --mpi-interface <iface>   (Optional) Network interface to pin MPI to (default: ens5f0np0)"
     echo "                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include."
     echo "                            Interface names vary by site; override on non-Markham clusters."
-    echo "  --no-tag-host             (Optional) Disable per-rank [hostname][time] output tagging"
+    echo "  --no-tag-host             (Optional) Disable per-rank [hostname] output tagging"
     echo "                            (tagging is ON by default and replaces mpirun's [jobid,rank] tag;"
     echo "                            --no-tag-host restores the plain --tag-output [jobid,rank] behavior)"
     echo "  --print                   Print the command alongside execution"
@@ -50,11 +50,8 @@ default() {
     local extra_volumes=""
     local print_flag=false
     local print_only=false
-    # Prefix every output line of each rank with [hostname][time], where hostname is
-    # resolved on the rank's own host (the prefixer runs in the remote shell that
-    # launches `docker run`, outside the container, so it reports the real host
-    # regardless of container hostname). Replaces mpirun's opaque [jobid,rank]
-    # --tag-output tag. On by default; disable with --no-tag-host.
+    # Host-tag each rank's output (replaces mpirun's [jobid,rank] --tag-output).
+    # On by default; disable with --no-tag-host.
     local tag_host=true
     # Interface names differ between sites; default works on Markham,
     # override elsewhere via --mpi-interface.
@@ -240,21 +237,17 @@ default() {
         exit 1
     fi
 
-    # Build the command for each rank group. With --tag-host we do our own per-line
-    # [hostname][time] tagging on each rank, so mpirun's [jobid,rank] --tag-output is
-    # dropped to avoid a redundant/confusing double tag.
+    # With --tag-host we host-tag each rank ourselves, so drop mpirun's [jobid,rank]
+    # --tag-output to avoid a double tag.
     local output_tag_arg="--tag-output"
     if [[ "$tag_host" == true ]]; then
         output_tag_arg=""
     fi
     local base_mpirun_args="$output_tag_arg --prtemca oob_tcp_if_include $mpi_interface --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_include $mpi_interface"
 
-    # Per-rank self-tagger: runs in the remote shell (outside the container), pipes the
-    # container's merged stdout/stderr, and stamps each line with a bare [real-host]
-    # prefix. The caller's tag_stream adds the time and avoids duplicating any timestamp
-    # the line already carries. No single quotes (would clash with the bash -c '...'
-    # wrapper); $(hostname)/$l are kept literal here and resolved on the rank at run
-    # time. pipefail preserves the container's exit code through the pipe.
+    # Bare [real-host] tag applied in the remote shell (outside the container), so it
+    # reports the true host regardless of container hostname. No single quotes (would
+    # clash with the bash -c '...' wrapper); $(hostname)/$l resolve on the rank.
     local host_tag_pipe='while IFS= read -r l; do printf "[%s] %s\n" "$(hostname)" "$l"; done'
 
     # Add global MPI args to base
