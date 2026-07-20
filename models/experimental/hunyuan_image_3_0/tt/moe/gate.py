@@ -22,7 +22,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
-from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
+from ..matmul_utils import to_interleaved_if_sharded
 from ..parallel_utils import decode_mm_program_config
 
 
@@ -94,20 +94,27 @@ class HunyuanTtTopKGate(LightweightModule):
         """
         # Upcast activations to match the fp32 router weight (mirrors the
         # reference, which casts hidden states to fp32 before the projection).
+        # Keep the caller-owned activation alive — MoE reuses ``x`` for experts.
+        # DRAM linear only: L1 width-sharded matmul must not consume shared ``x``.
+        act = x
+        owns_act = False
         if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
+            act = ttnn.typecast(x, ttnn.float32)
+            owns_act = True
 
-        # Router projection (M-tiny decode, K=4096, N=num_experts=64). ttnn.linear
-        # auto mis-schedules this skinny matmul to ~90us / 0.4 TFLOPs; the 1D split-N
-        # mcast config recovers ~13us (~6.8x, program-cache ON — see gate sweep). It
-        # returns None (=> auto/wide_mm) for wide-M prefill, so only decode is affected.
-        gate_pc = decode_mm_program_config(self.device, x.shape[-2], x.shape[-1], self.wg.shape[-1])
-        logits = l1_sharded_linear(
-            x,
+        # Router projection (M-tiny decode, K=4096, N=num_experts=64). Prefer DRAM
+        # linear so MoE can reuse ``x`` across gate/experts; 1D split-N program
+        # config still recovers decode latency vs auto (see gate sweep).
+        gate_pc = decode_mm_program_config(self.device, act.shape[-2], act.shape[-1], self.wg.shape[-1])
+        logits = ttnn.linear(
+            act,
             self.wg,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=gate_pc,
         )  # [B, S, num_experts]
+        if owns_act:
+            ttnn.deallocate(act)
         logits = to_interleaved_if_sharded(logits)
 
         gates = ttnn.softmax(logits, dim=-1)
