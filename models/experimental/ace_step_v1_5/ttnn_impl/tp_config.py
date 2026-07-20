@@ -71,26 +71,31 @@ def _env_tp_axis() -> int:
     return 0 if raw == "0" else 1
 
 
+_TP_ON_VALUES = ("on", "1", "true", "yes", "auto")
+_TP_FULL_VALUES = ("4", "full", "all")  # 4-way: shard one dim across ALL chips (cluster_axis=None)
+
+
 def ace_step_tp_env_requested() -> bool:
     """Env-only TP request check (no device needed) — used to decide fabric-enable *before* the
     mesh is opened. Must agree with :func:`ace_step_tp_enabled` modulo the multi-chip check."""
-    return os.environ.get("ACE_STEP_TP", "").strip().lower() in ("on", "1", "true", "yes", "auto")
+    return os.environ.get("ACE_STEP_TP", "").strip().lower() in (_TP_ON_VALUES + _TP_FULL_VALUES)
+
+
+def ace_step_tp_full_requested() -> bool:
+    """True when 4-way (all-chip) TP is requested (``ACE_STEP_TP=4|full|all``)."""
+    return os.environ.get("ACE_STEP_TP", "").strip().lower() in _TP_FULL_VALUES
 
 
 def ace_step_tp_enabled(mesh_device: Any) -> bool:
     """True iff TP is switched on for this device.
 
-    ``ACE_STEP_TP`` = ``on``/``1`` forces on (requires >1 chip); ``auto`` enables on any
-    multi-chip mesh; anything else (default) keeps TP off → legacy replicate path.
+    ``ACE_STEP_TP`` = ``on``/``1``/``auto`` → per-axis TP (degree = one mesh axis);
+    ``4``/``full``/``all`` → shard across ALL chips (degree = num_chips). Requires >1 chip.
     """
     raw = os.environ.get("ACE_STEP_TP", "").strip().lower()
     if _num_chips(mesh_device) <= 1:
         return False
-    if raw in ("on", "1", "true", "yes"):
-        return True
-    if raw in ("auto",):
-        return True
-    return False
+    return raw in (_TP_ON_VALUES + _TP_FULL_VALUES)
 
 
 @dataclass(frozen=True)
@@ -98,15 +103,18 @@ class TPConfig:
     """Resolved TP layout for a mesh device."""
 
     enabled: bool
-    axis: int  # mesh axis carrying the TP shards (0=rows, 1=cols)
+    axis: int  # mesh axis carrying the TP shards (0=rows, 1=cols); ignored when full
     rows: int
     cols: int
+    full: bool = False  # 4-way: shard one dim across ALL chips (collectives use all devices)
 
     @property
     def degree(self) -> int:
-        """Number of TP shards = size of the mesh along the TP axis (1 when disabled)."""
+        """Number of TP shards. Full → all chips; else the size of the TP mesh axis."""
         if not self.enabled:
             return 1
+        if self.full:
+            return self.rows * self.cols
         return self.cols if self.axis == 1 else self.rows
 
     @property
@@ -117,8 +125,9 @@ class TPConfig:
 def resolve_tp_config(mesh_device: Any) -> TPConfig:
     rows, cols = _mesh_shape(mesh_device)
     enabled = ace_step_tp_enabled(mesh_device)
+    full = enabled and ace_step_tp_full_requested()
     axis = _env_tp_axis()
-    return TPConfig(enabled=enabled, axis=axis, rows=rows, cols=cols)
+    return TPConfig(enabled=enabled, axis=axis, rows=rows, cols=cols, full=full)
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +163,9 @@ def tp_weight_mesh_mapper(mesh_device: Any, *, shard_dim: int, cfg: TPConfig | N
     cfg = cfg or resolve_tp_config(mesh_device)
     if not cfg.enabled or cfg.degree <= 1:
         return _replicate_mapper(mesh_device)
+    if cfg.full:
+        # 4-way: split `shard_dim` across ALL chips (mesh linearised to num_chips devices).
+        return ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
     if not hasattr(ttnn, "ShardTensor2dMesh"):
         raise RuntimeError("ttnn.ShardTensor2dMesh unavailable; cannot build TP weight mapper")
     # Shard `shard_dim` across the TP axis, replicate across the other mesh axis.
@@ -174,7 +186,9 @@ def tp_all_reduce(tensor: "ttnn.Tensor", mesh_device: Any, *, cfg: TPConfig | No
     cfg = cfg or resolve_tp_config(mesh_device)
     if not cfg.enabled or cfg.degree <= 1:
         return tensor
-    # Sum reduction across the cluster axis; mesh is implicit in the tensor (G0-confirmed sig).
+    # Sum across the TP shards; full → all devices (cluster_axis omitted), else the TP axis.
+    if cfg.full:
+        return ttnn.all_reduce(tensor)
     return ttnn.all_reduce(tensor, cluster_axis=cfg.axis)
 
 
@@ -184,7 +198,9 @@ def tp_all_gather(tensor: "ttnn.Tensor", mesh_device: Any, *, dim: int, cfg: TPC
     cfg = cfg or resolve_tp_config(mesh_device)
     if not cfg.enabled or cfg.degree <= 1:
         return tensor
-    # `dim` is a required positional; mesh is implicit in the tensor (G0-confirmed sig).
+    # `dim` is a required positional; full → all devices (cluster_axis omitted), else the TP axis.
+    if cfg.full:
+        return ttnn.all_gather(tensor, dim)
     return ttnn.all_gather(tensor, dim, cluster_axis=cfg.axis)
 
 

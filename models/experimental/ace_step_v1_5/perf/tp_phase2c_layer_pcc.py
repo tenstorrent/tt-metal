@@ -73,7 +73,7 @@ def main() -> int:
         )
         os.environ["ACE_STEP_TP"] = "off"
         y_off = _run(mesh, cfg, sd, layer_idx, x, tsp, enc, rotary)
-        os.environ["ACE_STEP_TP"] = "on"
+        os.environ["ACE_STEP_TP"] = os.environ.get("TP_ON", "on")
         y_on = _run(mesh, cfg, sd, layer_idx, x, tsp, enc, rotary)
 
         _, p_off = comp_pcc(ref, y_off, pcc=_GATE_TORCH)

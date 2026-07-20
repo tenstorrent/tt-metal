@@ -112,9 +112,65 @@ need on-device confirmation — that is gate **G0**.
   measure; then attempt in-trace CCL. Gate: trace-on RTF ≥ replicate baseline, audio parity.
 - **Phase 5 — drop host offload.** Once DiT is genuinely sharded, retire
   host temb / host CFG-Euler / sequential-CFG for the mesh path.
-- **Phase 6 — VAE (optional).** Channel-parallel: shard k=1 convs / detokenizer projections
-  (all-reduce at output); keep k>1 conv + conv_transpose2d weights replicated, shard activations.
-  Lower priority (VAE decode is ~14–24 s of wall).
+- **Phase 6 — VAE TP: BLOCKED (framework).** Investigated and stopped with rationale:
+  `ttnn.prepare_conv_weights` (used by every VAE conv) takes a **full host weight + device** and
+  exposes only an intra-device *activation* sharding scheme — **no cross-mesh weight sharding**
+  (`mesh`/`mesh_mapper`/`ShardTensor` absent from its API). So k>1 convs (conv1/conv2 k=7, resnet
+  k=7 dilated, conv_transpose2d — the bulk of VAE compute) cannot be tensor-parallel-sharded
+  without bypassing the entire tuned conv path (manual im2col + sharded matmul): a large, fragile
+  rewrite with poor ROI (VAE TP would add an all-gather per conv and, per the DiT result, likely
+  regress latency). Sharding only the k=1 convs (`ttnn.linear`) is counterproductive — they are
+  interleaved with k>1 convs, forcing an all-gather around each. **Viable alternative (NOT TP,
+  deferred):** data/time-parallel decode — distribute the existing overlap-add time tiles across
+  the 4 chips (weights replicated, no conv sharding). Separate substantial build; real ~Nx VAE
+  speedup potential without the conv-sharding blocker.
+- **Phase 5 — retire host CFG/Euler: DEFERRED (low ROI).** Trace already gives latency parity, so
+  moving CFG/Euler onto the device is optimization, not TP-completion, and risks the validated
+  multi-device pipeline. Left as future optimization.
+
+## ⚠️ Perf finding (controlled A/B, base 30s, eager, only ACE_STEP_TP toggled)
+
+| | Wall | DiT | RTF |
+| --- | --- | --- | --- |
+| replicate (TP off) | 84.9 s | **7.70 s** | 0.35× |
+| TP on (2-way) | 111.7 s | **18.91 s** | 0.27× |
+
+**Naive 2-way eager TP is ~2.5× SLOWER on the DiT.** Cause: ~3 `all_reduce`/block × N blocks × 50
+steps of **eager** CCL; fabric/launch latency per collective exceeds the compute saved by 2-way
+sharding on a DiT this small. TP here buys **memory** (≈½ DiT weights/chip), not latency. It would
+only help latency for a model that is compute-bound or does not fit on one chip. **Latency recovery — CONFIRMED via `--use-trace`** (base 30s, same A/B):
+
+| | Wall | DiT | RTF |
+| --- | --- | --- | --- |
+| replicate (trace) | 78.9 s | 7.30 s | 0.38× |
+| TP 2-way (trace) | 77.6 s | 8.65 s | 0.39× |
+
+Trace replay amortizes the CCL launch overhead: DiT overhead drops from +146% (eager) to **+18%**,
+and **wall/RTF reach parity**. So with trace, TP is latency-neutral → the **memory benefit is
+free**. Take-away: **run TP only with trace**; eager TP is a large regression. 2-way sharding on
+this DiT is ~break-even (compute saved ≈ comms added), so don't expect a *speedup* — expect parity
++ memory headroom. A larger DiT variant would tip this toward a real speedup.
+
+## 4-way TP (DONE — validated)
+
+`ACE_STEP_TP=4|full|all` shards one dim across **all 4 chips** (`ShardTensorToMesh` +
+`all_reduce`/`all_gather` with `cluster_axis=None`). Feasibility probe: all-4-chip collectives work
+under **FABRIC_1D** (all_reduce(ones)→4.0). Full DiT block at degree 4: **on-vs-off PCC 0.999212**.
+DiT code already parameterized by `degree` (interleave into `deg` chunks), so no DiT edits needed —
+only `tp_config`. Memory: ≈¼ DiT weights/chip. Latency (e2e, base 30s, trace): wall 93.3s / DiT 13.72s —
+**a regression** vs replicate (78.9/7.30) and 2-way (77.6/8.65). More sharding ⇒ more comms ⇒
+slower on this small DiT. **Verdict: 2-way + trace is the sweet spot (parity + ½ memory); use 4-way
+only when ½-memory is insufficient and the latency hit is acceptable.**
+
+## Perf summary (base 30s, trace, DiT = TP-relevant metric)
+
+| config | wall | DiT | RTF | weights/chip |
+| --- | --- | --- | --- | --- |
+| replicate | 78.9s | 7.30s | 0.38× | full |
+| TP 2-way | 77.6s | 8.65s | 0.39× | ½ |
+| TP 4-way | 93.3s | 13.72s | 0.32× | ¼ |
+
+Eager TP (no trace) is a large regression (DiT +146%); **always run TP with `--use-trace`.**
 
 ## Open questions
 

@@ -596,9 +596,17 @@ def open_dit_device(
         from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import ace_step_tp_env_requested
 
         if ace_step_tp_env_requested() and hasattr(ttnn_mod, "set_fabric_config") and hasattr(ttnn_mod, "FabricConfig"):
+            from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import ace_step_tp_full_requested
+
             ttnn_mod.set_fabric_config(ttnn_mod.FabricConfig.FABRIC_1D)
             _tp_fabric = True
-            print("[ace_step_v1_5] TP: enabled FABRIC_1D for DiT mesh CCL", flush=True)
+            _mode = "4-way (all chips)" if ace_step_tp_full_requested() else "per-axis (2-way)"
+            print(f"[ace_step_v1_5] TP: enabled FABRIC_1D for DiT mesh CCL ({_mode})", flush=True)
+            print(
+                "[ace_step_v1_5] TP: run WITH --use-trace. Eager TP is ~2.5x slower on the DiT "
+                "(un-amortised CCL); trace replay recovers latency parity. See docs/TP4_PLAN.md.",
+                flush=True,
+            )
         try:
             dev = ttnn_mod.open_mesh_device(ttnn_mod.MeshShape(int(rows), int(cols)), **mesh_kw)
         except Exception as exc:
