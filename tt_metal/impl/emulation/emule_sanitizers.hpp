@@ -34,8 +34,9 @@ static constexpr uint32_t EMULE_NUM_CBS = 32;
 
 namespace tt::tt_metal::emule {
 
-// Sanitizer state threaded into each kernel thread. Built once per launch by
-// build_oob_tensor_state, then pushed into the thread-locals above.
+// Sanitizer state threaded into each kernel launch. Built once per launch by
+// build_oob_tensor_state, then copied into the current fiber's sanitizer state
+// (__emule_self->san) by set_sanitizer_thread_locals.
 struct EmuleOobTensorState {
     bool asan_enabled = false;
     uint32_t l1_unreserved_base = 0;

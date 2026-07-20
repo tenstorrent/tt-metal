@@ -115,6 +115,7 @@ if(TT_METAL_USE_EMULE)
             ${TT_EMULE_PATH}/include
     )
     target_link_libraries(unit_tests_fiber_asan PRIVATE test_metal_common_libs)
+    target_precompile_headers(unit_tests_fiber_asan REUSE_FROM metal_common_pch)
     target_link_options(unit_tests_fiber_asan PRIVATE -rdynamic)
     set_target_properties(
         unit_tests_fiber_asan

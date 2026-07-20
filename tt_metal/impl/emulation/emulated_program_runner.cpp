@@ -3322,7 +3322,10 @@ static void launch_cores(
                         intent_tracker->accumulate_resolved(
                             oob_state, __emule_self->san_resolved_log, __emule_self->san_resolved_count);
                         __emule_self->san_resolved_active = false;
-                        intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_kernel_name);
+                        // Use the per-fiber kernel name (survives a mid-kernel yield) rather than
+                        // the worker-thread_local __emule_kernel_name, which a co-scheduled fiber
+                        // could have overwritten — otherwise an OI violation can misattribute.
+                        intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_self->san.kernel_name);
                     }
                     __emule_kernel_name = nullptr;
                     clear_sanitizer_thread_locals();
