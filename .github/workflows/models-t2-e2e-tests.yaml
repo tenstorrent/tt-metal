@@ -126,7 +126,6 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      tracy: true
   models-e2e-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
