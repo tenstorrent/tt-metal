@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -920,8 +921,24 @@ void launch_build_step(const std::function<void()>& build_func, std::vector<std:
 }
 
 void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    // Join EVERY task before propagating, even if one throws. The build steps are spawned
+    // onto other pool workers and capture this / out_dir / settings — all owned by the
+    // compile() call chain (out_dir's string lives in the caller frame). Returning on the
+    // first exception unwinds that chain while sibling tasks are still running and still
+    // dereference those captures → use-after-scope (benign serially, a SEGV under parallel
+    // load that immediately reuses the freed stack). Stash the first error, join all, rethrow.
+    std::exception_ptr first_error;
     for (auto& event : events) {
-        event.get();
+        try {
+            event.get();
+        } catch (...) {
+            if (!first_error) {
+                first_error = std::current_exception();
+            }
+        }
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
     }
 }
 
