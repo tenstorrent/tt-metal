@@ -33,9 +33,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
-# ── Op registry ──────────────────────────────────────────────────────────────
-
-
 @dataclass(frozen=True)
 class OpSpec:
     """Static description of a traced op kind.
@@ -113,9 +110,6 @@ def missing_params(kind: str, params: Optional[Mapping[str, Any]]) -> List[str]:
     """Return the ``required_params`` for ``kind`` that are absent from ``params``."""
     present = params or {}
     return [p for p in required_params(kind) if p not in present]
-
-
-# ── Manifest record type ─────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -198,9 +192,6 @@ def load_manifest(manifest_path: Any) -> List[Record]:
     data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     records = data.get("records", []) if isinstance(data, dict) else []
     return [record_from_mapping(r, i) for i, r in enumerate(records)]
-
-
-# ── Shared record validation ─────────────────────────────────────────────────
 
 
 def validate_record_mapping(raw: Any, *, position: int) -> List[str]:
