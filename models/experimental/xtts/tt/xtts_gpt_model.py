@@ -25,7 +25,13 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE, LAYER_NORM_EPS, NUM_LAYERS
+from models.experimental.xtts.reference.xtts_gpt_block import (
+    HEAD_DIM,
+    HIDDEN_SIZE,
+    LAYER_NORM_EPS,
+    NUM_HEADS,
+    NUM_LAYERS,
+)
 from models.experimental.xtts.tt.xtts_gpt_block import _to_device
 from models.experimental.xtts.tt.xtts_gpt_stack import TtXttsGptStack
 
@@ -170,3 +176,79 @@ class TtXttsGptModel(LightweightModule):
         ttnn.deallocate(hidden)
         logits = ttnn.linear(latent, self.mel_head_weight, bias=self.mel_head_bias)
         return logits, latent, kv
+
+    # ------------------------------------------------------------------ #
+    # Trace-compatible static-KV decode (parallel path; see tt/xtts_gpt_stack.py). The
+    # concat-based prefill/decode above are unchanged. Here the KV cache is a fixed
+    # [1, heads, max_seq, head_dim] buffer written in place at a device-driven position, so
+    # every decode step is the SAME static-shape, host-sync-free op sequence -> capturable
+    # as one ttnn trace and replayed at any position.
+    # ------------------------------------------------------------------ #
+    def init_static_decode(self, max_seq):
+        """Enable the static-KV decode path for a fixed context length ``max_seq``."""
+        self.max_seq = max_seq
+        self.stack.init_static(max_seq)
+
+    def _pos_ids(self, value):
+        """``[1, 1]`` uint32 index tensor (token id or embedding position) on device."""
+        return ttnn.from_torch(
+            torch.tensor([[value]], dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            dtype=ttnn.uint32,
+        )
+
+    def cache_pos(self, value):
+        """``[1, 1, 1, max_seq]`` tensor filled with the absolute cache position ``value``."""
+        return ttnn.from_torch(
+            torch.full((1, 1, 1, self.max_seq), float(value), dtype=torch.float32),
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            dtype=ttnn.float32,
+        )
+
+    def prefill_static(self, text_ids, cond_latents):
+        """Seed fixed-size caches from the ``[cond | text]`` prompt. Reuses the (eager, one-shot)
+        concat prefill, then pads each layer's K/V out to ``max_seq``. Returns ``(kv, prompt_len)``
+        where the mel token for step ``i`` occupies absolute cache position ``prompt_len + i``."""
+        kv = self.prefill(text_ids, cond_latents)  # list of (k, v) [1, heads, prompt_len, head_dim]
+        prompt_len = kv[0][0].shape[2]
+        pad = self.max_seq - prompt_len
+        kv_static = []
+        for k, v in kv:
+            zeros = ttnn.from_torch(
+                torch.zeros(1, NUM_HEADS, pad, HEAD_DIM),
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+            )
+            k2 = ttnn.concat([k, zeros], dim=2)
+            zeros2 = ttnn.from_torch(
+                torch.zeros(1, NUM_HEADS, pad, HEAD_DIM),
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+            )
+            v2 = ttnn.concat([v, zeros2], dim=2)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            kv_static.append((k2, v2))
+        return kv_static, prompt_len
+
+    def decode_static(self, token_ids, mel_pos_ids, cache_pos, kv):
+        """One trace-compatible decode step. All per-step inputs are DEVICE tensors so a single
+        capture replays at any position: ``token_ids``/``mel_pos_ids`` are ``[1, 1]`` uint32
+        (audio code id + mel position for the embeddings); ``cache_pos`` is ``[1, 1, 1, max_seq]``
+        (absolute cache write/attention position). Returns ``(logits, latent, new_kv)``."""
+        tok = ttnn.to_layout(ttnn.embedding(token_ids, self.mel_emb_weight), ttnn.TILE_LAYOUT)
+        posn = ttnn.to_layout(ttnn.embedding(mel_pos_ids, self.mel_pos_weight), ttnn.TILE_LAYOUT)
+        x = ttnn.add(tok, posn)  # [1, 1, hidden]
+        ttnn.deallocate(tok)
+        ttnn.deallocate(posn)
+        hidden = self.stack.forward_decode_static(x, kv, cache_pos)  # kv caches updated in place
+        latent = ttnn.layer_norm(
+            hidden, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS
+        )
+        ttnn.deallocate(hidden)
+        logits = ttnn.linear(latent, self.mel_head_weight, bias=self.mel_head_bias)
+        return logits, latent

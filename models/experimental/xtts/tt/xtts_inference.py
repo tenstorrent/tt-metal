@@ -75,6 +75,7 @@ class TtXtts(LightweightModule):
         top_k=0,
         repetition_penalty=1.0,
         top_p=1.0,
+        min_new_tokens=0,
     ):
         """``text_ids``: ``[START]/[STOP]``-wrapped torch ids. ``cond_mel``: torch
         80-mel ``[1, 80, s]``. ``ref_wav_spk``: ttnn 16 kHz audio ``[1, L, 1]``
@@ -94,6 +95,7 @@ class TtXtts(LightweightModule):
                 top_k=top_k,
                 repetition_penalty=repetition_penalty,
                 top_p=top_p,
+                min_new_tokens=min_new_tokens,
             )
         wav = self._decode_wav(latents_tt, ref_wav_spk)
         return wav, codes
