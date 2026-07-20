@@ -1404,6 +1404,11 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         or (gather_dim_normalized == rank - 1 and tt_input.shape[-1] % tile_size != 0)
     )
 
+    if is_tile_padded and topology == ttnn.Topology.Linear:
+        pytest.skip(
+            "Tile-padded shapes with Topology.Linear produce wrong output TensorTopology on 2x4 mesh (PlacementReplicate instead of PlacementShard), refs #47181"
+        )
+
     input_topology = tt_input.tensor_topology()
 
     # Create expected topology based on which all-gather path was used
