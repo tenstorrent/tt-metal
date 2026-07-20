@@ -72,6 +72,6 @@ ttnn::Tensor reduce(
     bool row_major_w_dense_path = false,
     bool row_major_h_dense_path = false,
     bool use_sfpu_reduce = false,
-    uint32_t h_num_shards = 1);
+    uint32_t num_h_slices = 1);
 
 }  // namespace ttnn::prim

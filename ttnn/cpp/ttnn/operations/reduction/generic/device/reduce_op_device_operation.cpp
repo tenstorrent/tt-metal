@@ -40,10 +40,10 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !(operation_attributes.row_major_w_dense_path && operation_attributes.row_major_h_dense_path),
         "Only one of row_major_w_dense_path / row_major_h_dense_path may be set");
-    TT_FATAL(operation_attributes.h_num_shards >= 1, "h_num_shards must be >= 1");
+    TT_FATAL(operation_attributes.num_h_slices >= 1, "num_h_slices must be >= 1");
     TT_FATAL(
-        operation_attributes.h_num_shards == 1 || operation_attributes.row_major_h_dense_path,
-        "h_num_shards > 1 (H-axis split) is only supported on the row-major H dense path");
+        operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path,
+        "num_h_slices > 1 (H-axis split) is only supported on the row-major H dense path");
     if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
         const auto expected_dim =
             operation_attributes.row_major_w_dense_path ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -121,14 +121,14 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         const auto& input_shard_grid = in_shard.grid;
         TT_FATAL(
             program_grid.contains(input_shard_grid),
-            "Input shard grid {} must be contained in program core grid {}",
+            "Input slice grid {} must be contained in program core grid {}",
             input_shard_grid,
             program_grid);
         const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
         const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(
             in_shard.shape[0] > 0 && in_shard.shape[1] > 0,
-            "Sharded reduce input: shard face shape must be positive, got [{}, {}]",
+            "Sharded reduce input: slice face shape must be positive, got [{}, {}]",
             in_shard.shape[0],
             in_shard.shape[1]);
         TT_FATAL(
@@ -152,18 +152,18 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
 
         TT_FATAL(
             program_grid.contains(output_shard_grid),
-            "Output shard grid {} must be contained in program core grid {}",
+            "Output slice grid {} must be contained in program core grid {}",
             output_shard_grid,
             program_grid);
         TT_FATAL(
             device_grid.contains(output_shard_grid),
-            "Output shard grid {} must be contained in device grid {}",
+            "Output slice grid {} must be contained in device grid {}",
             output_shard_grid,
             device_grid);
         if (output_nd_shard_spec.shard_shape.rank() >= 2) {
             TT_FATAL(
                 output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,
-                "ND sharded output: last-2 shard dims must be positive, got [..., {}, {}] (height/width in "
+                "ND sharded output: last-2 slice dims must be positive, got [..., {}, {}] (height/width in "
                 "shard_shape)",
                 output_nd_shard_spec.shard_shape[-2],
                 output_nd_shard_spec.shard_shape[-1]);
@@ -185,8 +185,8 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
     switch (operation_attributes.dim) {
-        // H-axis split emits one partial row per shard: output H = h_num_shards (1 = normal reduce).
-        case tt::tt_metal::ReduceOpDim::H: output_shape[2] = operation_attributes.h_num_shards; break;
+        // H-axis split emits one partial row per slice: output H = num_h_slices (1 = normal reduce).
+        case tt::tt_metal::ReduceOpDim::H: output_shape[2] = operation_attributes.num_h_slices; break;
         case tt::tt_metal::ReduceOpDim::W: output_shape[3] = 1; break;
         case tt::tt_metal::ReduceOpDim::HW:
             output_shape[2] = 1;
@@ -226,7 +226,7 @@ ttnn::Tensor reduce(
     bool row_major_w_dense_path,
     bool row_major_h_dense_path,
     bool use_sfpu_reduce,
-    uint32_t h_num_shards) {
+    uint32_t num_h_slices) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -241,7 +241,7 @@ ttnn::Tensor reduce(
             row_major_w_dense_path,
             row_major_h_dense_path,
             use_sfpu_reduce,
-            h_num_shards},
+            num_h_slices},
         input_tensor);
 }
 

@@ -10,10 +10,10 @@ import pytest
 # tile-reduce, which both changes output layout (TILE, not ROW_MAJOR) and re-introduces the
 # excessive padded-tilize allocation (#32546) for narrow-last-dim shapes like (512, 1024, 1, 2).
 # Skip the whole module until the fast path is re-enabled. See Issue #46110.
-pytestmark = [
-    pytest.mark.use_module_device,
-    pytest.mark.skip(reason="dense ROW_MAJOR reduce path gated off (use_row_major_support=false)"),
-]
+# pytestmark = [
+#     pytest.mark.use_module_device,
+#     pytest.mark.skip(reason="dense ROW_MAJOR reduce path gated off (use_row_major_support=false)"),
+# ]
 
 import torch
 import ttnn
