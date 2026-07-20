@@ -95,9 +95,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const bool has_ternary = operation_attributes.fused_ternary_scalar.has_value();
     const bool has_activation = operation_attributes.fused_activation.has_value();
     const bool gate_is_fp32 = has_ternary && tensor_args.fused_ternary_input_b->dtype() == DataType::FLOAT32;
-    // gate broadcast [1,N] (M tiles == 1) vs full [M,N].
+    // gate broadcast [1,N] vs full [M,N]. Decide from LOGICAL M, not padded: a full per-row gate with
+    // M_logical in 2..32 pads to a single tile row, so padded_shape()/TILE_HEIGHT==1 cannot tell it apart
+    // from a real [1,N] broadcast and would silently broadcast row 0 across all M rows. logical M==1 is the
+    // only broadcast case, matching validate()'s tb_l[-2]==1 || tb_l[-2]==M check.
     const uint32_t broadcast_gate =
-        has_ternary ? (tensor_args.fused_ternary_input_b->padded_shape()[-2] / TILE_HEIGHT == 1u ? 1u : 0u) : 1u;
+        has_ternary ? (tensor_args.fused_ternary_input_b->logical_shape()[-2] == 1u ? 1u : 0u) : 1u;
     const int32_t chunks = operation_attributes.chunks < 1 ? 1 : operation_attributes.chunks;
     const uint32_t n_chunks = static_cast<uint32_t>(chunks);
     const uint32_t out_ntc = Nt_r / n_chunks;  // per-chunk N tiles (validated divisible + tile-aligned)

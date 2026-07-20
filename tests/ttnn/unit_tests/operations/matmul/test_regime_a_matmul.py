@@ -274,9 +274,13 @@ def test_regime_a_fused_addcmul_bias(device, pk_label, Pk):
 
 @pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
 @pytest.mark.parametrize("pk_label,Pk", _FUSE_PK, ids=[c[0] for c in _FUSE_PK])
-def test_regime_a_fused_addcmul_full_gate(device, pk_label, Pk):
-    # M=64 (Mt=2) so the [M,N] gate is genuinely full (not a 1-tile row treated as broadcast).
-    _run_fused(device, 64, 6144, 3072, 1, Pk, 1, 4, 6, scalar=0.7, gate_full=True)
+@pytest.mark.parametrize("M", [32, 64])
+def test_regime_a_fused_addcmul_full_gate(device, pk_label, Pk, M):
+    # Regression: M=32 (Mt=1) makes the full [M,N] gate occupy exactly ONE tile row, so it is
+    # indistinguishable from a [1,N] broadcast gate by padded shape. The broadcast-vs-full decision must
+    # key off LOGICAL M (==1 => broadcast), NOT padded rows, or a genuine per-row gate is silently
+    # broadcast (row 0 across all 32 rows). M=64 (Mt=2) covers the multi-tile-row full-gate case.
+    _run_fused(device, M, 6144, 3072, 1, Pk, 1, 4, 6, scalar=0.7, gate_full=True)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
