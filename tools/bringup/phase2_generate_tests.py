@@ -74,7 +74,6 @@ DEVICE_ENV = {device_env!r}
 LEGACY_DEVICE_ENV = "TT_DEVICE_ID"
 DEFAULT_DEVICE_ID = {default_device_id}
 DEVICE_CANDIDATES = {device_candidates}
-L1_SMALL_SIZE = {l1_small_size}
 
 
 @pytest.fixture(scope="session")
@@ -84,7 +83,6 @@ def tt_device():
         legacy_device_env=LEGACY_DEVICE_ENV,
         default_device_id=DEFAULT_DEVICE_ID,
         device_candidates=DEVICE_CANDIDATES,
-        l1_small_size=L1_SMALL_SIZE,
         verbose=True,
     )
     print(f"[ttnn] Using device_id={{dev_id}}")
@@ -118,12 +116,6 @@ def main() -> None:
     ap.add_argument("--device-env", default="TT_DEVICE_ID_OP_TEST", help="Env var used to select TT device")
     ap.add_argument("--default-device-id", type=int, default=0, help="Default TT device id if env vars not set")
     ap.add_argument("--device-candidates", default="0,1,2,3,4,5,6,7", help="Comma-separated fallback device IDs")
-    ap.add_argument(
-        "--l1-small-size",
-        type=int,
-        default=32768,
-        help="L1 small buffer size for ttnn.open_device (default: 32768; conv2d requires a non-zero value)",
-    )
     args = ap.parse_args()
 
     manifest_path = Path(args.manifest).resolve()
@@ -151,7 +143,6 @@ def main() -> None:
         device_env=str(args.device_env),
         default_device_id=int(args.default_device_id),
         device_candidates=cand,
-        l1_small_size=int(args.l1_small_size),
     )
 
     out_test.write_text(content, encoding="utf-8")
