@@ -53,8 +53,6 @@ public:
 
     RoutingPlaneConnectionManager() : num_active_(0) {}
 
-    // noc must be a non-type template param: open_start/open_finish take
-    // WORKER_HANDSHAKE_NOC as a compile-time template argument.
     template <
         BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
         uint8_t noc = get_fabric_worker_noc()>
