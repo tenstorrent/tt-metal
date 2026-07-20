@@ -1375,6 +1375,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
                 // in1 receiver
             } else {
+                // out tensor base address (common idx 0) is core-invariant and set once as a common runtime
+                // arg (on both receiver handles) after this loop.
                 std::vector<uint32_t> mm_in1_receiver_writer_args = {
                     // READER
                     // in1 mcast args
@@ -1383,7 +1385,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_tensor.address(),                                // out_tensor_addr
                     ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
@@ -1454,16 +1455,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 }
 
                 {
-                    std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
-                        in1_recv_variant(mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
-                    in1_recv_variant[2] = out_tensor;
                     // left half
                     if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                        in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
+                        in1_receiver_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
                     }
                     // right half
                     else {
-                        in1_receiver_writer_other_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
+                        in1_receiver_writer_other_kernel_desc.runtime_args.emplace_back(
+                            core, mm_in1_receiver_writer_args);
                     }
                 }
             }
@@ -1493,6 +1492,19 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             in1_sender_common_args.push_back((uint32_t)0);
         }
         in1_sender_writer_kernel_desc.emplace_common_runtime_args(in1_sender_common_args);
+    }
+
+    // in1 receiver/writer common args: out (0) base address; MeshTensor auto-patched each dispatch.
+    // Both receiver handles (main + other-noc-setup) read out from common idx 0.
+    if (has_in1_receiver_writer_kernel) {
+        KernelDescriptor::RTArgList in1_recv_common_args;
+        in1_recv_common_args.push_back(out_tensor);
+        in1_receiver_writer_kernel_desc.emplace_common_runtime_args(in1_recv_common_args);
+    }
+    if (has_in1_receiver_writer_other_kernel) {
+        KernelDescriptor::RTArgList in1_recv_other_common_args;
+        in1_recv_other_common_args.push_back(out_tensor);
+        in1_receiver_writer_other_kernel_desc.emplace_common_runtime_args(in1_recv_other_common_args);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -2841,6 +2853,8 @@ create_program_mcast_in0_in1(
 
                 // in1 receiver
             } else {
+                // out tensor base address (common idx 0) is core-invariant and set once as a common runtime
+                // arg (on both receiver handles) after this loop.
                 std::vector<uint32_t> mm_in1_receiver_writer_args = {
                     // READER
                     // in1 mcast args
@@ -2849,7 +2863,6 @@ create_program_mcast_in0_in1(
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_tensor.address(),                                // out_tensor_addr
                     ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
@@ -2949,6 +2962,16 @@ create_program_mcast_in0_in1(
          (std::uint32_t)out_tensor.address(),
          (std::uint32_t)(bias_mesh.has_value() ? bias_mesh->address() : 0)});
 
+    // in1 receiver/writer common args: out (0) base address, on each receiver handle (receiver cores only).
+    if (in1_receiver.num_cores() > 0) {
+        tt_metal::SetCommonRuntimeArgs(
+            program, mm_kernel_in1_receiver_writer_id, {(std::uint32_t)out_tensor.address()});
+        if (mm_kernel_in1_receiver_writer_other_noc_setup_id != mm_kernel_in1_receiver_writer_id) {
+            tt_metal::SetCommonRuntimeArgs(
+                program, mm_kernel_in1_receiver_writer_other_noc_setup_id, {(std::uint32_t)out_tensor.address()});
+        }
+    }
+
     return {
         std::move(program),
         {mm_kernel_in0_sender_id,
@@ -3030,19 +3053,13 @@ void override_runtime_arguments_impl(
         }
     }
 
-    // in1 receiver
-    auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id);
-    for (const auto& core : in1_receiver_cores) {
-        auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-        writer_runtime_args[2] = out.address();
+    // in1 receiver/writer: out base address is a common runtime arg, patched once per handle (receiver cores only).
+    if (!in1_receiver_cores.empty()) {
+        GetCommonRuntimeArgs(program, mm_kernel_in1_receiver_writer_id)[0] = out.address();
     }
-    if (mm_kernel_in1_receiver_writer_id != mm_kernel_in1_receiver_writer_other_noc_setup_id) {
-        auto& receiver_writer_runtime_args_by_core =
-            GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_other_noc_setup_id);
-        for (const auto& core : in1_receiver_other_cores) {
-            auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-            writer_runtime_args[2] = out.address();
-        }
+    if (mm_kernel_in1_receiver_writer_id != mm_kernel_in1_receiver_writer_other_noc_setup_id &&
+        !in1_receiver_other_cores.empty()) {
+        GetCommonRuntimeArgs(program, mm_kernel_in1_receiver_writer_other_noc_setup_id)[0] = out.address();
     }
 
     if (out_sharded) {

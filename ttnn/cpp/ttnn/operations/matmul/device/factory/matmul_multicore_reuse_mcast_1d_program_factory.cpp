@@ -1859,6 +1859,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         }
         // in0 sender and in1 receiver
         else {
+            // out tensor base address (common idx 0) is core-invariant; set once as a common runtime arg
+            // after this loop.
             std::vector<uint32_t> mm_in1_receiver_writer_args = {
                 // READER
                 // in1 mcast args
@@ -1867,7 +1869,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_tensor.address(),  // out_tensor_addr
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
@@ -1939,6 +1940,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
          (std::uint32_t)0,
          (std::uint32_t)out_tensor.address(),
          (std::uint32_t)(bias_tensor.has_value() ? bias_tensor->address() : 0)});
+
+    // in1 receiver/writer common args: out (0) base address (only present when there are receiver cores).
+    if (in1_mcast_receivers.num_cores() > 0) {
+        tt_metal::SetCommonRuntimeArgs(
+            program, mm_kernel_in1_receiver_writer_id, {(std::uint32_t)out_tensor.address()});
+    }
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in0_sender_id, mm_kernel_in1_sender_writer_id, mm_kernel_in1_receiver_writer_id},
         {cb_src0, cb_src2, cb_output},
@@ -2772,15 +2779,9 @@ inline void override_mcast_in1_program_parameters(
         }
     }
 
-    auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(2));
-
-    for (uint32_t i = 1; i < override_variables.cores.size(); ++i) {
-        const CoreCoord& core = override_variables.cores[i];
-
-        auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-
-        // in1 receiver
-        writer_runtime_args[2] = dst_tensor.address();
+    // in1 receiver/writer: out base address is a common runtime arg, patched once (receiver cores only).
+    if (override_variables.cores.size() > 1) {
+        GetCommonRuntimeArgs(program, override_variables.kernels.at(2))[0] = dst_tensor.address();
     }
 
     if (src0_sharded) {
@@ -4692,19 +4693,19 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         }
         // in0 sender and in1 receiver
         else {
-            std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in1_receiver_writer_args =
-                {
-                    // READER
-                    // in1 mcast args
-                    (std::uint32_t)top_left_core_physical.x,  // in1_mcast_sender_noc_x
-                    (std::uint32_t)top_left_core_physical.y,  // in1_mcast_sender_noc_y
+            // out tensor base address (common idx 0) is core-invariant and registered once as a common
+            // runtime arg after this loop.
+            std::vector<uint32_t> mm_in1_receiver_writer_args = {
+                // READER
+                // in1 mcast args
+                (std::uint32_t)top_left_core_physical.x,  // in1_mcast_sender_noc_x
+                (std::uint32_t)top_left_core_physical.y,  // in1_mcast_sender_noc_y
 
-                    // WRITER
-                    // out tensor args
-                    out_tensor,  // out_tensor_addr
-                    ((std::uint32_t)output_idx_x * per_core_N) +
-                        (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
-                };
+                // WRITER
+                // out tensor args
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
+            };
 
             if (output_idx_y == num_blocks_y - 1) {
                 // padding args (WRITER)
@@ -4739,12 +4740,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 }
             }
 
-            {
-                std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in1_recv_variant(
-                    mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
-                in1_recv_variant[2] = out_tensor;
-                in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
-            }
+            in1_receiver_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
         }
         // in0 tensor base address (common idx 0) and sparsity address (common idx 1) are core-invariant and
         // registered once as common runtime args after this loop.
@@ -4785,6 +4781,13 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             in1_sender_common_args.push_back((uint32_t)0);
         }
         in1_sender_writer_kernel_desc.emplace_common_runtime_args(in1_sender_common_args);
+    }
+
+    // in1 receiver/writer common args: out (0) base address; MeshTensor auto-patched each dispatch.
+    if (has_in1_receiver_writer_kernel) {
+        KernelDescriptor::RTArgList in1_recv_common_args;
+        in1_recv_common_args.push_back(out_tensor);  // common idx 0: out base address
+        in1_receiver_writer_kernel_desc.emplace_common_runtime_args(in1_recv_common_args);
     }
 
     ////////////////////////////////////////////////////////////////////////////

@@ -12,6 +12,9 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 void kernel_main() {
+    // out tensor base address is a common runtime arg (identical on every receiver core); see program factory.
+    const uint32_t out_tensor_addr = get_common_arg_val<uint32_t>(0);
+
     // READER
     uint32_t rt_args_idx = 0;
     // in1 mcast args
@@ -20,7 +23,6 @@ void kernel_main() {
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args (WRITER)
