@@ -194,6 +194,75 @@ def _save_attempts(a: list) -> None:
     _KERNEL_LOG_PATH.write_text(json.dumps(a))
 
 
+_LAST_TARGET_PATH = Path(str(_KERNEL_LOG_PATH) + ".target")
+_LAST_TARGET: dict = {}
+
+
+def _persist_target(t) -> None:
+    _LAST_TARGET.clear()
+    if isinstance(t, dict):
+        _LAST_TARGET.update(t)
+    try:
+        _LAST_TARGET_PATH.write_text(json.dumps(_LAST_TARGET))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _load_target() -> dict:
+    if _LAST_TARGET:
+        return dict(_LAST_TARGET)
+    try:
+        return json.loads(_LAST_TARGET_PATH.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _append_attempt(rec: dict) -> list:
+    attempts = _load_attempts()
+    sig, kind, note = rec.get("op_signature"), rec.get("kernel_kind"), rec.get("note") or ""
+    if rec.get("wedged"):
+        attempts = [
+            a
+            for a in attempts
+            if not (a.get("wedged") and a.get("op_signature") == sig and a.get("kernel_kind") == kind)
+        ]
+    else:
+        attempts = [
+            a
+            for a in attempts
+            if not (
+                not a.get("wedged")
+                and a.get("op_signature") == sig
+                and a.get("kernel_kind") == kind
+                and (a.get("note") or "") == note
+            )
+        ]
+    attempts.append(rec)
+    _save_attempts(attempts)
+    _rebuild_optimize_report()
+    return attempts
+
+
+def _autorecord_wedge(reason: str) -> None:
+    t = _load_target()
+    rec = {
+        "op_signature": t.get("op") or "candidate config",
+        "kernel_kind": t.get("rung") or "knob",
+        "measured_ms": None,
+        "beat_baseline": False,
+        "note": reason,
+        "stages": [],
+        "kernel_detected_in_source": False,
+        "wedged": True,
+        "evidence": {},
+        "diff": "",
+    }
+    try:
+        _append_attempt(rec)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _summary_mod():
     import importlib.util
 
@@ -666,8 +735,10 @@ def measure_candidate() -> dict:
         _msg = str(exc)
         if _is_l1_overflow(_msg):
             _reclaim_mesh("measure_candidate")
+            _autorecord_wedge(_L1_OVERFLOW_MSG)
             return {"verdict": "REJECTED", "reason": _L1_OVERFLOW_MSG}
         _note_device_crash("measure_candidate")  # may tt-smi reset if this is a repeat (wedge)
+        _autorecord_wedge(f"wedged/crashed when tried: {_msg[-300:]}")
         return {"verdict": "REJECTED", "reason": f"profiler crashed: {_msg[-600:]}"}
     _note_device_ok()
     dev = round(float(prof.get("device_ms", 0.0)), 4)
@@ -1416,7 +1487,6 @@ def record_kernel_attempt(
         stages = [s for s in stages if isinstance(s, dict)] if isinstance(stages, list) else []
     except Exception:  # noqa: BLE001
         stages = []
-    attempts = _load_attempts()
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
@@ -1425,12 +1495,11 @@ def record_kernel_attempt(
         "note": note,
         "stages": stages,
         "kernel_detected_in_source": detected,
+        "wedged": False,
         "evidence": ev,
         "diff": _capture_attempt_diff(),
     }
-    attempts.append(rec)
-    _save_attempts(attempts)
-    _rebuild_optimize_report()
+    _append_attempt(rec)
     return {
         "recorded": True,
         "attempt": rec,
@@ -1742,6 +1811,7 @@ def termination_check() -> dict:
         if blocking
         else None
     )
+    _persist_target(next_target)
     return {
         "can_stop": can_stop,
         "halt": bool(halt),

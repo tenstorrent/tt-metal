@@ -1230,6 +1230,49 @@ def _progress_token(repo_root: Path, kernel_log: str):
     return (_git(repo_root, "rev-parse", "HEAD"), mt)
 
 
+def _record_wedge_to_log(kernel_log: str, reason: str) -> None:
+    try:
+        target = {}
+        try:
+            target = json.loads(Path(str(kernel_log) + ".target").read_text())
+        except Exception:  # noqa: BLE001
+            target = {}
+        if not isinstance(target, dict):
+            target = {}
+        try:
+            attempts = json.loads(Path(kernel_log).read_text())
+        except Exception:  # noqa: BLE001
+            attempts = []
+        if not isinstance(attempts, list):
+            attempts = []
+        op = target.get("op") or "candidate config"
+        kind = target.get("rung") or "knob"
+        attempts = [
+            a
+            for a in attempts
+            if not (
+                isinstance(a, dict) and a.get("wedged") and a.get("op_signature") == op and a.get("kernel_kind") == kind
+            )
+        ]
+        attempts.append(
+            {
+                "op_signature": op,
+                "kernel_kind": kind,
+                "measured_ms": None,
+                "beat_baseline": False,
+                "note": reason,
+                "stages": [],
+                "kernel_detected_in_source": False,
+                "wedged": True,
+                "evidence": {},
+                "diff": "",
+            }
+        )
+        Path(kernel_log).write_text(json.dumps(attempts))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
     """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
@@ -1318,6 +1361,7 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                 _lf.close()
         except Exception:  # noqa: BLE001
             pass
+    _record_wedge_to_log(kernel_log, f"wedged: round killed ({wedge_reason})")
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001

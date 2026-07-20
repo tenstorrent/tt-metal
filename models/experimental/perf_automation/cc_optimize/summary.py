@@ -170,11 +170,15 @@ def render_summary(
         op = by_op.setdefault(sig, {c: None for c in _LEVEL_COLS})
         cur = op[lvl]
         # 'win' beats 'try'; track best (lowest) measured ms per cell
-        status = "win" if won else "try"
-        if cur is None or (status == "win" and cur[0] != "win"):
+        status = "win" if won else ("wedge" if a.get("wedged") else "try")
+        if cur is None:
             op[lvl] = (status, ms)
-        elif cur and ms is not None and (cur[1] is None or ms < cur[1]):
-            op[lvl] = (cur[0] if not won else "win", ms)
+        elif status == "win" and cur[0] != "win":
+            op[lvl] = (status, ms)
+        elif cur[0] == "wedge" and status == "try":
+            op[lvl] = (status, ms)
+        elif cur and ms is not None and cur[1] is not None and ms < cur[1] and cur[0] != "win":
+            op[lvl] = (cur[0], ms)
 
     win_ms = [
         a.get("measured_ms")
@@ -230,7 +234,7 @@ def render_summary(
                     cells.append(f"{'—':>7}")
                 else:
                     st, ms = cell
-                    mark = "✓win" if st == "win" else "·try"
+                    mark = "✓win" if st == "win" else ("·wedge" if st == "wedge" else "·try")
                     cells.append(f"{mark:>7}")
                     if ms is not None and (best is None or ms < best):
                         best = ms
@@ -262,7 +266,7 @@ def render_summary(
                 gain_s = f"{baseline_ms - ms:+.2f} ms"
             else:
                 gain_s = "—"
-            res = "✓ win" if a.get("beat_baseline") else "· no gain"
+            res = "✓ win" if a.get("beat_baseline") else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
             lines.append(f"{sig:<34} {lever:>10} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
 
@@ -279,7 +283,7 @@ def render_summary(
                 continue
             sig = _op_label(a.get("op_signature", "?"))
             lever = _level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?")
-            res = "win" if a.get("beat_baseline") else "no gain"
+            res = "win" if a.get("beat_baseline") else ("wedged" if a.get("wedged") else "no gain")
             ms = a.get("measured_ms")
             gain = f"  {baseline_ms - ms:+.2f} ms" if (baseline_ms and isinstance(ms, (int, float))) else ""
             lines.append("")
@@ -347,6 +351,6 @@ def render_summary(
 
     lines.append("")
     lines.append(
-        "levels: grid -> dtype -> tt-lang -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, — = not attempted"
+        "levels: grid -> dtype -> tt-lang -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
     )
     return "\n".join(lines)
