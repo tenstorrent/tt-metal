@@ -1,12 +1,12 @@
 # Porting an Op to Metal 2.0 — TTNN Integration
 
-> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the two device-op-class edits the port forces (custom-hash deletion, pybind cleanup). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](../port/metal2.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
+> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the two device-op-class edits the port forces (custom-hash deletion, pybind cleanup). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](../port/metal2_port.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
 
 ## Read this first
 
-**Primary audience**: AI agents performing the [audit](../audit/metal2.md) on a TTNN op. The audit's final step is to confirm the op fits the Metal 2.0 factory concept and record the choice in the audit report.
+**Primary audience**: AI agents performing the [audit](../audit/metal2_audit.md) on a TTNN op. The audit's final step is to confirm the op fits the Metal 2.0 factory concept and record the choice in the audit report.
 
-**Secondary audience**: AI agents performing the [port](../port/metal2.md). The port inherits the audit's decision and implements the factory entry point against it. The "Port plan" and "Port report" deliverable sections at the bottom of this document carry the decision forward through the port artifacts.
+**Secondary audience**: AI agents performing the [port](../port/metal2_port.md). The port inherits the audit's decision and implements the factory entry point against it. The "Port plan" and "Port report" deliverable sections at the bottom of this document carry the decision forward through the port artifacts.
 
 **The division of labor with the recipe.** The recipe owns the *contents* of the artifact — how you build a `ProgramSpec` (kernels, DFBs, semaphores, tensor parameters, work units) and its paired `ProgramRunArgs`. This document owns the *wrapper* — the factory method that returns those two objects to the framework, how the framework caches and dispatches it, and the handful of device-operation-class edits the port forces. When the recipe says "return the artifact," the shape of that return lives here.
 
@@ -94,7 +94,7 @@ Every `TensorParameter` enforces an exact `TensorSpec` match by default. **Don't
 
 ## Device-operation-class edits the port forces
 
-The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](../port/metal2.md#scope-discipline)). There are **three** sanctioned exceptions, each forced by the port, each recorded prominently in the port report.
+The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](../port/metal2_port.md#scope-discipline)). There are **three** sanctioned exceptions, each forced by the port, each recorded prominently in the port report.
 
 ### 1. Delete a custom `compute_program_hash`
 
@@ -179,8 +179,8 @@ If the port stayed on the default concept with no device-op edits, these section
 
 ## Cross-references
 
-- [Audit doc](../audit/metal2.md) — the feasibility audit that invokes this document as its final step.
-- [Port recipe](../port/metal2.md) — builds the `ProgramSpec` + `ProgramRunArgs` this document's factory entry point returns.
+- [Audit doc](../audit/metal2_audit.md) — the feasibility audit that invokes this document as its final step.
+- [Port recipe](../port/metal2_port.md) — builds the `ProgramSpec` + `ProgramRunArgs` this document's factory entry point returns.
 - [Migration guide — Design Principles](migration_guide.md#design-principles) — the named-binding model the spec is built on.
 - [`ttnn/api/ttnn/operation_concepts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/operation_concepts.hpp) — `MetalV2FactoryConcept` definition in code.
 - [`ttnn/api/ttnn/metal_v2_artifacts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/metal_v2_artifacts.hpp) — `ProgramArtifacts` field layout.
