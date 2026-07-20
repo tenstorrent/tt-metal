@@ -32,7 +32,7 @@ Optional:
     --skip-reset                            Skip tt-smi reset, only run validation
     --skip-validation                       Skip validation, only run tt-smi reset
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
-                                            before recovery (see minimum versions at top of this script)
+                                            before recovery (see minimum versions in utils/host_utils.sh)
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
     --mpi-if <interface>                    Network interface for MPI TCP transport
@@ -108,11 +108,8 @@ RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
 
-# Minimum required versions, checked on every host before recovery (see --skip-version-check).
-# Bump these as the required baseline moves.
-TT_SMI_MIN_VERSION="5.2.0"   # `tt-smi --version`
-KMD_MIN_VERSION="2.9.0"      # `cat /sys/module/tenstorrent/version`
-FW_MIN_VERSION="19.11"       # `cat /sys/class/tenstorrent/tenstorrent!<n>/tt_fw_bundle_ver`
+# Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
+# FW_MIN_VERSION) and the check itself live in utils/host_utils.sh, shared with run_validation.sh.
 
 CABLING_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
@@ -430,77 +427,13 @@ echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
 echo "=========================================="
 echo ""
 
-# Step 0: assert minimum tt-smi / KMD / firmware versions on every host.
-# These are host-level (independent of --use-docker), so the check always runs via plain mpirun.
+# Step 0: assert minimum tt-smi / KMD / firmware versions on every host (see check_cluster_versions
+# in utils/host_utils.sh). These are host-level (independent of --use-docker), so the check always
+# runs via plain mpirun.
 if [[ "$SKIP_VERSION_CHECK" == false ]]; then
     echo "Checking tt-smi/KMD/firmware versions on all hosts..."
-    # Single-quoted heredoc: nothing expands locally. Minimum versions are passed as positional
-    # args ($1/$2/$3) so the script body stays literal and runs identically on every rank.
-    read -r -d '' VERSION_CHECK_CMD <<'VERSION_CHECK_CMD' || true
-set -o pipefail
-h=$(hostname)
-tt_smi_min="$1"
-kmd_min="$2"
-fw_min="$3"
-fail=0
-
-# version_ge A B -> true (0) if A >= B, using version-aware ordering.
-version_ge() {
-    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$2" ]]
-}
-
-# 1) tt-smi version
-tt_smi_ver=$(tt-smi --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
-if [[ -z "$tt_smi_ver" ]]; then
-    printf '[%s] ERROR: could not determine tt-smi version (is tt-smi installed?)\n' "$h"
-    fail=1
-elif ! version_ge "$tt_smi_ver" "$tt_smi_min"; then
-    printf '[%s] ERROR: tt-smi version %s < required %s\n' "$h" "$tt_smi_ver" "$tt_smi_min"
-    fail=1
-else
-    printf '[%s] OK: tt-smi version %s (>= %s)\n' "$h" "$tt_smi_ver" "$tt_smi_min"
-fi
-
-# 2) KMD (kernel driver) version
-kmd_ver=$(cat /sys/module/tenstorrent/version 2>/dev/null)
-if [[ -z "$kmd_ver" ]]; then
-    printf '[%s] ERROR: could not read /sys/module/tenstorrent/version (is the tenstorrent KMD loaded?)\n' "$h"
-    fail=1
-elif ! version_ge "$kmd_ver" "$kmd_min"; then
-    printf '[%s] ERROR: KMD version %s < required %s\n' "$h" "$kmd_ver" "$kmd_min"
-    fail=1
-else
-    printf '[%s] OK: KMD version %s (>= %s)\n' "$h" "$kmd_ver" "$kmd_min"
-fi
-
-# 3) Firmware bundle version, checked on every tenstorrent device present on the host
-fw_found=0
-for f in /sys/class/tenstorrent/tenstorrent!*/tt_fw_bundle_ver; do
-    [[ -e "$f" ]] || continue
-    fw_found=1
-    fw_ver=$(cat "$f" 2>/dev/null)
-    if [[ -z "$fw_ver" ]]; then
-        printf '[%s] ERROR: could not read %s\n' "$h" "$f"
-        fail=1
-    elif ! version_ge "$fw_ver" "$fw_min"; then
-        printf '[%s] ERROR: firmware version %s on %s < required %s\n' "$h" "$fw_ver" "$f" "$fw_min"
-        fail=1
-    fi
-done
-if [[ "$fw_found" -eq 0 ]]; then
-    printf '[%s] ERROR: no tenstorrent devices found under /sys/class/tenstorrent\n' "$h"
-    fail=1
-elif [[ "$fail" -eq 0 ]]; then
-    printf '[%s] OK: firmware version >= %s on all devices\n' "$h" "$fw_min"
-fi
-
-exit "$fail"
-VERSION_CHECK_CMD
     # `if !` suspends `set -e`, so a failing rank is handled here instead of aborting abruptly.
-    if ! mpirun --host "$HOSTS" \
-        --mca btl_tcp_if_include "$MPI_IF" \
-        "${MPI_EXTRA_ARGS[@]}" \
-        bash -c "$VERSION_CHECK_CMD" _ "$TT_SMI_MIN_VERSION" "$KMD_MIN_VERSION" "$FW_MIN_VERSION"; then
+    if ! check_cluster_versions "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
         echo ""
         echo "Error: version check failed on one or more hosts (see above)."
         echo "       Required: tt-smi >= $TT_SMI_MIN_VERSION, KMD >= $KMD_MIN_VERSION, firmware >= $FW_MIN_VERSION."
