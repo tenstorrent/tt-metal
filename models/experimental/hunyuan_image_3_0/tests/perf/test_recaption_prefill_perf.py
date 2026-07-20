@@ -56,8 +56,8 @@ import ttnn
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_dit.parallel.manager import CCLManager
 
-from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
+from models.experimental.hunyuan_image_3_0.tt.attention.mask import build_attention_mask_tt
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
 from models.experimental.hunyuan_image_3_0.tt.kv_cache import HunyuanTtKvCache
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
@@ -157,17 +157,12 @@ def _build_workload(mesh_device):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate_to_mesh,
         )
-        mask_add = to_additive(build_attention_mask(seq_len, attn_slices, bsz=1), dtype=torch.bfloat16).reshape(
-            1, 1, seq_len, seq_len
-        )
-        mask_tt = ttnn.from_torch(
-            mask_add,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate_to_mesh,
-        )
+        # Pure-causal text prefill (no image spans): pass NO mask so SDPA uses its
+        # built-in causal path — matches the model (tt/generate.py _upload_mask_full).
+        # Avoids the ~1 GB host mask build + PCIe upload (hundreds of ms of device
+        # stall at large ISL) and runs causal SDPA (~3x faster than a materialized mask).
+        has_spans = bool(attn_slices) and any(len(s) > 0 for s in attn_slices)
+        mask_tt = build_attention_mask_tt(mesh_device, seq_len, attn_slices, bsz=1) if has_spans else None
         kv_cache = HunyuanTtKvCache(len(backbone.layers))
         hidden = backbone.forward(
             inputs_embeds=hidden_tt,
@@ -180,7 +175,8 @@ def _build_workload(mesh_device):
         )
         kv_cache.seq_len = seq_len
         ttnn.deallocate(hidden_tt)
-        ttnn.deallocate(mask_tt)
+        if mask_tt is not None:
+            ttnn.deallocate(mask_tt)
         kv_cache.clear()
         return hidden
 

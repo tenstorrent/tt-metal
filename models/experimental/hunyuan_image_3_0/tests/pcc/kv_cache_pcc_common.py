@@ -229,7 +229,14 @@ class KvCachePccContext:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _upload_mask_full(self, S: int) -> ttnn.Tensor:
+    def _upload_mask_full(self, S: int):
+        # Mirror the model prefill (tt/generate.py _upload_mask_full): a pure-causal
+        # prefix supplies NO mask so SDPA uses its built-in causal path (no S×S host
+        # build + upload; ~3x faster causal SDPA at large ISL). Only image spans need
+        # an explicit mask.
+        has_spans = bool(self.attn_slices) and any(len(s) > 0 for s in self.attn_slices)
+        if not has_spans:
+            return None
         mask_add = to_additive(build_attention_mask(S, self.attn_slices, bsz=1), dtype=torch.bfloat16).reshape(
             1, 1, S, S
         )
@@ -300,7 +307,8 @@ class KvCachePccContext:
         hidden_last = ttnn.to_torch(hidden)[:, -1, :].float()
         logits = self._to_logits(hidden)
         ttnn.deallocate(hidden)
-        ttnn.deallocate(mask_tt)
+        if mask_tt is not None:  # None on the pure-causal path (is_causal SDPA)
+            ttnn.deallocate(mask_tt)
         ttnn.deallocate(hidden_tt)
         return hidden_last, logits
 
@@ -331,7 +339,8 @@ class KvCachePccContext:
         hidden_last = ttnn.to_torch(hidden)[:, -1, :].float()
         logits = self._to_logits(hidden)
         ttnn.deallocate(hidden)
-        ttnn.deallocate(mask_tt)
+        if mask_tt is not None:  # None on the pure-causal path (is_causal SDPA)
+            ttnn.deallocate(mask_tt)
         ttnn.deallocate(hidden_tt)
         return hidden_last, logits
 
