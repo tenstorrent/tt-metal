@@ -118,10 +118,6 @@ default() {
                 print_only=true
                 shift
                 ;;
-            --tag-host)
-                tag_host=true
-                shift
-                ;;
             --no-tag-host)
                 tag_host=false
                 shift
