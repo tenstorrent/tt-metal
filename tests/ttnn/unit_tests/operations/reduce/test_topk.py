@@ -340,7 +340,7 @@ def test_topk_bfloat8_with_inf(N, C, H, W, dim, k, sub_core_grids, device):
         (torch.int32, ttnn.int32),
     ],
 )
-def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dtype, device):
+def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dtype, device, expect_error):
     torch.manual_seed(0)
     shape = [1, 1, 32, 64]
 
@@ -351,7 +351,7 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tensor_dtype, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(Exception):
+    with expect_error(RuntimeError, "Input tensor must be BFLOAT16, or BFLOAT8_B"):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
 
 
@@ -366,18 +366,28 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
         (ttnn.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
+def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device, expect_error):
     torch.manual_seed(0)
+    k = 32
     shape = [1, 1, 32, 64]
+    output_shape = [1, 1, 32, k]
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
-    value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
-    index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
+    # Preallocated outputs must carry the topk output shape ([..., k]); allocating at the input shape would
+    # trip the shape check in topk() before dtype validation is reached and defeat the purpose of this test.
+    output_torch = torch.zeros(output_shape, dtype=torch.bfloat16)
+    value_tensor = ttnn.from_torch(output_torch, value_dtype, layout=ttnn.Layout.TILE, device=device)
+    index_tensor = ttnn.from_torch(output_torch, index_dtype, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(Exception):
-        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
+    # The value dtype must be BFLOAT16/BFLOAT8_B and the index dtype UINT16/UINT32; match whichever is
+    # violated first for the given parametrization.
+    with expect_error(
+        RuntimeError,
+        "Preallocated (output tensor must be BFLOAT16 or BFLOAT8_B|indices tensor must be UINT16 or UINT32)",
+    ):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
 
 
 @pytest.mark.parametrize("largest", [True, False])
