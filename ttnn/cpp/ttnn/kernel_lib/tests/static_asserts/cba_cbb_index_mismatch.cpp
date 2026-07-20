@@ -25,11 +25,8 @@ void kernel_main() {
             cb_in,
             BinaryFpuOp::Add,
             BroadcastDim::None,
-            InputLifecycle::Bulk,
-            InputLifecycle::Bulk,
-            BinaryDataFormatReconfig::Input,
-            Dst::D0,
-            OperandKind::Scalar,
-            OperandKind::Block>{},
+            input(InputLifecycle::Bulk, OperandKind::Scalar),
+            input(InputLifecycle::Bulk, OperandKind::Block),
+            Dst::D0>{},
         PackTile<cb_out>{});
 }

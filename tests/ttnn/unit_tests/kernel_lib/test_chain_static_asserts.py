@@ -73,6 +73,6 @@ def test_setupowner_caller_not_hoistable_illegal(device, expect_error):
 
 
 def test_setupowner_caller_reconfig_illegal(device, expect_error):
-    """SetupOwner::Caller with a live (non-None) reconfig knob — under Caller the chain emits
-    no reconfig, so the knob is inert/deceptive; must not compile (force the caller to declare None)."""
-    _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "non-None reconfig knob")
+    """SetupOwner::Caller with enabled operand reconfig — under Caller the chain emits no
+    reconfig, so the setting is inert/deceptive; the input/output specs must disable it."""
+    _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "enabled operand reconfig")

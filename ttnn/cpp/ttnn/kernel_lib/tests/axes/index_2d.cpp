@@ -32,13 +32,10 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Bulk,
-                InputLifecycle::Bulk,
-                BinaryDataFormatReconfig::Input,
-                Dst::D0,
-                OperandKind::Block,
-                OperandKind::Row>{},
-            PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+                input(InputLifecycle::Bulk, OperandKind::Block),
+                input(InputLifecycle::Bulk, OperandKind::Row),
+                Dst::D0>{},
+            PackTile<cb_out, output(OutputLifecycle::Bulk)>{});
     } else {  // Col index on B
         eltwise_chain(
             EltwiseShape::grid(Ht, Wt),
@@ -47,12 +44,9 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Bulk,
-                InputLifecycle::Bulk,
-                BinaryDataFormatReconfig::Input,
-                Dst::D0,
-                OperandKind::Block,
-                OperandKind::Col>{},
-            PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+                input(InputLifecycle::Bulk, OperandKind::Block),
+                input(InputLifecycle::Bulk, OperandKind::Col),
+                Dst::D0>{},
+            PackTile<cb_out, output(OutputLifecycle::Bulk)>{});
     }
 }

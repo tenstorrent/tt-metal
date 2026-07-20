@@ -20,6 +20,6 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         CopyTile<cb_in, Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+        PackTile<cb_out, output(OutputLifecycle::Streaming), Dst::D0>{},
+        PackTile<cb_out, output(OutputLifecycle::Streaming), Dst::D0>{});
 }

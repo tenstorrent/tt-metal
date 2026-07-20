@@ -25,6 +25,6 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         CopyTile<cb_in, Dst::D0>{},
-        PackTile<cb_out0, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
-        OptionalChainElement<ON, PackTile<cb_out1, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>>{});
+        PackTile<cb_out0, output(OutputLifecycle::Streaming), Dst::D0>{},
+        OptionalChainElement<ON, PackTile<cb_out1, output(OutputLifecycle::Streaming), Dst::D0>>{});
 }

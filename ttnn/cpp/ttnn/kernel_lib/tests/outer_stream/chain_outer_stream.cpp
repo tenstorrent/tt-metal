@@ -33,11 +33,8 @@ void kernel_main() {
             cb_b,
             ckl::BinaryFpuOp::Add,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Streaming,    // cb_a: one tile per (ht, wt)
-            ckl::InputLifecycle::OuterStream,  // cb_b: one tile per row
-            ckl::BinaryDataFormatReconfig::None,
-            ckl::Dst::D0,
-            ckl::OperandKind::Scalar,     // cb_a reads the front
-            ckl::OperandKind::Scalar>{},  // cb_b reads the front (advances per row)
+            ckl::input(ckl::InputLifecycle::Streaming, ckl::OperandKind::Scalar, ckl::DataFormatReconfig::Disabled),
+            ckl::input(ckl::InputLifecycle::OuterStream, ckl::OperandKind::Scalar, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::PackTile<cb_out>{});
 }

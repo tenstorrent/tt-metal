@@ -10,9 +10,12 @@
  * Included from `eltwise_chain.hpp`. Do NOT include directly.
  */
 
+#include <climits>
+#include <type_traits>
+#include <utility>
+
 // Impl-only includes (the public eltwise_chain.hpp surface — element decls + enums — needs
 // none of these; they live here, with the implementation that uses them).
-#include <tuple>
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
 #include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer — chain routes CB sync (wait/pop/reserve/push) through it
@@ -24,6 +27,292 @@
 #include "api/compute/tile_move_copy.h"
 
 namespace compute_kernel_lib {
+
+enum class WaitPolicy : uint8_t { None, PerTile, PerChunk, PerOuter, Upfront, Cumulative };
+enum class PopPolicy : uint8_t { None, PerTile, PerChunk, PerOuter, AtEnd };
+enum class ReservePolicy : uint8_t { None, PerTile, PerChunk, Upfront };
+enum class PushPolicy : uint8_t { None, PerTile, PerChunk, AtEnd };
+
+inline constexpr InputLifecycle InputLifecycle::Streaming = {WaitPolicy::PerTile, PopPolicy::PerTile};
+inline constexpr InputLifecycle InputLifecycle::Chunked = {WaitPolicy::PerChunk, PopPolicy::PerChunk};
+inline constexpr InputLifecycle InputLifecycle::Bulk = {WaitPolicy::Upfront, PopPolicy::AtEnd};
+inline constexpr InputLifecycle InputLifecycle::Pipelined = {WaitPolicy::Cumulative, PopPolicy::AtEnd};
+inline constexpr InputLifecycle InputLifecycle::CallerManaged = {WaitPolicy::None, PopPolicy::None};
+inline constexpr InputLifecycle InputLifecycle::BulkDrain = {WaitPolicy::Upfront, PopPolicy::PerTile};
+inline constexpr InputLifecycle InputLifecycle::HeldBulk = {WaitPolicy::Upfront, PopPolicy::None};
+inline constexpr InputLifecycle InputLifecycle::HeldCumulative = {WaitPolicy::Cumulative, PopPolicy::None};
+inline constexpr InputLifecycle InputLifecycle::HeldStream = {WaitPolicy::PerTile, PopPolicy::None};
+inline constexpr InputLifecycle InputLifecycle::DeferredPop = {WaitPolicy::None, PopPolicy::AtEnd};
+inline constexpr InputLifecycle InputLifecycle::NoWaitPop = {WaitPolicy::None, PopPolicy::PerTile};
+inline constexpr InputLifecycle InputLifecycle::OuterStream = {WaitPolicy::PerOuter, PopPolicy::PerOuter};
+
+inline constexpr OutputLifecycle OutputLifecycle::Streaming = {ReservePolicy::PerTile, PushPolicy::PerTile};
+inline constexpr OutputLifecycle OutputLifecycle::Chunked = {ReservePolicy::PerChunk, PushPolicy::PerChunk};
+inline constexpr OutputLifecycle OutputLifecycle::Bulk = {ReservePolicy::Upfront, PushPolicy::AtEnd};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerTile = {
+    ReservePolicy::Upfront, PushPolicy::PerTile};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerChunk = {
+    ReservePolicy::Upfront, PushPolicy::PerChunk};
+inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy::None, PushPolicy::None};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveNonePushEnd = {ReservePolicy::None, PushPolicy::AtEnd};
+
+constexpr EltwiseShape::EltwiseShape(uint32_t H, uint32_t W, uint32_t blk) : Ht(H), Wt(W), block_size(blk) {}
+
+constexpr EltwiseShape::EltwiseShape(uint32_t n_tiles) : Ht(1), Wt(n_tiles), block_size(1) {}
+
+constexpr EltwiseShape EltwiseShape::tiles(uint32_t n, uint32_t blk) { return {1, n, blk}; }
+
+constexpr EltwiseShape EltwiseShape::grid(uint32_t H, uint32_t W, uint32_t blk) { return {H, W, blk}; }
+
+constexpr EltwiseShape EltwiseShape::of(uint32_t r, uint32_t c) { return {r, c, 1}; }
+
+constexpr EltwiseShape EltwiseShape::row(uint32_t c) { return {1, c, 1}; }
+
+constexpr EltwiseShape EltwiseShape::col(uint32_t r) { return {r, 1, 1}; }
+
+constexpr EltwiseShape EltwiseShape::single() { return {1, 1, 1}; }
+
+constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
+    return lc == InputLifecycle::Streaming || lc == InputLifecycle::Chunked || lc == InputLifecycle::Bulk ||
+           lc == InputLifecycle::Pipelined || lc == InputLifecycle::CallerManaged || lc == InputLifecycle::BulkDrain ||
+           lc == InputLifecycle::HeldBulk || lc == InputLifecycle::HeldCumulative || lc == InputLifecycle::HeldStream ||
+           lc == InputLifecycle::DeferredPop || lc == InputLifecycle::NoWaitPop || lc == InputLifecycle::OuterStream;
+}
+
+constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
+    return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
+           lc == OutputLifecycle::ReserveAllPushPerTile || lc == OutputLifecycle::ReserveAllPushPerChunk ||
+           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::ReserveNonePushEnd;
+}
+
+constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noexcept {
+    if (!is_legal_input_lifecycle(lc)) {
+        return false;
+    }
+    if (kind == OperandKind::Block) {
+        return lc == InputLifecycle::Bulk || lc == InputLifecycle::Pipelined || lc == InputLifecycle::HeldBulk ||
+               lc == InputLifecycle::HeldCumulative || lc == InputLifecycle::Chunked ||
+               lc == InputLifecycle::CallerManaged || lc == InputLifecycle::DeferredPop;
+    }
+    if (lc == InputLifecycle::Pipelined || lc == InputLifecycle::HeldCumulative || lc == InputLifecycle::Chunked) {
+        return false;
+    }
+    if (kind == OperandKind::Scalar) {
+        return true;
+    }
+    return lc == InputLifecycle::Bulk || lc == InputLifecycle::HeldBulk || lc == InputLifecycle::CallerManaged ||
+           lc == InputLifecycle::DeferredPop;
+}
+
+constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
+    return lc == InputLifecycle::Bulk || lc == InputLifecycle::HeldBulk || lc == InputLifecycle::DeferredPop ||
+           lc == InputLifecycle::BulkDrain || lc == InputLifecycle::CallerManaged;
+}
+
+constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
+    return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::ReserveNonePushEnd ||
+           lc == OutputLifecycle::CallerManaged;
+}
+
+constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
+
+namespace detail {
+
+constexpr uint32_t bit_width_for_max(uint32_t max_value) noexcept {
+    uint32_t width = 1;
+    while ((max_value >>= 1) != 0) {
+        ++width;
+    }
+    return width;
+}
+
+constexpr uint32_t low_bits_mask(uint32_t width) noexcept { return (uint32_t{1} << width) - uint32_t{1}; }
+
+inline constexpr uint32_t first_config_bit = 0;
+
+template <class Value, uint32_t Shift, Value MaxValue>
+struct ConfigField {
+    static constexpr uint32_t max_value = static_cast<uint32_t>(MaxValue);
+    static constexpr uint32_t width = bit_width_for_max(max_value);
+    static_assert(Shift + width <= sizeof(uint32_t) * CHAR_BIT, "ConfigField exceeds uint32_t storage");
+
+    static constexpr uint32_t value_mask = low_bits_mask(width);
+    static constexpr uint32_t end = Shift + width;
+
+    static constexpr uint32_t encode(Value value) noexcept {
+        return (static_cast<uint32_t>(value) & value_mask) << Shift;
+    }
+
+    static constexpr Value decode(uint32_t storage) noexcept {
+        return static_cast<Value>((storage >> Shift) & value_mask);
+    }
+};
+
+struct InputSpecConfig {
+    using WaitField = ConfigField<WaitPolicy, first_config_bit, WaitPolicy::Cumulative>;
+    using PopField = ConfigField<PopPolicy, WaitField::end, PopPolicy::AtEnd>;
+    using IndexField = ConfigField<OperandKind, PopField::end, OperandKind::Scalar>;
+    using OffsetField = ConfigField<TileOffset, IndexField::end, TileOffset::Set>;
+    using ReconfigField = ConfigField<DataFormatReconfig, OffsetField::end, DataFormatReconfig::Enabled>;
+
+    static constexpr uint32_t used_bits = ReconfigField::end;
+    static constexpr uint32_t storage_mask = low_bits_mask(used_bits);
+    static_assert(used_bits <= sizeof(uint16_t) * CHAR_BIT, "InputSpec exceeds uint16_t storage");
+
+    static constexpr uint16_t encode(InputSpec spec) noexcept {
+        return static_cast<uint16_t>(
+            WaitField::encode(spec.lifecycle.wait_policy) | PopField::encode(spec.lifecycle.pop_policy) |
+            IndexField::encode(spec.index) | OffsetField::encode(spec.offset) |
+            ReconfigField::encode(spec.reconfig));
+    }
+
+    static constexpr InputSpec decode(uint16_t storage) noexcept;
+};
+
+struct OutputSpecConfig {
+    using ReserveField = ConfigField<ReservePolicy, first_config_bit, ReservePolicy::Upfront>;
+    using PushField = ConfigField<PushPolicy, ReserveField::end, PushPolicy::AtEnd>;
+    using OffsetField = ConfigField<TileOffset, PushField::end, TileOffset::Set>;
+    using ReconfigField = ConfigField<DataFormatReconfig, OffsetField::end, DataFormatReconfig::Enabled>;
+
+    static constexpr uint32_t used_bits = ReconfigField::end;
+    static constexpr uint32_t storage_mask = low_bits_mask(used_bits);
+    static_assert(used_bits <= sizeof(uint16_t) * CHAR_BIT, "OutputSpec exceeds uint16_t storage");
+
+    static constexpr uint16_t encode(OutputSpec spec) noexcept {
+        return static_cast<uint16_t>(
+            ReserveField::encode(spec.lifecycle.reserve_policy) | PushField::encode(spec.lifecycle.push_policy) |
+            OffsetField::encode(spec.offset) | ReconfigField::encode(spec.reconfig));
+    }
+
+    static constexpr OutputSpec decode(uint16_t storage) noexcept;
+};
+
+}  // namespace detail
+
+constexpr bool InputLifecycle::operator==(InputLifecycle other) const noexcept {
+    return wait_policy == other.wait_policy && pop_policy == other.pop_policy;
+}
+
+constexpr bool InputLifecycle::operator!=(InputLifecycle other) const noexcept { return !(*this == other); }
+
+constexpr bool OutputLifecycle::operator==(OutputLifecycle other) const noexcept {
+    return reserve_policy == other.reserve_policy && push_policy == other.push_policy;
+}
+
+constexpr bool OutputLifecycle::operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
+
+namespace detail {
+
+constexpr InputSpec InputSpecConfig::decode(uint16_t storage) noexcept {
+    return {
+        {WaitField::decode(storage), PopField::decode(storage)},
+        IndexField::decode(storage),
+        OffsetField::decode(storage),
+        ReconfigField::decode(storage)};
+}
+
+constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage) noexcept {
+    return {
+        {ReserveField::decode(storage), PushField::decode(storage)},
+        OffsetField::decode(storage),
+        ReconfigField::decode(storage)};
+}
+
+}  // namespace detail
+
+constexpr InputSpec input(
+    InputLifecycle lifecycle, OperandKind index, TileOffset offset, DataFormatReconfig reconfig) noexcept {
+    return {lifecycle, index, offset, reconfig};
+}
+
+constexpr InputSpec input(InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept {
+    return input(lifecycle, OperandKind::Scalar, TileOffset::Unset, reconfig);
+}
+
+constexpr InputSpec input(
+    InputLifecycle lifecycle, OperandKind index, DataFormatReconfig reconfig) noexcept {
+    return input(lifecycle, index, TileOffset::Unset, reconfig);
+}
+
+constexpr OutputSpec output(
+    OutputLifecycle lifecycle, TileOffset offset, DataFormatReconfig reconfig) noexcept {
+    return {lifecycle, offset, reconfig};
+}
+
+constexpr OutputSpec output(OutputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept {
+    return output(lifecycle, TileOffset::Unset, reconfig);
+}
+
+namespace detail {
+
+struct CopyTileConfig {
+    using DstField = ConfigField<Dst, first_config_bit, Dst::D15>;
+    using InputField = ConfigField<uint16_t, DstField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
+
+    uint32_t bits;
+
+    constexpr CopyTileConfig(Dst dst, InputSpec input_spec) noexcept :
+        bits(DstField::encode(dst) | InputField::encode(InputSpecConfig::encode(input_spec))) {}
+    constexpr explicit CopyTileConfig(uint32_t encoded) noexcept : bits(encoded) {}
+
+    constexpr Dst dst() const noexcept { return DstField::decode(bits); }
+    constexpr InputSpec input_spec() const noexcept { return InputSpecConfig::decode(InputField::decode(bits)); }
+};
+
+struct PackTileConfig {
+    using OutputField =
+        ConfigField<uint16_t, first_config_bit, static_cast<uint16_t>(OutputSpecConfig::storage_mask)>;
+    using DstField = ConfigField<Dst, OutputField::end, Dst::D15>;
+
+    uint32_t bits;
+
+    constexpr PackTileConfig(OutputSpec output_spec, Dst dst) noexcept :
+        bits(OutputField::encode(OutputSpecConfig::encode(output_spec)) | DstField::encode(dst)) {}
+    constexpr explicit PackTileConfig(uint32_t encoded) noexcept : bits(encoded) {}
+
+    constexpr OutputSpec output_spec() const noexcept { return OutputSpecConfig::decode(OutputField::decode(bits)); }
+    constexpr Dst dst() const noexcept { return DstField::decode(bits); }
+};
+
+struct BinaryFpuConfig {
+    using OpField = ConfigField<BinaryFpuOp, first_config_bit, BinaryFpuOp::Mul>;
+    using BroadcastField = ConfigField<BroadcastDim, OpField::end, BroadcastDim::Scalar>;
+    using AInputField =
+        ConfigField<uint16_t, BroadcastField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
+    using BInputField =
+        ConfigField<uint16_t, AInputField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
+    using DstField = ConfigField<Dst, BInputField::end, Dst::D15>;
+
+    uint32_t bits;
+
+    constexpr BinaryFpuConfig(BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst) noexcept :
+        bits(
+            OpField::encode(op) | BroadcastField::encode(bcast) | AInputField::encode(InputSpecConfig::encode(a)) |
+            BInputField::encode(InputSpecConfig::encode(b)) | DstField::encode(dst)) {}
+    constexpr explicit BinaryFpuConfig(uint32_t encoded) noexcept : bits(encoded) {}
+
+    constexpr BinaryFpuOp op() const noexcept { return OpField::decode(bits); }
+    constexpr BroadcastDim broadcast() const noexcept { return BroadcastField::decode(bits); }
+    constexpr InputSpec a_input_spec() const noexcept { return InputSpecConfig::decode(AInputField::decode(bits)); }
+    constexpr InputSpec b_input_spec() const noexcept { return InputSpecConfig::decode(BInputField::decode(bits)); }
+    constexpr Dst dst() const noexcept { return DstField::decode(bits); }
+};
+
+constexpr uint32_t copy_tile_config_bits(Dst dst, InputSpec input_spec) noexcept {
+    return CopyTileConfig{dst, input_spec}.bits;
+}
+
+constexpr uint32_t pack_tile_config_bits(OutputSpec output_spec, Dst dst) noexcept {
+    return PackTileConfig{output_spec, dst}.bits;
+}
+
+constexpr uint32_t binary_fpu_config_bits(
+    BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst) noexcept {
+    return BinaryFpuConfig{op, bcast, a, b, dst}.bits;
+}
+
+}  // namespace detail
 
 // Internal sentinel + type-list wrapper + chain-shape trait declarations. These are
 // implementation detail of the chain pipeline — no chain caller references them, so they
@@ -453,11 +742,15 @@ constexpr bool chain_requests_no_reconfig() {
 // a wrong gate is a hang or a PCC failure, never benign.
 // =============================================================================
 
-template <uint32_t Cb,
-          InputLifecycle Policy,
-          OperandKind IndexMode = OperandKind::Block,
-          TileOffset Offset = TileOffset::Unset>
+template <uint32_t Cb, uint16_t ConfigBits>
 struct InputStream {
+    static constexpr InputSpec Config = detail::InputSpecConfig::decode(ConfigBits);
+    static constexpr InputLifecycle Policy = Config.lifecycle;
+    static constexpr WaitPolicy Wait = Policy.wait_policy;
+    static constexpr PopPolicy Pop = Policy.pop_policy;
+    static constexpr OperandKind IndexMode = Config.index;
+    static constexpr TileOffset Offset = Config.offset;
+
     uint32_t tile_base = 0;
 
     constexpr InputStream() noexcept = default;
@@ -475,14 +768,14 @@ struct InputStream {
     ALWI void pop_n(uint32_t n) const { DataflowBuffer(Cb).pop_front(n); }
 
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::Streaming, InputLifecycle::HeldStream>) {
+        if constexpr (Wait == WaitPolicy::PerTile) {
             DataflowBuffer(Cb).wait_front(1);
-        } else if constexpr (is_one_of_v<Policy, InputLifecycle::Pipelined, InputLifecycle::HeldCumulative>) {
+        } else if constexpr (Wait == WaitPolicy::Cumulative) {
             DataflowBuffer(Cb).wait_front(cumulative_count);
         }
     }
     ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::Chunked>) {
+        if constexpr (Wait == WaitPolicy::PerChunk) {
             DataflowBuffer(Cb).wait_front(inner_count);
         }
     }
@@ -493,43 +786,47 @@ struct InputStream {
             // Scalar index BulkDrain is restricted to. Waiting 1 would silently rely on the producer
             // having already staged every tile.
             DataflowBuffer(Cb).wait_front(Ht * Wt + tile_base_value<Offset>(tile_base));
-        } else if constexpr (is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk>) {
+        } else if constexpr (Wait == WaitPolicy::Upfront) {
             // Bulk stages its window once and pops at end; HeldBulk holds it — a held Scalar operand
             // legitimately waits window<Scalar>=1 (see the Bulk+Scalar held-operand contract).
             DataflowBuffer(Cb).wait_front(window_count(Ht, Wt));
         }
     }
     ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::Pipelined, InputLifecycle::DeferredPop>) {
+        if constexpr (Pop == PopPolicy::AtEnd) {
             DataflowBuffer(Cb).pop_front(window_count(Ht, Wt));
         }
     }
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::Streaming, InputLifecycle::NoWaitPop, InputLifecycle::BulkDrain>) {
+        if constexpr (Pop == PopPolicy::PerTile) {
             DataflowBuffer(Cb).pop_front(1);
         }
     }
     ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::Chunked>) {
+        if constexpr (Pop == PopPolicy::PerChunk) {
             DataflowBuffer(Cb).pop_front(inner_count);
         }
     }
     ALWI void wait_per_row() const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::OuterStream>) {
+        if constexpr (Wait == WaitPolicy::PerOuter) {
             DataflowBuffer(Cb).wait_front(1);
         }
     }
     ALWI void pop_per_row() const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::OuterStream>) {
+        if constexpr (Pop == PopPolicy::PerOuter) {
             DataflowBuffer(Cb).pop_front(1);
         }
     }
 };
 
-template <uint32_t Cb,
-          OutputLifecycle Policy,
-          TileOffset Offset = TileOffset::Unset>
+template <uint32_t Cb, uint16_t ConfigBits>
 struct OutputStream {
+    static constexpr OutputSpec Config = detail::OutputSpecConfig::decode(ConfigBits);
+    static constexpr OutputLifecycle Policy = Config.lifecycle;
+    static constexpr ReservePolicy Reserve = Policy.reserve_policy;
+    static constexpr PushPolicy Push = Policy.push_policy;
+    static constexpr TileOffset Offset = Config.offset;
+
     uint32_t tile_base = 0;
 
     constexpr OutputStream() noexcept = default;
@@ -538,36 +835,35 @@ struct OutputStream {
     // Walk vs pinned output addressing is DERIVED from the OutputLifecycle (no caller knob):
     // upfront-reserve policies reserve the whole window once and write distinct tiles into it
     // (walk); per-tile/per-chunk-reserve policies advance the CB front, so the index stays pinned.
-    static constexpr bool walk =
-        is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::ReserveAllPushPerTile, OutputLifecycle::ReserveAllPushPerChunk>;
+    static constexpr bool walk = Reserve == ReservePolicy::Upfront;
 
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == OutputLifecycle::Streaming) {
+        if constexpr (Reserve == ReservePolicy::PerTile) {
             DataflowBuffer(Cb).reserve_back(1);
         }
     }
     ALWI void reserve_per_block(uint32_t inner_count) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Chunked>) {
+        if constexpr (Reserve == ReservePolicy::PerChunk) {
             DataflowBuffer(Cb).reserve_back(inner_count);
         }
     }
     ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::ReserveAllPushPerTile, OutputLifecycle::ReserveAllPushPerChunk>) {
+        if constexpr (Reserve == ReservePolicy::Upfront) {
             DataflowBuffer(Cb).reserve_back((Ht * Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::ReserveNonePushEnd, OutputLifecycle::Bulk>) {
+        if constexpr (Push == PushPolicy::AtEnd) {
             DataflowBuffer(Cb).push_back((walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_per_tile(uint32_t /*i*/) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Streaming, OutputLifecycle::ReserveAllPushPerTile>) {
+        if constexpr (Push == PushPolicy::PerTile) {
             DataflowBuffer(Cb).push_back(1);
         }
     }
     ALWI void push_per_block(uint32_t inner_count) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Chunked, OutputLifecycle::ReserveAllPushPerChunk>) {
+        if constexpr (Push == PushPolicy::PerChunk) {
             DataflowBuffer(Cb).push_back(inner_count);
         }
     }
@@ -577,14 +873,20 @@ struct OutputStream {
 // 1. CopyTile chain element
 // =============================================================================
 
-template <uint32_t Cb,
-          Dst DstSlot,
-          InputLifecycle Policy,
-          CopyTileReconfig Reconfig,
-          OperandKind IndexMode,
-          TileOffset Offset>
-struct CopyTile : InputStream<Cb, Policy, IndexMode, Offset>, CopyTileTag {
-    using Base = InputStream<Cb, Policy, IndexMode, Offset>;
+template <uint32_t Cb, uint32_t ConfigBits>
+struct detail::CopyTileImpl
+    : InputStream<
+          Cb,
+          detail::InputSpecConfig::encode(CopyTileConfig{ConfigBits}.input_spec())>,
+      CopyTileTag {
+    static constexpr CopyTileConfig Config{ConfigBits};
+    static constexpr InputSpec Input = Config.input_spec();
+    static constexpr Dst DstSlot = Config.dst();
+    static constexpr InputLifecycle Policy = Input.lifecycle;
+    static constexpr DataFormatReconfig Reconfig = Input.reconfig;
+    static constexpr OperandKind IndexMode = Input.index;
+    static constexpr TileOffset Offset = Input.offset;
+    using Base = InputStream<Cb, detail::InputSpecConfig::encode(Input)>;
     using Base::tile_base;
 
     // ---- compile-time validation ----
@@ -617,10 +919,11 @@ struct CopyTile : InputStream<Cb, Policy, IndexMode, Offset>, CopyTileTag {
 
     // Prev-CB fold: CopyTile loads CbA only. srcb/pack sides are absent -> dfb_for_side
     // defaults them to NO_PREV_DFB.
-    static constexpr uint32_t       reconfig_srca_dfb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srca_dfb =
+        (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    constexpr CopyTile() noexcept = default;
-    constexpr explicit CopyTile(uint32_t base) noexcept : Base(base) {}
+    constexpr CopyTileImpl() noexcept = default;
+    constexpr explicit CopyTileImpl(uint32_t base) noexcept : Base(base) {}
 
     // ---- chain pipeline hooks ----
     static ALWI void init() {
@@ -642,13 +945,19 @@ struct CopyTile : InputStream<Cb, Policy, IndexMode, Offset>, CopyTileTag {
 // 2. PackTile chain element
 // =============================================================================
 
-template <uint32_t Cb,
-          OutputLifecycle Policy,
-          PackTileReconfig Reconfig,
-          Dst DstSlot,
-          TileOffset Offset>
-struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
-    using Base = OutputStream<Cb, Policy, Offset>;
+template <uint32_t Cb, uint32_t ConfigBits>
+struct detail::PackTileImpl
+    : OutputStream<
+          Cb,
+          detail::OutputSpecConfig::encode(PackTileConfig{ConfigBits}.output_spec())>,
+      PackTileTag {
+    static constexpr PackTileConfig Config{ConfigBits};
+    static constexpr OutputSpec Output = Config.output_spec();
+    static constexpr OutputLifecycle Policy = Output.lifecycle;
+    static constexpr DataFormatReconfig Reconfig = Output.reconfig;
+    static constexpr Dst DstSlot = Config.dst();
+    static constexpr TileOffset Offset = Output.offset;
+    using Base = OutputStream<Cb, detail::OutputSpecConfig::encode(Output)>;
     using Base::tile_base;
     using Base::walk;
 
@@ -674,11 +983,11 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
     // emitted — fold keeps prior pack target.
     // srca/srcb absent -> dfb_for_side defaults them to NO_PREV_DFB; PackTile programs pack only.
-    static constexpr uint32_t          reconfig_pack_dfb    =
-        (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_pack_dfb =
+        (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    constexpr PackTile() noexcept = default;
-    constexpr explicit PackTile(uint32_t base) noexcept : Base(base) {}
+    constexpr PackTileImpl() noexcept = default;
+    constexpr explicit PackTileImpl(uint32_t base) noexcept : Base(base) {}
 
     static ALWI void init() {
         // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
@@ -716,19 +1025,20 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
 // 3. BinaryFpu chain element
 // =============================================================================
 
-template <uint32_t CbA,
-          uint32_t CbB,
-          BinaryFpuOp Op,
-          BroadcastDim Bcast,
-          InputLifecycle APolicy,
-          InputLifecycle BPolicy,
-          BinaryDataFormatReconfig Reconfig,
-          Dst DstSlot,
-          OperandKind AIndex,
-          OperandKind BIndex,
-          TileOffset OffsetA,
-          TileOffset OffsetB>
-struct BinaryFpu : BinaryFpuTag {
+template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits>
+struct detail::BinaryFpuImpl : BinaryFpuTag {
+    static constexpr BinaryFpuConfig Config{ConfigBits};
+    static constexpr InputSpec AInput = Config.a_input_spec();
+    static constexpr InputSpec BInput = Config.b_input_spec();
+    static constexpr BinaryFpuOp Op = Config.op();
+    static constexpr BroadcastDim Bcast = Config.broadcast();
+    static constexpr InputLifecycle APolicy = AInput.lifecycle;
+    static constexpr InputLifecycle BPolicy = BInput.lifecycle;
+    static constexpr Dst DstSlot = Config.dst();
+    static constexpr OperandKind AIndex = AInput.index;
+    static constexpr OperandKind BIndex = BInput.index;
+    static constexpr TileOffset OffsetA = AInput.offset;
+    static constexpr TileOffset OffsetB = BInput.offset;
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
     // Comprehensive per-side (IndexMode, Policy) legality. Block rejects PerTile-pop
@@ -781,24 +1091,24 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr bool needs_per_side_idx = (a_uses_local_idx != b_uses_local_idx);
 
     // Prev-CB fold: BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
-    // reconfig is owned by the downstream PackTile element (`PackTileReconfig::Output`)
+    // reconfig is owned by the downstream PackTile element.
     // — BinaryFpu writes to DEST, not to a CB, so it has no pack-side responsibility.
     //
     // Per-side selection (Input / SrcA / SrcB) lets the caller opt into a single-side
     // fold when the other side is already programmed (by a previous chain element on
     // the same side, or by external init).
-    static constexpr uint32_t      reconfig_srca_dfb =
-        is_one_of_v<Reconfig, BinaryDataFormatReconfig::Input, BinaryDataFormatReconfig::SrcA> ? CbA : NO_PREV_DFB;
-    static constexpr uint32_t      reconfig_srcb_dfb =
-        is_one_of_v<Reconfig, BinaryDataFormatReconfig::Input, BinaryDataFormatReconfig::SrcB> ? CbB : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srca_dfb =
+        (AInput.reconfig == DataFormatReconfig::Enabled) ? CbA : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srcb_dfb =
+        (BInput.reconfig == DataFormatReconfig::Enabled) ? CbB : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
 
-    InputStream<CbA, APolicy, AIndex, OffsetA> a;
-    InputStream<CbB, BPolicy, BIndex, OffsetB> b;
+    InputStream<CbA, detail::InputSpecConfig::encode(Config.a_input_spec())> a;
+    InputStream<CbB, detail::InputSpecConfig::encode(Config.b_input_spec())> b;
 
-    constexpr BinaryFpu() noexcept = default;
-    constexpr BinaryFpu(uint32_t base_a, uint32_t base_b) noexcept : a(base_a), b(base_b) {}
-    constexpr explicit BinaryFpu(uint32_t base_a) noexcept : a(base_a) {}
+    constexpr BinaryFpuImpl() noexcept = default;
+    constexpr BinaryFpuImpl(uint32_t base_a, uint32_t base_b) noexcept : a(base_a), b(base_b) {}
+    constexpr explicit BinaryFpuImpl(uint32_t base_a) noexcept : a(base_a) {}
 
     // Helper: when same_dfb, both bases live in the single shared wait window.
     // Wait/pop count uses max(base_a, base_b) — caller must stage that many tiles
@@ -954,24 +1264,29 @@ struct BinaryFpu : BinaryFpuTag {
 template <uint32_t Cb,
           BinaryFpuOp Op,
           DestReuseType ReuseType,
-          InputLifecycle Policy,
-          DestReuseReconfig Reconfig,
+          InputSpec Input,
           Dst DstIn,
-          Dst DstOut,
-          OperandKind IndexMode,
-          TileOffset Offset>
-struct DestReuseBinary : InputStream<Cb, Policy, IndexMode, Offset>, DestReuseBinaryTag {
-    using Base = InputStream<Cb, Policy, IndexMode, Offset>;
+          Dst DstOut>
+struct DestReuseBinary
+    : InputStream<
+          Cb,
+          detail::InputSpecConfig::encode(Input)>,
+      DestReuseBinaryTag {
+    static constexpr InputSpec InputConfig = Input;
+    static constexpr InputLifecycle Policy = InputConfig.lifecycle;
+    static constexpr OperandKind EffectiveIndexMode = InputConfig.index;
+    static constexpr TileOffset EffectiveOffset = InputConfig.offset;
+    using Base = InputStream<Cb, detail::InputSpecConfig::encode(InputConfig)>;
     using Base::tile_base;
 
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
-    static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
+    static_assert(is_legal_kind_lifecycle(EffectiveIndexMode, Policy),
                   "DestReuseBinary: (IndexMode, Policy) is illegal for Block — exclude "
                   "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
-    static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
+    static_assert(detail::valid_policy_mode_v<Policy, EffectiveIndexMode>,
                   "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
-    static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
+    static_assert(EffectiveOffset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
                   "DestReuseBinary: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle");
 
     // The one CB feeds the src that DEST is NOT routed to: DEST_TO_SRCB -> CB on srcA (dfb_a),
@@ -985,16 +1300,14 @@ struct DestReuseBinary : InputStream<Cb, Policy, IndexMode, Offset>, DestReuseBi
     // Prev-CB fold: DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
     // (when DEST → srca). Reconfig only fires when opted in.
     //
-    // `Input` follows ReuseType (programs the side the CB actually unpacks into).
-    // `SrcA` / `SrcB` explicitly pick a side, decoupled from ReuseType — used when
-    // the caller wants to program a specific unpack lane regardless of which lane
-    // DEST is feeding into.
     static constexpr uint32_t       reconfig_srca_dfb  =
-        ((Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCB) ||
-         Reconfig == DestReuseReconfig::SrcA) ? Cb : NO_PREV_DFB;
+        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCB)
+            ? Cb
+            : NO_PREV_DFB;
     static constexpr uint32_t       reconfig_srcb_dfb  =
-        ((Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ||
-         Reconfig == DestReuseReconfig::SrcB) ? Cb : NO_PREV_DFB;
+        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCA)
+            ? Cb
+            : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
     constexpr DestReuseBinary() noexcept = default;
@@ -1019,7 +1332,8 @@ struct DestReuseBinary : InputStream<Cb, Policy, IndexMode, Offset>, DestReuseBi
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
+        const uint32_t in_idx =
+            tile_base_value<EffectiveOffset>(tile_base) + detail::idx<EffectiveIndexMode>(i_flat, ht, wt);
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
 
@@ -1040,7 +1354,9 @@ template <BroadcastDim Dim,
           UnaryBcastReconfig Reconfig,
           Dst DstSlot>
 struct UnaryBcast
-    : InputStream<Cb, Policy, OperandKind::Block, TileOffset::Unset>,
+    : InputStream<
+          Cb,
+          detail::InputSpecConfig::encode(input(Policy, OperandKind::Block, TileOffset::Unset))>,
       UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -1053,12 +1369,12 @@ struct UnaryBcast
 
     // Prev-CB fold: UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
     // drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb must be reprogrammed too — a
-    // srca-only reconfig leaves ALU_FORMAT_SPEC_REG1_SrcB stale from a preceding two-operand op
-    // (e.g. layernorm's BinaryFpu(cb_ex2, cb_eps) leaves SrcB = cb_eps), which corrupts the bcast.
+    // srca-only reconfig leaves ALU_FORMAT_SPEC_REG1_SrcB stale from a preceding two-operand op,
+    // which corrupts the broadcast.
     // Declaring both CBs lets the chain's reconfig fold (emit_pre_element_transitions) emit the
     // reconfig before init() AND record Cb as the post-element srca/srcb state for the next
     // element — so a subsequent srca/srcb reader sees the correct prev-CB and won't wrongly elide.
-    // Pack-side reconfig is owned by the downstream PackTile (PackTileReconfig::Output), exactly
+    // Pack-side reconfig is owned by the downstream PackTile, exactly
     // like BinaryFpu — UnaryBcast never configures pack.
     static constexpr uint32_t       reconfig_srca_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
     static constexpr uint32_t       reconfig_srcb_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
@@ -1548,8 +1864,8 @@ template <class... Es>
 struct chain_hoist_pack<EltwiseChain<Es...>>
     : std::bool_constant<!detail::ChainTraits<Es...>::pack_hetero> {};
 
-// True iff no element requests any reconfig (all reconfig knobs None). SetupOwner::Caller requires
-// this so a set-but-inert reconfig knob (which the helper would silently ignore) is a compile error
+// True iff no element requests any reconfig. SetupOwner::Caller requires this so an enabled but
+// inert operand reconfig (which the helper would silently ignore) is a compile error
 // instead of a lie about what runs inside the chain.
 template <class Chain>
 struct chain_no_reconfig_requested : std::true_type {};
@@ -1581,8 +1897,8 @@ namespace detail {
 // runtime members when it needs to (e.g. Dropout seeding the SFPU with its runtime
 // `seed`). Most inits don't and are declared `static`; a static member is callable
 // through an instance, so the call site is uniform either way. PackTile is the one
-// exception — its init is dispatched by type in `pack_init_for_each` (no instance in
-// scope there), which is fine because pack init never needs runtime state.
+// exception — its init is dispatched by type in the indexed setup fold (no instance
+// needed), which is fine because pack init never needs runtime state.
 
 // =============================================================================
 // emit_pre_element_transitions<E, PrevA, PrevB, PrevP, PackHetero>()
@@ -1597,16 +1913,12 @@ namespace detail {
 // hardware no-op (a few compares).
 //
 // Pack-side hoist: homogeneous chains (≤1 opt-in pack site, or all share a CB) emit at
-// boot via `pack_init_for_each`; heterogeneous chains (≥2 sites, different CBs) emit only
+// boot via the indexed setup fold; heterogeneous chains (≥2 sites, different CBs) emit only
 // the first site at boot and defer the rest to per-stage `emit_per_stage_pack_reconfig`.
 // DEST accumulation is build-flag-driven (no per-element fp32 fold here).
 // =============================================================================
 
-// De-templated from the full chain pack: takes only the compile-time facts it consumes — the
-// element's prev-CB descriptors (srca/srcb/pack) and pack-heterogeneity — precomputed by the caller
-// from `ChainTraits<Es...>` at the element's index. This keeps the per-element mangled name (and thus
-// the -g debug info that records it) proportional to the ELEMENT, not the whole chain. The values
-// passed in are exactly what this function used to read internally, so reconfig behavior is identical.
+// Takes only the element and the preceding CB descriptors needed to decide its transitions.
 template <class E, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
 ALWI void emit_pre_element_transitions() {
     constexpr uint32_t curr_a = dfb_for_side<Side::SrcA, E>();
@@ -1700,7 +2012,7 @@ ALWI void emit_per_stage_pack_reconfig() {
 }
 
 // Pack-phase init (Pack* only). Pack is its own cohort (disjoint from math-MOP / SFPU),
-// excluded from `hoist_compute_init` and always boot-hoisted here via `pack_init_for_each`.
+// excluded from the compute-init fold and always boot-hoisted by the pack-init fold.
 // Reconfig is fold-driven (see emit_pre_element_transitions): homogeneous chains program
 // the packer once at boot; heterogeneous chains defer later sites to per-stage emission so
 // the per-iter wraparound stays correct.
@@ -1712,30 +2024,16 @@ ALWI void elem_pack_init() {
     }
 }
 
-// Hoisted pack-init dispatcher — visits each chain element by compile-time index and precomputes the
-// element's reconfig facts from `ChainTraits<Es...>` so the per-element init carries only those ints
-// (not the whole chain type) in its mangled name.
-template <class... Es, std::size_t... Is>
-ALWI void pack_init_for_each(std::index_sequence<Is...>) {
-    (elem_pack_init<
-         ChainTraits<Es...>::prev.srca[Is],
-         ChainTraits<Es...>::prev.srcb[Is],
-         ChainTraits<Es...>::prev.pack[Is],
-         ChainTraits<Es...>::pack_hetero,
-         Es>(),
-     ...);
-}
-
 // =============================================================================
 // Two-phase per-element apply: compute / pack
 //
 // Each element owns its full lifecycle slice of the outer iteration. Per outer iter:
 //
 //   tile_regs_acquire();
-//   apply_compute_phase(...);   // per element: wait + init? + for(j) exec + pop
+//   elem_apply_compute(...);    // per element: wait + init? + for(j) exec + pop
 //   tile_regs_commit();
 //   tile_regs_wait();
-//   apply_pack_phase(...);      // per pack element: reserve + for(j) pack_exec + push
+//   elem_apply_pack(...);       // per pack element: reserve + for(j) pack_exec + push
 //   tile_regs_release();
 //
 // Upfront-policy lifecycle (elem_pop_upfront_end / elem_push_at_end) fires after the loop.
@@ -1753,7 +2051,7 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // itself is decided from SFPU-op uniformity alone).
 //
 // PackTile is intentionally excluded from this walk — pack-side reconfig is
-// emitted unconditionally at boot via `pack_init_for_each` (PACK cohort is
+// emitted unconditionally at boot via the indexed pack-init fold (PACK cohort is
 // disjoint from compute cohorts and is always hoisted).
 template <bool HoistMath, bool HoistSfpu, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero, class ElemT>
 ALWI void hoist_compute_init_one([[maybe_unused]] ElemT& elem) {
@@ -1764,19 +2062,6 @@ ALWI void hoist_compute_init_one([[maybe_unused]] ElemT& elem) {
         emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
         elem.init();  // instance dispatch (see convention note above): a runtime-stateful init reads its members here
     }
-}
-
-// Direct indexed fold (no generic-lambda closure): precompute each element's reconfig facts from
-// `ChainTraits<Es...>` and hand them to the de-templated per-element init.
-template <bool HoistMath, bool HoistSfpu, std::size_t... Is, class... Es>
-ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
-    (hoist_compute_init_one<HoistMath, HoistSfpu,
-         ChainTraits<Es...>::prev.srca[Is],
-         ChainTraits<Es...>::prev.srcb[Is],
-         ChainTraits<Es...>::prev.pack[Is],
-         ChainTraits<Es...>::pack_hetero,
-         std::remove_reference_t<Es>>(elts),
-     ...);
 }
 
 }  // namespace detail
@@ -1891,50 +2176,6 @@ ALWI void elem_apply_pack(
     }
 }
 
-template <bool EmitMathInit, bool EmitSfpuInit, std::size_t... Is, class... Es>
-ALWI void apply_compute_phase(
-    std::index_sequence<Is...>,
-    uint32_t i_flat,
-    uint32_t ht,
-    uint32_t wt,
-    uint32_t inner_count,
-    uint32_t chain_lane_width,
-    uint32_t Ht,
-    uint32_t Wt,
-    Es&... elts) {
-    // Direct indexed fold: precompute each element's reconfig facts from `ChainTraits<Es...>` and call
-    // the de-templated worker. No generic-lambda closure, and the worker's name no longer embeds Es....
-    (elem_apply_compute<EmitMathInit, EmitSfpuInit,
-         ChainTraits<Es...>::prev.srca[Is],
-         ChainTraits<Es...>::prev.srcb[Is],
-         ChainTraits<Es...>::prev.pack[Is],
-         ChainTraits<Es...>::pack_hetero,
-         std::remove_reference_t<Es>>(
-         elts, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt),
-     ...);
-}
-
-template <std::size_t... Is, class... Es>
-ALWI void apply_pack_phase(
-    std::index_sequence<Is...>,
-    uint32_t i_flat,
-    uint32_t ht,
-    uint32_t wt,
-    uint32_t inner_count,
-    uint32_t chain_lane_width,
-    uint32_t Ht,
-    uint32_t Wt,
-    Es&... elts) {
-    // Direct indexed fold (see apply_compute_phase): de-templated pack worker fed precomputed facts.
-    (elem_apply_pack<
-         ChainTraits<Es...>::prev.pack[Is],
-         ChainTraits<Es...>::last_pack_cb,
-         ChainTraits<Es...>::pack_hetero,
-         std::remove_reference_t<Es>>(
-         elts, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt),
-     ...);
-}
-
 template <class E>
 ALWI void elem_wait_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
     if constexpr (is_cb_reader_op_v<E>) e.wait_upfront(Ht, Wt);
@@ -1964,79 +2205,13 @@ ALWI void elem_pop_per_row(const E& e) {
 
 }  // namespace detail
 
-// Shared per-tile walk. `EmitMathInit`/`EmitSfpuInit` control whether the per-element compute init
-// is emitted inside the loop. eltwise_chain_impl always passes `!hoist_*`: a hoistable cohort emits
-// nothing here (it was hoisted to boot by this call under SetupOwner::Chain, or by the caller under
-// SetupOwner::Caller), and a non-hoistable cohort re-inits per tile regardless.
-template <bool EmitMathInit, bool EmitSfpuInit, class... Es>
-ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
-    using Chain = EltwiseChain<Es...>;
-    // Block size lives on the shape. The DEST footprint is block_size * chain_lane_width;
-    // the chain clamps block_size so it can never overflow DEST.
-    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
-    uint32_t block_size = shape.block_size;
-    // InputLifecycle::Streaming CB-reader chains can't multi-tile their DEST window — force
-    // block_size to 1 (compile-time gated, so the override emits no code for block-capable chains).
-    if constexpr (!chain_supports_block_v<Chain>) {
-        block_size = 1;
-    } else {
-        // Clamp the runtime block_size to the chain's compile-time DEST capacity
-        // (chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width). Clamping down is
-        // correctness-safe — more outer iters, same total tile coverage.
-        constexpr uint32_t max_block = chain_max_block_v<Chain>;
-        if (block_size > max_block) {
-            block_size = max_block;
-        }
-    }
-
-    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
-    const uint32_t Ht = shape.Ht;
-    const uint32_t Wt = shape.Wt;
-
-    // Upfront input wait + output reserve — each fires once for the whole Ht*Wt window for its
-    // upfront policies (Bulk / HeldBulk / BulkDrain on the input wait; Bulk-reserve on the output),
-    // bracketing the loop with the end-of-chain pop_upfront_end / push_at_end folds. The input
-    // wait is hoisted here (not sprayed per block-iter) so it's placed exactly once — symmetric
-    // with its pop_upfront_end partner — rather than relying on cb_wait_front idempotency.
-    (detail::elem_wait_upfront(elts, Ht, Wt), ...);
-    (detail::elem_reserve_upfront(elts, Ht, Wt), ...);
-
-    // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base) pair.
-    // Block-mode elements consume `flat_base + j`; bcast-mode read `ht` / `wt = wt_base + j`.
-    for (uint32_t ht = 0; ht < Ht; ++ht) {
-        const uint32_t row_base = ht * Wt;
-        // Outer-axis streamed input operands (InputLifecycle::OuterStream): wait ONE tile at row
-        // entry; the inner loop re-reads it at the front; pop it at row exit. Inert for every
-        // other policy.
-        (detail::elem_wait_per_row(elts), ...);
-        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
-            const uint32_t inner_count =
-                (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
-            const uint32_t i_flat = row_base + wt_base;
-            tile_regs_acquire();
-            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit>(
-                IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
-            tile_regs_commit();
-            tile_regs_wait();
-            detail::apply_pack_phase(
-                IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
-            tile_regs_release();
-        }
-        (detail::elem_pop_per_row(elts), ...);
-    }
-
-    // End-of-chain upfront-policy lifecycle.
-    (detail::elem_pop_upfront_end(elts, Ht, Wt), ...);
-    (detail::elem_push_at_end(elts, Ht, Wt), ...);
-}
-
 // eltwise_chain_impl — the walk. SetupOwner::Chain (default) emits the chain's one-time setup
 // (pack boot init + the uniform math-MOP / SFPU init + their srca/srcb reconfig) before walking.
 // SetupOwner::Caller skips ALL of it: the caller emitted the chain's whole one-time setup itself,
 // once, before its own loop, so this call is pure per-tile compute. SetupOwner is about WHO emits
 // the hoistable setup — it never changes which init is hoistable (that's deduced from uniformity).
-template <SetupOwner SO = SetupOwner::Chain, class... Es>
-ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
+template <SetupOwner SO = SetupOwner::Chain, std::size_t... Is, class... Es>
+ALWI void eltwise_chain_impl(std::index_sequence<Is...> indices, EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
                   "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
@@ -2056,23 +2231,83 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
                   "reconfig are boot-only and nothing self-emits per tile. This chain has setup that "
                   "must re-emit per tile, so the caller cannot own it once — use SetupOwner::Chain.");
     // Honesty: under SetupOwner::Caller the chain emits NO reconfig at all (the caller owns the
-    // setup), so a non-None reconfig knob on any element is inert and lies about what runs inside
-    // the helper. Forbid it — make the caller declare None, which truthfully says "the chain does
-    // no reconfig; my manual setup owns the format."
+    // setup), so enabled operand reconfig on any element is inert and lies about what runs inside
+    // the helper. Require each input/output spec to disable it.
     static_assert(SO == SetupOwner::Chain || chain_no_reconfig_requested_v<Chain>,
-                  "SetupOwner::Caller with a non-None reconfig knob: under Caller the chain emits no "
-                  "reconfig (the caller owns the setup), so the knob is inert and misleading. Set "
-                  "every element's reconfig to None — the caller's manual setup owns the format.");
+                  "SetupOwner::Caller with enabled operand reconfig: under Caller the chain emits no "
+                  "reconfig (the caller owns the setup), so the setting is inert and misleading. Disable "
+                  "reconfig in every input/output spec — the caller's manual setup owns the format.");
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
-    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
     if constexpr (SO == SetupOwner::Chain) {
-        detail::pack_init_for_each<Es...>(IdxSeq{});
-        detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
+        (detail::elem_pack_init<
+             detail::ChainTraits<Es...>::prev.srca[Is],
+             detail::ChainTraits<Es...>::prev.srcb[Is],
+             detail::ChainTraits<Es...>::prev.pack[Is],
+             detail::ChainTraits<Es...>::pack_hetero,
+             Es>(),
+         ...);
+        (detail::hoist_compute_init_one<hoist_math, hoist_sfpu,
+             detail::ChainTraits<Es...>::prev.srca[Is],
+             detail::ChainTraits<Es...>::prev.srcb[Is],
+             detail::ChainTraits<Es...>::prev.pack[Is],
+             detail::ChainTraits<Es...>::pack_hetero,
+             std::remove_reference_t<Es>>(elts),
+         ...);
     }
-    chain_run_loop<!hoist_math, !hoist_sfpu>(shape, elts...);
+    (void)indices;
+
+    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
+    uint32_t block_size = shape.block_size;
+    if constexpr (!chain_supports_block_v<Chain>) {
+        block_size = 1;
+    } else {
+        constexpr uint32_t max_block = chain_max_block_v<Chain>;
+        if (block_size > max_block) {
+            block_size = max_block;
+        }
+    }
+
+    const uint32_t Ht = shape.Ht;
+    const uint32_t Wt = shape.Wt;
+
+    (detail::elem_wait_upfront(elts, Ht, Wt), ...);
+    (detail::elem_reserve_upfront(elts, Ht, Wt), ...);
+
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        const uint32_t row_base = ht * Wt;
+        (detail::elem_wait_per_row(elts), ...);
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
+            const uint32_t inner_count =
+                (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
+            const uint32_t i_flat = row_base + wt_base;
+            tile_regs_acquire();
+            (detail::elem_apply_compute<!hoist_math, !hoist_sfpu,
+                 detail::ChainTraits<Es...>::prev.srca[Is],
+                 detail::ChainTraits<Es...>::prev.srcb[Is],
+                 detail::ChainTraits<Es...>::prev.pack[Is],
+                 detail::ChainTraits<Es...>::pack_hetero,
+                 std::remove_reference_t<Es>>(
+                 elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
+             ...);
+            tile_regs_commit();
+            tile_regs_wait();
+            (detail::elem_apply_pack<
+                 detail::ChainTraits<Es...>::prev.pack[Is],
+                 detail::ChainTraits<Es...>::last_pack_cb,
+                 detail::ChainTraits<Es...>::pack_hetero,
+                 std::remove_reference_t<Es>>(
+                 elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
+             ...);
+            tile_regs_release();
+        }
+        (detail::elem_pop_per_row(elts), ...);
+    }
+
+    (detail::elem_pop_upfront_end(elts, Ht, Wt), ...);
+    (detail::elem_push_at_end(elts, Ht, Wt), ...);
 }
 
 // =============================================================================
@@ -2087,10 +2322,7 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
 // the prev-CB sweep too: its NO_PREV_DFB sides never update the running prev, so a later
 // element sees the same previous CB as if the marker were absent.
 //
-// We deliberately do NOT filter the marker out with `std::tuple_cat` / `std::get` (the old
-// approach): that pulled the entire std::tuple template family into every chain kernel's -g
-// debug info (~2/3 of .debug_str) solely to strip a no-op. Passing it through inert folds
-// away to nothing at runtime and in code, and removes that debug bloat.
+// Passing the marker through the folds leaves it inert and transparent to neighboring elements.
 // =============================================================================
 
 // Public entry. `SetupOwner SO` (default Chain) says who emits the chain's one-time setup:
@@ -2099,7 +2331,7 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
 // declaration in eltwise_chain.hpp.)
 template <SetupOwner SO, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
-    eltwise_chain_impl<SO>(shape, elts...);
+    eltwise_chain_impl<SO>(std::index_sequence_for<Es...>{}, shape, elts...);
 }
 
 // =============================================================================

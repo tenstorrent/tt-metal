@@ -27,17 +27,15 @@ void kernel_main() {
             cb_b,
             BinaryFpuOp::Add,
             BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input,
+            input(InputLifecycle::Streaming),
+            input(InputLifecycle::Streaming),
             Dst::D0>{},
         DestReuseBinary<
             cb_c,
             BinaryFpuOp::Mul,
             DestReuseType::DEST_TO_SRCA,
-            InputLifecycle::Streaming,
-            DestReuseReconfig::Input,
+            input(InputLifecycle::Streaming),
             Dst::D0,
             Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+        PackTile<cb_out, output(OutputLifecycle::Streaming), Dst::D0>{});
 }

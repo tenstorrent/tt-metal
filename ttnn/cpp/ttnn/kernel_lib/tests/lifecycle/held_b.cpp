@@ -38,7 +38,7 @@ void kernel_main() {
     CircularBuffer cb_b_obj(cb_b);
 
     // A: streaming. B: held single tile (Scalar index, relative tile 0). Output: streaming.
-    auto pack = PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{};
+    auto pack = PackTile<cb_out, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{};
 
     if constexpr (life == 0) {  // Bulk — chain owns both edges
         eltwise_chain(
@@ -48,12 +48,8 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::Bulk,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                input(InputLifecycle::Streaming, OperandKind::Scalar, DataFormatReconfig::Disabled),
+                input(InputLifecycle::Bulk, OperandKind::Scalar, DataFormatReconfig::Disabled)>{},
             pack);
     } else if constexpr (life == 1) {  // HeldBulk — chain waits upfront, caller pops after
         eltwise_chain(
@@ -63,12 +59,8 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::HeldBulk,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                input(InputLifecycle::Streaming, OperandKind::Scalar, DataFormatReconfig::Disabled),
+                input(InputLifecycle::HeldBulk, OperandKind::Scalar, DataFormatReconfig::Disabled)>{},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 2) {  // HeldStream — chain waits per-iter, caller pops after
@@ -79,12 +71,8 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::HeldStream,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                input(InputLifecycle::Streaming, OperandKind::Scalar, DataFormatReconfig::Disabled),
+                input(InputLifecycle::HeldStream, OperandKind::Scalar, DataFormatReconfig::Disabled)>{},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 3) {  // CallerManaged — chain emits nothing for B
@@ -96,12 +84,8 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::CallerManaged,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                input(InputLifecycle::Streaming, OperandKind::Scalar, DataFormatReconfig::Disabled),
+                input(InputLifecycle::CallerManaged, OperandKind::Scalar, DataFormatReconfig::Disabled)>{},
             pack);
         cb_b_obj.pop_front(1);
     } else {  // life == 4: DeferredPop — caller waits before, chain pops at end
@@ -113,12 +97,8 @@ void kernel_main() {
                 cb_b,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::DeferredPop,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                input(InputLifecycle::Streaming, OperandKind::Scalar, DataFormatReconfig::Disabled),
+                input(InputLifecycle::DeferredPop, OperandKind::Scalar, DataFormatReconfig::Disabled)>{},
             pack);
     }
 }
