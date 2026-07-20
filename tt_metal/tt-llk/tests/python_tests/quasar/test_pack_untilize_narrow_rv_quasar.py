@@ -149,14 +149,35 @@ def test_pack_untilize_narrow_rv_quasar(formats):
         res_from_L1, formats.output_format, label="result", tile_width=TILE_WIDTH
     )
 
+    res_full = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    full_len = TILE_HEIGHT * TILE_WIDTH
     assert (
-        len(res_from_L1) >= narrow_len
-    ), f"Result too short: {len(res_from_L1)} < {narrow_len}"
+        res_full.numel() >= full_len
+    ), f"Result too short: {res_full.numel()} < {full_len}"
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])[
-        :narrow_len
-    ]
+    # The kernel untilizes into a full-width (TILE_WIDTH) row-major buffer with the low
+    # ROW_NUM_DATUMS columns of each row holding the narrow data. Extract cols
+    # [0:ROW_NUM_DATUMS] of each of the TILE_HEIGHT rows and compare to the tight golden.
+    res_narrow = (
+        res_full[:full_len]
+        .reshape(TILE_HEIGHT, TILE_WIDTH)[:, :ROW_NUM_DATUMS]
+        .flatten()
+    )
+    assert res_narrow.numel() == narrow_len
+
+    print_full_tile(
+        narrow_golden,
+        formats.output_format,
+        label="narrow-golden",
+        tile_width=ROW_NUM_DATUMS,
+    )
+    print_full_tile(
+        res_narrow,
+        formats.output_format,
+        label="narrow-result",
+        tile_width=ROW_NUM_DATUMS,
+    )
 
     assert passed_test(
-        narrow_golden, res_tensor, formats.output_format, print_errors=True
+        narrow_golden, res_narrow, formats.output_format, print_errors=True
     ), "Narrow RV_PACR untilize output does not match golden"
