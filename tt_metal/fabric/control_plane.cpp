@@ -3387,7 +3387,9 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     }
 
-    auto is_marked = [&](const Boundary& boundary) {
+    // A boundary is "marked for Z" when the MGD requests assign_z_direction: it is placed Z-only in Phase 1a
+    // and excluded from the NESW / leftover-Z phases.
+    auto is_marked_z = [&](const Boundary& boundary) {
         return mesh_graph.should_assign_z_direction(MeshId{boundary.first}, MeshId{boundary.second});
     };
 
@@ -3425,33 +3427,48 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     };
 
     // Phase 1a: marked (assign_z) boundaries are Z-only. They claim the Z lane here and are excluded from
-    // every later phase -- an assign_z boundary NEVER takes an NESW port. A marked boundary must secure at
-    // least one channel on the Z lane; if it cannot place even a single one, that is a hard configuration
-    // error (its Z lane is fully owned by another neighbor mesh). Channels that cannot take Z are simply
-    // left unplaced (dropped) -- they do NOT fall back to NESW. The full requested count is enforced
-    // afterwards by the direction-agnostic validation step.
+    // every later phase -- an assign_z boundary NEVER takes an NESW port. Placement is round-robin across
+    // marked boundaries (one link per boundary per round) so a shared Z exit chip is not drained by whichever
+    // marked boundary happens to be processed first. Channels that cannot take Z are simply left unplaced
+    // (dropped) -- they do NOT fall back to NESW. The full requested count is enforced afterwards by the
+    // direction-agnostic validation step.
+    bool z_progress = true;
+    while (z_progress) {
+        z_progress = false;
+        for (auto& [boundary, links] : links_by_boundary) {
+            if (!is_marked_z(boundary)) {
+                continue;
+            }
+            for (auto& link : links) {
+                if (link.placed || !trim_to_budget(boundary, link)) {
+                    continue;  // already placed, or excess beyond the count cap
+                }
+                if (place_link(link, /*want_z=*/true)) {
+                    account_placed(boundary, link);
+                    z_progress = true;
+                    break;  // one link per boundary per round -> fairness across marked boundaries
+                }
+            }
+        }
+    }
+    // A marked boundary must secure at least one channel on the Z lane. Once the round-robin settles, flag a
+    // hard configuration error for any marked boundary that placed zero links despite a genuine attempt: an
+    // unplaced link that still has budget but could not take Z (a Z conflict, not merely a budget skip -- its
+    // Z lane is fully owned by another neighbor mesh). A partially-placed marked boundary is fine.
     for (auto& [boundary, links] : links_by_boundary) {
-        if (!is_marked(boundary)) {
+        if (!is_marked_z(boundary)) {
             continue;
         }
-        std::size_t placed_on_z = 0;        // links this boundary secured on Z
-        Link* first_unplaceable = nullptr;  // first link that tried Z and failed (for the error message)
+        bool placed_any = false;
+        Link* first_unplaceable = nullptr;  // first unplaced link that still had budget (for the error message)
         for (auto& link : links) {
-            if (link.placed || !trim_to_budget(boundary, link)) {
-                continue;  // excess beyond the count cap; leave for the validation step
-            }
-            if (place_link(link, /*want_z=*/true)) {
-                account_placed(boundary, link);
-                ++placed_on_z;
-            } else if (first_unplaceable == nullptr) {
-                // Z conflict / exhaustion on one or both sides. Don't fatal yet: another link on this
-                // boundary may still land on Z. Remember it; if none land, this is the reported failure.
+            if (link.placed) {
+                placed_any = true;
+            } else if (first_unplaceable == nullptr && budget_remaining(boundary, link) > 0) {
                 first_unplaceable = &link;
             }
         }
-        // Hard error only if the boundary got zero Z channels despite a genuine placement attempt (i.e. a
-        // failure, not merely budget skips). A partially-placed marked boundary is fine.
-        if (placed_on_z == 0 && first_unplaceable != nullptr) {
+        if (!placed_any && first_unplaceable != nullptr) {
             fatal_assign_z_failure(boundary, *first_unplaceable);
         }
     }
@@ -3464,7 +3481,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     while (progress) {
         progress = false;
         for (auto& [boundary, links] : links_by_boundary) {
-            if (is_marked(boundary)) {
+            if (is_marked_z(boundary)) {
                 continue;  // assign_z boundaries never take NESW
             }
             for (auto& link : links) {
@@ -3487,7 +3504,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     while (progress) {
         progress = false;
         for (auto& [boundary, links] : links_by_boundary) {
-            if (is_marked(boundary)) {
+            if (is_marked_z(boundary)) {
                 continue;
             }
             for (auto& link : links) {
