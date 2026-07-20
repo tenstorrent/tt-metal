@@ -227,6 +227,12 @@ class TtIndexer:
         self.tp_factor = mesh_shape[tp_axis]
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
+        # The q·kᵀ score is the indexer's only compute-bound op, so run it at LoFi; the projections keep
+        # default_compute_kernel_config (HiFi2) — DRAM-bound, so lower fidelity buys nothing there.
+        # indexer_score_dsa honors only math_fidelity (fp32_dest_acc_en must stay False — already the default).
+        self._score_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+        )
         self.weight_cache_path = weight_cache_path
         self.layer_idx = layer_idx
         # Total local layers in the shared key cache. The block-cyclic index_kv_cache is user-major
@@ -616,6 +622,7 @@ class TtIndexer:
             weights,
             chunk_start_idx=start_pos,
             program_config=cfg,
+            compute_kernel_config=self._score_compute_kernel_config,
             # Seq shard axes, outermost (SP ring) first. TP×SP adds the TP axis so the score adds each
             # device's tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat [] path, which is
             # linear-approximate under a mid-slab start). SP-only ([sp]) when the query stays SP-sharded.
