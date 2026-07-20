@@ -33,6 +33,8 @@ tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT
 .github/workflows/models-t2*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/models-t3*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/syseng-didt-tests-impl.yaml @rdjogoTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/workflows/galaxy-multi-user-isolation-tests.yaml @sott0n @changh95 @tenstorrent/codeowner-bypass
+.github/scripts/utils/run-reset-isolation-test.sh @sott0n @changh95 @tenstorrent/codeowner-bypass
 .github/copilot-instructions.md @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/instructions/cpp.instructions.md @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/instructions/python.instructions.md @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
