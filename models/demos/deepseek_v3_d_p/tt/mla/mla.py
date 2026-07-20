@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -292,14 +291,6 @@ class ttMLA:
             weight_cache_path=self.weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.mla",
         )
-
-        # Perf-measurement gate: when set, the sparse chunked KVPE gather (_gather_kvpe_prefix) trims
-        # the block-cyclic cache to only the POPULATED KV depth before the SP all-gather, instead of
-        # gathering the full allocated cache width every chunk. This makes the measured gather cost track
-        # the real valid length (realistic per-depth perf). Correctness-preserving (top-k indices never
-        # address the unwritten suffix) but assumes a chunk-aligned populated depth, so it stays OFF by
-        # default and the production path gathers full width unchanged.
-        self._gather_populated_kv = os.environ.get("TT_MLA_GATHER_POPULATED_KV", "0") == "1"
 
         # The RoPE op is fixed by the configured mode. It is bound AFTER self._has_indexer is resolved
         # (below), because sparse always runs the block-cyclic path (single-shot is one full-seq chunk at
@@ -1249,7 +1240,9 @@ class ttMLA:
         # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
         # only needs that populated prefix (top-k indices never address the unwritten suffix).
         populated_global = kv_actual_isl + seq_len_local * self.sp_factor
-        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_batch_idx, populated_global=populated_global)
+        kvpe_dev = self._gather_kvpe_prefix(
+            kvpe_cache, cache_batch_idx, populated_global=populated_global, chunk_local=seq_len_local
+        )
         ttnn.deallocate(tt_kvpe)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
@@ -1459,7 +1452,7 @@ class ttMLA:
             ttnn.deallocate(out_all_heads)
         return ret
 
-    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx, populated_global=None):
+    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx, populated_global=None, chunk_local=None):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
         ND-sharded / block-cyclic across SP, in the op's format (bf16 or fp8_e4m3, ROW_MAJOR — the
         sparse cache is uncompressed). sparse_sdpa consumes it replicated and remaps the
@@ -1475,15 +1468,16 @@ class ttMLA:
         requires B==1 when cache_batch_idx is unset). This mirrors the dense ring_mla single-slot gather
         (kv_cache_batch_idx → batch-1 scratch).
 
-        POPULATED-WIDTH TRIM (gated, ``populated_global``): by default the gather covers the full
-        allocated cache width every chunk, so that fixed cost does not track the real valid length. When
-        the ``TT_MLA_GATHER_POPULATED_KV`` gate is on and ``populated_global`` (the written KV depth after
-        this chunk) is given, trim the per-chip seq dim to only the populated slabs BEFORE the gather. The
-        per-chip cache is slab-major (slab s at local rows [s*chunk_local, (s+1)*chunk_local)), so the
-        first ``populated_global / sp`` local rows hold exactly the written slabs; the unwritten suffix is
-        never addressed (top-k indices stay < populated), so this is correctness-preserving. It shrinks
-        the SP all-gather (and the downstream sparse_sdpa buffer) to the real depth → realistic per-depth
-        perf. Requires a shard-aligned depth (asserted); OFF by default so production gathers full width.
+        POPULATED-WIDTH TRIM (``populated_global`` = written KV depth after this chunk, ``chunk_local`` =
+        per-chip slab width): trim the per-chip seq dim to only the populated SLABS BEFORE the gather
+        instead of gathering the full allocated cache width. The per-chip cache is slab-major (slab s at
+        local rows [s*chunk_local, (s+1)*chunk_local)) and ``populated_global`` can end mid-slab (padded /
+        rotated ``kv_actual_isl``). A partial boundary slab holds a NON-uniform valid-row count across
+        chips (low chips full, high chips none), and the block-cyclic index remap needs an integer slab
+        count -- so a uniform ``populated_global / sp`` width would drop valid rows on low chips AND slice
+        a fractional slab. Round the touched depth UP to a whole chunk: every valid slab is kept intact
+        and the pad tail is present but never addressed (top-k indices stay < valid). It shrinks the SP
+        all-gather (and the downstream sparse_sdpa buffer) to the populated slab count.
 
         Pipeline (all on device): ND→interleaved, slot + populated-width slice (no-op for a single-slot,
         full-width cache), SP all-gather (no-op at sp==1). The cache is already in the op format, so there
@@ -1492,12 +1486,12 @@ class ttMLA:
 
         slot_lo = cache_batch_idx if cache_i.shape[0] > 1 else 0  # user-major slot select (single-slot → 0)
         seq_hi = cache_i.shape[2]  # per-chip seq width to gather; default = full allocated cache
-        if self._gather_populated_kv and populated_global is not None:
-            assert populated_global % self.sp_factor == 0, (
-                f"populated_global ({populated_global}) must be divisible by sp ({self.sp_factor}) to trim "
-                f"the block-cyclic gather on a shard boundary"
-            )
-            seq_hi = min(populated_global // self.sp_factor, seq_hi)
+        if populated_global is not None and chunk_local is not None:
+            # Round the populated depth UP to whole block-cyclic slabs (see docstring): a partial boundary
+            # slab is non-uniform across chips and fractional, so trim by slab count, not raw width.
+            chunk_size_global = chunk_local * self.sp_factor
+            num_slabs = -(-populated_global // chunk_size_global)  # ceil-div
+            seq_hi = min(num_slabs * chunk_local, seq_hi)
 
         # Slice iff the cache is multi-slot (must select this slot even when it's slot 0) and/or the
         # populated-width trim applies. A single-slot cache (shape[0]==1) is already batch-1.
