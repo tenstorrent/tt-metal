@@ -45,6 +45,14 @@
 
 #include "prof_packet.h"
 
+// --tracy: feed decoded records into the existing RealtimeProfilerTracyHandler (Yusuf's branch) so the
+// zones render in Tracy. All no-ops unless the build is TRACY_ENABLE (build_Release is).
+#if defined(TRACY_ENABLE)
+#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
+#include "impl/dispatch/realtime_profiler_tracy_handler.hpp"
+#include "impl/profiler/profiler.hpp"  // loadZoneSourceLocationsHashesReadOnly (zone hash -> name)
+#endif
+
 using tt::Cluster;
 using tt::CoreType;
 using tt::tt_metal::CoreCoord;
@@ -155,6 +163,8 @@ int main(int argc, char** argv) {
     int mpmc = 0;              // --mpmc M: real host pipeline -- 2 per-socket flush+demux threads -> record MPMC
                                // -> M consumer threads (0 = old offline capture+demux path)
     int cwork = 0;             // --cwork N: busy-wait N iters/record in each consumer (simulate Tracy-emit load)
+    bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
+                               // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -216,6 +226,8 @@ int main(int argc, char** argv) {
             mpmc = std::stoi(next());
         } else if (a == "--cwork") {
             cwork = std::stoi(next());
+        } else if (a == "--tracy") {
+            do_tracy = true;
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -262,9 +274,11 @@ int main(int argc, char** argv) {
         (unsigned long long)nmarkers,
         hring_words);
 
-    // VIRTUAL coords for host UMD access; TRANSLATED for the X280 read-window table.
+    // VIRTUAL coords for host UMD access; TRANSLATED for the X280 read-window table; NOC0 for the Tracy
+    // contexts (per-core row keys, matching the standard DeviceProfiler view -- see --tracy).
     std::vector<CoreCoord> vc(num_cores);
     std::vector<uint8_t> coords(num_cores * 8, 0);
+    std::vector<uint32_t> noc0x(num_cores, 0), noc0y(num_cores, 0);
     const auto& soc = cluster.get_soc_desc(device_id);
     uint32_t idx = 0;
     for (int ly = cy0; ly <= cy1; ly++) {
@@ -275,6 +289,10 @@ int main(int argc, char** argv) {
                 {lg, tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL}, tt::CoordSystem::TRANSLATED);
             pack<uint32_t>(coords, idx * 8 + 0, (uint32_t)tr.x);
             pack<uint32_t>(coords, idx * 8 + 4, (uint32_t)tr.y);
+            tt::umd::CoreCoord n0 =
+                soc.translate_coord_to({lg, tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL}, tt::CoordSystem::NOC0);
+            noc0x[idx] = (uint32_t)n0.x;
+            noc0y[idx] = (uint32_t)n0.y;
             idx++;
         }
     }
@@ -682,6 +700,73 @@ int main(int argc, char** argv) {
         consumed.fetch_add(cnt);
         sink_total.fetch_add(sink);
     };
+
+#if defined(TRACY_ENABLE)
+    // ---- Tracy consumer (--tracy): feed decoded records into the EXISTING RealtimeProfilerTracyHandler so
+    // the zones visualize. A SINGLE consumer -- per-lane START/END must be pushed in emission order (Tracy
+    // nests by arrival), which the M stateless sink consumers would scramble. Contexts are pre-created here,
+    // before draining (creation is ~ms; keep it off the hot path). ----
+    std::unique_ptr<tt::tt_metal::RealtimeProfilerTracyHandler> tracy_handler;
+    std::unordered_map<uint32_t, std::string> zone_names;  // hash -> name (stable storage backing name views)
+    const double tracy_freq = (double)pll * 1e6;           // pll is MHz -> Hz (pll=1000 -> 1e9; 1 cyc = 1 ns)
+    if (do_tracy) {
+        tracy_handler = std::make_unique<tt::tt_metal::RealtimeProfilerTracyHandler>();
+        // host_start must be in TRACY's clock domain (tracy::Profiler::GetTime()), NOT system_clock epoch --
+        // otherwise the device zones land on a bogus multi-hour timeline. Provisional here; the first marker
+        // re-anchors (CalibrateDevice) so device-first-ts maps to tracy-now with exact relative spacing.
+        tracy_handler->AddDevice((uint32_t)device_id, tracy::Profiler::GetTime(), 0.0, tracy_freq);
+        std::vector<std::pair<uint32_t, uint32_t>> worker_noc0;
+        worker_noc0.reserve(num_cores);
+        for (uint32_t c = 0; c < num_cores; c++) {
+            worker_noc0.emplace_back(noc0x[c], noc0y[c]);
+        }
+        tracy_handler->PreCreateContexts((uint32_t)device_id, worker_noc0);
+        for (auto& [h, md] : loadZoneSourceLocationsHashesReadOnly()) {  // recorded zone hash -> name
+            zone_names[h] = md.marker_name;
+        }
+        zone_names[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID
+        printf(
+            "[tracy] handler up: %zu cores pre-created, %zu zone names loaded\n", (size_t)num_cores, zone_names.size());
+    }
+    auto tracy_consumer = [&]() {
+        Batch b;
+        bool anchored = false;
+        uint64_t cnt = 0;
+        while (mq.pop(b)) {
+            for (auto& r : b) {
+                uint32_t ci = r.lane / (uint32_t)NRISC, risc = r.lane % (uint32_t)NRISC;
+                if (ci >= num_cores) {
+                    continue;
+                }
+                if (!anchored) {  // anchor device-first-ts to tracy-now (Tracy clock domain); relative spacing exact
+                    tracy_handler->CalibrateDevice((uint32_t)device_id, tracy::Profiler::GetTime(), r.ts, tracy_freq);
+                    anchored = true;
+                }
+                auto it = zone_names.find(r.zone);
+                if (it == zone_names.end()) {  // unnamed hash -> stable fallback string
+                    char nb[24];
+                    std::snprintf(nb, sizeof(nb), "Zone_0x%x", r.zone);
+                    it = zone_names.emplace(r.zone, nb).first;
+                }
+                tt::tt_metal::experimental::WorkerZonePacket zp{};
+                zp.chip_id = (uint32_t)device_id;
+                zp.core_virtual_x = (uint32_t)vc[ci].x;
+                zp.core_virtual_y = (uint32_t)vc[ci].y;
+                zp.core_noc0_x = noc0x[ci];
+                zp.core_noc0_y = noc0y[ci];
+                zp.risc = risc;
+                zp.timer_id = r.zone;
+                zp.name = it->second;
+                zp.timestamp = r.ts;
+                zp.is_start = (r.type == PP_ZONE_START);
+                tracy_handler->HandleWorkerZone(zp);
+                cnt++;
+            }
+        }
+        consumed.fetch_add(cnt);
+    };
+#endif
+
     std::vector<std::thread> flushers, mconsumers;  // --mpmc threads
 
     // One host thread PER ring (default) -> ring 1 is never ack-starved by ring 0's servicing. --rrconsumer
@@ -691,10 +776,25 @@ int main(int argc, char** argv) {
         for (uint64_t h = 0; h < ndh; h++) {
             flushers.emplace_back(flusher, h);
         }
-        for (int i = 0; i < mpmc; i++) {
-            mconsumers.emplace_back(consumer);
+        bool tracy_spawned = false;
+#if defined(TRACY_ENABLE)
+        if (do_tracy) {
+            mconsumers.emplace_back(tracy_consumer);  // ONE ordered consumer -> Tracy zones
+            tracy_spawned = true;
         }
-        printf("[mpmc] %llu flush+demux -> record MPMC -> %d consumers\n", (unsigned long long)ndh, mpmc);
+#endif
+        if (!tracy_spawned) {
+            if (do_tracy) {
+                printf("[tracy] build lacks TRACY_ENABLE -- falling back to sink consumers (no zones emitted)\n");
+            }
+            for (int i = 0; i < mpmc; i++) {
+                mconsumers.emplace_back(consumer);
+            }
+        }
+        printf(
+            "[mpmc] %llu flush+demux -> record MPMC -> %s\n",
+            (unsigned long long)ndh,
+            tracy_spawned ? "1 Tracy consumer" : (std::to_string(mpmc) + " consumers").c_str());
     } else if (nodrain) {
         printf("[nodrain] host consumer DISABLED, relay ignores flow control -- diagnostic (lossy)\n");
     } else if (rr_consumer) {
@@ -837,6 +937,16 @@ int main(int argc, char** argv) {
         for (auto& t : mconsumers) {
             t.join();
         }
+#if defined(TRACY_ENABLE)
+        if (do_tracy && tracy_handler) {
+            tracy_handler->RemoveDevice((uint32_t)device_id);  // orphan-end summary + destroy contexts
+            tracy_handler.reset();
+            // The final std::_Exit is abrupt (skips atexit) -- give the in-process Tracy client a moment to
+            // ship the queued zones to a connected tracy-capture/GUI before we bail.
+            printf("[tracy] flushing zones to Tracy client (3s)...\n");
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+        }
+#endif
     } else {
         for (auto& c : consumers) {
             c.join();

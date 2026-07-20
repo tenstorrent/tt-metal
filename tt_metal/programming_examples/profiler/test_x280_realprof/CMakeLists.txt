@@ -20,4 +20,7 @@ target_include_directories(
         ${PROJECT_BINARY_DIR}/tt_metal/api
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tools/x280_bm/include # prof_packet.h (shared 8 B format)
+        # --tracy: the RealtimeProfilerTracyHandler header transitively includes internal tt_metal headers
+        ${PROJECT_SOURCE_DIR}/tt_metal/impl
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public
 )
