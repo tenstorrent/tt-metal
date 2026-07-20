@@ -1303,6 +1303,37 @@ def _fold_cumulative(kernel_log: str) -> None:
         pass
 
 
+def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
+    floor = max(stall_sec * 4, 2400)
+    override = os.environ.get("PERF_MCP_ROUND_MAX_SEC")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    ceil = 10800
+    base = 0.0
+    mani = _latest_manifest(repo_root / PERF_DIR)
+    if mani is not None:
+        try:
+            cfg = json.loads(mani.read_text()).get("config", {}) or {}
+            ceil = int(cfg.get("timeout", ceil) or ceil)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            for ln in (mani.parent / "events.jsonl").read_text().splitlines():
+                if not ln.strip():
+                    continue
+                e = json.loads(ln)
+                if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
+                    base = float(e["seconds"])
+        except Exception:  # noqa: BLE001
+            pass
+    if ceil < floor:
+        ceil = floor
+    return min(ceil, max(floor, int(3 * base)))
+
+
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
     """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
@@ -1354,7 +1385,7 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
     #   max_no_progress  - HARD CAP: alive but produced NO real progress (commit/kernel attempt) for
     #                      this long -> kill anyway (default 4x stall / >=40min, comfortably above one
     #                      legit slow measure cycle, so a productive round always records well within it).
-    max_no_progress = int(os.environ.get("PERF_MCP_ROUND_MAX_SEC", str(max(stall_sec * 4, 2400))) or 2400)
+    max_no_progress = _round_hard_cap(repo_root, stall_sec)
     last_tok = _progress_token(repo_root, kernel_log)
     last_live = _liveness()
     _now0 = time.monotonic()
