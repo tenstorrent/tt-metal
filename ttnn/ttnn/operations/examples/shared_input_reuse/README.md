@@ -19,7 +19,7 @@ and at scale the DRAM interface saturates.
 - **Isolation setup:** *DRAM-read / NoC-contention* row of the rule — the input is DRAM interleaved, the
   per-core job is trivial and identical in both variants, and only the read path differs. Geometry is a
   fixed **2 × grid_x** rectangle used by both variants, so core placement is not a hidden variable
-  (contrast `reader_placement`, which isolates exactly *where* a fixed-work line sits).
+  (contrast `noc_placement`, which isolates exactly *where* a fixed-work line sits).
 - **The job (identical, both variants):** fold the whole streamed input into one running **tile-sum** using
   `add_tiles(acc_to_dest=true)` — a genuine **fp32** accumulation of **bf16** data (the running sum stays
   in the fp32 DEST adder and never round-trips through a bf16 Src register). Output is **one tile per
