@@ -1049,6 +1049,38 @@ workload *timing*, never drops markers. At ~615 MB/s / 8 B this is ~77 M markers
 below, so the operating point sits well under the stall threshold. More headroom later = a 2nd
 independent drain hart on its own host ring (no shared LIM), ~1.9× per rdrbench (§ RDRBENCH).
 
+## §22 — Real kernel_profiler capture (2-word markers + split stickies) + full-grid BW
+
+Moved the X280 profiler onto the REAL `kernel_profiler.hpp` path (2-word markers; identity/context via
+STICKY_PROG/TIMER/SRC — SRC & TIMER now 1 word, PROG 2). Drainer = `profzone` (copy of `profstream`);
+new host test = `test_x280_realprof` (real `DeviceZoneScopedN` dm+compute kernels). Run with
+`TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1`. Dual-relay (2 D2H sockets) is the default.
+
+**Marker spacing (the key finding).** With `WORK_SIZE=0` (empty zone bodies), consecutive markers on a
+lane settle at **~48–50 ns apart** (~49 cycles @ 1 GHz) — the raw cost of one `mark_time`: ring
+room-check + tear-free 64-bit wall-clock read (retry loop) + 2 ring writes + fenced `publish_tail`. A
+back-to-back empty zone (START+END) ≈ **~98 ns**. First 1–2 markers are wider (warmup + leading nested
+FW/child-zone STARTs). So the profiler's own overhead sets an effective resolution floor of ~50 ns/marker
+(~100 ns/empty-zone) — the observer effect on a real kernel. Per-lane instantaneous rate ≈ 1 marker/49 ns
+≈ 160 MB/s/lane of 8-B markers, but bursts don't overlap enough across lanes to saturate the drain.
+
+**Full grid = 550 lanes** (110 cores × 5; the board is 11×10, not 600):
+- Real `work=0` workload: LOSSLESS with ~30× headroom — drain <4% busy, 0 stalls, 0 loss, 0 ts
+  regressions. Effective end-to-end ~46 MB/s (production/dispatch-limited, NOT drain-limited).
+- Saturated ceiling via `--fullread` (lossy microbench; ignores tail to force max drain):
+  - SINGLE relay: relay **92.6% busy**, ~1.2–1.3 GB/s end-to-end — relay-funnel-bound.
+  - DUAL relay: relays ~59% busy (funnel gone), readers ~77% @ **4.5 cyc/word** → **~1.8 GB/s aggregate
+    read** = NoC-read-bound (near the 2-reader ~2.24 GB/s ceiling, § RDRBENCH). Reader ~0.89 GB/s each,
+    relay ~3.0–3.5 cyc/word.
+- So dual-relay lifts the artificial funnel; the wall becomes the fundamental NoC read. 3rd reader craters
+  (§ RDRBENCH), so 2 readers + 2 relays is the sweet spot.
+
+**Two silicon-only bugs fixed** (neither caught by the synthetic bench): (1) hi/lo wall-clock read TEAR →
+tear-free `read_wall_clock`; (2) the real ts-regression cause — `mark_time` timestamped BEFORE
+`ring_ensure_room`, so a full-ring stall (X280-STALL zone, timestamped later) got written ahead of a
+marker carrying its pre-stall time → backwards per-lane jump. Fix: reserve ring room FIRST (take the
+stall), read the clock AFTER. Commits (local): `1e9f01113a1`, `a76d615ea18`, `046d151ef7b`.
+
 ## Gotchas (saved time → don't relearn)
 
 - **`tt-smi -r` does NOT clear LIM SRAM** → a re-run of the same FW sees the prior
