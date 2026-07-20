@@ -223,7 +223,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
                     for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                     {
-                        _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, DST_INDEX + i);
+                        _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
                 }
                 _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
@@ -245,7 +245,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
                     for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                     {
-                        _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, DST_INDEX + i);
+                        _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
                 }
                 _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);

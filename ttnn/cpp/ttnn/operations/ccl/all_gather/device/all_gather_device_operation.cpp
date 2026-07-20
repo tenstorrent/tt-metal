@@ -33,7 +33,9 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.num_links);
     TT_FATAL(
         operation_attributes.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelized over rows");
+        "Worker cores used by {} links are parallelized over {} rows",
+        operation_attributes.num_links,
+        input_tensor.device()->compute_with_storage_grid_size().y);
 
     // Page alignment check
     auto page_size = input_tensor.buffer()->page_size();

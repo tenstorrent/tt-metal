@@ -552,9 +552,10 @@ targets:
               top5: 97
       p300x2:
         entries:
+          # Catch-all (no batch_size/seq_len): serves the data-parallel b4 perf run and the
+          # token-matching (b1) accuracy check. Perf seeded from data-parallel run 27016350392
+          # (b4 aggregate); accuracy is the token-matching (b1) target.
           - status: active
-            # Perf seeded from data-parallel run 27016350392 (b4 aggregate);
-            # accuracy is the token-matching (b1) target.
             perf:
               prefill_time_to_first_token: 19
               decode_t/s/u: 20.88
@@ -562,6 +563,19 @@ targets:
             accuracy:
               top1: 90.0
               top5: 97.6
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          # batch-32 ci-eval-32 DRAM-prefetcher run (single repeat batch) on bh_quietbox_2.
+          # Specific entry so it wins over the catch-all for this config without disturbing
+          # the b4/b1 runs above. Seeded from the prefetcher run once the job could pass (#47820).
+          - batch_size: 32
+            seq_len: 712
+            status: active
+            perf:
+              prefill_time_to_first_token: 28
+              decode_t/s/u: 57
+              decode_t/s: 1824
+            accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   # Active e2e combinations with no centralized target yet must remain explicit TODOs.
@@ -1182,9 +1196,9 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 820.0
-              decode_t/s: 18.2
-              decode_t/s/u: 18.2
+              prefill_time_to_first_token: 241.0
+              decode_t/s: 26.0
+              decode_t/s/u: 26.0
               tolerance: 0.2
             accuracy: {}
             owner_id: U08HL8X1ECD # Aniruddha Tupe

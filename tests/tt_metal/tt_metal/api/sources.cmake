@@ -20,10 +20,16 @@ set(UNIT_TESTS_API_SOURCES
     core_coord/test_CoreRangeSet_intersects.cpp
     core_coord/test_CoreRangeSet_merge.cpp
     dataflow_buffer/test_alias_dataflow_buffer.cpp
-    dataflow_buffer/test_dataflow_buffer.cpp
+    dataflow_buffer/test_dataflow_buffer_apis.cpp
+    dataflow_buffer/test_dataflow_buffer_base.cpp
+    dataflow_buffer/test_dataflow_buffer_multinode.cpp
+    dataflow_buffer/test_dataflow_buffer_intra.cpp
+    dataflow_buffer/test_dataflow_buffer_edge_cases.cpp
+    dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    metal2_host_api/test_mesh_workload_factories_hw.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
     metal2_host_api/test_scratchpad_hw.cpp
@@ -82,18 +88,18 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         UNIT_TESTS_API_SOURCES
-        test_alignment_writes.cpp
-        test_cb_leak.cpp
-        test_cb_pages.cpp
-        test_host_alignment.cpp
-        test_metadata_size.cpp
-        test_noc_without_barrier.cpp
-        test_padded_write.cpp
-        test_semaphore_write.cpp
-        test_tensor_bad_access.cpp
-        test_valid_mem_wrong_alloc.cpp
-        test_write_beyond_res_pages.cpp
-        test_write_outside_tensor.cpp
+        emule/test_alignment_writes.cpp
+        emule/test_cb_leak.cpp
+        emule/test_cb_pages.cpp
+        emule/test_host_alignment.cpp
+        emule/test_metadata_size.cpp
+        emule/test_noc_without_barrier.cpp
+        emule/test_padded_write.cpp
+        emule/test_semaphore_write.cpp
+        emule/test_tensor_bad_access.cpp
+        emule/test_valid_mem_wrong_alloc.cpp
+        emule/test_write_beyond_res_pages.cpp
+        emule/test_write_outside_tensor.cpp
     )
 endif()
 

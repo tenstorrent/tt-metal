@@ -30,7 +30,7 @@ jobs:
   # ---------------------------------------------------------------------------
   auto-approve-sfpi:
     name: Auto-approve SFPI bump
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Fast-exit: only run for nathan-TT non-draft PRs
     if: |
       github.event.pull_request.user.login == 'nathan-TT' &&
@@ -104,7 +104,7 @@ jobs:
   # ---------------------------------------------------------------------------
   auto-approve-ttsim:
     name: Auto-approve ttsim bump
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Fast-exit: only run for mcraigheadTT non-draft PRs
     if: |
       github.event.pull_request.user.login == 'mcraigheadTT' &&
@@ -176,7 +176,7 @@ jobs:
   # ---------------------------------------------------------------------------
   auto-approve-umd:
     name: Auto-approve UMD bump
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Fast-exit: skip draft PRs (author check is done via team membership below)
     if: "!github.event.pull_request.draft"
     steps:

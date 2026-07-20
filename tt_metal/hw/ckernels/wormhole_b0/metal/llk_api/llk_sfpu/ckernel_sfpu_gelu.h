@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"  // math::reset_counters, p_setrwc
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -202,6 +203,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
@@ -212,14 +214,14 @@ void gelu_init() {
         // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
         // [2.0, 3.0): slope=0.5402, intercept=-0.1194  (lreg2)
         // [3.0, ∞):   slope=0.5,    intercept=0.0      (lreg2 hi / lreg6 hi)
-        _sfpu_load_imm32_(0, 0x37E7322B);
-        _sfpu_load_imm32_(4, 0xB12286D8);
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37E7322B);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB12286D8);
 
-        _sfpu_load_imm32_(1, 0x38E138F3);
-        _sfpu_load_imm32_(5, 0xB437B479);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E138F3);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB437B479);
 
-        _sfpu_load_imm32_(2, 0x38003852);
-        _sfpu_load_imm32_(6, 0x7c00afa4);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003852);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7c00afa4);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
@@ -381,6 +383,7 @@ inline void calculate_gelu_tanh() {
 
 template <bool is_fp32_dest_acc_en>
 inline void gelu_tanh_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // initialise constants for _sfpu_tanh_fp32_accurate_
     tanh_init<false, true>();
 }
@@ -496,6 +499,7 @@ inline void calculate_gelu_derivative_polynomial() {
 
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         // Call sfpu_reciprocal_init directly: gelu derivative uses sfpu_reciprocal_iter
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is

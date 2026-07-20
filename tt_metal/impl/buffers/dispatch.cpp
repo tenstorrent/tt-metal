@@ -32,7 +32,7 @@
 #include "tt_metal/impl/event/dispatch.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <tt-metalium/graph_tracking.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/overloaded.hpp>
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -683,7 +683,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     const BufferCorePageMapping& core_page_mapping,
     const CoreCoord& core,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
@@ -932,6 +932,7 @@ void issue_buffer_dispatch_command_sequence(
     T& dispatch_params,
     ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreType /*dispatch_core_type*/) {
+    TTZoneScopedD(DISPATCH);
     uint32_t num_worker_counters = sub_device_ids.size();
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
     uint32_t num_pages_to_write =
@@ -1040,6 +1041,7 @@ void write_interleaved_buffer_to_device(
     const BufferDispatchConstants& buf_dispatch_constants,
     ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
+    TTZoneScopedD(DISPATCH);
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
 
     // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -1089,6 +1091,7 @@ void write_sharded_buffer_to_core(
     ttsl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
+    TTZoneScopedD(DISPATCH);
     // Skip writing the padded pages along the bottom
     // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
     // Alternative write each page row into separate commands, or have a strided linear write
@@ -1140,6 +1143,7 @@ bool write_to_device_buffer(
     ttsl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory,
     const CoreRangeSet* logical_core_filter) {
+    TTZoneScopedD(DISPATCH);
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
@@ -1463,8 +1467,14 @@ void issue_read_buffer_dispatch_command_sequence(
     } else {
         calculator.add_dispatch_write_linear_host();
     }
-    // Prefetch relay cmd has fixed header size in calculator regardless of type
-    calculator.add_prefetch_relay_paged();
+    // Size the prefetch relay cmd to match the type emitted below: sharded reads emit
+    // CQ_PREFETCH_CMD_RELAY_LINEAR (CQPrefetchCmdLarge, 32B), interleaved reads emit
+    // CQ_PREFETCH_CMD_RELAY_PAGED (CQPrefetchCmd, 16B).
+    if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+        calculator.add_prefetch_relay_linear();
+    } else {
+        calculator.add_prefetch_relay_paged();
+    }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -1632,6 +1642,7 @@ void copy_completion_queue_data_into_user_space(
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
     std::atomic<bool>& exit_condition) {
+    TTZoneScopedD(DISPATCH);
     const auto& [page_size, padded_page_size, buffer_page_mapping, core_page_mapping, dst, dst_offset, num_pages_read] =
         read_buffer_descriptor;
     const DeviceAddr padded_num_bytes = ((DeviceAddr)num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);

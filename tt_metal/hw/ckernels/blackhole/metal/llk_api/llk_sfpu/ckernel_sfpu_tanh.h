@@ -16,6 +16,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_expm1.h"
 #include "ckernel_sfpu_trigonometry.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -50,7 +51,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
 
     e = i + 126;
     r = r * s + f;
-    scale = sfpi::setexp(sfpi::vConst0, e);
+    scale = sfpi::setexp(sfpi::vFloat(0.0f), e);
     bias0 = scale - w;
 
     // If a=±inf, converts to a finite value, otherwise if a=±NaN, converts to ±inf or ±NaN.
@@ -153,6 +154,7 @@ inline void calculate_tanh() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
         std::uint32_t imm0 = 0x1DFF;  // 0.90625*x
         std::uint32_t imm1 = 0x481A;  // 0.09375*x + 0.8125

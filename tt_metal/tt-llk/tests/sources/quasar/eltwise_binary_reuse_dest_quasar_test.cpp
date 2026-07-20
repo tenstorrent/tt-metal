@@ -185,7 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1);
                 for (int i = 0; i < num_total_tiles; ++i)
                 {
-                    _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM, i);
+                    _llk_math_eltwise_unary_datacopy_(i);
                 }
 
                 _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE);
@@ -210,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1);
                 for (int i = 0; i < num_total_tiles; ++i)
                 {
-                    _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM, i);
+                    _llk_math_eltwise_unary_datacopy_(i);
                 }
 
                 _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE);

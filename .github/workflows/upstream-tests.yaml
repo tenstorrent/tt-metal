@@ -74,7 +74,7 @@ jobs:
       build-umd-tests: true
       tracy: true
   get-image-tags:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
       is-release: ${{ steps.detect-release.outputs.is-release }}
@@ -304,6 +304,12 @@ jobs:
       - name: Pull image
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+      - name: Run deployment tests
+        timeout-minutes: 20
+        run: |
+          docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
+            --device /dev/tenstorrent \
+            ${{ needs.get-image-tags.outputs.bh-glx-image-tag }} blackhole_glx_deployment_tests
       - name: Run image
         timeout-minutes: 75
         env:
@@ -434,7 +440,7 @@ jobs:
       - test-bh-p300-image
       - test-bh-multicard-image
       - test-bh-glx-image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       images-to-push: ${{ steps.calculate-images.outputs.images-to-push }}
     steps:

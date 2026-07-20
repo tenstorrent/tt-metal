@@ -318,7 +318,7 @@ protected:
     std::vector<uint32_t> common_runtime_args_;
     RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
-    std::size_t max_runtime_args_per_core_{0};  // For validation
+    std::size_t max_runtime_args_per_core_{0};  // Max user-visible unique RTA count, for validation
     CoreCoord core_with_max_runtime_args_;      // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.

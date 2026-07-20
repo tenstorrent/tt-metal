@@ -115,9 +115,9 @@ std::vector<Tensor> post_topk_transform_tensor(
     // If we had to round up K for op, slice down to the requested K value
     if (adjusted_k != k) {
         const auto output_shape = result[0].logical_shape();
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
 
         // Slice both values and indices tensors to remove extra elements beyond requested K
         result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
@@ -134,7 +134,7 @@ std::vector<Tensor> post_topk_transform_tensor(
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
     } else if (orig_rank != 4) {
         // For tensors originally > 4D, or 1D, reshape back to original higher-dimensional structure
-        ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
+        ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         result_shape[result_shape.size() - 1] = k;  // Update last dimension to K
         result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
         result[1] = ttnn::reshape(result[1], ttnn::Shape{result_shape});
@@ -156,9 +156,9 @@ std::vector<Tensor> post_topk_transform_tensor(
         int rank = final_lshape.rank();
 
         // Build slice parameters to extract exactly the expected shape
-        ttnn::SmallVector<uint32_t> step;
-        ttnn::SmallVector<uint32_t> start_index;
-        ttnn::SmallVector<uint32_t> end_index;
+        ttsl::SmallVector<uint32_t> step;
+        ttsl::SmallVector<uint32_t> start_index;
+        ttsl::SmallVector<uint32_t> end_index;
 
         for (int i = 0; i < rank; i++) {
             step.push_back(1);                     // No skipping, take every element
@@ -340,7 +340,7 @@ std::vector<Tensor> topk(
     const auto pad_val = largest ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
 
     if (pad_amount > 0) {
-        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
+        ttsl::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
 
         // Use multicore padding for BFLOAT16 tensors not in L1 memory for better performance
         const bool pad_multicore = transformed_tensor.dtype() == DataType::BFLOAT16 &&

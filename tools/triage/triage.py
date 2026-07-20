@@ -5,13 +5,13 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
+    triage [--noc-id=<id>] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
     --remote-server=<remote-server>  Specify the remote server to connect to. [default: localhost]
     --remote-port=<remote-port>      Specify the remote server port. [default: 5555]
-    --initialize-with-noc1           Initialize debugger context with NOC1 enabled. [default: False]
+    --noc-id=<id>                    NOC used for device communication (0/NOC0, 1/NOC1, 2/SYSTEM_NOC, case-insensitive). Defaults to the tt-exalens default.
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
     --skip-version-check             Do not enforce debugger version check. [default: False]
@@ -79,7 +79,7 @@ import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 import sys
-from ttexalens.context import Context
+from ttexalens.context import Context, to_noc_id
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
@@ -433,10 +433,13 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     if console is not None:
         return
 
-    # When redirecting to file, use a larger width to avoid wrapping.
-    # When in a terminal, let Rich auto-detect the terminal width.
-    # Similarly, if verbosity is increased, use larger width to avoid wrapping.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
+    # When redirecting to file (or a zero-width pty), use a larger width to avoid wrapping;
+    # in a real terminal let Rich auto-detect. Higher verbosity also uses the larger width.
+    width = (
+        None
+        if sys.stdout.isatty() and os.get_terminal_size(sys.stdout.fileno()).columns > 0 and _verbose_level == 0
+        else 10000
+    )
     # --llm-output implies no colors: non-table console output (status lines,
     # warnings) needs to stay plain text for cheap LLM consumption.
     disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
@@ -830,7 +833,10 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
     if args["--remote-exalens"]:
         context = init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
     else:
-        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+        if args["--noc-id"]:
+            context = init_ttexalens(noc_id=to_noc_id(args["--noc-id"]))
+        else:
+            context = init_ttexalens()
 
     _patch_risc_debug()
     return context
@@ -980,7 +986,7 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
-                    # Silently mark as skipped — the original root-cause failure already
+                    # Silently mark as skipped - the original root-cause failure already
                     # printed its own message; cascading "Cannot run due to failed dependencies"
                     # lines for every downstream script are noise.
                     script.failed = True

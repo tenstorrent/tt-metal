@@ -22,6 +22,8 @@ on:
           - gemma-4-26b-a4b
           - gemma-4-31b
           - dit-common
+          - wan-2.2-t2v
+          - wan-2.2-i2v
           # llama3.3-70b-galaxy: disabled — see #42139
           - flux.1-schnell
           - flux.1-dev
@@ -82,7 +84,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
       model: ${{ steps.resolve.outputs.model }}

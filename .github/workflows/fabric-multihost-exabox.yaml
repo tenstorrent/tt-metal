@@ -1,10 +1,13 @@
-# This workflow can be run between 3 and 7 AM UTC
-name: "Fabric Test on a BH Quad"
+name: "(SC4) Health check & Fabric Test"
 
 on:
   schedule:
     - cron: "0 5 * * *" # Runs every day at 5:00 AM UTC
   workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
 
 run-name: Fabric Test on a BH Quad
 jobs:
@@ -43,7 +46,7 @@ jobs:
           pip3 install PyYAML
           {
             echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sp1-mgd"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sc4-mgd"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
@@ -144,13 +147,11 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          # Unpack build artifact locally as well. Pipeline config generation runs on the runner
-          # and expects test binaries under /ci/tt-metal/build/test.
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user
-          sudo chown "$(id -u):$(id -g)" /home/user
-          cp -r /ci/tt-metal /home/user/
+          sudo mkdir -p /home/user/tt-metal
+          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 

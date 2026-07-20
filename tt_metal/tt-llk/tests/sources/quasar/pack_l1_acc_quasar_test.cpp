@@ -225,7 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                         {
-                            _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, tile);
+                            _llk_math_eltwise_unary_datacopy_(tile);
                         }
                     }
                 }
@@ -238,7 +238,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                         {
-                            _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, tile);
+                            _llk_math_eltwise_unary_datacopy_(tile);
                         }
                         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                     }

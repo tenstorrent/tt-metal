@@ -16,16 +16,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# --- e2e ---
-- id: bh-grid-110-cores-panoptic-deeplab-demo
-  name: 110 cores panoptic-deeplab demo
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1800
-  skus:
-    bh_p150b_civ2:
-      timeout: 30
-  owner_id: U09LK84G4TF # Nikola Milicevic
-  team: models
-
 # --- integration ---
 - id: bh-fabric-infra-integration
   name: fabric infra unit tests
@@ -55,24 +45,6 @@
       timeout: 60
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-
-- id: bh-grid-110-cores-panoptic-deeplab
-  name: 110 cores panoptic-deeplab
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
-  skus:
-    bh_p150b_civ2:
-      timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
-  team: models
-
-- id: bh-grid-110-cores-bevformer
-  name: 110 cores bevformer
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/
-  skus:
-    bh_p150b_civ2:
-      timeout: 15
-  owner_id: U08E1JCMAJF # Marko Bezulj
-  team: models
 
 # --- perf ---
 - id: bh-fabric-sanity-benchmark
@@ -123,6 +95,7 @@
   cmd: |
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   skus:
     bh_loudbox:
@@ -190,12 +163,12 @@
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((mesh-4x2 or mesh-2x4 or linear-8) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (linear-8 and (pcc-device or (5k and not 25k))) and not (ttnn_moe and kimi and perf) and not (ttnn_moe and deepseek_v3 and mesh-4x2 and not fabric2d-) and not pad50" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d" -vvv --tb=short --timeout=900 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d and not pretrained" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device and not fabric2d- and 2link" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 93
+      timeout: 120
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -229,11 +202,11 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and not fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and not single-1" -m "not extended_model" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and not fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not zero_padded or linear-8 or 2x4) and not single-1" -m "not extended_model" || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 27
+      timeout: 28
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 

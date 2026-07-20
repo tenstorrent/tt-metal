@@ -84,7 +84,8 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
  * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
  * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length).
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
- * @note On the math thread, pair with @ref _llk_math_eltwise_unary_datacopy_init_ (T1; tilize moves the tilized SrcA tile to dest); on the pack thread, pair with
+ * @note On the math thread, pair with @ref _llk_math_eltwise_unary_datacopy_init_ (T1; tilize moves the tilized SrcA tile to dest); on the pack thread, pair
+ * with
  *       @ref _llk_pack_init_ (T2). @ref _llk_unpack_tilize_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
@@ -93,20 +94,22 @@ inline void _llk_unpack_tilize_init_(
 {
     // Pack all UNPACK_TILIZE stride fields into a single struct to perform a direct 32-bit cfg write
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
-    unpk_cfg.f.src_z_stride      = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
-                                                                 // Src (L1) counter increments in the UNPACR_TILIZE instruction
-    unpk_cfg.f.dst_z_stride      = 1;           // col dim of a tile in dest reg (1 face)
+    unpk_cfg.f.src_z_stride                       = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
+                                                                                  // Src (L1) counter increments in the UNPACR_TILIZE instruction
+    unpk_cfg.f.dst_z_stride      = 1;                                             // col dim of a tile in dest reg (1 face)
     unpk_cfg.f.stride_val_source = 0;
     unpk_cfg.f.stride_offset_0   = full_ct_dim * tensor_shape.num_faces_c_dim; // how much to stride to go to next row within the same tile
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
         cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
         cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }
     else
     {
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0); // Disable transpose
         cfg[THCON_UNPACKER1_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
         cfg[THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
@@ -189,13 +192,14 @@ template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
-    unpk_cfg.f.src_z_stride      = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face)
+    unpk_cfg.f.src_z_stride                       = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face)
     // Z stride unit = face_r_dim datums. Each tile = total_num_faces faces × face_r_dim rows per face.
     unpk_cfg.f.dst_z_stride      = tensor_shape.total_num_faces() * tensor_shape.face_r_dim; // stride between tiles in DEST
     unpk_cfg.f.stride_val_source = 0;
     unpk_cfg.f.stride_offset_0   = FULL_CT_DIM * tensor_shape.num_faces_c_dim; // stride to next row within same tile
 
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+    cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
     cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
 
@@ -278,11 +282,13 @@ inline void _llk_unpack_tilize_strided_init_(const std::uint32_t buf_desc_id, co
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
     }
     else
     {
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0); // Disable transpose
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
@@ -416,6 +422,7 @@ template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM,
 inline void _llk_unpack_tilize_strided_init_small_faces_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+    cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
     cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
     _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, IS_32b_DEST_EN, FULL_CT_DIM, ROWS_READ>(buf_desc_id);

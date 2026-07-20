@@ -204,32 +204,33 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             schema->num_common_runtime_varargs,
             kernel_common_runtime_varargs(kernel_params).size());
 
-        // Validate named RTAs: every declared name set per-node, no extras, no duplicate node entries.
+        // Validate named RTAs: every declared name set per-node, no extras.
         const auto& named_rta_names = schema->runtime_arg_names;
         const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
-        std::unordered_set<NodeCoord> nodes_with_named_params;
-        for (const auto& [node, args] : kernel_params.runtime_arg_values) {
-            // runtime_arg_values is a Group (no structural key), so per-node uniqueness is validated here.
-            auto [it_node, inserted_node] = nodes_with_named_params.insert(node);
+        std::unordered_map<NodeCoord, size_t> named_rta_count_per_node;
+        for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+            for (const auto& [node, _value] : per_node) {
+                (void)_value;
+                TT_FATAL(
+                    kernel_nodes.contains(node),
+                    "Kernel '{}' is setting runtime_arg_values for node {}, but the kernel does not run on that node.",
+                    kernel_name,
+                    node.str());
+                named_rta_count_per_node[node]++;
+            }
+        }
+        for (const auto& [node, provided] : named_rta_count_per_node) {
             TT_FATAL(
-                inserted_node,
-                "Duplicate node_coord {} in runtime_arg_values for kernel '{}'.",
-                node.str(),
-                kernel_name);
-            TT_FATAL(
-                kernel_nodes.contains(node),
-                "Kernel '{}' is setting runtime_arg_values for node {}, but the kernel does not run on that node.",
-                kernel_name,
-                node.str());
-            TT_FATAL(
-                args.size() == named_rta_names.size(),
+                provided == named_rta_names.size(),
                 "Kernel '{}' node {} expects {} named RTAs, but {} were provided",
                 kernel_name,
                 node.str(),
                 named_rta_names.size(),
-                args.size());
-            for (const auto& [name, _value] : args) {
+                provided);
+        }
+        for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+            for (const auto& [node, _value] : per_node) {
                 (void)_value;
                 TT_FATAL(
                     named_rta_name_set.contains(name),
@@ -242,7 +243,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         if (!named_rta_names.empty()) {
             for (const auto& node : kernel_nodes) {
                 TT_FATAL(
-                    nodes_with_named_params.contains(node),
+                    named_rta_count_per_node.contains(node),
                     "Kernel '{}' has named RTAs declared but no runtime_arg_values provided for node {}.",
                     kernel_name,
                     node.str());
@@ -523,12 +524,13 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     };
 
     // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
-    // binding, holding the scratchpad's allocated L1 base address. The address is 0 here on the first
-    // SetProgramRunArgs (the scratchpad is allocated later, at program-compile time, and the slot is
-    // then patched in place — see ProgramImpl::allocate_scratchpads); on any later re-assembly the
-    // handle already carries the allocated address, so it is filled directly. The section is always
-    // present (sized by the kernel's scratchpad bindings), so the buffer's word count is stable across
-    // re-set calls (install_crtas asserts that).
+    // binding, holding the scratchpad's allocated L1 base address. On the factory path,
+    // reserve_runtime_arg_buffers + allocate_scratchpads may already have filled this; on the
+    // legacy order (SetProgramRunArgs before allocate_scratchpads) the address is 0 here and is
+    // patched later. On any re-assembly the handle already carries the allocated address, so it
+    // is filled directly. The section is always present (sized by the kernel's scratchpad
+    // bindings), so the buffer's word count is stable across re-set calls (install_crtas asserts
+    // that).
     auto append_scratchpad_crtas = [](const auto& scratchpad_handles, std::vector<uint32_t>& out) {
         for (const auto& handle : scratchpad_handles) {
             out.push_back(handle.allocated_address);
@@ -599,20 +601,20 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             // named and vararg sections are patched independently and the join is pure overhead.
             // (This is the per-node fixed cost that made Set ~5us/call slower than the otherwise
             // identical Update path, flat in N.)
-            for (const auto& [node, args] : kernel_params.runtime_arg_values) {
-                RuntimeArgsData& rta = kernel->runtime_args_data(node);
-                TT_FATAL(
-                    rta.data() != nullptr,
-                    "SetProgramRunArgs fast path: kernel '{}' node {} has no allocated RTA buffer though the kernel "
-                    "reports prior runtime args. Internal invariant violation.",
-                    kernel_name,
-                    node.str());
-                for (const auto& [name, value] : args) {
-                    const auto s = slot_of.find(name);
+            for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+                const auto s = slot_of.find(name);
+                for (const auto& [node, value] : per_node) {
                     TT_FATAL(
                         s != slot_of.end(),
                         "Internal error: named RTA '{}' not in schema for kernel '{}' node {}.",
                         name,
+                        kernel_name,
+                        node.str());
+                    RuntimeArgsData& rta = kernel->runtime_args_data(node);
+                    TT_FATAL(
+                        rta.data() != nullptr,
+                        "SetProgramRunArgs fast path: kernel '{}' node {} has no allocated RTA buffer though the "
+                        "kernel reports prior runtime args. Internal invariant violation.",
                         kernel_name,
                         node.str());
                     rta.data()[s->second] = value;
@@ -640,10 +642,18 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             // before allocating. Build the node->values lookups and walk the kernel's logical cores
             // (the node coverage validation has confirmed) to assemble each combined buffer. This
             // runs once; every subsequent call takes the fast path above.
-            std::unordered_map<NodeCoord, const Table<std::string, uint32_t>*> named_rtas_by_node;
-            named_rtas_by_node.reserve(kernel_params.runtime_arg_values.size());
-            for (const auto& [node, args] : kernel_params.runtime_arg_values) {
-                named_rtas_by_node[node] = &args;
+            std::unordered_map<NodeCoord, std::vector<std::pair<size_t, uint32_t>>> named_rtas_by_node;
+            for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+                const auto s = slot_of.find(name);
+                for (const auto& [node, value] : per_node) {
+                    TT_FATAL(
+                        s != slot_of.end(),
+                        "Internal error: named RTA '{}' not in schema for kernel '{}' node {}.",
+                        name,
+                        kernel_name,
+                        node.str());
+                    named_rtas_by_node[node].emplace_back(s->second, value);
+                }
             }
             std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
             for (const auto& [node, args] : kernel_runtime_varargs(kernel_params)) {
@@ -664,15 +674,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 // Value-initialized to the exact combined width so the scatter can assign by slot.
                 std::vector<uint32_t> combined(num_named_rtas + num_varargs, 0u);
                 if (kernel_has_named_rtas && has_named) {
-                    for (const auto& [name, value] : *named_it->second) {
-                        const auto s = slot_of.find(name);
-                        TT_FATAL(
-                            s != slot_of.end(),
-                            "Internal error: named RTA '{}' not in schema for kernel '{}' node {}.",
-                            name,
-                            kernel_name,
-                            node.str());
-                        combined[s->second] = value;
+                    for (const auto& [slot, value] : named_it->second) {
+                        combined[slot] = value;
                     }
                 }
                 if (has_varargs) {
@@ -768,15 +771,19 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     }
     program_impl.apply_dfb_size_overrides(size_overrides);
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+    program_impl.mark_program_run_args_initialized();
 }
 
 void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
+    detail::ProgramImpl& program_impl = program.impl();
+    TT_FATAL(
+        program_impl.program_run_args_initialized(),
+        "UpdateTensorArgs called on Program before SetProgramRunArgs. Call SetProgramRunArgs at least once first.");
+
     // Validate the TensorArgument list (shared with the full-path validator).
     ValidateTensorArgs(program, tensor_args);
-
-    detail::ProgramImpl& program_impl = program.impl();
 
     // Build a tensor_parameter_name -> MeshTensor lookup.
     // As in SetProgramRunArgs, this assumes lockstep mesh allocation:
@@ -849,30 +856,21 @@ void MergeKernelRunArgsInto(
         dst.common_runtime_arg_values[name] = value;
     }
 
-    // Per-node named RTAs.
-    for (const auto& src_node : src.runtime_arg_values) {
-        ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs* dst_node = nullptr;
-        for (auto& dn : dst.runtime_arg_values) {
-            if (dn.node == src_node.node) {
-                dst_node = &dn;
-                break;
-            }
-        }
-        if (dst_node == nullptr) {
-            dst.runtime_arg_values.push_back(src_node);
-            continue;
-        }
-        for (const auto& [name, value] : src_node.args) {
+    // Per-node named RTAs (keyed by name, then node). A given (name, node) may appear in at most
+    // one input; disjoint names/nodes union together.
+    for (const auto& [name, src_per_node] : src.runtime_arg_values) {
+        auto& dst_per_node = dst.runtime_arg_values[name];
+        for (const auto& [node, value] : src_per_node) {
             if (!skip_validation) {
                 TT_FATAL(
-                    !dst_node->args.get(name).has_value(),
+                    !dst_per_node.get(node).has_value(),
                     "MergeProgramRunArgs: kernel '{}' node {} runtime arg '{}' is specified in more than one "
                     "ProgramRunArgs.",
                     kernel_name,
-                    src_node.node.str(),
+                    node.str(),
                     name);
             }
-            dst_node->args[name] = value;
+            dst_per_node[node] = value;
         }
     }
 
@@ -988,35 +986,21 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             }
         }
         std::unordered_set<NodeCoord> nodes_with_named_params;
-        for (const auto& [node, args] : kernel_params.runtime_arg_values) {
-            auto [it_node, inserted_node] = nodes_with_named_params.insert(node);
-            TT_FATAL(
-                inserted_node,
-                "Duplicate node_coord {} in runtime_arg_values for kernel '{}'.",
-                node.str(),
-                kernel_name);
-            TT_FATAL(
-                kernel_nodes.contains(node),
-                "Kernel '{}' is setting runtime_arg_values for node {}, but the kernel does not run on that node.",
-                kernel_name,
-                node.str());
-            for (const auto& [name, _value] : args) {
+        for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+            for (const auto& [node, _value] : per_node) {
                 (void)_value;
+                nodes_with_named_params.insert(node);
+                TT_FATAL(
+                    kernel_nodes.contains(node),
+                    "Kernel '{}' is setting runtime_arg_values for node {}, but the kernel does not run on that node.",
+                    kernel_name,
+                    node.str());
                 TT_FATAL(
                     named_rta_name_set.contains(name),
                     "Kernel '{}' node {} sets named RTA '{}' which is not declared in the schema.",
                     kernel_name,
                     node.str(),
                     name);
-            }
-            for (const auto& rname : regular_rta_names) {
-                TT_FATAL(
-                    args.get(rname).has_value(),
-                    "Kernel '{}' node {} is missing named RTA '{}', which is not declared enqueue-invariant and so "
-                    "must be supplied to UpdateProgramRunArgs.",
-                    kernel_name,
-                    node.str(),
-                    rname);
             }
         }
         if (!regular_rta_names.empty()) {
@@ -1026,6 +1010,19 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
                     "Kernel '{}' has non-invariant named RTAs but no runtime_arg_values provided for node {}.",
                     kernel_name,
                     node.str());
+            }
+        }
+        // Every non-invariant named RTA must be supplied for every node the kernel runs on.
+        for (const auto& rname : regular_rta_names) {
+            auto per_node = kernel_params.runtime_arg_values.get(rname);
+            for (const auto& node : kernel_nodes) {
+                TT_FATAL(
+                    per_node.has_value() && per_node->get(node).has_value(),
+                    "Kernel '{}' node {} is missing named RTA '{}', which is not declared enqueue-invariant and so "
+                    "must be supplied to UpdateProgramRunArgs.",
+                    kernel_name,
+                    node.str(),
+                    rname);
             }
         }
 
@@ -1142,11 +1139,15 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
+    detail::ProgramImpl& program_impl = program.impl();
+    TT_FATAL(
+        program_impl.program_run_args_initialized(),
+        "UpdateProgramRunArgs: CRTA buffer not allocated because SetProgramRunArgs has not been called. Call "
+        "SetProgramRunArgs at least once before a partial update.");
+
     if (!skip_validation) {
         ValidateUpdateProgramRunArgs(program, params);
     }
-
-    detail::ProgramImpl& program_impl = program.impl();
 
     // Patch the supplied args in place. Omitted (enqueue-invariant) named args and tensor params
     // are left untouched, retaining the value installed by the most recent SetProgramRunArgs.
@@ -1162,21 +1163,21 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         // ---- Per-node RTA buffer: patch supplied named RTAs at their declaration-order slot ----
         if (!kernel_params.runtime_arg_values.empty()) {
             const auto& rta_index = schema->runtime_arg_name_to_slot;
-            for (const auto& [node, args] : kernel_params.runtime_arg_values) {
+            for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+                const auto it = rta_index.find(name);
                 TT_FATAL(
-                    kernel->cores_with_runtime_args().contains(node),
-                    "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call SetProgramRunArgs "
-                    "at least once before a partial update.",
-                    kernel_name,
-                    node.str());
-                RuntimeArgsData& rta = kernel->runtime_args_data(node);
-                for (const auto& [name, value] : args) {
-                    const auto it = rta_index.find(name);
+                    it != rta_index.end(),
+                    "Internal error: named RTA '{}' not in schema for kernel '{}'.",
+                    name,
+                    kernel_name);
+                for (const auto& [node, value] : per_node) {
                     TT_FATAL(
-                        it != rta_index.end(),
-                        "Internal error: named RTA '{}' not in schema for kernel '{}'.",
-                        name,
-                        kernel_name);
+                        kernel->cores_with_runtime_args().contains(node),
+                        "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call "
+                        "SetProgramRunArgs at least once before a partial update.",
+                        kernel_name,
+                        node.str());
+                    RuntimeArgsData& rta = kernel->runtime_args_data(node);
                     rta.data()[it->second] = value;
                 }
             }

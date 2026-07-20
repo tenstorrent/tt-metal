@@ -43,10 +43,8 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
-#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
@@ -77,9 +75,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
-#ifdef GENERATE_HASH_LOG
-#include <fstream>
-#endif
+#include "kernel_compile_utils.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -91,9 +87,9 @@
 #include "impl/allocator/allocator.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt {
-class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
 namespace tt_metal::experimental {
 class GlobalCircularBuffer;
@@ -203,29 +199,6 @@ KernelCompileDescriptor build_kernel_descriptor(
     }
 
     return desc;
-}
-
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
-    // Store the build key into the KernelCompile hash. This will be unique per command queue
-    // configuration (necessary for dispatch kernels).
-    // watcher/dprint enabled are accounted for in the build key.
-    tt::StableHasher hasher;
-    hasher.update(build_key);
-    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
-    hasher.update(kernel->compute_hash());
-    size_t compile_hash = static_cast<size_t>(hasher.digest());
-
-#ifdef GENERATE_HASH_LOG
-    static std::ofstream f("/tmp/hashlog.txt");
-    static std::mutex mutex_;
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
-          << std::flush;
-    }
-#endif
-    return compile_hash;
 }
 
 std::string ensure_kernel_binaries(
@@ -581,6 +554,65 @@ std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
         }
     }
     return names;
+}
+
+void ProgramImpl::reserve_runtime_arg_buffers() {
+    if (!metal2_registry_) {
+        return;
+    }
+
+    for (const std::string& kernel_name : get_registered_kernel_names()) {
+        const KernelRTASchema* schema = get_kernel_rta_schema(kernel_name);
+        if (schema == nullptr) {
+            continue;
+        }
+
+        std::shared_ptr<Kernel> kernel = get_kernel_by_spec_name(kernel_name);
+        if (kernel == nullptr) {
+            continue;
+        }
+
+        // CRTA word count is fully determined by ProgramSpec resolution:
+        //   [ named | tensor bindings | scratchpads | common varargs ]
+        // vararg_section_offset == named + bindings + scratchpads.
+        const KernelCrtaLayout layout = kernel->get_crta_layout();
+        const size_t crta_words =
+            static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
+
+        // Per-node RTAs: named count + per-node vararg count from the schema.
+        const size_t named_rta_words = schema->runtime_arg_names.size();
+
+        // Reserve unique RTAs first so set_common_runtime_args can validate against
+        // max_runtime_args_per_core_ once CRTAs are installed.
+        for (const CoreCoord& core : kernel->logical_cores()) {
+            size_t vararg_words = 0;
+            if (auto it = schema->num_runtime_varargs_per_node.find(core);
+                it != schema->num_runtime_varargs_per_node.end()) {
+                vararg_words = it->second;
+            }
+            const size_t rta_words = named_rta_words + vararg_words;
+            if (rta_words == 0) {
+                continue;
+            }
+            // set_runtime_args may only allocate on the first call; skip if already sized
+            // (e.g. SetProgramRunArgs ran earlier on a non-factory path).
+            if (!kernel->runtime_args(core).empty()) {
+                continue;
+            }
+            std::vector<uint32_t> zeros(rta_words, 0u);
+            kernel->set_runtime_args(core, zeros);
+        }
+
+        if (crta_words == 0) {
+            continue;
+        }
+        // set_common_runtime_args may only be called once; SetProgramRunArgs overwrites in place after.
+        if (!kernel->common_runtime_args().empty()) {
+            continue;
+        }
+        std::vector<uint32_t> zeros(crta_words, 0u);
+        kernel->set_common_runtime_args(zeros);
+    }
 }
 
 void ProgramImpl::register_tensor_parameter(
@@ -1333,20 +1365,6 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
 
-                // Patch the allocated address into the kernel's CRTA buffer. This runs at Program-compile
-                // time, upstream of where dispatch delivers runtime args to the device:
-                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-                //
-                // An implicit CRTA slot to hold the scratchpad address is reserved at Program creation.
-                // (The actual CRTA buffer itself is allocated when SetProgramRunArgs runs.)
-                // Now, we populate the scratchpad address.
-                //
-                TT_FATAL(
-                    !kernel->common_runtime_args().empty(),
-                    "CRTA buffer is not allocated; cannot populate scratchpad addresses for kernel {}. "
-                    "Ensure that SetProgramRunArgs is called before attempting to enqueue a Program.",
-                    kernel->name());
                 TT_FATAL(
                     handle.allocated_address != 0,
                     "Internal error: scratchpad '{}' on kernel '{}' "
@@ -1354,8 +1372,20 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                     handle.accessor_name,
                     kernel->name());
 
-                RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                // Patch the allocated address into the kernel's CRTA buffer if it exists.
+                // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
+                // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
+                // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+                // handle.allocated_address into the scratchpad section when it builds the buffer.
+                // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
+                //
+                // Usage of the CRTA buffer:
+                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+                if (!kernel->common_runtime_args().empty()) {
+                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                }
             }
         }
     }
@@ -1364,7 +1394,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 }
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // If device is a MeshDevice, we need to track all its sub-devices
     std::vector<const IDevice*> devices_to_track;
@@ -1532,7 +1562,7 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
     std::optional<DeviceAddr> lowest_address =
@@ -1836,7 +1866,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
 
 void detail::ProgramImpl::set_cb_data_fmt_and_tile(
     const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
@@ -1971,8 +2001,11 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     }
                 }
             } else {
-                // Below assumes ethernet dispatch class
-                TT_ASSERT(core_type == CoreType::ETH);
+                // Non-multicast cores are dispatched via unicast. Historically this was only ETH, but
+                // DRAM programmable cores (e.g. the tensor-prefetcher DRISC senders) are also unicast-only
+                // and take the same path — extract_dst_noc_unicast_info handles either core type. The
+                // branch above (get_supports_receiving_multicasts) is the authoritative hal query, so no
+                // enumerated core-type check is needed here.
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group->core_ranges.ranges(), core_type);
 
@@ -2186,7 +2219,10 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
+
+    const auto& cluster = MetalContext::instance(extract_context_id(device)).get_cluster();
+
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
@@ -2201,6 +2237,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
 
     Inspector::program_compile_started(this, device, build_env.build_key());
+
+    // Currently JIT compile on Quasar mock devices is non functional
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
+        compiled_.insert(build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
+        return;
+    }
 
     TT_FATAL(
         device->is_initialized(),
@@ -2239,7 +2282,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 kernel->name());
         }
 
-        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+        auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
 
         const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
         kernel->set_full_name(kernel_path_suffix);
@@ -2308,6 +2351,23 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     compiled_.insert(build_env.build_key());
 
     Inspector::program_compile_finished(this, device, build_env.build_key());
+}
+
+void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
+    this->compile(device, force_slow_dispatch);
+    this->allocate_circular_buffers(device);
+    this->validate_circular_buffer_core_ranges(device);
+    this->validate_circular_buffer_region(device);
+    this->finalize_dataflow_buffer_configs();
+    this->allocate_dataflow_buffers(device);
+
+    // Pre-size Metal 2.0 RTA/CRTA host buffers from the registered schema before scratchpad allocation and
+    // finalize_offsets. This is a no-op for programs without a Metal 2.0 registry.
+    this->reserve_runtime_arg_buffers();
+
+    // Metal 2.0 scratchpads stack on the DFB allocations and their locations are passed as implicit CRTAs.
+    this->allocate_scratchpads(device);
+    this->validate_dataflow_buffer_region(device);
 }
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }

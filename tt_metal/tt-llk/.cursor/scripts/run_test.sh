@@ -20,8 +20,8 @@
 #                     (contains tests/ and tt_llk_<arch>/ as direct children)
 #   --arch     ARCH   Target architecture (quasar, blackhole, ...)
 #   --test     FILE   Test file name, e.g. test_sfpu_square_quasar.py.
-#                    Additional trailing test file names are accepted for
-#                    count/compile/simulate/run.
+#                     Additional trailing test file names are accepted for
+#                     count/compile/simulate/run.
 #
 # Optional:
 #   --maxfail  N      Stop after N failures (simulate/run; omit for verification)
@@ -87,7 +87,6 @@ shift 2>/dev/null || true
 
 WORKTREE=""
 ARCH=""
-TEST_FILE=""
 TEST_FILES=()
 MAXFAIL=""
 K_FILTER=""
@@ -107,7 +106,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --worktree)      WORKTREE="$2";      shift 2 ;;
     --arch)          ARCH="$2";          shift 2 ;;
-    --test)          TEST_FILE="$2"; TEST_FILES+=("$2"); shift 2 ;;
+    --test)          TEST_FILES+=("$2"); shift 2 ;;
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
@@ -132,7 +131,6 @@ while [[ $# -gt 0 ]]; do
         exit 4
       fi
       TEST_FILES+=("$1")
-      [[ -z "$TEST_FILE" ]] && TEST_FILE="$1"
       shift
       ;;
   esac
@@ -173,7 +171,6 @@ _validate() {
     ((errors++))
   }
   [[ $errors -gt 0 ]] && exit 4
-  TEST_FILE="${TEST_FILES[0]}"
 
   VENV="${WORKTREE}/tests/.venv"
   # Test layout is arch-dependent:
@@ -262,16 +259,24 @@ _do_count() {
 
 _do_compile() {
   _validate
-  _vlog "compile: $(_test_label) (arch=${ARCH}, -n ${JOBS}${K_FILTER:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
   # The two-phase flow requires compile and simulate to filter to the same set:
   # simulate's --compile-consumer reads per-variant artifacts that producer
   # wrote, so an unfiltered producer + filtered consumer would either rebuild
   # variants the consumer skips or miss variants the consumer needs.
   local -a kflag=()
-  [[ -n "$K_FILTER" ]] && kflag=(-k "$K_FILTER")
   local -a solflag=()
   [[ "$SPEED_OF_LIGHT" == "true" ]] && solflag=(--speed-of-light)
+  local -a pytest_targets=("${TEST_FILES[@]}")
+  local target_label="$(_test_label)"
+  if [[ -n "$TEST_ID" ]]; then
+    pytest_targets=("$TEST_ID")
+    target_label="$TEST_ID"
+  elif [[ -n "$K_FILTER" ]]; then
+    kflag=(-k "$K_FILTER")
+  fi
+
+  _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
@@ -279,14 +284,14 @@ _do_compile() {
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${TEST_FILES[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
   else
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${TEST_FILES[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
     )
   fi
 }

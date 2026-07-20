@@ -11,6 +11,7 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -130,6 +131,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void polygamma_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 

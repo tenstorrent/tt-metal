@@ -4,7 +4,12 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import MathFidelity, ReduceDimension, ReducePool, PERF_RUN_TYPES_QUASAR
+from helpers.llk_params import (
+    PERF_RUN_TYPES_QUASAR,
+    MathFidelity,
+    ReduceDimension,
+    ReducePool,
+)
 from helpers.param_config import parametrize
 from quasar.test_reduce_quasar import (
     REDUCE_FORMATS,
@@ -20,10 +25,12 @@ from quasar.test_reduce_quasar import (
 
 _ARCH = get_chip_architecture()
 
+
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
     formats=REDUCE_FORMATS,
+    tile_dimensions=[(32, 32)],
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
@@ -40,6 +47,7 @@ _ARCH = get_chip_architecture()
 def test_perf_reduce_quasar(
     perf_report,
     formats,
+    tile_dimensions,
     dest_acc,
     reduce_dim,
     pool_type_and_math_fidelity,
@@ -58,6 +66,7 @@ def test_perf_reduce_quasar(
         )
     run_reduce_quasar(
         formats,
+        tile_dimensions,
         dest_acc,
         reduce_dim,
         pool_type_and_math_fidelity,
