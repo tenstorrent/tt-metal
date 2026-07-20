@@ -1811,4 +1811,75 @@ TEST_F(MeshDeviceFixture, B9_InterTensixScope_Rejected_2_0) {
     GTEST_SKIP() << "Not applicable: M2 DataflowBufferSpec has no tensix_scope field";
 }
 
+
+// =====================================================================================
+// BLOCKED access-pattern config-rejection tests (migrated from monolithic)
+// =====================================================================================
+// --- REJECTED CONFIG: Tensix BLOCKED producer + IMPLICIT DM consumer ---
+// A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster dfb_tile_poster_irq_handler()
+// is #ifndef COMPILE_FOR_TRISC — compiled out on Tensix). For a STRIDED DM consumer those explicit per-tile
+// posts hand off to an implicit drain fine (the A1 Tensix→DM STRIDED pipeline passes). For a BLOCKED DM
+// consumer they do NOT: the per-block explicit posts never reach the implicit BLOCKED drain's ISR/txn
+// signal, so the DM consumer spin-waits forever (verified: a device-side deadlock, ~20s CPU / >10min wall).
+// The host now rejects this combination at config time (finalize_single_dfb_config), turning a silent hang
+// into a fast, deterministic failure. These two were added unverified in 4a0757c0a11; they now assert the
+// rejection. Real-use workaround: explicit DM consumer (the non-_impl TensixDMTest1xDFB{2Bx2B,4Bx4B}_blk4
+// tests above cover Tensix→DM BLOCKED), or a DM producer if the consumer must be implicit.
+static void expect_tensix_blocked_implicit_consumer_rejected(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_threads, uint32_t num_entries) {
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = num_threads,
+        .num_consumers = num_threads,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = num_entries,
+        .block_size = 4,
+    };
+    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+}
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/2, /*num_entries=*/16);
+}
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/4, /*num_entries=*/32);
+}
+
+// B10 — a BLOCKED binding with block_size == 0 is rejected. BLOCKED is now supported (Phase 3),
+// so the lowering gate is gone; what remains is the host validation that block_size must be > 0
+// iff the access pattern is BLOCKED (check_block_size_validity in program_spec.cpp). This config
+// leaves block_size unset (0) on a BLOCKED consumer, so it must still throw.
+TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
+    auto& mesh_device = this->devices_.at(0);
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB validation tested on Quasar";
+    }
+    using namespace m2_config_test_helpers;
+    M2ConfigDFBParams p{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::STRIDED,
+        .cap = m2::DFBAccessPattern::BLOCKED,  // <-- BLOCKED consumer but block_size left 0 (the offense)
+        .implicit_sync = false,
+    };
+    EXPECT_THROW(
+        {
+            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        std::exception);
+}
+
+// B7 — CB+DFB mix rejection.
+// Not applicable to M2: ProgramSpec doesn't expose a circular-buffer API
+// (CircularBufferConfig is a legacy host-API construct). M2 programs are
+// purely DFB-based; the legacy CB-then-DFB rejection path can't be exercised
+
 }  // end namespace tt::tt_metal
