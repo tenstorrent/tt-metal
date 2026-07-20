@@ -120,8 +120,8 @@ tt-perf-report "$MODEL/doc/full_model/profile/reduced/reports/2026_07_20_04_23_5
 
 `results/runner_provenance.json` records source, result, log, and profile hashes. `doc/context_contract.json` contains the recomputed weight-plus-KV capacity evidence and preserves the 32768-token context. The first independent review returned `more-work-needed` solely for missing lower-bound attribution. The corrected full-context depth runner/result/log closed that finding. A fresh independent rereview returned `clean-pass` after recalculating the fit and cost decomposition, checking all recorded hashes, parsing all 142 JSON artifacts and 22 relevant Python files, and auditing the full user contract. The initial and final reports are retained in `stage_review_initial.md` and `stage_review_final.md`.
 
-Final host-only checks passed: `python -m py_compile` on the implementation and evidence runners, Black `--check --fast` on all 15 changed Python files, `git diff --check`, and the three focused teacher-forcing readiness unit tests.
+Final host-only checks passed: `python -m py_compile` on the implementation and evidence runners, Black `--check --fast` on all 19 changed Python files, `git diff --check`, and the three focused teacher-forcing readiness unit tests.
 
-The implementation and documentation checkpoint SHAs are appended after the isolated local commits; nothing is pushed.
+Local implementation checkpoint: `e28c682f9f8` (`Add Falcon3 10B full model`). The subsequent documentation-only closure commit is reported in the final handoff; nothing is pushed.
 
 The pre-existing unrelated modification to `.agents/skills/forge-functional-decoder-from-ir/SKILL.md` was preserved and is excluded from this stage.
