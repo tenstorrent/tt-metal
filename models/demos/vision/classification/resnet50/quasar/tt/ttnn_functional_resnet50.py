@@ -4,6 +4,7 @@
 
 import math
 import os
+import re
 from typing import List
 
 import torch
@@ -51,8 +52,16 @@ def _log_op(name, t):
         )
         dump = os.environ.get("RESNET_PCC_DUMP")
         if dump:
-            os.makedirs(dump, exist_ok=True)
-            torch.save(tt, os.path.join(dump, f"op{idx:03d}_{name}.pt"))
+            # Sanitize path components before touching the filesystem (path-traversal / SAST): the op
+            # `name` becomes a filename, so strip anything that isn't a safe filename char (no path
+            # separators, no ".."), and confine the write to the RESNET_PCC_DUMP dir via a realpath
+            # containment check so neither the env value nor the name can escape it.
+            dump_dir = os.path.realpath(dump)
+            safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+            out_path = os.path.realpath(os.path.join(dump_dir, f"op{idx:03d}_{safe_name}.pt"))
+            if os.path.commonpath([dump_dir, out_path]) == dump_dir:
+                os.makedirs(dump_dir, exist_ok=True)
+                torch.save(tt, out_path)
     except Exception as e:
         logger.info(f"[PCCLOG] op{idx:03d} {name} <to_torch failed: {type(e).__name__}: {e}>")
     return t
