@@ -10,7 +10,7 @@ device stores K / index_k Meta-RoPE swizzled over the rotary slice (``ModelArgs.
 Meta interleaved; identity tail) before comparing. V is raw (no swizzle).
 
 Ported from ``tests/galaxy_prefill_kv_pcc.py::check_kv_pcc`` so the runner and the standalone test share
-one implementation. Called by ``TtPrefillRuntime.kv_cache_pcc_check`` (the runner's PREFILL_STANDALONE_PCC
+one implementation. Called by ``TtPrefillRuntime.kv_cache_pcc_check`` (the migration validators' KV-PCC
 hook). At <= 2048 tokens MSA == dense so the dense golden matches; above that the device's block-sparse
 MSA diverges from the dense golden (see the m3-cpu-reference-model notes).
 """

@@ -1,4 +1,4 @@
-# REQUEST mode (unbounded, H2D-driven), 4-rank D2D pipeline. No PREFILL_STANDALONE => request loop.
+# REQUEST mode (unbounded, H2D-driven), 4-rank D2D pipeline.
 # rank0 builds the H2D service; downstream ranks read via D2D. Migration/LayerAck auto-disabled (num_ranks>1).
 # Shutdown is SIGKILL (no end-of-request sentinel yet). Host order is the ring chain (see the 4-galaxy MGD).
 rank_bindings:

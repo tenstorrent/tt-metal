@@ -1,4 +1,4 @@
-# REQUEST mode (unbounded, H2D-driven), 2-rank D2D pipeline. No PREFILL_STANDALONE => request loop.
+# REQUEST mode (unbounded, H2D-driven), 2-rank D2D pipeline.
 # rank0 (d07u02) builds the H2D service; downstream rank1 reads via D2D. Migration/LayerAck auto-disabled
 # for num_ranks>1. Cache sized to 11 chunks. Shutdown is via SIGKILL (no end-of-request sentinel yet).
 rank_bindings:

@@ -10,8 +10,8 @@ per-model runtime PRIMITIVES (kept small so a new model implements almost nothin
 
   * ``runtime.kv_cache_pcc_check(kv_cache, *, slot_id, n_chunks, real_len=None, pt_path_override=None)``
     — PCC one slot's cache against the golden trace; returns the min per-layer PCC (asserts on failure).
-    Also the PREFILL_STANDALONE_PCC hook. This is the single place a model's KV layout / golden format
-    lives.
+    Driven by the migration validators (PREFILL_VALIDATE_MIGRATION). This is the single place a model's
+    KV layout / golden format lives.
   * ``runtime.read_slot_kv(kv_cache, slot) -> list[torch.Tensor]`` — the raw per-slot cache blocks for
     the golden-free dst==src pairwise compare, one tensor per cache tensor, shaped
     ``[num_layers, heads(or 1), seq_cache, head_dim]`` (replicas collapsed to 1). The blocks carry the
