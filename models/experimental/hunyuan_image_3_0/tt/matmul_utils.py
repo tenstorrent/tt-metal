@@ -557,6 +557,54 @@ def l1_sharded_linear(
     return ttnn.linear(x, weight, **kwargs)
 
 
+def small_m_split_n_linear(
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    *,
+    dtype=None,
+    compute_kernel_config=None,
+    out_memory_config: "ttnn.MemoryConfig | None" = None,
+) -> ttnn.Tensor:
+    """Small-M, wide-N projection (e.g. lm_head vocab): pad M→TILE, split N wide.
+
+    ``act_width_sharded_linear`` width-shards the activation on K, so its core grid
+    is capped by ``gcd(k_tiles, n_tiles)`` (64 for the full 4096×133120 vocab head,
+    only 16 once N is TP-sharded). This path leaves the activation interleaved and
+    routes to ``decode_mm_program_config`` (1D mcast, N split across the largest
+    core-divisor of ``n_tiles`` — 104 on Blackhole), so more cores stream the huge
+    weight in parallel and DRAM bandwidth is better utilized.
+
+    ``decode_mm_program_config`` returns None (=> slow auto) unless M is tile-aligned,
+    so M is padded to ``TILE_SIZE`` here and the padded rows trimmed afterward. The
+    per-device N is read from ``weight.shape[-1]``, so a mesh-sharded (vocab-TP)
+    weight automatically uses its local width.
+    """
+    m_dim = int(list(x.shape)[-2])
+    batch_rows = m_dim
+    n = int(list(weight.shape)[-1])
+
+    work = x
+    owns_work = False
+    if m_dim < TILE_SIZE:
+        work = _pad_m_to_tile(x, m_dim)
+        owns_work = True
+
+    out = l1_sharded_linear(
+        work,
+        weight,
+        dtype=dtype,
+        compute_kernel_config=compute_kernel_config,
+        allow_width_shard=False,
+        out_memory_config=out_memory_config,
+    )
+    if owns_work:
+        ttnn.deallocate(work)
+
+    if batch_rows < int(list(out.shape)[-2]):
+        out = _slice_m_rows(out, batch_rows, n)
+    return out
+
+
 def l1_sharded_matmul(
     x: ttnn.Tensor,
     weight: ttnn.Tensor,

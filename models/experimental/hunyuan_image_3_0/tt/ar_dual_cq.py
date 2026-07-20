@@ -74,11 +74,19 @@ def open_recaption_mesh(mesh_shape, *, l1_small_size: int = 32768, enable_2cq: b
     return mesh
 
 
-def logits_host_to_torch(logits_host, device, batch_size: int) -> torch.Tensor:
-    """Convert a host tensor from ``from_device`` into float logits ``[B, V]``."""
+def logits_host_to_torch(logits_host, device, batch_size: int, *, vocab_parallel: bool = False) -> torch.Tensor:
+    """Convert a host tensor from ``from_device`` into float logits ``[B, V]``.
+
+    When ``vocab_parallel`` the lm_head sharded V across the mesh, so concatenate the
+    per-device vocab slices along the last dim to rebuild the full ``[B, 1, V]``.
+    Otherwise the logits are replicated: concat along the batch dim and keep one copy.
+    """
     if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
-        logits = ttnn.to_torch(logits_host, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
-        logits = logits[:batch_size]
+        if vocab_parallel:
+            logits = ttnn.to_torch(logits_host, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1))
+        else:
+            logits = ttnn.to_torch(logits_host, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            logits = logits[:batch_size]
     else:
         logits = ttnn.to_torch(logits_host)
     return logits.float().squeeze(1)
@@ -97,6 +105,9 @@ class ArDualCQCoordinator:
         self._write_event = None
         self._pending_logits_host = None
         self.steps = 0
+        # Set by the caller once the lm_head is known: True when the vocab is
+        # sharded across the mesh so ``consume_logits`` concatenates vocab slices.
+        self.vocab_parallel = False
 
     def fence_compute_before_io(self) -> None:
         """Ensure the previous CQ1 D2H finished before reusing the logits buffer."""
@@ -130,7 +141,7 @@ class ArDualCQCoordinator:
         self._read_event = None
         host = self._pending_logits_host
         self._pending_logits_host = None
-        return logits_host_to_torch(host, self.device, batch_size)
+        return logits_host_to_torch(host, self.device, batch_size, vocab_parallel=self.vocab_parallel)
 
     def copy_host_to_device_async(self, host_tensor, device_tensor) -> None:
         """H2D on CQ1 after CQ0 compute completes (forced stage tokens)."""
