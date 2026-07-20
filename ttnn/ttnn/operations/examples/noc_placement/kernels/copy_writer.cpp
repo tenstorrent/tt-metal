@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// reader_placement writer (BRISC / NoC1) — identical for every placement.
+// noc_placement copy writer (BRISC) — identical for every placement.
 //
 // Drains each page from the reader->writer CB and writes it back to the same
 // interleaved DRAM page index (an identity copy). Runs on NoC1 so its writes
