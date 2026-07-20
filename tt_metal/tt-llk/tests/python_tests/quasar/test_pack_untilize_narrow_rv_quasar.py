@@ -1,16 +1,22 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# NARROW-ROW untilize via RV_PACR (Quasar) DEMO test.
+# NARROW-ROW untilize via RV_PACR (Quasar) DEMO test — MULTI-TILE.
 #
-# Validates that RV_PACR tile-mode-per-row produces a TIGHT ROW_NUM_DATUMS-wide
-# untilized output — the narrow_row capability the pack-untilize config stride
-# cannot express. Scope: single 32x32 tile, 16-bit formats, ROW_NUM_DATUMS=8.
+# Validates that RV_PACR tile-mode-per-row produces a TIGHT untilized output with
+# a variable-width last tile per tile-row — the narrow_row capability the
+# pack-untilize config stride cannot express. Scope: one tile-row of NUM_TILES
+# 32x32 tiles, 16-bit formats. The first NUM_TILES-1 tiles are packed full (32
+# wide); the last tile is packed at a swept width in {8, 16, 24, 32}: 8/16 use only
+# col-group g=0 (faces 0,2), 24/32 also use g=1 (faces 1,3), and 32 == normal
+# untilize. Each op always writes a full 16-datum face-row; non-face-aligned widths
+# (8, 24) keep only the low datums, the spill being overwritten by the next tile row.
 #
-# Golden = the first ROW_NUM_DATUMS columns of each of the 32 untilized rows,
-# packed tight (32 * ROW_NUM_DATUMS datums). The device writes that tight region
-# to the front of a full-tile result buffer; we read the full tile back and
-# compare only the first 32*ROW_NUM_DATUMS datums.
+# Golden = the first matrix_w columns of each of the 32 untilized rows, packed
+# tight and row-major (32 * matrix_w datums), where
+#   matrix_w = (NUM_TILES-1)*TILE_WIDTH + last_tile_width.
+# The device writes exactly that tight matrix_w-wide buffer; we read it back and
+# compare the first 32*matrix_w datums.
 
 import pytest
 import torch
@@ -29,6 +35,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LAST_TILE_W_DATUMS,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -62,11 +69,21 @@ def print_full_tile(data, data_format, label="result", tile_width=32):
         print(f"[RV-narrow] {label} flat: {flat.tolist()}")
 
 
-# Must match ROW_NUM_DATUMS in the C++ kernel.
-ROW_NUM_DATUMS = 8
+# Must match the C++ kernel. The last tile in each row is packed narrow via skip-face-1
+# (faces 0,2 => cols 0-15). The op always writes a full 16-datum face-row, but the kept
+# width is LAST_TILE_WIDTH (16 or 8) -- for 8 the upper half is spill overwritten by the
+# next row / tile 0, so only the low 8 columns of the last tile are meaningful.
 TILE_WIDTH = 32
 TILE_HEIGHT = 32
-SINGLE_TILE_DIMS = [TILE_HEIGHT, TILE_WIDTH]
+# Kept widths of the last tile to sweep (must match the LAST_TILE_W_DATUMS the kernel is
+# built with; the matrix width / L1 stride follows from it). 8/16 use only col-group g=0
+# (faces 0,2); 24/32 also use g=1 (faces 1,3). 32 == normal (full) untilize; 8 and 24 are
+# non-face-aligned widths whose boundary-face spill is overwritten by the next tile row.
+LAST_TILE_WIDTHS = [8, 16, 24, 32]
+# Number of tiles per tile-row (last one narrow). Must match FULL_CT_DIM in the kernel;
+# set the input to TILE_HEIGHT x (NUM_TILES*TILE_WIDTH) so MATH produces that many tiles.
+NUM_TILES = 4
+INPUT_DIMS = [TILE_HEIGHT, NUM_TILES * TILE_WIDTH]
 
 # 16-bit formats only: RV_PACR tile-mode l1_addr is 16B-aligned == 8 datums for
 # 16-bit. Sub-16-bit formats cannot hit 8-datum granularity.
@@ -79,12 +96,14 @@ NARROW_RV_FORMATS = input_output_formats(
 
 
 @pytest.mark.quasar
-@parametrize(formats=NARROW_RV_FORMATS)
-def test_pack_untilize_narrow_rv_quasar(formats):
-    (formats,) = formats
+@parametrize(formats=NARROW_RV_FORMATS, last_tile_width=LAST_TILE_WIDTHS)
+def test_pack_untilize_narrow_rv_quasar(formats, last_tile_width):
     dest_acc = DestAccumulation.No
     dest_sync_mode = DestSync.Half
-    input_dimensions = SINGLE_TILE_DIMS
+    input_dimensions = INPUT_DIMS
+    matrix_w = (
+        NUM_TILES - 1
+    ) * TILE_WIDTH + last_tile_width  # output row width (datums)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -93,8 +112,10 @@ def test_pack_untilize_narrow_rv_quasar(formats):
         input_dimensions_B=input_dimensions,
     )
 
-    # Full untilize, then keep the first ROW_NUM_DATUMS columns of each of the
-    # 32 rows and pack them tight -> narrow golden (32 * ROW_NUM_DATUMS datums).
+    # Full untilize of the NUM_TILES-wide input (32 rows x NUM_TILES*32 cols, row-major).
+    # The device output is the same row-major layout but the LAST tile keeps only its
+    # first LAST_TILE_WIDTH columns -> output row width = matrix_w. So the golden is the
+    # first matrix_w columns of each untilized row.
     generate_golden = get_golden_generator(UntilizeGolden)
     full_untilized = generate_golden(
         src_A,
@@ -102,12 +123,13 @@ def test_pack_untilize_narrow_rv_quasar(formats):
         input_dimensions,
         input_format=formats.input_format,
     )
+    full_w = NUM_TILES * TILE_WIDTH
     narrow_golden = (
-        full_untilized.reshape(TILE_HEIGHT, TILE_WIDTH)[:, :ROW_NUM_DATUMS]
+        full_untilized.reshape(TILE_HEIGHT, full_w)[:, :matrix_w]
         .flatten()
         .to(format_dict[formats.output_format])
     )
-    narrow_len = TILE_HEIGHT * ROW_NUM_DATUMS
+    narrow_len = TILE_HEIGHT * matrix_w
 
     num_faces = 4
     configuration = TestConfig(
@@ -121,6 +143,7 @@ def test_pack_untilize_narrow_rv_quasar(formats):
             TEST_FACE_DIMS(),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            LAST_TILE_W_DATUMS(last_tile_width),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -140,44 +163,28 @@ def test_pack_untilize_narrow_rv_quasar(formats):
 
     res_from_L1 = configuration.run().result
 
-    # Diagnostic: dump the full untilized golden and the whole result buffer the SAME
-    # way (tile_width-wide rows), so they can be compared line-by-line.
-    print_full_tile(
-        full_untilized, formats.output_format, label="golden", tile_width=TILE_WIDTH
-    )
-    print_full_tile(
-        res_from_L1, formats.output_format, label="result", tile_width=TILE_WIDTH
-    )
-
     res_full = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    full_len = TILE_HEIGHT * TILE_WIDTH
     assert (
-        res_full.numel() >= full_len
-    ), f"Result too short: {res_full.numel()} < {full_len}"
+        res_full.numel() >= narrow_len
+    ), f"Result too short: {res_full.numel()} < {narrow_len}"
 
-    # The kernel untilizes into a full-width (TILE_WIDTH) row-major buffer with the low
-    # ROW_NUM_DATUMS columns of each row holding the narrow data. Extract cols
-    # [0:ROW_NUM_DATUMS] of each of the TILE_HEIGHT rows and compare to the tight golden.
-    res_narrow = (
-        res_full[:full_len]
-        .reshape(TILE_HEIGHT, TILE_WIDTH)[:, :ROW_NUM_DATUMS]
-        .flatten()
-    )
-    assert res_narrow.numel() == narrow_len
+    # Device output is a tight matrix_w-wide row-major buffer (32 rows x matrix_w).
+    res_narrow = res_full[:narrow_len]
 
+    # Raw full-buffer dump (matrix_w-wide rows) — shows per-tile column placement and
+    # any spill past matrix_w, so a mis-strided tile is easy to spot when NUM_TILES>1.
     print_full_tile(
-        narrow_golden,
-        formats.output_format,
-        label="narrow-golden",
-        tile_width=ROW_NUM_DATUMS,
+        res_full, formats.output_format, label="result-raw", tile_width=matrix_w
+    )
+
+    # Dump golden vs result as matrix_w-wide rows for line-by-line comparison.
+    print_full_tile(
+        narrow_golden, formats.output_format, label="golden", tile_width=matrix_w
     )
     print_full_tile(
-        res_narrow,
-        formats.output_format,
-        label="narrow-result",
-        tile_width=ROW_NUM_DATUMS,
+        res_narrow, formats.output_format, label="result", tile_width=matrix_w
     )
 
     assert passed_test(
         narrow_golden, res_narrow, formats.output_format, print_errors=True
-    ), "Narrow RV_PACR untilize output does not match golden"
+    ), "Narrow RV_PACR multi-tile untilize output does not match golden"
