@@ -737,9 +737,18 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
 
 void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_args) {
     auto& set_rt_args = this->common_runtime_args_;
-    TT_FATAL(
-        set_rt_args.empty(),
-        "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
+
+    // Metal 2.0 may preallocate the common runtime-argument buffer from the
+    // ProgramSpec schema. Preserve that allocation and populate it in place.
+    if (!set_rt_args.empty()) {
+        TT_FATAL(
+            this->common_runtime_args_data_.size() == common_runtime_args.size(),
+            "Illegal Common Runtime Args: Cannot change the number of common runtime args from {} to {}.",
+            this->common_runtime_args_data_.size(),
+            common_runtime_args.size());
+        std::copy(common_runtime_args.begin(), common_runtime_args.end(), this->common_runtime_args_data_.data());
+        return;
+    }
 
     size_t effective_crta_limit = common_runtime_args.size() + watcher_count_word_offset_;
 
