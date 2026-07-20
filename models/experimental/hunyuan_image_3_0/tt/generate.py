@@ -53,25 +53,35 @@ from models.experimental.hunyuan_image_3_0.tt.ar_trace import (  # noqa: E402
 )
 
 
-def _logits_to_torch(logits_tt, device, batch_size: int):
-    """Device logits [B, 1, V] -> host [B, V] (gather mesh replicas when needed)."""
+def _logits_to_torch(logits_tt, device, batch_size: int, *, vocab_parallel: bool = False):
+    """Device logits [B, 1, V] -> host [B, V].
+
+    When ``vocab_parallel`` the vocab is sharded across the mesh: concat the per-device
+    slices on the last dim. Otherwise the logits are replicated: gather the batch-dim
+    replicas and keep one copy.
+    """
     import ttnn
 
     if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
-        logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
-        logits = logits[:batch_size]
+        if vocab_parallel:
+            logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1))
+        else:
+            logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            logits = logits[:batch_size]
     else:
         logits = ttnn.to_torch(logits_tt)
     return logits.float().squeeze(1)
 
 
-def _finish_logits_read(logits_tt, device, batch_size: int, dual_cq: ArDualCQCoordinator | None):
+def _finish_logits_read(
+    logits_tt, device, batch_size: int, dual_cq: ArDualCQCoordinator | None, *, vocab_parallel: bool = False
+):
     """D2H logits on CQ1 (2CQ) or blocking read (1CQ). Caller deallocates ``logits_tt`` after."""
     if dual_cq is not None:
         dual_cq.launch_logits_d2h(logits_tt)
         logits = dual_cq.consume_logits(batch_size)
     else:
-        logits = _logits_to_torch(logits_tt, device, batch_size)
+        logits = _logits_to_torch(logits_tt, device, batch_size, vocab_parallel=vocab_parallel)
     ttnn.deallocate(logits_tt)
     return logits
 
@@ -125,7 +135,9 @@ def make_backbone_logits_fn(
             attention_mask=mask,
         )
         logits_tt = lm_head(hidden, last_token_only=True)
-        logits = _finish_logits_read(logits_tt, device, B, dual_cq)
+        logits = _finish_logits_read(
+            logits_tt, device, B, dual_cq, vocab_parallel=getattr(lm_head, "vocab_parallel", False)
+        )
         ttnn.deallocate(hidden)
         ttnn.deallocate(ids_tt)
         if mask is not None:
@@ -358,7 +370,9 @@ def make_recaption_logits_fn(
                 kv_cache.seq_len = S
 
         logits_tt = lm_head(hidden, last_token_only=True)
-        logits = _finish_logits_read(logits_tt, device, B, dual_cq)
+        logits = _finish_logits_read(
+            logits_tt, device, B, dual_cq, vocab_parallel=getattr(lm_head, "vocab_parallel", False)
+        )
         ttnn.deallocate(hidden)
         return logits
 
