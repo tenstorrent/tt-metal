@@ -129,40 +129,42 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
         in1_cb.wait_front(in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
-        for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
-            int in1_index_subblock_offset = 0;
-            for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
-                tile_regs_acquire();
+        {
+            DeviceZoneScopedN("DOWN-MATMUL");
+            for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
+                int in1_index_subblock_offset = 0;
+                for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+                    tile_regs_acquire();
 
-                uint32_t dst_index = 0;
-                uint32_t in0_index = in0_index_subblock_offset;
-                uint32_t in1_index = in1_index_subblock_offset;
-                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                    matmul_block(
-                        in0_cb_id,
-                        in1_cb_id,
-                        in0_index,
-                        in1_index,
-                        dst_index,
-                        /*transpose=*/0,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
-                    in0_index += 1;
-                    in1_index += in1_per_core_w;
+                    uint32_t dst_index = 0;
+                    uint32_t in0_index = in0_index_subblock_offset;
+                    uint32_t in1_index = in1_index_subblock_offset;
+                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                        matmul_block(
+                            in0_cb_id,
+                            in1_cb_id,
+                            in0_index,
+                            in1_index,
+                            dst_index,
+                            /*transpose=*/0,
+                            out_subblock_w,
+                            out_subblock_h,
+                            in0_block_w);
+                        in0_index += 1;
+                        in1_index += in1_per_core_w;
+                    }
+
+                    tile_regs_commit();
+                    partials_cb.reserve_back(out_subblock_num_tiles);
+                    tile_regs_wait();
+                    pack_tile_block(0, partials_cb_id, out_subblock_num_tiles);
+                    tile_regs_release();
+                    partials_cb.push_back(out_subblock_num_tiles);
+
+                    in1_index_subblock_offset += out_subblock_w;
                 }
-
-                tile_regs_commit();
-                partials_cb.reserve_back(out_subblock_num_tiles);
-                tile_regs_wait();
-                pack_tile_block(0, partials_cb_id, out_subblock_num_tiles);
-                tile_regs_release();
-                partials_cb.push_back(out_subblock_num_tiles);
-
-                in1_index_subblock_offset += out_subblock_w;
+                in0_index_subblock_offset += in0_subblock_num_tiles;
             }
-            in0_index_subblock_offset += in0_subblock_num_tiles;
-        }
 
 #ifdef PACKER_L1_ACC
         // After block 0 finishes, flip L1_ACC on so blocks 1..N-1 accumulate.
@@ -170,6 +172,7 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
             PACK((llk_pack_reconfig_l1_acc(1)));
         }
 #endif
+        }
 
         in0_cb.pop_front(in0_block_num_tiles);
         in1_cb.pop_front(in1_block_num_tiles);
@@ -321,67 +324,70 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
-        for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
-            int in1_index_subblock_offset = 0;
-            for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
-                // --- Gate matmul: x * gate -> partials_gu ---
-                tile_regs_acquire();
-                {
-                    uint32_t in0_index = in0_index_subblock_offset;
-                    uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                        matmul_block(
-                            x_cb_id,
-                            gate_cb_id,
-                            in0_index,
-                            in1_index,
-                            /*dst_index=*/0,
-                            /*transpose=*/0,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index += 1;
-                        in1_index += in1_per_core_w;
+        {
+            DeviceZoneScopedN("GATE-UP-MATMUL");
+            for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
+                int in1_index_subblock_offset = 0;
+                for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+                    // --- Gate matmul: x * gate -> partials_gu ---
+                    tile_regs_acquire();
+                    {
+                        uint32_t in0_index = in0_index_subblock_offset;
+                        uint32_t in1_index = in1_index_subblock_offset;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                            matmul_block(
+                                x_cb_id,
+                                gate_cb_id,
+                                in0_index,
+                                in1_index,
+                                /*dst_index=*/0,
+                                /*transpose=*/0,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
+                            in0_index += 1;
+                            in1_index += in1_per_core_w;
+                        }
                     }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
-                }
-                tile_regs_release();
-
-                // --- Up matmul: x * up -> partials_up (same x, different in1) ---
-                tile_regs_acquire();
-                {
-                    uint32_t in0_index = in0_index_subblock_offset;
-                    uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                        matmul_block(
-                            x_cb_id,
-                            up_cb_id,
-                            in0_index,
-                            in1_index,
-                            /*dst_index=*/0,
-                            /*transpose=*/0,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index += 1;
-                        in1_index += in1_per_core_w;
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                        pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
                     }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
-                }
-                tile_regs_release();
-                partials_slot_idx += out_subblock_num_tiles;
+                    tile_regs_release();
 
-                in1_index_subblock_offset += out_subblock_w;
+                    // --- Up matmul: x * up -> partials_up (same x, different in1) ---
+                    tile_regs_acquire();
+                    {
+                        uint32_t in0_index = in0_index_subblock_offset;
+                        uint32_t in1_index = in1_index_subblock_offset;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                            matmul_block(
+                                x_cb_id,
+                                up_cb_id,
+                                in0_index,
+                                in1_index,
+                                /*dst_index=*/0,
+                                /*transpose=*/0,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
+                            in0_index += 1;
+                            in1_index += in1_per_core_w;
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                        pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
+                    }
+                    tile_regs_release();
+                    partials_slot_idx += out_subblock_num_tiles;
+
+                    in1_index_subblock_offset += out_subblock_w;
+                }
+                in0_index_subblock_offset += in0_subblock_num_tiles;
             }
-            in0_index_subblock_offset += in0_subblock_num_tiles;
         }
 
 #ifdef PACKER_L1_ACC
@@ -422,29 +428,32 @@ FORCE_INLINE void matmul_phase_fused_gu(
     //     overlapping with the next subblock's UNPACK rather than gating the
     //     pack pipeline as apply_activation_from_pack would.
     //   * pack dst → gate_intermed without per-tile SFPU.
-    pack_reconfig_data_format(gate_intermed_cb_id);
-    // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
-    // to partials_gu so copy_tile reads the accumulator.
-    copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
-    for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
-        tile_regs_acquire();
-        partials_gu_cb.wait_front(out_subblock_num_tiles);
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            copy_tile(partials_gu_cb_id, i, i);
+    {
+        DeviceZoneScopedN("SILU");
+        pack_reconfig_data_format(gate_intermed_cb_id);
+        // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
+        // to partials_gu so copy_tile reads the accumulator.
+        copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
+        for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
+            tile_regs_acquire();
+            partials_gu_cb.wait_front(out_subblock_num_tiles);
+            for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                copy_tile(partials_gu_cb_id, i, i);
+            }
+            partials_gu_cb.pop_front(out_subblock_num_tiles);
+            // MATH-thread SFPU pass: apply silu to each dst tile before pack.
+            for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                silu_tile(i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            gate_intermed_cb.reserve_back(out_subblock_num_tiles);
+            for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                pack_tile(i, gate_intermed_cb_id);
+            }
+            gate_intermed_cb.push_back(out_subblock_num_tiles);
+            tile_regs_release();
         }
-        partials_gu_cb.pop_front(out_subblock_num_tiles);
-        // MATH-thread SFPU pass: apply silu to each dst tile before pack.
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            silu_tile(i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        gate_intermed_cb.reserve_back(out_subblock_num_tiles);
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            pack_tile(i, gate_intermed_cb_id);
-        }
-        gate_intermed_cb.push_back(out_subblock_num_tiles);
-        tile_regs_release();
     }
 
     // Up partials are NOT copied to a separate cb_up_intermed: the multiply
@@ -540,6 +549,8 @@ FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_
 
     gate_cb.wait_front(out_block_num_tiles);
     up_cb.wait_front(out_block_num_tiles);
+
+    DeviceZoneScopedN("MULTIPLY");
 
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the

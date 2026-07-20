@@ -39,6 +39,7 @@ SINGLE_CHIP_MESH_PARAMS = [
 # (emb_dim, hidden_dim). The (num_tokens, id) pairs are model-independent.
 _TOKEN_SWEEP = [
     (1024, "1k"),
+    (5120, "5k"),
     (25600, "25k"),
 ]
 

@@ -194,22 +194,29 @@ void kernel_main() {
                     ++up_seq;
                     up_go_sem.wait_min(up_seq);
                     uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
-                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                            const uint32_t row = kb * in0_block_w_gu + k;
-                            const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                            if (col < N_gate_tiles_full) {
-                                const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_up.async_read(
-                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
-                            } else {
-                                volatile tt_l1_ptr uint64_t* p =
-                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
+                    {
+                        DeviceZoneScopedN("UP-READ");
+                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+                                const uint32_t row = kb * in0_block_w_gu + k;
+                                const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                                if (col < N_gate_tiles_full) {
+                                    const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                                    noc_up.async_read(
+                                        up_acc,
+                                        CoreLocalMem<uint32_t>(l1_w_up),
+                                        up_tile_bytes,
+                                        {.page_id = tile_idx},
+                                        {});
+                                } else {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
+                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
                                 }
+                                l1_w_up += up_tile_bytes;
                             }
-                            l1_w_up += up_tile_bytes;
                         }
                     }
                     noc_up.async_read_barrier();
@@ -225,46 +232,49 @@ void kernel_main() {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
                 cb_out_buf.wait_front(d_out_subblock_num_tiles);
                 uint32_t subblock_tile_offset = 0;
-                for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
-                    for (uint32_t j = 0; j < d_out_subblock_w; ++j) {
-                        const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
-                        const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
-                        // `row` indexes the FFN *input* (x) tile-rows; the
-                        // destination tile-row adds the per-expert region
-                        // offset (0 in non-direct mode).
-                        const uint32_t dst_row = row_offset_tiles + row;
-                        // Bounds that decide whether this is a real output tile
-                        // for this expert:
-                        //   * col < N_down_tiles_full: GRID_X=11 ceil_div
-                        //     produces phantom output cols past actual N.
-                        //   * row < M_tiles_full: ceil_div of M produces a
-                        //     last-chunk tail past actual M when
-                        //     M_tiles_full doesn't divide chunk_M_tiles.
-                        //   * row < count_tiles: the last chunk's per_core_M
-                        //     rows extend past count_tiles when count_tiles
-                        //     is not chunk-aligned.
-                        if (col < N_down_tiles_full && row < M_tiles_full && row < count_tiles) {
-                            // The destination tile-row must stay inside the
-                            // (possibly shared) output buffer. ttnn::insert
-                            // asserted the whole-slice fit
-                            // (start_tile_idx + num_tiles <= global_num_tiles);
-                            // assert the per-tile equivalent so an over-capacity
-                            // region offset fails loudly in watcher builds. The
-                            // guard below keeps Release builds safe (skip the OOB
-                            // write rather than corrupt DRAM, since ASSERT is a
-                            // no-op there).
-                            ASSERT(dst_row < dst_M_tiles);
-                            if (dst_row < dst_M_tiles) {
-                                const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
-                                noc.async_write(
-                                    cb_out_buf,
-                                    out_acc,
-                                    out_tile_bytes,
-                                    {.offset_bytes = subblock_tile_offset},
-                                    {.page_id = tile_idx});
+                {
+                    DeviceZoneScopedN("OUTPUT-WRITE");
+                    for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
+                        for (uint32_t j = 0; j < d_out_subblock_w; ++j) {
+                            const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
+                            const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
+                            // `row` indexes the FFN *input* (x) tile-rows; the
+                            // destination tile-row adds the per-expert region
+                            // offset (0 in non-direct mode).
+                            const uint32_t dst_row = row_offset_tiles + row;
+                            // Bounds that decide whether this is a real output tile
+                            // for this expert:
+                            //   * col < N_down_tiles_full: GRID_X=11 ceil_div
+                            //     produces phantom output cols past actual N.
+                            //   * row < M_tiles_full: ceil_div of M produces a
+                            //     last-chunk tail past actual M when
+                            //     M_tiles_full doesn't divide chunk_M_tiles.
+                            //   * row < count_tiles: the last chunk's per_core_M
+                            //     rows extend past count_tiles when count_tiles
+                            //     is not chunk-aligned.
+                            if (col < N_down_tiles_full && row < M_tiles_full && row < count_tiles) {
+                                // The destination tile-row must stay inside the
+                                // (possibly shared) output buffer. ttnn::insert
+                                // asserted the whole-slice fit
+                                // (start_tile_idx + num_tiles <= global_num_tiles);
+                                // assert the per-tile equivalent so an over-capacity
+                                // region offset fails loudly in watcher builds. The
+                                // guard below keeps Release builds safe (skip the OOB
+                                // write rather than corrupt DRAM, since ASSERT is a
+                                // no-op there).
+                                ASSERT(dst_row < dst_M_tiles);
+                                if (dst_row < dst_M_tiles) {
+                                    const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
+                                    noc.async_write(
+                                        cb_out_buf,
+                                        out_acc,
+                                        out_tile_bytes,
+                                        {.offset_bytes = subblock_tile_offset},
+                                        {.page_id = tile_idx});
+                                }
                             }
+                            subblock_tile_offset += out_tile_bytes;
                         }
-                        subblock_tile_offset += out_tile_bytes;
                     }
                 }
                 // Wait for the writes to LEAVE this core (departed sender);
