@@ -342,7 +342,11 @@ void RealtimeProfilerTracyHandler::HandleWorkerZone(
     // One Tracy context (row) per worker core, keyed by its NOC0 coord; the 5 RISCs are lanes within.
     TracyTTCtx ctx;
     {
-        ZoneScopedN("HWZ-GetCtx");  // context lookup/create (+ the per-marker fmt::format for the name)
+        // NOTE: the per-marker CPU ZoneScopedN("HWZ-GetCtx") that used to bracket this lookup was
+        // removed. It is NOT needed for device (GPU) zone capture: the GPU serial zones are captured
+        // regardless (verified via GetGpuZoneCount/ctx-inspector). tracy-capture's printed "Zones:"
+        // headline is GetZoneCount() = CPU zones only, which made the missing CPU brackets look like
+        // lost device data. Dropping the brackets removes ~2 overhead CPU zones/marker and declutters.
         ctx = GetOrCreateContext(
             zone.chip_id,
             zone.core_noc0_x,
@@ -421,7 +425,7 @@ void RealtimeProfilerTracyHandler::HandleWorkerZone(
     }
 
     {
-        ZoneScopedN("HWZ-TracyPush");  // the actual enqueue into Tracy (blocks here if Tracy's queue is full)
+        // (per-marker CPU ZoneScopedN("HWZ-TracyPush") intentionally removed — see note above)
         if (zone.is_start) {
             TracyTTPushStartMarker(ctx, marker);
         } else {
