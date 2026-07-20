@@ -1179,11 +1179,11 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
         });
     }
 
-    // Semaphores.  The cores->coordinator channel is split into two so a fast
+    // Semaphores.  The cores->coordinator channel uses two separate semaphores so a fast
     // reader's next-row readiness increment can never be miscounted as a sub-stage
-    // confirmation (a shared counter let it overshoot the coordinator's exact-match
-    // wait, deadlocking the op at Ht >= 2).  Readiness -> ready sem; per-pair
-    // confirmations -> done sem.
+    // confirmation: on one shared counter it could overshoot the coordinator's exact-match
+    // wait and deadlock the op at Ht >= 2.  Readiness -> ready sem; per-pair confirmations
+    // -> done sem.
     constexpr uint32_t coordinator_to_cores_semaphore_id = 0;
     constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
     constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;

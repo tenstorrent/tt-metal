@@ -63,12 +63,12 @@ void kernel_main() {
 
     // Semaphore setup
     Semaphore<> coordinator_to_cores_sem(coordinator_to_cores_semaphore_arg);
-    // Two separate up-channels from the worker cores.  A single shared semaphore was
-    // fed by both the reader's per-row readiness and the writer's per-pair
-    // confirmations; at a tile-row boundary a fast reader's next-row readiness could
-    // land during the confirmation window and push the counter past the exact target,
-    // so the exact-match wait() below never matched -> latent deadlock at Ht >= 2.
-    // Readiness -> ready sem; per-pair confirmations -> done sem.
+    // Two separate up-channels from the worker cores: the reader's per-row readiness ->
+    // ready sem, the writer's per-pair confirmations -> done sem.  They are kept on
+    // distinct semaphores so each exact-match wait() below has its own monotonic target;
+    // folded onto one shared counter, at a tile-row boundary (Ht >= 2) a fast reader's
+    // next-row readiness could land during the confirmation window and push the counter
+    // past the done target, so the wait would never match and the op would deadlock.
     Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_arg);
     Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_arg);
 

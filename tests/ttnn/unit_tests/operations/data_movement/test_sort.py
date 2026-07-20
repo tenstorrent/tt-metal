@@ -690,18 +690,18 @@ def test_sort_multi_row_multi_core_no_deadlock(descending, device):
     """
     Guard for the DRAM multi-core sort path (SortProgramFactorySingleRowMultiCore).
 
-    The coordinator core used to collect two logically different worker signals --
-    the reader's per-row "ready" and the writer's per-pair "done" confirmations --
-    on a single cores->coordinator semaphore, consumed with an exact-match wait().
-    At a tile-row boundary (Ht >= 2) a fast reader's next-row readiness increment
-    could push that shared counter past the exact confirmation target so the wait
-    never matched -> deadlock.  The fix splits the channel into two semaphores
-    (ready + done), one producer signal each.
+    The coordinator core collects two logically distinct worker signals -- the reader's
+    per-row "ready" and the writer's per-pair "done" -- on two separate cores->coordinator
+    semaphores, one producer signal each.  They are kept separate so each coordinator wait
+    has an exact, monotonic per-producer target: were both folded onto one shared counter,
+    at a tile-row boundary (Ht >= 2) a fast reader's next-row "ready" increment could push
+    the counter past the "done" target an exact-match wait is looking for, stranding the
+    wait and deadlocking the op.
 
-    That race is latent (the exact-match poll normally out-races the NoC atomics, so
-    it needs timing pressure to surface), so this test does not deterministically
-    reproduce the hang.  What it *does* guarantee is that the multi-core Ht >= 2 path
-    -- otherwise only exercised at Ht == 1 -- runs to completion with correct output.
+    This exercises the multi-core Ht >= 2 path -- otherwise only covered at Ht == 1 -- and
+    checks it runs to completion with correct output.  It is not a deterministic deadlock
+    reproducer: the mismatch a shared counter would cause is timing-dependent (the exact-match
+    poll normally out-races the NoC atomics), so it needs timing pressure to surface.
 
     The worker-thread watchdog + pytest-timeout are a best-effort regression guard,
     not a clean recovery mechanism: a genuine deadlock wedges the device (which needs
