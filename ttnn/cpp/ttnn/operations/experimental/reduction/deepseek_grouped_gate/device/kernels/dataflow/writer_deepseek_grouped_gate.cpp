@@ -51,7 +51,7 @@ FORCE_INLINE void generate_index_tile(
         // A baby-RISCV store can retire before its write-request lands, and the RISCV core and the NoC are
         // different L1 clients with no program-order guarantee (WormholeB0/.../MemoryOrdering.md); read the
         // last written word (blocking load + memory clobber) so the fill is visible before the NoC read is
-        // issued. See issue #50154 (finding #23).
+        // issued.
         (void)ckernel::load_blocking(index_cb_ptr + ((columns_per_face / 2) - 1));
         // then use noc to write the rest of the face
         uint32_t dm_engine_index_write_offset = index_write_face_offset + face_line_bytes;
