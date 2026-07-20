@@ -640,7 +640,7 @@ def test_fp32_non_last_dim_index_validation(shape, dim, device):
     assert_allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2)
 
 
-def test_fp32_input_uint16_preallocated_index_rejected(device):
+def test_fp32_input_uint16_preallocated_index_rejected(device, expect_error):
     shape = [TILE_HEIGHT, 2 * TILE_WIDTH]
     t = torch.randn(shape, dtype=torch.float32)
     x = ttnn.from_torch(
@@ -653,7 +653,7 @@ def test_fp32_input_uint16_preallocated_index_rejected(device):
         shape, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    with pytest.raises((RuntimeError, Exception)):
+    with expect_error(RuntimeError, "must be UINT32 when input dtype is FLOAT32"):
         ttnn.sort(x, dim=-1, out=(out_v, out_i))
 
 
