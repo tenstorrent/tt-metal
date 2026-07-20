@@ -158,8 +158,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     });
 
     // client interface
-    // [0] = data unicast header; [1]/[2] = completion atomic-inc bidirectional multicast headers
-    // (positive/negative ring directions); [1] is reused earlier for the init-semaphore send.
+    // [0] data unicast; [1]/[2] bidirectional completion atomic-inc (pos/neg arcs); [1] reused for init send.
     constexpr auto num_headers = 3;
     constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     desc.cbs.push_back(CBDescriptor{

@@ -41,23 +41,14 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
     return k * TokensPerDevice + t_idx;
 }
 
-// Signal combine completion to the other devices in the replicate group.
-//
-// Templated (not inlined into kernel_main) so the `if constexpr` below genuinely discards the
-// unused branch: fabric_multicast_bidirectional_atomic_inc_1d static_asserts a 1D topology, so it
-// must not be instantiated for a 2D (Mesh/Torus) build — which only holds inside a template.
-//
-// 1D fix (matches selective_reduce_combine / all_to_all_dispatch_metadata): send the completion
-// credit as a bidirectional ring/line multicast so it egresses on BOTH arcs and therefore follows
-// this device's payloads on whichever arc they took (same-connection, in-order) — it can no longer
-// overtake a payload on the opposite arc. Previously the credit re-derived its route via the
-// stateful get_route(), which for the antipodal "tie" destination could pick the opposite arc from
-// the payload and be observed before the data landed. DoubleAntipodalAtomicInc=true increments the
-// antipodal device from both directions, so on a Ring every device receives exactly
-// replicate_group_devices credits (see the wait in kernel_main); Linear does no antipodal doubling.
-//
-// 2D path is unchanged: the credit routes via the deterministic hop router (not get_route), so a
-// per-device unicast credit cannot mis-route relative to the payload.
+// Signal combine completion to the replicate group.
+// Templated so the `if constexpr` genuinely discards the unused branch
+// (fabric_multicast_bidirectional_atomic_inc_1d static_asserts a 1D topology).
+// 1D: send the credit as a bidirectional ring/line multicast so it follows the payload on
+// whichever arc it took and cannot overtake it on the opposite arc. On a Ring the antipodal
+// device is incremented from both directions (DoubleAntipodalAtomicInc), so every device
+// receives replicate_group_devices credits; Linear does no antipodal doubling.
+// 2D: credit routes via the deterministic hop router, so a unicast credit cannot mis-route.
 template <
     uint32_t LinearizedMeshCoord,
     tt::tt_fabric::Topology Topology,
@@ -173,13 +164,9 @@ void kernel_main() {
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
-    // packet_header_cb holds 3 distinct pages. The bidirectional completion send below uses
-    // packet_headers[1] and packet_headers[2] as two SEPARATE arc headers (positive/negative), filled and
-    // sent back-to-back with a non-blocking (non-source-draining) fabric send, so they must be distinct L1
-    // buffers or the negative-arc fill clobbers the still-in-flight positive-arc header. get_read_ptr stays
-    // pinned here (cb_push_back only advances the write ptr and nothing pops this scratch CB), so take the
-    // base once and offset each header by sizeof(PACKET_HEADER_TYPE), mirroring writer_all_to_all_dispatch.
-    // (issue #50154 finding #10)
+    // 3 distinct header buffers: the bidirectional completion send fills packet_headers[1] and [2]
+    // back-to-back with non-draining fabric sends, so they must not alias. get_read_ptr stays pinned
+    // (nothing pops this scratch CB), so take the base once and offset each by sizeof(PACKET_HEADER_TYPE).
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     cb_reserve_back(packet_header_cb_id, 3);
     const uint32_t packet_header_base = get_read_ptr(packet_header_cb_id);
@@ -208,8 +195,7 @@ void kernel_main() {
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
         cb_wait_front(metadata_cb_id, 1);
-        // Consumer role: read the front page via get_read_ptr, not get_write_ptr (which only coincides while
-        // metadata_cb depth==1). Drops the hidden depth==1 dependence. (issue #50154 finding #11)
+        // Consumer: read the front page via get_read_ptr (get_write_ptr only coincides while depth==1).
         const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
@@ -308,9 +294,8 @@ void kernel_main() {
     close_direction_connections(directions, fabric_connections);
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-    // Ring (bidirectional, DoubleAntipodal): each device receives replicate_group_devices credits.
-    // Linear (bidirectional): replicate_group_devices - 1 (no antipodal doubling).
-    // 2D unicast path: local self-inc (1) + (replicate_group_devices - 1) remotes = replicate_group_devices.
+    // Credits expected: Ring = replicate_group_devices (antipodal doubled); Linear = replicate_group_devices - 1;
+    // 2D unicast = 1 self-inc + (replicate_group_devices - 1) remotes = replicate_group_devices.
     constexpr uint32_t expected_credits =
         (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
     noc_semaphore_wait(semaphore_ptr, expected_credits);
