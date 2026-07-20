@@ -148,17 +148,28 @@ void PadDeviceOperation::validate_on_program_cache_miss(
         "Output size cannot fit input with offset");
 
     if (input_tensor.layout() == Layout::TILE) {
+        const auto& tile = input_tensor.tensor_spec().tile();
         TT_FATAL(
-            (operation_attributes.output_padded_shape[2] % TILE_HEIGHT == 0),
+            tile.get_width() == TILE_WIDTH, "ttnn.pad requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
+        TT_FATAL(
+            (operation_attributes.output_padded_shape[2] % tile.get_height() == 0),
             "Can only pad tilized tensor with full tiles");
         TT_FATAL(
-            (operation_attributes.output_padded_shape[3] % TILE_WIDTH == 0),
+            (operation_attributes.output_padded_shape[3] % tile.get_width() == 0),
             "Can only pad tilized tensor with full tiles");
+        TT_FATAL(
+            !(tile.get_height() < TILE_HEIGHT &&
+              (input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B)),
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
                 input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
                 input_tensor.dtype() == DataType::UINT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
             "Cannot pad tilized tensor with specified format");
+        if (tensor_args.preallocated_output.has_value()) {
+            const auto& out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
+            TT_FATAL(out_tile == tile, "Output tensor tile shape must match input tensor tile shape");
+        }
     } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
@@ -213,14 +224,39 @@ void PadDeviceOperation::validate_on_program_cache_miss(
 ttnn::TensorSpec PadDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
     return TensorSpec(
         operation_attributes.output_logical_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
-            PageConfig(input_tensor.layout()),
+            input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config,
             operation_attributes.output_logical_shape,
             operation_attributes.output_padded_shape));
+}
+
+ttsl::hash::hash_t PadDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    // Include tile shape so tiny-tile programs are not reused with default 32x32 kernels.
+    const auto& tile = input_tensor.tensor_spec().tile();
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+    return tt::tt_metal::operation::hash_operation<PadDeviceOperation>(
+        operation_attributes.output_logical_shape,
+        operation_attributes.output_padded_shape,
+        operation_attributes.input_tensor_start,
+        operation_attributes.pad_value,
+        operation_attributes.output_mem_config,
+        operation_attributes.use_multicore,
+        operation_attributes.sub_core_grids,
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_tensor.layout(),
+        input_tensor.padded_shape(),
+        program_factory.index(),
+        tile.get_height(),
+        tile.get_width());
 }
 
 Tensor PadDeviceOperation::create_output_tensors(
