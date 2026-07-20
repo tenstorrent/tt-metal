@@ -102,7 +102,7 @@ void kernel_main() {
     // and NoC are different L1 clients with no program-order guarantee between them
     // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). load_blocking the last filled word (blocking
     // load + memory clobber) to force the fill to be processed before the first loop-back read is issued.
-    // One-time cost, outside the per-stick loop. See issue #50154 (finding #13).
+    // One-time cost, outside the per-stick loop.
     (void)ckernel::load_blocking(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + (stick_size_padded / 2) - 1);
 
