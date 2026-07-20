@@ -142,8 +142,7 @@ int main(int argc, char** argv) {
         } else if (a == "--fullread") {
             fullread = true;
         } else if (a == "--bulkcore") {
-            bulkcore = true;
-            fullread = true;  // bulkcore is inherently a full-buffer read
+            bulkcore = true;  // force the lossless bulk path for every core (drains real [head,tail))
         } else if (a == "--dualrelay") {
             dualrelay = true;
         } else if (a == "--adaptive") {
