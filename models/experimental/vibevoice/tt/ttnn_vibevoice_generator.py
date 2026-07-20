@@ -1122,6 +1122,14 @@ class TTVibeVoiceGenerator:
 
         prof = _Profiler(device)
 
+        # Op-level speech-frame profiling (VV_PROFILE_SPEECH_FRAME=<n>, 0=off): wrap the n-th
+        # eager diffusion frame (neg-LM → diffusion → post → pos-LM → argmax) in Tracy
+        # ``start``/``stop`` signposts so ``tt-perf-report --start-signpost start --end-signpost
+        # stop`` isolates ONE warm frame.  VV_PROFILE_SPEECH_FRAME_EXIT=1 returns right after.
+        # Env-gated + eager-path only (VV_TRACE_SEGMENT=0), so the shipping trace path is untouched.
+        _profile_sf = int(os.environ.get("VV_PROFILE_SPEECH_FRAME", "0"))
+        _profile_sf_exit = os.environ.get("VV_PROFILE_SPEECH_FRAME_EXIT", "0") == "1"
+
         _vv_debug(
             f"generate() start: input_ids={tuple(input_ids.shape)} "
             f"voice_cloning={speech_tensors is not None} "
@@ -1322,6 +1330,12 @@ class TTVibeVoiceGenerator:
 
             if current_token == self.speech_diffusion_id:
                 diffusion_frames += 1
+                if _profile_sf and diffusion_frames == _profile_sf:
+                    import tracy
+
+                    ttnn.synchronize_device(device)
+                    tracy.signpost("start")
+                    _vv_debug(f"Tracy signpost start: eager speech frame {diffusion_frames}")
                 cond_pos = _condition_from_hidden(step_hidden)
                 # Negative CFG: reference processes the PREVIOUS speech_diffusion_id
                 # at each step (the current one is appended to negative_input_ids
@@ -1410,6 +1424,16 @@ class TTVibeVoiceGenerator:
                     forced_idx += 1
                 else:
                     next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)
+
+            if _profile_sf and diffusion_frames == _profile_sf and current_token == self.speech_diffusion_id:
+                import tracy
+
+                ttnn.synchronize_device(device)
+                tracy.signpost("stop")
+                _vv_debug(f"Tracy signpost stop: eager speech frame {diffusion_frames}")
+                if _profile_sf_exit:
+                    _vv_debug("VV_PROFILE_SPEECH_FRAME_EXIT=1 — ending generate after profiled frame")
+                    break
 
         _t_decode_end = time.perf_counter()
         # The per-step streaming decode already produced each frame's audio chunk
