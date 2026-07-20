@@ -232,6 +232,7 @@ def get_civ2_node_name_and_serial_from_annotations(annotation_info):
             node_name = message.rsplit("Kubernetes node:", 1)[-1].strip() or None
         elif title == "tt-card-serial" and "serial number(s):" in message:
             serial = message.rsplit("serial number(s):", 1)[-1].strip() or None
+    logger.info(f"Extracted node name and serial from annotations: {node_name}, {serial}")
     return node_name, serial
 
 

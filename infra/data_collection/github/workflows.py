@@ -420,6 +420,7 @@ def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_ru
                 serial = line.rsplit(_CIV2_SERIAL_LOG_MARKER, 1)[-1].strip() or None
             if node_name is not None and serial is not None:
                 break
+    logger.info(f"Extracted node name and serial from job log: {node_name}, {serial}")
     return node_name, serial
 
 
