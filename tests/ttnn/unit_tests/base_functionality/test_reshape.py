@@ -918,15 +918,14 @@ def test_reshape_4d_5d_layout(device):
 )
 def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shape):
     """
-    Guards the row-major interleaved reshape data-movement kernel (rm_reshape_interleaved) on the
-    write-after-read-prone path: DRAM row-major input, 16B-aligned wide rows (the clean async_write
+    Correctness guard for the row-major interleaved reshape data-movement kernel (rm_reshape_interleaved)
+    on the wide multi-page path: DRAM row-major input, 16B-aligned wide rows (the clean async_write
     branch), and >1 source page per core.
 
-    That kernel reuses a single L1 source_buffer slot every iteration; the next iteration's read can
-    overwrite it while the previous iteration's async_write is still reading it (WAR).  A
-    noc.async_writes_flushed() before the read closes the window.  The race is latent (masked by
-    read/write latency), so this is a correctness guard for that path; a forced-corruption reproducer
-    (clobbering source_buffer before the read) is documented in the PR.
+    The kernel reuses a single L1 source_buffer slot every iteration, so correct output relies on each
+    async_write draining before the next iteration's read reuses that slot; otherwise the read would
+    overwrite the buffer while the prior write is still sourcing from it (WAR) and corrupt the result.
+    This checks the wide multi-page RM path produces the expected reshape.
     """
     torch.manual_seed(0)
     t = torch.randn(*input_shape, dtype=torch.bfloat16)
