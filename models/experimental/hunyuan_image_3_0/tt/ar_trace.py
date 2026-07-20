@@ -136,10 +136,13 @@ class RecaptionDecodeTracer:
         return cos_h, sin_h
 
     def _read_logits(self, batch_size: int) -> torch.Tensor:
+        vocab_parallel = getattr(self.lm_head, "vocab_parallel", False)
         if self.dual_cq is not None:
             self.dual_cq.launch_logits_d2h(self.logits_tt)
             return self.dual_cq.consume_logits(batch_size)
-        return logits_host_to_torch(ttnn.from_device(self.logits_tt), self.device, batch_size)
+        return logits_host_to_torch(
+            ttnn.from_device(self.logits_tt), self.device, batch_size, vocab_parallel=vocab_parallel
+        )
 
     def _prefill_forward(self) -> ttnn.Tensor:
         """KV prefix prefill (chunked and/or trace-captured) returning last-token logits."""

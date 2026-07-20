@@ -82,6 +82,9 @@ def run_recaption_on_device(
     use_trace = recaption_trace_enabled(device, sp_factor=sp_factor, use_kv_cache=use_kv_cache)
     use_2cq = recaption_2cq_enabled(device)
     dual_cq = ArDualCQCoordinator(device) if use_2cq else None
+    if dual_cq is not None:
+        # Tell the async logits reader whether the lm_head sharded V across the mesh.
+        dual_cq.vocab_parallel = getattr(lm_head, "vocab_parallel", False)
     if use_trace:
         print(
             f"[recaption] trace AR decode on CQ0 (kv_cache={use_kv_cache}, 2cq={use_2cq}, "
