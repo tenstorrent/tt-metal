@@ -347,10 +347,26 @@ def _make_u32(device, values):
 
 TAIL_TILES = 6  # unused remainder of the shared flat buffer, in tile-rows
 
+# Metadata scale path: the dispatch metadata row is [METADATA_HEADER routing ints][H/128 fp32-bit scales].
+# A nonzero header forces the kernel's scale_col_offset (= metadata_len - H/128) off zero, so a test that
+# read the scales from the wrong columns would fail.
+METADATA_HEADER = 5
 
+
+def _pack_scale_metadata(input_scale):
+    """Bit-store fp32 per-token scales in the tail of an int32 dispatch-metadata row (the metadata scale
+    path). Leading header columns are filled with a sentinel the kernel must ignore."""
+    M, blocks = input_scale.shape
+    meta = torch.full((M, METADATA_HEADER + blocks), 0x0BADF00D, dtype=torch.int32)
+    meta[:, METADATA_HEADER:] = input_scale.contiguous().view(torch.int32)
+    return meta
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("scales_from_metadata", [False, True])
 @pytest.mark.parametrize("bf16_scale", [False, True])
 @pytest.mark.parametrize("label, counts", MASKED_CASES, ids=[c[0] for c in MASKED_CASES])
-def test_masked_cast_back_realistic_dispatch(device, label, counts, bf16_scale):
+def test_masked_cast_back_realistic_dispatch(device, label, counts, bf16_scale, scales_from_metadata, output_dtype):
     torch.manual_seed(0)
     H = 1024
 
@@ -375,13 +391,26 @@ def test_masked_cast_back_realistic_dispatch(device, label, counts, bf16_scale):
     input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0  # fp32; op always reads fp32
 
     e4m3_tt = _make_e4m3_from_torch(input_e4m3, device=device)
-    scale_tt = ttnn.from_torch(
-        input_scale,
-        dtype=ttnn.float32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Feed the scales either as a plain (M, H/128) fp32 tensor or packed into the int32 metadata tail;
+    # both drive the same math, so the golden is identical.
+    if scales_from_metadata:
+        scale_tt = None
+        metadata_tt = ttnn.from_torch(
+            _pack_scale_metadata(input_scale),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        metadata_tt = None
+        scale_tt = ttnn.from_torch(
+            input_scale,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     region_tt = _make_u32(device, region)
     counts_tt = _make_u32(device, counts_sparse)
     table_tt = _make_u32(device, table)
@@ -393,15 +422,21 @@ def test_masked_cast_back_realistic_dispatch(device, label, counts, bf16_scale):
         counts_tt,
         table_tt,
         experts_per_chip=experts_per_chip,
-        output_dtype=ttnn.bfloat16,
+        output_dtype=output_dtype,
+        metadata=metadata_tt,
         bf16_scale=bf16_scale,
     )
     out = ttnn.to_torch(out_tt).float()
 
     assert tuple(out_tt.shape) == (capacity, H)
+    assert out_tt.dtype == output_dtype
 
     golden_scale = input_scale.to(torch.bfloat16).float() if bf16_scale else input_scale
-    golden = (input_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)).to(torch.bfloat16).float()
+    golden = input_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)
+    # bf16_scale runs the whole compute datapath in bf16; a bf16 output additionally rounds at the packer.
+    # Either narrows the result to bf16 precision; only fp32-output + fp32-scale stays full fp32.
+    if bf16_scale or output_dtype == ttnn.bfloat16:
+        golden = golden.to(torch.bfloat16).float()
 
     # The op sweeps [0, total_valid_rows) contiguously (valid tokens + end-of-region tile padding), so
     # every written row must equal e4m3 * scale; the tail beyond total_valid_rows is left untouched.
@@ -415,5 +450,6 @@ def test_masked_cast_back_realistic_dispatch(device, label, counts, bf16_scale):
         pcc_threshold=0.999,
         rtol=1e-2,
         atol=atol,
-        label=f"realistic dispatch {label} bf16_scale={bf16_scale}",
+        label=f"realistic dispatch {label} bf16_scale={bf16_scale} "
+        f"metadata={scales_from_metadata} out={output_dtype}",
     )
