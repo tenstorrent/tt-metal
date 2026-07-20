@@ -228,20 +228,17 @@ def test_argmax_reduce_all_multicore_no_deadlock(device):
     """
     Guard for the multi-core reduce_all (whole-tensor) argmax path.
 
-    The reduce core signals each iteration via start_sem (set + multicast) and the
-    workers waited on it with an exact-match wait(k+1).  In the reduce_all path there
-    is no per-iteration done_sem back-pressure (it is lifted out of the k-loop), so the
-    reduce core free-runs and can advance start_sem past (k+1) before a lagging worker
-    samples it -- the exact-match wait then never observes k+1 and the op deadlocks
-    (workers stuck at noc_semaphore_wait).  The fix uses wait_min(k+1) (>=) on the
-    monotonically-increasing start_sem.
+    The reduce core signals each iteration via start_sem (set + multicast), which increases
+    monotonically.  In the reduce_all path there is no per-iteration done_sem back-pressure (it is
+    lifted out of the k-loop), so the reduce core free-runs and can advance start_sem past a given
+    value before a lagging worker samples it.  Workers therefore wait with wait_min(k+1) (>=) rather
+    than an exact match, so a skipped-over value cannot strand a worker at noc_semaphore_wait and
+    deadlock the op.
 
-    A ROW_MAJOR tensor with dim=None routes to the multi-core reduce_all reader; the
-    shape is large enough to split across many cores and run several k-iterations.  The
-    race is latent (timing-masked), so this does not deterministically fail on the
-    pre-fix code -- it guards correctness of the reduce_all multi-core path and, via the
-    worker-thread watchdog + pytest-timeout, converts a deadlock regression into an
-    assertion failure instead of a hung session.
+    A ROW_MAJOR tensor with dim=None routes to the multi-core reduce_all reader; the shape is large
+    enough to split across many cores and run several k-iterations.  The check guards correctness of
+    the reduce_all multi-core path and, via the worker-thread watchdog + pytest-timeout, converts a
+    deadlock into an assertion failure instead of a hung session.
     """
     torch.manual_seed(0)
     t = torch.randn((64, 4096), dtype=torch.bfloat16)
@@ -263,8 +260,8 @@ def test_argmax_reduce_all_multicore_no_deadlock(device):
 
     assert not worker.is_alive(), (
         "ttnn.argmax(dim=None) did not complete on the multi-core reduce_all path: a worker's "
-        "start_sem wait was starved -- likely a regression of the wait_min fix (exact-match "
-        "wait deadlock when the reduce core laps the workers)."
+        "start_sem wait was starved -- workers must wait_min(>=) on the monotonic start_sem, since "
+        "an exact-match wait can be lapped by the free-running reduce core."
     )
     if "error" in result:
         raise result["error"]
