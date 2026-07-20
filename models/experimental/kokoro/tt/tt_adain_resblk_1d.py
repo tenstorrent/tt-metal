@@ -118,13 +118,16 @@ class TTAdainResBlk1d:
         "device",
     )
 
-    def __init__(self, device, params: TTAdainResBlk1dParams) -> None:
+    def __init__(self, device, params: TTAdainResBlk1dParams, *, compute_kernel_config=None) -> None:
         self.device = device
         self._params = params
         self._upsample = TTUpSample1d(params.layer_type)
         self._norm1 = TTAdaIN1d(params.norm1)
         self._norm2 = TTAdaIN1d(params.norm2)
-        self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        # Default HiFi4 (decoder/generator use of this block). Callers may pass their own config to
+        # override — e.g. the prosody predictor's F0/N branches run at HiFi2 without changing the
+        # shared decoder/generator path.
+        self._compute_kernel_config = compute_kernel_config or ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,

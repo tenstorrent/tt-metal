@@ -853,27 +853,35 @@ def tt_bilstm_nlc(
     recur_pc = None
     out_dtype_step = None
     l1_weights: list[ttnn.Tensor] = []
-    if (
-        fp32_state
-        and step_mc.buffer_type != ttnn.BufferType.L1
-        and 2 * L * _tensor_nbytes((B, H), state_dtype) <= _PERDIR_L1_ACCUM_BUDGET_BYTES
-    ):
+    if fp32_state:
         recur_pc = _perdir_recurrent_program_config(batch=B, hidden=H, device=x_nlc.device())
         if recur_pc is not None:
-            step_mc = ttnn.L1_MEMORY_CONFIG
+            # P2 (always-on): the tuned recurrent-matmul config is applied on BOTH the L1 and the
+            # DRAM per-step paths — it is 44% faster than the default (4.66->2.60µs; sweep:
+            # perf/test_prosody_matmul_sweep.py, winner 32-core / full-K / per_core_N=1) and its
+            # full-K single-pass accumulation keeps it numerics-safe. ``out_dtype`` is pinned to the
+            # fp32 state dtype so the width-sharded output isn't silently downcast to bf16.
             out_dtype_step = state_dtype
+            # P1 (budget-gated): additionally make the per-step tensors L1-resident when the two
+            # direction output lists fit the L1 accumulation budget; longer sequences keep the
+            # per-step tensors on DRAM but still get the P2 matmul config above.
+            if (
+                step_mc.buffer_type != ttnn.BufferType.L1
+                and 2 * L * _tensor_nbytes((B, H), state_dtype) <= _PERDIR_L1_ACCUM_BUDGET_BYTES
+            ):
+                step_mc = ttnn.L1_MEMORY_CONFIG
 
-            def _stage_l1(t: ttnn.Tensor) -> ttnn.Tensor:
-                if t.memory_config().buffer_type == ttnn.BufferType.L1:
-                    return t
-                t_l1 = ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
-                l1_weights.append(t_l1)
-                return t_l1
+                def _stage_l1(t: ttnn.Tensor) -> ttnn.Tensor:
+                    if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                        return t
+                    t_l1 = ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
+                    l1_weights.append(t_l1)
+                    return t_l1
 
-            # Stage only w_h (recurrent, read every step) to L1; w_x is used once (batched gate
-            # precompute) so it stays DRAM to bound the transient L1 footprint.
-            fwd = TTLSTMParams(w_x=fwd.w_x, w_h=_stage_l1(fwd.w_h), b=fwd.b, hidden_size=H)
-            rev = TTLSTMParams(w_x=rev.w_x, w_h=_stage_l1(rev.w_h), b=rev.b, hidden_size=H)
+                # Stage only w_h (recurrent, read every step) to L1; w_x is used once (batched gate
+                # precompute) so it stays DRAM to bound the transient L1 footprint.
+                fwd = TTLSTMParams(w_x=fwd.w_x, w_h=_stage_l1(fwd.w_h), b=fwd.b, hidden_size=H)
+                rev = TTLSTMParams(w_x=rev.w_x, w_h=_stage_l1(rev.w_h), b=rev.b, hidden_size=H)
 
     gx_fwd = _precompute_gates_x(fwd)
     gx_rev = _precompute_gates_x(rev)

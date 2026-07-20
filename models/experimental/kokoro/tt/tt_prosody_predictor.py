@@ -224,15 +224,21 @@ class TTProsodyPredictor:
         self.params = params
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         self._text_encoder = TTDurationEncoder(params.text_encoder)
         self._duration_proj = TTLinearNorm(params.duration_proj)
-        self._f0_blocks = tuple(TTAdainResBlk1d(device, bp) for bp in params.f0_blocks)
-        self._n_blocks = tuple(TTAdainResBlk1d(device, bp) for bp in params.n_blocks)
+        # Run the F0/N AdainResBlk1d branches at the prosody predictor's fidelity (HiFi2) rather than
+        # the block's HiFi4 default — the decoder/generator use of this block is unaffected.
+        self._f0_blocks = tuple(
+            TTAdainResBlk1d(device, bp, compute_kernel_config=self.compute_kernel_config) for bp in params.f0_blocks
+        )
+        self._n_blocks = tuple(
+            TTAdainResBlk1d(device, bp, compute_kernel_config=self.compute_kernel_config) for bp in params.n_blocks
+        )
 
     def _forward_peak_nbytes(self, *, batch: int, seq_len: int, t_aligned: int, dtype) -> int:
         """Pipeline activations only — BiLSTM gx precompute stays DRAM (see ``tt_lstm`` step L1)."""
