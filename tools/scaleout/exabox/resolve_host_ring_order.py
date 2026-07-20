@@ -71,10 +71,7 @@ def _safe_read_text(path_arg: str) -> str:
 
     # Normalize .. / . components before the containment check.
     abs_path = os.path.abspath(path_arg)
-    if not any(
-        abs_path == root or abs_path.startswith(root + os.sep)
-        for root in _descriptor_allowed_roots()
-    ):
+    if not any(abs_path == root or abs_path.startswith(root + os.sep) for root in _descriptor_allowed_roots()):
         raise ValueError(f"refusing path outside allowed descriptor roots: {abs_path}")
 
     path = Path(abs_path)
@@ -87,6 +84,7 @@ def _safe_read_text(path_arg: str) -> str:
 # ---------------------------------------------------------------------------
 # Lightweight textproto parser
 # ---------------------------------------------------------------------------
+
 
 def _tokenize(text: str) -> list[str]:
     """Split textproto into tokens: braces, colons, strings, and barewords."""
@@ -189,6 +187,7 @@ def _normalize_map(value: Any) -> dict[str, Any]:
 # FSD mode: build adjacency from Factory System Descriptor
 # ---------------------------------------------------------------------------
 
+
 def _build_adjacency_from_fsd(fsd: dict) -> tuple[dict[int, str], dict[int, set[int]]]:
     """Return (host_id_to_name, adjacency) from a parsed FSD textproto."""
     hosts_raw = fsd.get("hosts", [])
@@ -220,6 +219,7 @@ def _build_adjacency_from_fsd(fsd: dict) -> tuple[dict[int, str], dict[int, set[
 # ---------------------------------------------------------------------------
 # Cabling + deployment mode
 # ---------------------------------------------------------------------------
+
 
 def _resolve_leaf_host_ids(
     instance: dict,
