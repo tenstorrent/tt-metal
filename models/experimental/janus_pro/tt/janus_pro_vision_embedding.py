@@ -59,7 +59,7 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         self.pos_emb_weights = ttnn.as_tensor(
             positional_embedding,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -72,7 +72,9 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         Returns:
             embeddings: ttnn.Tensor of shape (B, num_patches, hidden_dim)
         """
-        patch_embeddings = self.patch_embed(pixel_values)  # Returns [1, B, num_patches, hidden_dim]
+        # Conv2d patch returns [1, B, num_patches, hidden_dim]; the leading 1 comes from the
+        # 4D linear weight inside TtJanusProConv2dPatch, so the batch axis is at index 1.
+        patch_embeddings = self.patch_embed(pixel_values)
         batch_size = patch_embeddings.shape[1]
         patch_embeddings = ttnn.reshape(patch_embeddings, (batch_size, -1, self.hidden_dim))
         positional_embeddings = ttnn.embedding(self.position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
