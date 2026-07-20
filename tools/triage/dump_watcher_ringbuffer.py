@@ -5,15 +5,15 @@
 
 """
 Usage:
-    dump_watcher_ringbuffer [--force-watcher-ringbuffer]
+    dump_watcher_ringbuffer [--skip-watcher-enabled-check]
 
 Options:
-    --force-watcher-ringbuffer  Dump the ring buffer even if watcher was not enabled in the run.
+    --skip-watcher-enabled-check  Dump the ring buffer without checking whether watcher was enabled in the run.
 
 Description:
     Dump watcher ring buffer contents for all cores, skipping cores with empty buffers. This ringbuffer can be written
     into by using the WATCHER_RING_BUFFER_PUSH macro in a kernel.
-    Skipped by default when watcher was not enabled; use --force-watcher-ringbuffer to run anyway.
+    Skipped by default when watcher was not enabled; use --skip-watcher-enabled-check to run anyway.
 
 Owner:
     jbaumanTT
@@ -31,7 +31,7 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache", "configuration_provider"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
 
 
@@ -113,7 +113,7 @@ def read_ring_buffer_for_block(
 
 def run(args, context: Context):
     """Entry point for triage framework."""
-    if not args["--force-watcher-ringbuffer"]:
+    if not args["--skip-watcher-enabled-check"]:
         config = get_configuration(args, context)
         if not config.get_bool("watcher_enabled", default=False):
             return None
