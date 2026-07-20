@@ -102,7 +102,75 @@ def test_tilize_sharded_wide_width(device):
 
 
 # ---------------------------------------------------------------------------
-# Clean-refusal contract for out-of-scope sharded cases (Refinement 2b).
+# Refinement 2b — interleaved <-> sharded crossover (split reader / writer).
+# HEIGHT-sharded, ROW_MAJOR, one-shard-per-core maps each shard to a CONTIGUOUS
+# global tile-row range; the split reader/writer reuse the interleaved kernels.
+# ---------------------------------------------------------------------------
+def _run_crossover(device, shape, sharded_mc, interleaved_mc, in_sharded, dtype=ttnn.bfloat16):
+    torch_in = _make_torch(dtype, shape)
+    in_mc = sharded_mc if in_sharded else interleaved_mc
+    out_mc = interleaved_mc if in_sharded else sharded_mc
+    tt_in = ttnn.from_torch(torch_in, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc)
+    tt_out = tilize(tt_in, memory_config=out_mc)
+    assert tt_out.layout == ttnn.TILE_LAYOUT
+    out = ttnn.to_torch(tt_out)
+    if dtype in (ttnn.uint32, ttnn.uint16, ttnn.int32):
+        assert torch.equal(torch_in.to(torch.int64), out.to(torch.int64)), "crossover integer identity mismatch"
+    else:
+        assert torch.equal(
+            torch_in, out
+        ), f"crossover identity mismatch: max_diff={(torch_in.float()-out.float()).abs().max()}"
+
+
+_CROSSOVER_CASES = [
+    # (shape, HEIGHT shard shape, grid_end) — 1 shard/core
+    pytest.param([1, 1, 512, 64], (128, 64), (3, 0), id="512x64-4c"),
+    pytest.param([1, 1, 256, 128], (64, 128), (3, 0), id="256x128-4c"),
+    pytest.param([2, 128, 96], (128, 96), (1, 0), id="r3-2c"),
+]
+
+
+@pytest.mark.parametrize("shape,shard_shape,grid_end", _CROSSOVER_CASES)
+def test_tilize_crossover_interleaved_to_sharded(device, shape, shard_shape, grid_end):
+    """DRAM interleaved RM input -> HEIGHT-sharded TILE output (split reader)."""
+    mc = _legacy_mc(_HEIGHT, _crs(((0, 0), grid_end)), shard_shape, _ROW)
+    _run_crossover(device, shape, mc, ttnn.DRAM_MEMORY_CONFIG, in_sharded=False)
+
+
+@pytest.mark.parametrize("shape,shard_shape,grid_end", _CROSSOVER_CASES)
+def test_tilize_crossover_sharded_to_interleaved(device, shape, shard_shape, grid_end):
+    """HEIGHT-sharded RM input -> DRAM interleaved TILE output (split writer)."""
+    mc = _legacy_mc(_HEIGHT, _crs(((0, 0), grid_end)), shard_shape, _ROW)
+    _run_crossover(device, shape, mc, ttnn.DRAM_MEMORY_CONFIG, in_sharded=True)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.uint32])
+def test_tilize_crossover_dtypes(device, dtype):
+    """Crossover works for the value-preserving dtypes too."""
+    mc = _legacy_mc(_HEIGHT, _crs(((0, 0), (3, 0))), (128, 64), _ROW)
+    _run_crossover(device, [1, 1, 512, 64], mc, ttnn.DRAM_MEMORY_CONFIG, in_sharded=False, dtype=dtype)
+    _run_crossover(device, [1, 1, 512, 64], mc, ttnn.DRAM_MEMORY_CONFIG, in_sharded=True, dtype=dtype)
+
+
+# ---------------------------------------------------------------------------
+# Refinement 2b — multi-shard-per-core, same-spec, even, no-padding (nd only).
+# A core owns k = n_shards/n_cores contiguous full shards, tilized as one bank.
+# (Legacy HEIGHT/WIDTH/BLOCK cannot hold >1 shard/core — from_torch rejects it.)
+# ---------------------------------------------------------------------------
+_MULTISHARD_CASES = [
+    pytest.param([4, 128, 128], (2, 64, 64), (1, 1), id="nd-8sh-4c"),  # 8 shards / 4 cores
+    pytest.param([1, 1, 512, 64], (1, 1, 128, 64), (1, 0), id="nd-4sh-2c"),  # 4 shards / 2 cores
+]
+
+
+@pytest.mark.parametrize("shape,shard_shape,grid_end", _MULTISHARD_CASES)
+def test_tilize_multishard_same_spec_nd(device, shape, shard_shape, grid_end):
+    mc = _nd_mc(_crs(((0, 0), grid_end)), shard_shape, _ROW)
+    _run_identity(device, shape, mc, ttnn.bfloat16)
+
+
+# ---------------------------------------------------------------------------
+# Clean-refusal contract for the cases STILL deferred (Refinement 2c).
 # These MUST refuse (not hang, not produce wrong output).
 # ---------------------------------------------------------------------------
 def test_sharded_single_core_excluded(device, expect_error):
@@ -119,11 +187,11 @@ def test_sharded_single_core_excluded(device, expect_error):
         tilize(t, memory_config=mc, use_multicore=False)
 
 
-def test_sharded_interleaved_crossover_refused(device, expect_error):
-    """Interleaved input -> sharded output is not yet wired (Refinement 2b)."""
-    out_mc = _legacy_mc(_HEIGHT, _crs(((0, 0), (3, 0))), (128, 64), _ROW)
+def test_width_crossover_refused(device, expect_error):
+    """WIDTH crossover needs column-chunked reads (Refinement 2c)."""
+    out_mc = _legacy_mc(_WIDTH, _crs(((0, 0), (3, 0))), (64, 128), _ROW)
     t = ttnn.from_torch(
-        torch.randn([1, 1, 512, 64]).bfloat16(),
+        torch.randn([1, 1, 64, 512]).bfloat16(),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -133,11 +201,11 @@ def test_sharded_interleaved_crossover_refused(device, expect_error):
         tilize(t, memory_config=out_mc)
 
 
-def test_sharded_multi_shard_per_core_refused(device, expect_error):
-    """8 shards over 4 cores (2 shards/core) is not yet wired (Refinement 2b)."""
+def test_padded_multishard_refused(device, expect_error):
+    """Cliff/padded shards (3 % 2 != 0, 160 % 64 != 0) are Refinement 2c."""
     mc = _nd_mc(_crs(((0, 0), (1, 1))), (2, 64, 64), _ROW)
     t = ttnn.from_torch(
-        torch.randn([4, 128, 128]).bfloat16(),
+        torch.randn([3, 160, 160]).bfloat16(),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
