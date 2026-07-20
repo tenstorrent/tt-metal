@@ -2728,7 +2728,7 @@ void ControlPlane::generate_intermesh_connectivity() {
 
     if (!generate_mapping_locally_ && *(this->distributed_context_.get().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
-        auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
+        auto exit_node_port_descriptors = this->generate_port_descriptor_table();
         intermesh_connections = this->convert_port_descriptors_to_intermesh_connections(exit_node_port_descriptors);
     } else {
         // Intermesh Connectivity generation for the single-host case
@@ -2751,9 +2751,8 @@ void ControlPlane::generate_intermesh_connectivity() {
     this->validate_requested_intermesh_connections();
 }
 
-// Propose PortDescriptors for neighbor cables (rank 0 pairs). One RoutingDirection per physical link; Z/NESW order from
-// MGD.
-std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_nodes(
+// Gather physical cable facts toward one neighbor; no logical port/direction is chosen here (rank 0 pairs later).
+std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes(
     const std::string& my_host,
     const std::string& neighbor_host,
     bool strict_binding,
@@ -2830,7 +2829,7 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
     return gathered_cables;
 }
 
-PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
+PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
     const auto& mesh_graph = *this->mesh_graph_;
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
@@ -2882,7 +2881,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
         auto neighbor_ports =
-            this->propose_port_descriptors_for_exit_nodes(my_host, neighbor_host, strict_binding, requested_exit_nodes);
+            this->gather_intermesh_cables_for_exit_nodes(my_host, neighbor_host, strict_binding, requested_exit_nodes);
         // A host may connect to multiple neighbor hosts on the same logical mesh (e.g. pod
         // boundary spanning several machines). Append per-neighbor discoveries instead of
         // overwriting the previous neighbor's ports.
@@ -3654,7 +3653,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
             auto asic_id = this->cluster_.get().get_unique_chip_ids().at(physical_chip_id);
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 
-            // Same rule as propose_port_descriptors_for_exit_nodes: one dst chip per (src, neighbor mesh) on same-host
+            // Same rule as gather_intermesh_cables_for_exit_nodes: one dst chip per (src, neighbor mesh) on same-host
             // PSD.
             std::unordered_map<MeshId, std::unordered_map<ChipId, std::size_t>> cables_per_neighbor_mesh_per_chip;
             for (const auto& asic_neighbor : asic_neighbors) {

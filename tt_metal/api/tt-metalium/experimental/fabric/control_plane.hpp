@@ -484,15 +484,16 @@ private:
 
     // Gather physical inter-mesh cables toward one neighbor host (no port/direction assignment; that
     // is deferred to rank-0 pairing which sees both endpoints of every cable).
-    std::vector<PortDescriptor> propose_port_descriptors_for_exit_nodes(
+    std::vector<PortDescriptor> gather_intermesh_cables_for_exit_nodes(
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,
         const std::unordered_set<FabricNodeId>& requested_exit_nodes);
 
     // Multi-Host Intermesh Connectivity Helper Function:
-    // Fully annotate local physical exit nodes in logical space (src/dst mesh id, direction, channel id)
-    PortDescriptorTable generate_port_descriptors_for_exit_nodes();
+    // Build this mesh's PortDescriptorTable by gathering cables toward every requested neighbor mesh.
+    // Physical facts only; rank-0 pairing assigns logical ports/directions later.
+    PortDescriptorTable generate_port_descriptor_table();
 
     // Multi-Host Intermesh Connectivity Helper Function:
     // If the user has specified the logical devices to connect between meshes, this function will return
