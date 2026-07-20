@@ -9,12 +9,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from nop_injector.helper import item_key, nop_thread, work_dir
+from nop_injector.helper import (
+    counts_csv,
+    item_key,
+    nop_thread,
+    require_under,
+    rm_tree,
+    work_dir,
+)
 
 
 def main() -> int:
@@ -26,14 +32,21 @@ def main() -> int:
     )  # e.g. 1,2,...,100
     args = p.parse_args()
 
-    ttnop = Path(os.environ.get("TTNOP", ""))
+    # Absolute binary path; argv list only (no shell) — counts/thread validated below.
+    ttnop = Path(os.environ.get("TTNOP", "")).expanduser().resolve()
     if not args.counts or not ttnop.is_file():
         return 1
 
-    thread = nop_thread()  # which ELF gets NOP injection
-    entries = []
+    try:
+        counts = counts_csv(args.counts)  # digits / ranges only
+        thread = nop_thread()  # safelist: unpack|math|pack
+        nodeids_path = require_under(args.nodeids)
+        case_list_path = require_under(args.case_list)
+    except ValueError:
+        return 1
 
-    for nodeid in args.nodeids.read_text().splitlines():
+    entries = []
+    for nodeid in nodeids_path.read_text().splitlines():
         nodeid = nodeid.strip()
         if not nodeid:
             continue
@@ -44,29 +57,31 @@ def main() -> int:
         if not (work / "meta.json").is_file():
             continue
         # Emit perturbed ELF sets under work/batch/n<count>/
-        batch = work / "batch"
-        shutil.rmtree(batch, ignore_errors=True)
+        batch = require_under(work / "batch")
+        rm_tree(batch)
         batch.mkdir(parents=True)
+        base_dir = require_under(work / "base_elfs")
         # OpenMP lives inside ttnop: parse base once, patch all counts in parallel
         r = subprocess.run(
             [
                 str(ttnop),
                 "batch",
                 "--base-dir",
-                str(work / "base_elfs"),  # base ELFs from prepare
+                str(base_dir),
                 "--out-root",
                 str(batch),
                 "--thread",
                 thread,
                 "--counts",
-                args.counts,
+                counts,
             ],
+            shell=False,
             stdout=subprocess.DEVNULL,
         )
         if r.returncode == 0:
             entries.append({"nodeid": nodeid, "key": key, "work": str(work)})
 
-    args.case_list.write_text(json.dumps(entries, indent=2) + "\n")
+    case_list_path.write_text(json.dumps(entries, indent=2) + "\n")
     return 0 if entries else 1  # non-zero → shell sets rc / aborts consume
 
 

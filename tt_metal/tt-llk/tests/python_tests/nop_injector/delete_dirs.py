@@ -14,7 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from nop_injector.helper import load_case_list, rm_tree
+from nop_injector.helper import load_case_list, require_under, rm_tree
 
 
 def main() -> int:
@@ -26,7 +26,7 @@ def main() -> int:
     # Walk cases that made it through the program and delete their work trees.
     n = 0
     for e in load_case_list(args.case_list):
-        work = Path(e["work"])
+        work = require_under(e["work"])
         if work.exists():
             rm_tree(work)
             n += 1

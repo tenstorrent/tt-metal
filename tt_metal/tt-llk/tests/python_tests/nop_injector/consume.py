@@ -33,6 +33,7 @@ from nop_injector.helper import (
     parse_counts,
     phase,
     record_fail,
+    require_under,
     rm_tree,
 )
 
@@ -100,7 +101,7 @@ def pytest_collection_modifyitems(session, config, items):
     new_items = []
     for item in selected:
         entry = by_nodeid[item.nodeid]
-        work = Path(entry["work"])
+        work = require_under(entry["work"])
         meta_path = work / "meta.json"
         if not meta_path.is_file():
             raise RuntimeError(f"consume: missing {meta_path}")
@@ -141,7 +142,7 @@ def pytest_runtest_call(item):
     keep = keep_elfs()
 
     # Perturbed ELF set produced by ttnop batch for this count.
-    src = work / "batch" / f"n{n}"
+    src = require_under(work / "batch" / f"n{n}")
     if not (src / f"{thread}.elf").is_file():
         message = f"n{n}\tFAIL-ERR\tmissing perturbed ELF set at {src}"
         record_fail(f"{base_nodeid}::n{n}", f"{message}\n")
