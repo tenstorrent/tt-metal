@@ -17,6 +17,14 @@ def clear_runtime_records():
     auto_matmul.AutoMatmulCache.clear_runtime()
 
 
+@pytest.fixture
+def minimal_matmul_enabled(monkeypatch):
+    # minimal_matmul candidates are opt-in; enable them so the shape/bias gating
+    # logic can be exercised directly.
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_ENABLE_MINIMAL", "1")
+    yield
+
+
 def _make_signature():
     return auto_matmul.AutoMatmulSignature(
         arch="wormhole_b0",
@@ -134,7 +142,18 @@ def test_extract_mkn_uses_broadcasted_batch_shape():
     assert auto_matmul._extract_mkn((1, 32, 64), (8, 64, 128), False, False) == (256, 64, 128)
 
 
-def test_linear_bias_broadcast_that_changes_output_shape_disables_minimal_candidates():
+def test_minimal_candidates_are_opt_in_and_off_by_default(monkeypatch):
+    monkeypatch.delenv("TTNN_AUTO_MATMUL_ENABLE_MINIMAL", raising=False)
+    assert auto_matmul._minimal_matmul_enabled() is False
+    # Master switch off: the gate short-circuits regardless of a valid shape.
+    assert auto_matmul._can_use_minimal_matmul_common(_make_signature(), bias=None) is False
+
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_ENABLE_MINIMAL", "1")
+    assert auto_matmul._minimal_matmul_enabled() is True
+    assert auto_matmul._can_use_minimal_matmul_common(_make_signature(), bias=None) is True
+
+
+def test_linear_bias_broadcast_that_changes_output_shape_disables_minimal_candidates(minimal_matmul_enabled):
     signature = _make_linear_signature(bias_shape=(1, 1, 512))
     bias = SimpleNamespace(shape=(1, 1, 512), dtype="bfloat16", layout="Layout.TILE")
 
@@ -144,7 +163,9 @@ def test_linear_bias_broadcast_that_changes_output_shape_disables_minimal_candid
 
 
 @pytest.mark.parametrize("bias_shape", [(512,), (1, 512)])
-def test_linear_bias_broadcast_that_preserves_output_shape_allows_minimal_candidates(bias_shape):
+def test_linear_bias_broadcast_that_preserves_output_shape_allows_minimal_candidates(
+    bias_shape, minimal_matmul_enabled
+):
     signature = _make_linear_signature(bias_shape=bias_shape)
     bias = SimpleNamespace(shape=bias_shape, dtype="bfloat16", layout="Layout.TILE")
 
@@ -152,7 +173,7 @@ def test_linear_bias_broadcast_that_preserves_output_shape_allows_minimal_candid
     assert auto_matmul._can_use_minimal_matmul_common(signature, bias)
 
 
-def test_tiny_tile_shapes_disable_minimal_candidates():
+def test_tiny_tile_shapes_disable_minimal_candidates(minimal_matmul_enabled):
     signature = _make_signature()
     signature = dataclasses.replace(
         signature,
@@ -165,7 +186,7 @@ def test_tiny_tile_shapes_disable_minimal_candidates():
     assert not auto_matmul._can_use_minimal_matmul_common(signature, bias=None)
 
 
-def test_standard_tile_shapes_allow_minimal_candidates():
+def test_standard_tile_shapes_allow_minimal_candidates(minimal_matmul_enabled):
     signature = _make_signature()
 
     assert auto_matmul._uses_standard_tile_shape(signature.input_tensor_a)
