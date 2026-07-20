@@ -5,6 +5,7 @@
 #include "layernorm_nanobind.hpp"
 
 #include <optional>
+#include <variant>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -247,150 +248,106 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
         .def_rw("recip_tensor", &ttnn::prim::LayerNormInputs::recip_tensor);
 }
 
-void bind_normalization_layernorm_device_operation(nb::module_& mod) {
-    nb::class_<ttnn::prim::LayerNormDeviceOperation>(mod, "LayerNormDeviceOperation")
-        .def_static(
-            "compute_program_hash",
-            [](const ttnn::prim::LayerNormParams& attrs, const ttnn::prim::LayerNormInputs& tensors) {
-                return ttnn::device_operation::detail::compute_program_hash<ttnn::prim::LayerNormDeviceOperation>(
-                    attrs, tensors);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Compute the program hash from operation attributes and tensor metadata.
-            Same hash used by the C++ program cache.  Does not run the factory.
-            )doc")
-        .def_static(
-            "create_output_tensors",
-            &ttnn::prim::LayerNormDeviceOperation::create_output_tensors,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Creates output tensors for the layer norm operation.
+// Fusion-framework façade.
+//
+// The experimental fusion framework (models/experimental/ops/descriptors) is the sole consumer of
+// layernorm's device-op internals.  It used to reach directly into framework symbols
+// (LayerNormDeviceOperation::compute_program_hash / select_program_factory,
+// <Factory>::create_descriptor / default_core_range).  Those are framework concepts whose shape
+// changes under the Metal 2.0 migration (custom program hash removed, create_descriptor becomes
+// create_program_artifacts, the pybind-only core_range_set param / default_core_range hook are
+// dropped), which would silently break the fusion path.
+//
+// These free functions are the ONLY Python-facing surface the fusion framework talks to.  They are
+// owned by this binding, not by the framework: their NAMES and SIGNATURES are stable, and the
+// Metal 2.0 migration only has to re-point their C++ bodies (e.g. wrap a spec hash, lower
+// ProgramArtifacts to a ProgramDescriptor).  Python and the fusion framework stay untouched.  Do
+// NOT push any of this back into the op's device_operation.hpp — it is a binding-layer concern.
+void bind_normalization_layernorm_fusion_facade(nb::module_& mod) {
+    mod.def(
+        "layer_norm_program_cache_key",
+        [](const ttnn::prim::LayerNormParams& operation_attributes, const ttnn::prim::LayerNormInputs& tensor_args) {
+            return ttnn::device_operation::detail::compute_program_hash<ttnn::prim::LayerNormDeviceOperation>(
+                operation_attributes, tensor_args);
+        },
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"),
+        R"doc(
+        Fusion façade: program-cache key for a layer norm branch.
 
-            This creates appropriately configured output tensors based on the operation
-            attributes and input tensors. For sharded operations with inplace=True,
-            returns the input tensor.
+        Currently the C++ program hash used by the program cache.  Does not run the factory.
+        Migration re-points the body (e.g. to a spec hash) without changing this signature.
+        )doc");
 
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters.
-                tensor_args (LayerNormInputs): Input tensors.
+    mod.def(
+        "layer_norm_create_output_tensors",
+        &ttnn::prim::LayerNormDeviceOperation::create_output_tensors,
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"),
+        R"doc(
+        Fusion façade: allocate the output tensor(s) for a layer norm branch.
 
-            Returns:
-                ttnn.Tensor: The output tensor for the layer norm operation.
-            )doc")
-        .def_static(
-            "compute_output_specs",
-            &ttnn::prim::LayerNormDeviceOperation::compute_output_specs,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Computes the output tensor specification for the layer norm operation.
+        For sharded inplace operations this returns the input tensor.
 
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters.
-                tensor_args (LayerNormInputs): Input tensors.
+        Args:
+            operation_attributes (LayerNormParams): Operation parameters.
+            tensor_args (LayerNormInputs): Input tensors.
 
-            Returns:
-                ttnn.TensorSpec: The output tensor specification.
-            )doc")
-        .def_static(
-            "select_program_factory",
-            &ttnn::prim::LayerNormDeviceOperation::select_program_factory,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Selects the appropriate program factory based on input tensor's memory layout.
+        Returns:
+            ttnn.Tensor: The output tensor for the layer norm operation.
+        )doc");
 
-            Returns LayerNormShardedProgramFactory for sharded inputs,
-            LayerNormMultiCoreProgramFactory for non-sharded inputs.
+    mod.def(
+        "layer_norm_default_core_range",
+        &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
+        nb::arg("device"),
+        R"doc(
+        Fusion façade: default core range for a non-sharded (interleaved) layer norm branch.
 
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters.
-                tensor_args (LayerNormInputs): Input tensors.
+        Args:
+            device: The device to get the compute grid from.
 
-            Returns:
-                Union[LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory]:
-                    The appropriate program factory for the input tensor.
-            )doc");
-}
+        Returns:
+            ttnn.CoreRangeSet: The default core range covering the device's compute grid.
+        )doc");
 
-void bind_normalization_layernorm_program_factory(nb::module_& mod) {
-    nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = nb::none(),
-            R"doc(
-            Creates a program descriptor for layer norm multi-core operation.
+    mod.def(
+        "layer_norm_create_program_descriptor",
+        [](const ttnn::prim::LayerNormParams& operation_attributes,
+           const ttnn::prim::LayerNormInputs& tensor_args,
+           Tensor& tensor_return_value,
+           const std::optional<CoreRangeSet>& core_range_set) {
+            // Fold factory selection + descriptor creation behind one entry point so the fusion
+            // framework never touches the (migration-unstable) factory objects directly.
+            auto factory =
+                ttnn::prim::LayerNormDeviceOperation::select_program_factory(operation_attributes, tensor_args);
+            return std::visit(
+                [&](auto&& program_factory) {
+                    return program_factory.create_descriptor(
+                        operation_attributes, tensor_args, tensor_return_value, core_range_set);
+                },
+                factory);
+        },
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"),
+        nb::arg("tensor_return_value"),
+        nb::arg("core_range_set") = nb::none(),
+        R"doc(
+        Fusion façade: build the ProgramDescriptor for a layer norm branch.
 
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                tensor_args (LayerNormInputs): Input tensors including input, residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference.
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set to restrict the program to specific cores.
-                    If not provided, uses device's compute grid.
+        Selects the interleaved vs. sharded factory internally (matching
+        LayerNormDeviceOperation::select_program_factory) and returns a runnable ProgramDescriptor.
 
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
-            )doc")
-        .def_static(
-            "default_core_range",
-            &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
-            nb::arg("device"),
-            R"doc(
-            Returns the default core range for non-sharded LayerNorm based on device compute grid.
+        Args:
+            operation_attributes (LayerNormParams): Operation parameters (norm type, epsilon, memory config, ...).
+            tensor_args (LayerNormInputs): Input tensors (input, residual, weight, bias, stats, recip).
+            tensor_return_value (ttnn.Tensor): Output tensor reference.
+            core_range_set (ttnn.CoreRangeSet, optional): Core range override. For sharded inputs, when
+                provided, the shard spec cores are validated to lie within it.
 
-            Args:
-                device: The device to get the compute grid from.
-
-            Returns:
-                ttnn.CoreRangeSet: The default core range covering the device's compute grid.
-            )doc");
-
-    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt,
-            R"doc(
-            Creates a program descriptor for sharded layer norm operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                    Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
-                tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set. If provided, validates that the
-                    sharded tensor's shard spec cores lie entirely within this core range set. Raises an error if any
-                    shard spec core is outside the provided range.
-
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
-
-            Raises:
-                RuntimeError: If core_range_set is provided and the sharded tensor's shard spec cores are not
-                    entirely contained within it.
-            )doc");
+        Returns:
+            ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
+        )doc");
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {
@@ -398,8 +355,7 @@ void bind_normalization_layernorm(nb::module_& mod) {
     bind_normalization_layernorm_program_config(mod);
     bind_normalization_layernorm_operation(mod);
     bind_normalization_layernorm_params_and_inputs(mod);
-    bind_normalization_layernorm_device_operation(mod);
-    bind_normalization_layernorm_program_factory(mod);
+    bind_normalization_layernorm_fusion_facade(mod);
 }
 
 }  // namespace ttnn::operations::normalization::detail

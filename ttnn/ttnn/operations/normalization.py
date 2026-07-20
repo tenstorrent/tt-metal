@@ -131,9 +131,12 @@ LayerNormType = ttnn._ttnn.operations.normalization.LayerNormType
 DistributedLayerNormStage = ttnn._ttnn.operations.normalization.DistributedLayerNormStage
 LayerNormParams = ttnn._ttnn.operations.normalization.LayerNormParams
 LayerNormInputs = ttnn._ttnn.operations.normalization.LayerNormInputs
-LayerNormDeviceOperation = ttnn._ttnn.operations.normalization.LayerNormDeviceOperation
-LayerNormMultiCoreProgramFactory = ttnn._ttnn.operations.normalization.LayerNormMultiCoreProgramFactory
-LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactory
+# Fusion-framework façade (see models/experimental/ops/descriptors/normalization/_utils.py).
+# Binding-owned, migration-stable entry points; do not reintroduce direct device-op/factory bindings.
+layer_norm_program_cache_key = ttnn._ttnn.operations.normalization.layer_norm_program_cache_key
+layer_norm_create_output_tensors = ttnn._ttnn.operations.normalization.layer_norm_create_output_tensors
+layer_norm_default_core_range = ttnn._ttnn.operations.normalization.layer_norm_default_core_range
+layer_norm_create_program_descriptor = ttnn._ttnn.operations.normalization.layer_norm_create_program_descriptor
 layernorm_default_compute_config = ttnn._ttnn.operations.normalization.layernorm_default_compute_config
 rmsnorm_default_compute_config = ttnn._ttnn.operations.normalization.rmsnorm_default_compute_config
 create_layernorm_program_config = ttnn._ttnn.operations.normalization.create_layernorm_program_config
