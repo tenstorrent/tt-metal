@@ -103,8 +103,8 @@ void kernel_main() {
                 epsilon_cb,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Rsqrt<ckl::Approx::Exact, use_legacy_rsqrt ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<reduce_result_cb>{});
 
@@ -119,13 +119,9 @@ void kernel_main() {
                 reduce_result_cb,
                 mul_rms_result_cb,
                 ckl::BroadcastDim::Col,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_size, block_size));
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
 
             /**
              * Weight (gamma) fusion
@@ -139,15 +135,13 @@ void kernel_main() {
                         weight_cb,
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row,
-                        ckl::InputLifecycle::Chunked,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block,
-                        ckl::OperandKind::Block,
-                        ckl::TileOffset::Unset,
-                        ckl::TileOffset::Set>{0u, col_tile},
-                    ckl::PackTile<mul_weight_result_cb, ckl::OutputLifecycle::Chunked>{});
+                        ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::TileOffset::Set)>{0u, col_tile},
+                    ckl::PackTile<mul_weight_result_cb, ckl::output(ckl::OutputLifecycle::Chunked)>{});
             }
 
             /**
@@ -236,12 +230,9 @@ void kernel_main() {
                     rotated_input_cb,
                     output_cb,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::Bulk,
-                    ckl::InputLifecycle::Bulk,
-                    ckl::OutputLifecycle::Bulk,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
-                    ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block_size, block_size));
+                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
 
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);

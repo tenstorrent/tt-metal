@@ -85,13 +85,9 @@ void kernel_main() {
             cb_max,
             cb_x_m_max,
             ckl::BroadcastDim::Row,
-            ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            ckl::OperandKind::Block,
-            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Ht));
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Bulk),
+            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(Ht));
 
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef SOFTMAX
@@ -104,9 +100,7 @@ void kernel_main() {
             ckl::CopyTile<
                 cb_x_m_max,
                 ckl::Dst::D0,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::CopyTileReconfig::Input,
-                ckl::OperandKind::Block>{},
+                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block)>{},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<cb_exps>{});
@@ -116,13 +110,14 @@ void kernel_main() {
             ckl::CopyTile<
                 cb_x_m_max,
                 ckl::Dst::D0,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::CopyTileReconfig::Input,
-                ckl::OperandKind::Block,
-                ckl::TileOffset::Set>{Ht - 1},
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set)>{Ht - 1},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+            ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
             ckl::PackTile<cb_exps>{});
 
@@ -167,26 +162,18 @@ void kernel_main() {
             cb_recipsumexps,
             cb_out0,
             ckl::BroadcastDim::Row,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            ckl::OperandKind::Block,
-            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Ht));
+            ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Bulk),
+            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(Ht));
 #else
         ckl::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
             ckl::BroadcastDim::Row,
-            ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            ckl::OperandKind::Block,
-            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Ht));
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Bulk),
+            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(Ht));
 #endif
         cb_x_m_max_obj.pop_front(Ht);
     }

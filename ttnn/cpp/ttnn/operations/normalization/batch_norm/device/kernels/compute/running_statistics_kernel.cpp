@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"                      // binary_op_init_common (BIG init)
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"        // BinaryFpu, DestReuseBinary, PackTile
+#include "api/compute/eltwise_binary.h"                // binary_op_init_common (BIG init)
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"  // BinaryFpu, DestReuseBinary, PackTile
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
@@ -30,8 +30,8 @@ ALWI void update_running_stat() {
             cb_momentum,
             BinaryFpuOp::Sub,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::CallerManaged>{},                                           // D0 = 1 - momentum
+            ckl::input(ckl::InputLifecycle::CallerManaged),
+            ckl::input(ckl::InputLifecycle::CallerManaged)>{},                               // D0 = 1 - momentum
         ckl::DestReuseBinary<cb_old, BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1 - momentum) *
                                                                                              // old_stat
         ckl::BinaryFpu<
@@ -39,13 +39,13 @@ ALWI void update_running_stat() {
             cb_batch,
             BinaryFpuOp::Mul,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::Streaming,
-            ckl::BinaryDataFormatReconfig::Input,
+            ckl::input(ckl::InputLifecycle::CallerManaged),
+            ckl::input(),
             D::D1>{},                           // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
-        ckl::PackTile<cb_updated, ckl::OutputLifecycle::Bulk>{},
-        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, ckl::OutputLifecycle::CallerManaged>>{});
+        ckl::PackTile<cb_updated, ckl::output(ckl::OutputLifecycle::Bulk)>{},
+        ckl::
+            OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, ckl::output(ckl::OutputLifecycle::CallerManaged)>>{});
 }
 
 void kernel_main() {

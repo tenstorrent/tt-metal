@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
@@ -29,14 +29,20 @@ void kernel_main() {
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
-        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D0,
+            ckl::input(ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled)>{},
         ckl::Hardsigmoid<ckl::Dst::D0>{},
         ckl::OptionalChainElement<
             kIsFloat32,
-            ckl::CopyTile<cb_input, ckl::Dst::D1, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>>{},
+            ckl::CopyTile<
+                cb_input,
+                ckl::Dst::D1,
+                ckl::input(ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled)>>{},
         ckl::OptionalChainElement<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
         ckl::OptionalChainElement<
             kIsFloat,
             ckl::DestReuseBinary<cb_input, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{},
-        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

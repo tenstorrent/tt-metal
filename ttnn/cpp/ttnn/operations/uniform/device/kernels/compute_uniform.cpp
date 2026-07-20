@@ -27,5 +27,5 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(num_tiles),
         RandTile<Dst::D0>{f2u_from.u, f2u_scale.u, seed},
-        PackTile<intermed_cb_id, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+        PackTile<intermed_cb_id, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
 }

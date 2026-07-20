@@ -6,7 +6,7 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillInt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"  // FillInt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_int.hpp"
 
 namespace ckl = compute_kernel_lib;
@@ -28,24 +28,18 @@ void kernel_main() {
         ckl::CopyTile<
             cb_in0,
             ckl::Dst::D0,
-            ckl::InputLifecycle::Chunked,
-            ckl::CopyTileReconfig::None,
-            ckl::OperandKind::Block>{},
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
         ckl::CopyTile<
             cb_in1,
             ckl::Dst::D1,
-            ckl::InputLifecycle::Chunked,
-            ckl::CopyTileReconfig::None,
-            ckl::OperandKind::Block>{},
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
         ckl::CopyTile<
             cb_in2,
             ckl::Dst::D2,
-            ckl::InputLifecycle::Chunked,
-            ckl::CopyTileReconfig::None,
-            ckl::OperandKind::Block>{},
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
         ckl::FillInt<ADDCMUL_DATA_FORMAT, ckl::Dst::D3>{scalar_arg},
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D3>{},  // D3 = scalar*in1
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2>{},  // D2 = D3*in2
         ckl::AddIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},  // D0 = in0 + D2
-        ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
 }

@@ -80,7 +80,7 @@ void kernel_main() {
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                        compute_kernel_lib::input(compute_kernel_lib::InputLifecycle::CallerManaged)>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<cb_masked_input>{});
                 cb_input = cb_masked_input;

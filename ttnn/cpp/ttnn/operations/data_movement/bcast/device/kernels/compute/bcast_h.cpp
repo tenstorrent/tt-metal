@@ -25,11 +25,12 @@ void kernel_main() {
             cb_rhs,
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::BinaryDataFormatReconfig::None>{},
+            compute_kernel_lib::input(
+                compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            compute_kernel_lib::input(
+                compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>{},
         compute_kernel_lib::PackTile<
             cb_out,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::output(
+                compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>{});
 }

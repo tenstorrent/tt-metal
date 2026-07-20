@@ -93,36 +93,30 @@ void kernel_main() {
             sin_cb,
             sin_interm_cb,
             ckl::BroadcastDim::Row,
-            ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::HeldBulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::None,
-            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+            ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+            ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
         ckl::mul<
             in_cb,
             cos_cb,
             cos_interm_cb,
             ckl::BroadcastDim::Row,
-            ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::HeldBulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::None,
-            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+            ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+            ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
         ckl::add<
             cos_interm_cb,
             sin_interm_cb,
             out_cb,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::None,
-            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+            ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
     }
 
     // Done with the sin/cos matrices, so remove from CB

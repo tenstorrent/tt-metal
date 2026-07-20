@@ -19,11 +19,9 @@ ALWI void mul_tiles_chain() {
         in1_cb,
         out_cb,
         ckl::BroadcastDim::None,
-        ckl::InputLifecycle::Streaming,
-        ckl::InputLifecycle::Streaming,
-        ckl::OutputLifecycle::Streaming,
-        ckl::BinaryDataFormatReconfig::None,
-        ckl::PackTileReconfig::None>(ckl::EltwiseShape::single());
+        ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+        ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+        ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(ckl::EltwiseShape::single());
 }
 
 void kernel_main() {
@@ -54,8 +52,8 @@ void kernel_main() {
                     scalar_cb,
                     rotated_in_interm_cb,
                     ckl::BroadcastDim::Scalar,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb, sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 mul_tiles_chain<rotated_in_interm_cb, sin_cb, sin_interm_cb>();

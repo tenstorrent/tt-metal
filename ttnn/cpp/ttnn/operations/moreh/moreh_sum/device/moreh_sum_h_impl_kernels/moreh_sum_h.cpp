@@ -62,7 +62,7 @@ void kernel_main() {
                 // reconfig_data_format_srca(cb_input) on entry. The chain's
                 // per-element fold emits reconfig per CopyTile (Input mode) which
                 // matches the FP32 path and is a no-op transition for bf16.
-                // pack_reconfig is also FP32-only in original; PackTileReconfig::Output
+                // pack_reconfig is also FP32-only in original; enabling output reconfig
                 // emits unconditional pack reconfig — same effective behavior since
                 // chain's prev-CB elision handles the no-op case at compile time.
                 // cb_input InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside);
@@ -70,7 +70,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_input>{},
-                    ckl::CopyTile<cb_mask_h, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+                    ckl::CopyTile<cb_mask_h, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<cb_masked_input>{});
 

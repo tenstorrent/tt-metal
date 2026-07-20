@@ -28,11 +28,9 @@ void kernel_main() {
             cb_rhs,
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM,
-            ckl::InputLifecycle::Streaming,    // cb_lhs: one tile per (row,col)
-            ckl::InputLifecycle::OuterStream,  // cb_rhs: streamed broadcast, one per row
-            ckl::BinaryDataFormatReconfig::None,
-            ckl::Dst::D0,
-            ckl::OperandKind::Scalar,     // cb_lhs reads the front
-            ckl::OperandKind::Scalar>{},  // cb_rhs reads the front (advances per row)
-        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+            // cb_lhs: one tile per (row,col)
+            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            // cb_rhs: streamed broadcast, one per row
+            ckl::input(ckl::InputLifecycle::OuterStream, ckl::DataFormatReconfig::Disabled)>{},
+        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

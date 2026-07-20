@@ -42,7 +42,7 @@ void kernel_main() {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::tiles(onetile),
                         ckl::CopyTile<cb_dy>{},
-                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
                         ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                         ckl::PackTile<cb_add>{});
                 } else {
@@ -50,7 +50,7 @@ void kernel_main() {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::tiles(onetile),
                         ckl::CopyTile<cb_dy>{},
-                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
                         ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                         ckl::PackTile<cb_inter0>{});
                     ckl::add<cb_add, cb_inter0, cb_add>(ckl::EltwiseShape::tiles(onetile));
@@ -76,8 +76,8 @@ void kernel_main() {
                 cb_sum,
                 cb_inter2,
                 ckl::BroadcastDim::Row,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
             ckl::sub<cb_dy, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
         }
 
@@ -89,7 +89,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::BinaryFpu<cb_y, cb_dy, ckl::BinaryFpuOp::Mul>{},
-                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<cb_ydy>{});
             } else {
@@ -112,8 +112,8 @@ void kernel_main() {
                 cb_sum,
                 cb_inter2,
                 ckl::BroadcastDim::Row,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #ifdef SOFTMAX
             ckl::mul<cb_y, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
 #else

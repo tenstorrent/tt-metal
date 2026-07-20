@@ -51,23 +51,16 @@ void kernel_main() {
                 cb_res,
                 cb_inp,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::Bulk,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Block>(squaring_shape);
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::output(ckl::OutputLifecycle::Bulk)>(squaring_shape);
         }
 
         ckl::square<
             cb_inp,
             cb_x2,
-            ckl::InputLifecycle::Pipelined,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            ckl::OperandKind::Block>(squaring_shape);
+            ckl::input(ckl::InputLifecycle::Pipelined, ckl::OperandKind::Block),
+            ckl::output(ckl::OutputLifecycle::Bulk)>(squaring_shape);
 
         ckl::reduce<
             PoolType::AVG,

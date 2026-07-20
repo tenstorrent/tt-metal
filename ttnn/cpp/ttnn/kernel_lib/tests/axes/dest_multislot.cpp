@@ -25,22 +25,8 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        BinaryFpu<
-            cb_a,
-            cb_b,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            input(InputLifecycle::Streaming),
-            input(InputLifecycle::Streaming),
-            Dst::D0>{},
-        BinaryFpu<
-            cb_c,
-            cb_e,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            input(InputLifecycle::Streaming),
-            input(InputLifecycle::Streaming),
-            Dst::D1>{},
+        BinaryFpu<cb_a, cb_b>{},
+        BinaryFpu<cb_c, cb_e, BinaryFpuOp::Add, BroadcastDim::None, input(), input(), Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_out, output(OutputLifecycle::Streaming), Dst::D0>{});
+        PackTile<cb_out>{});
 }

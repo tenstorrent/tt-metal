@@ -26,27 +26,13 @@ void kernel_main() {
     constexpr DestReuseType R = (reuse == 0) ? DestReuseType::DEST_TO_SRCA : DestReuseType::DEST_TO_SRCB;
     constexpr BinaryFpuOp OP = (op == 0) ? BinaryFpuOp::Add : ((op == 1) ? BinaryFpuOp::Sub : BinaryFpuOp::Mul);
 
-    using CbOnSrcA = DestReuseBinary<
-        cb_c,
-        BinaryFpuOp::Add,
-        DestReuseType::DEST_TO_SRCB,
-        input(InputLifecycle::Streaming),
-        Dst::D0,
-        Dst::D0>;
-    using CbOnSrcB = DestReuseBinary<
-        cb_c,
-        BinaryFpuOp::Add,
-        DestReuseType::DEST_TO_SRCA,
-        input(InputLifecycle::Streaming),
-        Dst::D0,
-        Dst::D0>;
+    using CbOnSrcA = DestReuseBinary<cb_c, BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCB>;
+    using CbOnSrcB = DestReuseBinary<cb_c, BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCA>;
     using ReconfigDisabled = DestReuseBinary<
         cb_c,
         BinaryFpuOp::Add,
         DestReuseType::DEST_TO_SRCA,
-        input(InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-        Dst::D0,
-        Dst::D0>;
+        input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>;
     static_assert(CbOnSrcA::reconfig_srca_dfb == cb_c && CbOnSrcA::reconfig_srcb_dfb == NO_PREV_DFB);
     static_assert(CbOnSrcB::reconfig_srca_dfb == NO_PREV_DFB && CbOnSrcB::reconfig_srcb_dfb == cb_c);
     static_assert(
@@ -54,16 +40,5 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
-    eltwise_chain(
-        EltwiseShape::tiles(n),
-        BinaryFpu<
-            cb_a,
-            cb_b,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            input(InputLifecycle::Streaming),
-            input(InputLifecycle::Streaming),
-            Dst::D0>{},
-        DestReuseBinary<cb_c, OP, R, input(InputLifecycle::Streaming), Dst::D0, Dst::D0>{},
-        PackTile<cb_out, output(OutputLifecycle::Streaming), Dst::D0>{});
+    eltwise_chain(EltwiseShape::tiles(n), BinaryFpu<cb_a, cb_b>{}, DestReuseBinary<cb_c, OP, R>{}, PackTile<cb_out>{});
 }

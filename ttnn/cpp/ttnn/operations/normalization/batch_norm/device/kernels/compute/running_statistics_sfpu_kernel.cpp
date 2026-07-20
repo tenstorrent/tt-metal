@@ -7,8 +7,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Typecast
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"      // Typecast
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
@@ -30,22 +30,20 @@ ALWI void update_running_stat() {
     constexpr auto STREAM = ckl::InputLifecycle::Streaming;
     constexpr auto OUT_CM = ckl::OutputLifecycle::CallerManaged;
     constexpr auto SCALAR = ckl::OperandKind::Scalar;
-    constexpr auto CP_IN = ckl::CopyTileReconfig::Input;
-    constexpr auto PK_OUT = ckl::PackTileReconfig::Output;
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
-        ckl::CopyTile<cb_one, D::D0, CM, CP_IN, SCALAR>{},
-        ckl::CopyTile<cb_momentum, D::D1, CM, CP_IN, SCALAR>{},
+        ckl::CopyTile<cb_one, D::D0, ckl::input(CM, SCALAR)>{},
+        ckl::CopyTile<cb_momentum, D::D1, ckl::input(CM, SCALAR)>{},
         SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
-        ckl::CopyTile<cb_old, D::D1, STREAM, CP_IN, SCALAR>{},
+        ckl::CopyTile<cb_old, D::D1, ckl::input(STREAM, SCALAR)>{},
         MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
-        ckl::CopyTile<cb_momentum, D::D1, CM, CP_IN, SCALAR>{},
-        ckl::CopyTile<cb_batch, D::D2, STREAM, CP_IN, SCALAR>{},
+        ckl::CopyTile<cb_momentum, D::D1, ckl::input(CM, SCALAR)>{},
+        ckl::CopyTile<cb_batch, D::D2, ckl::input(STREAM, SCALAR)>{},
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<cb_updated, ckl::OutputLifecycle::Bulk, PK_OUT>{},
-        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, OUT_CM, PK_OUT>>{});
+        ckl::PackTile<cb_updated, ckl::output(ckl::OutputLifecycle::Bulk)>{},
+        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, ckl::output(OUT_CM)>>{});
 }
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcCb, uint32_t DstCb>

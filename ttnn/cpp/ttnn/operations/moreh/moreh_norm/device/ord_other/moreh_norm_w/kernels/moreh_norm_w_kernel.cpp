@@ -5,10 +5,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs, Negative, Mask, MaskPosInf
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Abs, Negative, Mask, MaskPosInf
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_minmax.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"   // UnaryNe
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"  // UnaryNe
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"    // OptionalChainElement
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -62,7 +62,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_x>{},
-                    ckl::CopyTile<cb_mask_w, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+                    ckl::CopyTile<cb_mask_w, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
                     ckl::OptionalChainElement<minus_inf, ckl::MaskPosInf<ckl::Dst::D0>>{},
                     ckl::OptionalChainElement<!minus_inf, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>>{},
                     ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},

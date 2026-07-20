@@ -42,13 +42,15 @@ void kernel_main() {
                     cb_in0,
                     ckl::BinaryFpuOp::Add,
                     bcast_dim,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::BinaryDataFormatReconfig::None>>{},
+                    ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                    ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>>{},
             ckl::OptionalChainElement<
                 !has_bcast,
-                ckl::CopyTile<cb_in0, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>>{},
-            ckl::PackTile<cb_out0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+                ckl::CopyTile<
+                    cb_in0,
+                    ckl::Dst::D0,
+                    ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>>{},
+            ckl::PackTile<cb_out0, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
     }
     cb_in1_obj.pop_front(onetile);
 }

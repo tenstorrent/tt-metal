@@ -32,8 +32,7 @@ void kernel_main() {
             cb_rhs,
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM,
-            ckl::InputLifecycle::Streaming,
-            rhs_lifecycle,
-            ckl::BinaryDataFormatReconfig::None>{},
-        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::input(rhs_lifecycle, ckl::DataFormatReconfig::Disabled)>{},
+        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

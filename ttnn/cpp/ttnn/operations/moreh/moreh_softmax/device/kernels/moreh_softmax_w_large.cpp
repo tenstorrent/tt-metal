@@ -40,8 +40,8 @@ void kernel_main() {
         if (Wt == 1) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_in0, ckl::Dst::D0>{},
-                ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+                ckl::CopyTile<cb_in0>{},
+                ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
                 ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                 ckl::PackTile<cb_tmp>{});
 
@@ -54,8 +54,8 @@ void kernel_main() {
 
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_in0, ckl::Dst::D0>{},
-                ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+                ckl::CopyTile<cb_in0>{},
+                ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
                 ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                 ckl::PackTile<cb_tmp>{});
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
@@ -74,10 +74,10 @@ void kernel_main() {
                         cb_max,
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col,
-                        ckl::InputLifecycle::Streaming,
-                        ckl::InputLifecycle::HeldStream>{},
+                        ckl::input(),
+                        ckl::input(ckl::InputLifecycle::HeldStream)>{},
                     ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<cb_exps>{});
 #else
@@ -86,7 +86,7 @@ void kernel_main() {
                     ckl::CopyTile<cb_in0>{},
                     ckl::Negative<ckl::Dst::D0>{},
                     ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<cb_exps>{});
 #endif
@@ -99,8 +99,8 @@ void kernel_main() {
                         cb_max,
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col,
-                        ckl::InputLifecycle::Streaming,
-                        ckl::InputLifecycle::HeldStream>{},
+                        ckl::input(),
+                        ckl::input(ckl::InputLifecycle::HeldStream)>{},
                     ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                     ckl::PackTile<cb_exps>{});
 #else
@@ -111,8 +111,8 @@ void kernel_main() {
                         cb_max,
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col,
-                        ckl::InputLifecycle::Streaming,
-                        ckl::InputLifecycle::HeldStream>{},
+                        ckl::input(),
+                        ckl::input(ckl::InputLifecycle::HeldStream)>{},
                     ckl::Negative<ckl::Dst::D0>{},
                     ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                     ckl::PackTile<cb_exps>{});
@@ -169,15 +169,15 @@ void kernel_main() {
                 cb_max,
                 cb_tmp,
                 ckl::BroadcastDim::Col,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
             ckl::sub<
                 cb_tmp,
                 cb_recipsumexps,
                 cb_out0,
                 ckl::BroadcastDim::Col,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #else
 #endif
 #else
@@ -189,8 +189,8 @@ void kernel_main() {
                     cb_max,
                     ckl::BinaryFpuOp::Sub,
                     ckl::BroadcastDim::Col,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldStream>{},
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_exps>{});
             ckl::mul<
@@ -198,8 +198,8 @@ void kernel_main() {
                 cb_recipsumexps,
                 cb_out0,
                 ckl::BroadcastDim::Col,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #else
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
@@ -208,8 +208,8 @@ void kernel_main() {
                     cb_max,
                     ckl::BinaryFpuOp::Sub,
                     ckl::BroadcastDim::Col,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldStream>{},
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
                 ckl::Negative<ckl::Dst::D0>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_exps>{});
@@ -218,8 +218,8 @@ void kernel_main() {
                 cb_recipsumexps,
                 cb_out0,
                 ckl::BroadcastDim::Col,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #endif
 #endif
         }

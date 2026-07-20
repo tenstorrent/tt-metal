@@ -98,14 +98,12 @@ void kernel_main() {
                 cb_param_in,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Set,
-                ckl::TileOffset::Unset>{weight_decay_tile, 0u},
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{weight_decay_tile, 0u},
             ckl::PackTile<cb_tmp1>{});
 
         ckl::mul<
@@ -113,16 +111,14 @@ void kernel_main() {
             cb_tmp1,
             cb_tmp1,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::Streaming>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
         ckl::sub<
             cb_param_in,
             cb_tmp1,
             tmp_cb_param,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::Streaming>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
@@ -134,23 +130,16 @@ void kernel_main() {
                 cb_scalar_args,
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Unset,
-                ckl::TileOffset::Set>{0u, beta1_tile},
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set)>{0u, beta1_tile},
             ckl::PackTile<cb_tmp1>{});
 
-        ckl::mul<
-            cb_grad_in,
-            cb_tmp1,
-            cb_tmp1,
-            ckl::BroadcastDim::None,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::Streaming>(ckl::EltwiseShape::tiles(onetile));
+        ckl::mul<cb_grad_in, cb_tmp1, cb_tmp1, ckl::BroadcastDim::None, ckl::input(ckl::InputLifecycle::CallerManaged)>(
+            ckl::EltwiseShape::tiles(onetile));
 
         // tmp_cb_exp_avg = cb_exp_avg_in * beta1
         ckl::eltwise_chain(
@@ -160,19 +149,18 @@ void kernel_main() {
                 cb_scalar_args,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Unset,
-                ckl::TileOffset::Set>{0u, beta1_tile},
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set)>{0u, beta1_tile},
             ckl::PackTile<tmp_cb_exp_avg>{});
 
         ckl::add<tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg>(ckl::EltwiseShape::tiles(onetile));
 
-        ckl::copy<tmp_cb_exp_avg, cb_exp_avg_out, ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+        ckl::copy<tmp_cb_exp_avg, cb_exp_avg_out, ckl::input(ckl::InputLifecycle::HeldStream)>(
+            ckl::EltwiseShape::tiles(onetile));
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -184,17 +172,16 @@ void kernel_main() {
                 cb_scalar_args,
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Unset,
-                ckl::TileOffset::Set>{0u, beta2_tile},
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set)>{0u, beta2_tile},
             ckl::PackTile<cb_tmp1>{});
 
-        ckl::square<cb_grad_in, cb_tmp2, ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+        ckl::square<cb_grad_in, cb_tmp2, ckl::input(ckl::InputLifecycle::CallerManaged)>(
+            ckl::EltwiseShape::tiles(onetile));
 
         ckl::mul<cb_tmp1, cb_tmp2, cb_tmp1>(ckl::EltwiseShape::tiles(onetile));
 
@@ -206,19 +193,17 @@ void kernel_main() {
                 cb_scalar_args,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Unset,
-                ckl::TileOffset::Set>{0u, beta2_tile},
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set)>{0u, beta2_tile},
             ckl::PackTile<tmp_cb_exp_avg_sq>{});
 
         ckl::add<tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq>(ckl::EltwiseShape::tiles(onetile));
 
-        ckl::copy<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, ckl::InputLifecycle::HeldStream>(
+        ckl::copy<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, ckl::input(ckl::InputLifecycle::HeldStream)>(
             ckl::EltwiseShape::tiles(onetile));
         //////////////////////////////////////////////////////////////////////
 
@@ -235,8 +220,8 @@ void kernel_main() {
                 cb_beta2_exponent,
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<cb_tmp1>{});
 
@@ -246,10 +231,10 @@ void kernel_main() {
             cb_max_exp_avg_sq_in,
             tmp_cb_exp_avg_sq,
             tmp_cb_max_exp_avg_sq,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(ckl::InputLifecycle::CallerManaged),
+            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
-        ckl::copy<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, ckl::InputLifecycle::HeldStream>(
+        ckl::copy<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, ckl::input(ckl::InputLifecycle::HeldStream)>(
             ckl::EltwiseShape::tiles(onetile));
 #endif
 
@@ -261,7 +246,7 @@ void kernel_main() {
                 cb_tmp1,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Sqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<cb_tmp1>{});
         tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
@@ -273,7 +258,7 @@ void kernel_main() {
                 cb_tmp1,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Sqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<cb_tmp1>{});
 #endif
@@ -286,14 +271,12 @@ void kernel_main() {
                 cb_scalar_args,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Unset,
-                ckl::TileOffset::Set>{0u, eps_tile},
+                ckl::input(),
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set)>{0u, eps_tile},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<cb_tmp1>{});
 
@@ -307,8 +290,8 @@ void kernel_main() {
                 cb_beta1_exponent,
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<cb_tmp2>{});
 
@@ -317,8 +300,7 @@ void kernel_main() {
             cb_tmp2,
             cb_tmp2,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::Streaming>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
         ckl::mul<cb_tmp2, tmp_cb_exp_avg, cb_tmp2>(ckl::EltwiseShape::tiles(onetile));
 

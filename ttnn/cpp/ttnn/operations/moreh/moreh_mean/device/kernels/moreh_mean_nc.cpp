@@ -49,8 +49,8 @@ void kernel_main() {
                     cb_in1,
                     cb_intermed0,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
             }
 
             enable_reload = true;
@@ -61,7 +61,7 @@ void kernel_main() {
             cb_scalar,
             cb_out0,
             ckl::BroadcastDim::Scalar,
-            ckl::InputLifecycle::Streaming,
-            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(),
+            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
     }
 }

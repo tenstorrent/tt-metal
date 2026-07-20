@@ -22,11 +22,10 @@ void kernel_main() {
                 tt::CBIndex::c_0,
                 tt::CBIndex::c_16,
                 ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::None,
-                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(onetile));
         }
 
         if (has_other_grad) {
@@ -35,11 +34,10 @@ void kernel_main() {
                 tt::CBIndex::c_0,
                 tt::CBIndex::c_17,
                 ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::None,
-                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(onetile));
         }
     }
 }

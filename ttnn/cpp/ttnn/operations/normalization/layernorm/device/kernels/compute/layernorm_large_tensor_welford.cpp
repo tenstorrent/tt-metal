@@ -100,12 +100,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             cb_inb,
             cb_interm_pre_add,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::output(ckl::OutputLifecycle::Bulk)>(
+            ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -346,7 +344,7 @@ void kernel_main() {
     constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
-    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                   // x - E[x]
+    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                        // x - E[x]
     constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
@@ -469,10 +467,10 @@ void kernel_main() {
                 cb_eps,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+            ckl::PackTile<cb_ex2pe, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
         ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
 

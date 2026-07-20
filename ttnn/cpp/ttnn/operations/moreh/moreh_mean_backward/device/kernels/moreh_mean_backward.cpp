@@ -47,7 +47,12 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(onetile),
             ckl::OptionalChainElement<
                 has_bcast,
-                ckl::BinaryFpu<cb_in1, cb_in0, ckl::BinaryFpuOp::Add, bcast_dim, ckl::InputLifecycle::CallerManaged>>{},
+                ckl::BinaryFpu<
+                    cb_in1,
+                    cb_in0,
+                    ckl::BinaryFpuOp::Add,
+                    bcast_dim,
+                    ckl::input(ckl::InputLifecycle::CallerManaged)>>{},
             ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<cb_in0>>{},
             ckl::PackTile<cb_intermed0>{});
 
@@ -56,8 +61,8 @@ void kernel_main() {
             cb_scalar,
             cb_out0,
             ckl::BroadcastDim::Scalar,
-            ckl::InputLifecycle::Streaming,
-            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(),
+            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
     }
     cb_in1_obj.pop_front(onetile);
 }

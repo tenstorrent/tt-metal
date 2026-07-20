@@ -39,7 +39,7 @@ void kernel_main() {
     binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
 
     if constexpr (has_divisor) {
-        ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_divisor_recip, ckl::InputLifecycle::Bulk>(
+        ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_divisor_recip, ckl::input(ckl::InputLifecycle::Bulk)>(
             ckl::EltwiseShape::single());
     }
 
@@ -58,8 +58,8 @@ void kernel_main() {
                 cb_divisor_recip,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::Bulk>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::Bulk)>{},
             negate,
             weight_mul,
             pack_out);

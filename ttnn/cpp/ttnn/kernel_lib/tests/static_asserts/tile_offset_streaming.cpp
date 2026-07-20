@@ -20,6 +20,9 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<cb_in, Dst::D0, input(InputLifecycle::Streaming, OperandKind::Scalar, TileOffset::Set)>{0},
+        CopyTile<
+            cb_in,
+            Dst::D0,
+            input(InputLifecycle::Streaming, OperandKind::Scalar, DataFormatReconfig::Enabled, TileOffset::Set)>{0},
         PackTile<cb_out>{});
 }

@@ -59,13 +59,9 @@ void kernel_main() {
                 cb_res_id,
                 cb_inp_id,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::Bulk,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Block>(ckl::EltwiseShape::of(Wt / blk, blk));
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::of(Wt / blk, blk));
         }
 
         /*

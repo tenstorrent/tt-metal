@@ -189,15 +189,17 @@ void kernel_main() {
                 cb_stats_reduced,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Set,
-                ckl::TileOffset::Set>{1, 1},
-            ckl::PackTile<cb_mean_squared, ckl::OutputLifecycle::Bulk>{});
+                ckl::input(
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set),
+                ckl::input(
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set)>{1, 1},
+            ckl::PackTile<cb_mean_squared, ckl::output(ckl::OutputLifecycle::Bulk)>{});
 
         /*
          * E[x**2] - E[x]**2  — sub at index 0.
@@ -211,9 +213,9 @@ void kernel_main() {
             cb_mean_squared,
             cb_var,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::HeldBulk,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Bulk>(ckl::EltwiseShape::single());
+            ckl::input(ckl::InputLifecycle::HeldBulk),
+            ckl::input(ckl::InputLifecycle::Bulk),
+            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::single());
 
         /*
          * 1/sqrt(var + eps)  — same shape as layernorm.cpp Var+eps prologue.
@@ -228,8 +230,8 @@ void kernel_main() {
                 cb_eps,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<cb_recip_sqrt_var>{});
 

@@ -4,10 +4,10 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"       // Clamp, RsubUnary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"    // Log
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // Clamp, RsubUnary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
@@ -32,16 +32,25 @@ void kernel_main() {
 #endif
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
-        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D0,
+            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
         ckl::OptionalChainElement<do_clamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
-        ckl::PackTile<cb_tmp0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_tmp0, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
-        ckl::CopyTile<cb_tmp0, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<cb_tmp0, ckl::Dst::D1, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_tmp0,
+            ckl::Dst::D0,
+            ckl::input(ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled)>{},
+        ckl::CopyTile<
+            cb_tmp0,
+            ckl::Dst::D1,
+            ckl::input(ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled)>{},
         ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
         ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
-        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

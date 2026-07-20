@@ -5,10 +5,10 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Rsqrt
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Typecast
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Rsqrt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Typecast
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
 template <
@@ -31,8 +31,8 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
 
     eltwise_chain(
         EltwiseShape::single(),
-        CopyTile<cb_batch_var, Dst::D0, InputLifecycle::Bulk>{},
-        CopyTile<cb_eps, Dst::D1, InputLifecycle::CallerManaged>{},
+        CopyTile<cb_batch_var, Dst::D0, input(InputLifecycle::Bulk)>{},
+        CopyTile<cb_eps, Dst::D1, input(InputLifecycle::CallerManaged)>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Rsqrt<>{},
         PackTile<cb_den>{});
@@ -44,13 +44,13 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     eltwise_chain(
         EltwiseShape::tiles(inner_count),
         CopyTile<cb_other>{},
-        CopyTile<cb_bcast, Dst::D1, InputLifecycle::Bulk>{},
+        CopyTile<cb_bcast, Dst::D1, input(InputLifecycle::Bulk)>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        CopyTile<cb_den, Dst::D1, InputLifecycle::Bulk>{},
+        CopyTile<cb_den, Dst::D1, input(InputLifecycle::Bulk)>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        OptionalChainElement<WeightHas, CopyTile<cb_weight, Dst::D1, InputLifecycle::Bulk>>{},
+        OptionalChainElement<WeightHas, CopyTile<cb_weight, Dst::D1, input(InputLifecycle::Bulk)>>{},
         OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<BiasHas, CopyTile<cb_bias, Dst::D1, InputLifecycle::Bulk>>{},
+        OptionalChainElement<BiasHas, CopyTile<cb_bias, Dst::D1, input(InputLifecycle::Bulk)>>{},
         OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
         OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
         PackTile<cb_final_out>{});

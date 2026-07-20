@@ -64,7 +64,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_input>{},
-                    ckl::CopyTile<cb_mask_h, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+                    ckl::CopyTile<cb_mask_h, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<cb_masked_input>{});
 

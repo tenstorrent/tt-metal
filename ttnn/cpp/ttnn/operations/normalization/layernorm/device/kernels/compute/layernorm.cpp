@@ -157,10 +157,10 @@ void kernel_main() {
         // on cb_x, inner add_tiles + pack_tile loop, then pop_front on cb_in/cb_inb.
         //
         // Reconfig audit: chain re-emits its element-level reconfig per-call. With
-        // BinaryDataFormatReconfig::Input + PackTileReconfig::Output, the chain emits
+        // both input specs and the output spec set reconfig to Enabled, so the chain emits
         // reconfig per outer block iter (extra MOPs vs original's once-outside). The fold
         // elision skips reconfig when prev format matches, so the per-iter cost is amortized
-        // after the first block. (Alternative: BinaryDataFormatReconfig::None + keep the
+        // after the first block. (Alternative: disable reconfig in all three specs and keep the
         // explicit reconfigs above — same effect, but the chain owns the lifecycle).
         // Net: same correctness; slightly different MOP placement.
         //
@@ -178,12 +178,9 @@ void kernel_main() {
             cb_inb,
             cb_x,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Chunked,
-            ckl::InputLifecycle::Chunked,
-            ckl::OutputLifecycle::Chunked,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::output(ckl::OutputLifecycle::Chunked)>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
 #else
@@ -213,9 +210,9 @@ void kernel_main() {
         //
         // Reconfig audit:
         //   - reconfig_data_format(cb_x, cb_ex) + sub_bcast_cols_init_short both reconfig
-        //     srca/srcb -> BinaryDataFormatReconfig::Input (chain re-emits per call;
+        //     srca/srcb -> reconfig Enabled on both input specs (chain re-emits per call;
         //     fold elides after first iter).
-        //   - No pack_reconfig in original -> PackTileReconfig::None.
+        //   - No pack reconfig in original -> reconfig Disabled on the output spec.
         //
         // Behavioral diff:
         //   - Original: 1 upfront cb_xmm.reserve_back(total) + N per-block push.
@@ -236,13 +233,10 @@ void kernel_main() {
             cb_ex,
             cb_xmm,
             ckl::BroadcastDim::Col,
-            ckl::InputLifecycle::Chunked,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::OutputLifecycle::Chunked,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::None,
-            ckl::OperandKind::Block,
-            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::CallerManaged),
+            ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>(
+            ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
         cb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -271,17 +265,15 @@ void kernel_main() {
          *   chain dedups the B-side wait. No TileOffset: BlockIter index is already absolute.
          * cb_xmm2: OutputLifecycle::Bulk (reserve total_buffer_size upfront + push at end),
          *   matching the original.
-         * Reconfig: mul_tiles_init(cb_xmm, cb_xmm) -> BinaryDataFormatReconfig::Input
+         * Reconfig: mul_tiles_init(cb_xmm, cb_xmm) -> reconfig Enabled on the input spec
          *   (fold elides after first block, CbA==CbB); no pack_reconfig -> None.
          */
         ckl::square<
             cb_xmm,
             cb_xmm2,
-            ckl::InputLifecycle::HeldBulk,
-            ckl::OutputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::None,
-            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+            ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+            ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
@@ -306,8 +298,8 @@ void kernel_main() {
                 cb_eps,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<cb_ex2pe>{});
 

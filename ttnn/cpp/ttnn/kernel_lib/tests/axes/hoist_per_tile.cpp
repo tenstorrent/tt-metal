@@ -19,6 +19,6 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     for (uint32_t i = 0; i < n; ++i) {
-        eltwise_chain(EltwiseShape::single(), CopyTile<cb_in, Dst::D0>{}, Exp<>{}, PackTile<cb_out>{});
+        eltwise_chain(EltwiseShape::single(), CopyTile<cb_in>{}, Exp<>{}, PackTile<cb_out>{});
     }
 }

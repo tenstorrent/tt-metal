@@ -102,8 +102,8 @@ void kernel_main() {
                 cb_mean,
                 cb_xmm,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_y
             // (x - mean) * rstd and mask(optional)
@@ -264,8 +264,8 @@ void kernel_main() {
                 cb_dycopy,
                 cb_ydy,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::NoWaitPop>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::NoWaitPop)>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_ydyadd
             if (wt == 0) {
@@ -322,15 +322,13 @@ void kernel_main() {
                 cb_rstd,
                 ckl::BinaryFpuOp::Mul,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Set,
-                ckl::TileOffset::Unset>{1u, 0u},
-            ckl::PackTile<cb_recip_nrstd, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{1u, 0u},
+            ckl::PackTile<cb_recip_nrstd>{});
 
         // Compute cb_dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
@@ -427,8 +425,7 @@ void kernel_main() {
                 cb_dycopy,
                 cb_ndy,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::Streaming>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_ndymdysum
             // n * dy - Sum[dy]
@@ -439,8 +436,8 @@ void kernel_main() {
                 cb_dysum,
                 cb_ndymdysum,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_xmm
             // x - mean and mask(optional)
@@ -488,8 +485,8 @@ void kernel_main() {
                 cb_rstd,
                 cb_y,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
@@ -500,8 +497,8 @@ void kernel_main() {
                 cb_ydysum,
                 cb_yydysum,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_tmp4
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
@@ -515,8 +512,8 @@ void kernel_main() {
                 cb_recip_nrstd,
                 cb_dx,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
         }  // Wt loop
         cb_recip_nrstd_obj.pop_front(onetile);
         cb_dysum_obj.pop_front(onetile);

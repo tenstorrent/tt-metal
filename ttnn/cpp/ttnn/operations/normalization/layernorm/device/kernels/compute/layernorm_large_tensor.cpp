@@ -61,7 +61,7 @@ void kernel_main() {
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");
     constexpr auto cb_xmm2 = get_named_compile_time_arg_val("cb_xmm2");
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");
-    uint32_t cb_fusion = get_named_compile_time_arg_val("cb_fusion");      // stream gamma/beta
+    uint32_t cb_fusion = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto cb_accumulate = get_named_compile_time_arg_val("cb_accumulate");
 
@@ -163,9 +163,7 @@ void kernel_main() {
                     ckl::CopyTile<
                         cb_in,
                         ckl::Dst::D0,
-                        ckl::InputLifecycle::Bulk,
-                        ckl::CopyTileReconfig::Input,
-                        ckl::OperandKind::Block>>{},
+                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block)>>{},
                 ckl::OptionalChainElement<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
                     ckl::BinaryFpu<
@@ -173,25 +171,17 @@ void kernel_main() {
                         cb_ex,
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col,
-                        ckl::InputLifecycle::Bulk,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block,
-                        ckl::OperandKind::Scalar>>{},
+                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(ckl::InputLifecycle::CallerManaged)>>{},
                 ckl::OptionalChainElement<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
                         cb_inb,
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB,
-                        ckl::InputLifecycle::Bulk,
-                        ckl::DestReuseReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block>>{},
+                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block)>>{},
                 ckl::Square<ckl::Dst::D0>{},
-                ckl::PackTile<cb_xmm2, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::Output>{});
+                ckl::PackTile<cb_xmm2, ckl::output(ckl::OutputLifecycle::Bulk)>{});
 
             tile_regs_acquire();
             if (!block.is_first()) {
@@ -250,10 +240,10 @@ void kernel_main() {
                 cb_eps,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::ReserveNonePushEnd>{});
+            ckl::PackTile<cb_ex2pe, ckl::output(ckl::OutputLifecycle::ReserveNonePushEnd)>{});
 
         ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
         cb_ex2pe_obj.wait_front(onetile);
@@ -289,9 +279,7 @@ void kernel_main() {
                     ckl::CopyTile<
                         cb_in,
                         ckl::Dst::D0,
-                        ckl::InputLifecycle::Bulk,
-                        ckl::CopyTileReconfig::Input,
-                        ckl::OperandKind::Block>>{},
+                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block)>>{},
                 ckl::OptionalChainElement<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
                     ckl::BinaryFpu<
@@ -299,24 +287,16 @@ void kernel_main() {
                         cb_ex,
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col,
-                        ckl::InputLifecycle::Bulk,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block,
-                        ckl::OperandKind::Scalar>>{},
+                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(ckl::InputLifecycle::CallerManaged)>>{},
                 ckl::OptionalChainElement<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
                         cb_inb,
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB,
-                        ckl::InputLifecycle::Bulk,
-                        ckl::DestReuseReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block>>{},
-                ckl::PackTile<cb_xmm, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::Output>{});
+                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block)>>{},
+                ckl::PackTile<cb_xmm, ckl::output(ckl::OutputLifecycle::Bulk)>{});
 
             cb_xmm_obj.wait_front(block.full_block_size());
             reconfig_data_format(cb_xmm, cb_ex2pe);

@@ -46,7 +46,7 @@ void kernel_main() {
                 ckl::EltwiseShape::tiles(onetile));
 
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            ckl::mul<cb_sum, cb_exp, cb_inter2, ckl::BroadcastDim::None, ckl::InputLifecycle::HeldStream>(
+            ckl::mul<cb_sum, cb_exp, cb_inter2, ckl::BroadcastDim::None, ckl::input(ckl::InputLifecycle::HeldStream)>(
                 ckl::EltwiseShape::tiles(onetile));
 
             ckl::sub<cb_dy, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
@@ -69,8 +69,8 @@ void kernel_main() {
                 cb_sum,
                 cb_dy_m_sum,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #ifdef SOFTMAX
             ckl::mul<cb_dy_m_sum, cb_y, cb_dx>(ckl::EltwiseShape::tiles(onetile));
 #else

@@ -20,8 +20,9 @@ void kernel_main() {
         compute_kernel_lib::Typecast<CHAIN_TYPECAST_IN_DF, CHAIN_TYPECAST_OUT_DF, compute_kernel_lib::Dst::D0>,
         input_cb,
         output_cb,
-        compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::OutputLifecycle::Streaming,
-        compute_kernel_lib::CopyTileReconfig::None,
-        compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(total_tiles));
+        compute_kernel_lib::input(
+            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::output(
+            compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
+        compute_kernel_lib::EltwiseShape::tiles(total_tiles));
 }

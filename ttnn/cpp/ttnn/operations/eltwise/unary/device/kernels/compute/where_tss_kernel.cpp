@@ -42,7 +42,10 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         // cond -> D0. Single CB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
-        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D0,
+            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
         // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
         // kWhereDF carries main's #48602 fix: Int32 for int32 inputs, UInt32 for uint32 inputs.
         ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D1>>{packed_scalar1},
@@ -52,5 +55,5 @@ void kernel_main() {
         ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
-        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

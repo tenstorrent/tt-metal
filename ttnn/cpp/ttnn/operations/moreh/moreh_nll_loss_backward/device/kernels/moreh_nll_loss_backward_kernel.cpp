@@ -27,7 +27,8 @@ void kernel_main() {
     init_sfpu(cb_output_grad, cb_input_grad);
 
 #if defined(DIVISOR)
-    ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_tmp1, ckl::InputLifecycle::Bulk>(ckl::EltwiseShape::single());
+    ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_tmp1, ckl::input(ckl::InputLifecycle::Bulk)>(
+        ckl::EltwiseShape::single());
 
     cb_wait_front(cb_tmp1, 1);
     cb_wait_front(cb_output_grad, 1);
@@ -40,8 +41,8 @@ void kernel_main() {
                 cb_output_grad,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Negative<D::D0>{},
             ckl::PackTile<cb_tmp2>{});
 
@@ -50,8 +51,9 @@ void kernel_main() {
             cb_tmp1,
             cb_input_grad,
             compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::single());
+            compute_kernel_lib::input(),
+            compute_kernel_lib::input(compute_kernel_lib::InputLifecycle::CallerManaged)>(
+            compute_kernel_lib::EltwiseShape::single());
     }
 
     cb_pop_front(cb_output_grad, 1);
@@ -67,8 +69,8 @@ void kernel_main() {
                 cb_output_grad,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Negative<D::D0>{},
             ckl::PackTile<cb_input_grad>{});
     }

@@ -31,8 +31,8 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
             cb_eps,
             ckl::BinaryFpuOp::Add,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::CallerManaged>{},
+            ckl::input(ckl::InputLifecycle::Bulk),
+            ckl::input(ckl::InputLifecycle::CallerManaged)>{},
         ckl::Rsqrt<>{},
         ckl::PackTile<cb_den>{});
 
@@ -43,24 +43,27 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
         cb_bcast,
         ckl::BinaryFpuOp::Sub,
         ckl::BroadcastDim::None,
-        ckl::InputLifecycle::Streaming,
-        ckl::InputLifecycle::Bulk>{};
-    constexpr auto mul_den = ckl::
-        DestReuseBinary<cb_den, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA, ckl::InputLifecycle::Bulk>{};
+        ckl::input(),
+        ckl::input(ckl::InputLifecycle::Bulk)>{};
+    constexpr auto mul_den = ckl::DestReuseBinary<
+        cb_den,
+        ckl::BinaryFpuOp::Mul,
+        ckl::DestReuseType::DEST_TO_SRCA,
+        input(ckl::InputLifecycle::Bulk)>{};
     constexpr auto mul_weight = ckl::OptionalChainElement<
         WeightHas,
         ckl::DestReuseBinary<
             cb_weight,
             ckl::BinaryFpuOp::Mul,
             ckl::DestReuseType::DEST_TO_SRCA,
-            ckl::InputLifecycle::Bulk>>{};
+            ckl::input(ckl::InputLifecycle::Bulk)>>{};
     constexpr auto add_bias = ckl::OptionalChainElement<
         BiasHas,
         ckl::DestReuseBinary<
             cb_bias,
             ckl::BinaryFpuOp::Add,
             ckl::DestReuseType::DEST_TO_SRCA,
-            ckl::InputLifecycle::Bulk>>{};
+            ckl::input(ckl::InputLifecycle::Bulk)>>{};
     constexpr auto pack_out = ckl::PackTile<cb_output_0>{};
 
     ckl::eltwise_chain(ckl::EltwiseShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);

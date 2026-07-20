@@ -48,9 +48,9 @@ void kernel_main() {
         // Front rotation: pop frees the front tile, reserve reuses it. Scalar reads the current front.
         eltwise_chain(
             EltwiseShape::tiles(n),
-            CopyTile<cb_x, Dst::D0, input(InputLifecycle::BulkDrain, OperandKind::Scalar)>{},
+            CopyTile<cb_x, Dst::D0, input(InputLifecycle::BulkDrain)>{},
             Exp<>{},
-            PackTile<cb_x, output(OutputLifecycle::Streaming)>{});
+            PackTile<cb_x>{});
     } else if constexpr (life == 1) {
         // Chunk lockstep: pop/reserve K per chunk. Block index walks the K-tile front window.
         eltwise_chain(
@@ -60,11 +60,7 @@ void kernel_main() {
             PackTile<cb_x, output(OutputLifecycle::Chunked)>{});
     } else {  // life == 2
         // Per-tile rotation: like life 0 but the wait is per-tile too.
-        eltwise_chain(
-            EltwiseShape::tiles(n),
-            CopyTile<cb_x, Dst::D0, input(InputLifecycle::Streaming, OperandKind::Scalar)>{},
-            Exp<>{},
-            PackTile<cb_x, output(OutputLifecycle::Streaming)>{});
+        eltwise_chain(EltwiseShape::tiles(n), CopyTile<cb_x>{}, Exp<>{}, PackTile<cb_x>{});
     }
 
     // Stage B: copy cb_x -> cb_out (plain Bulk copy) so the DRAM writer drains cb_out, never cb_x.

@@ -25,7 +25,10 @@ void kernel_main() {
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(total_tiles),
-        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D0,
+            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
         ckl::Dropout<ckl::Dst::D0>{int_probability, int_scale_factor, seed},
-        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

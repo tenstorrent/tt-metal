@@ -21,9 +21,11 @@ void kernel_main() {
         cb_clip_coef_clamped,
         cb_y,
         compute_kernel_lib::BroadcastDim::Scalar,
-        compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::InputLifecycle::Bulk,
-        compute_kernel_lib::OutputLifecycle::Streaming,
-        compute_kernel_lib::BinaryDataFormatReconfig::None,
-        compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
+        compute_kernel_lib::input(
+            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::input(
+            compute_kernel_lib::InputLifecycle::Bulk, compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::output(
+            compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles));
 }

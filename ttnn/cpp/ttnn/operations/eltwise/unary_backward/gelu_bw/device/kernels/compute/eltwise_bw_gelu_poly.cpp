@@ -28,16 +28,12 @@ void kernel_main() {
         ckl::CopyTile<
             cb_grad_out,
             ckl::Dst::D0,
-            ckl::InputLifecycle::Chunked,
-            ckl::CopyTileReconfig::None,
-            ckl::OperandKind::Block>{},
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
         ckl::CopyTile<
             cb_input,
             ckl::Dst::D1,
-            ckl::InputLifecycle::Chunked,
-            ckl::CopyTileReconfig::None,
-            ckl::OperandKind::Block>{},
+            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
         ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-        ckl::PackTile<cb_grad_in, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_grad_in, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
 }

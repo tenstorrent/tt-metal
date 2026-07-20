@@ -23,11 +23,10 @@ void kernel_main() {
             tt::CBIndex::c_1,
             tt::CBIndex::c_24,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Streaming,
-            ckl::InputLifecycle::Streaming,
-            ckl::OutputLifecycle::Streaming,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(),
+            ckl::input(),
+            ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+            ckl::EltwiseShape::tiles(onetile));
 
         // reduce-w
         if (last_out) {

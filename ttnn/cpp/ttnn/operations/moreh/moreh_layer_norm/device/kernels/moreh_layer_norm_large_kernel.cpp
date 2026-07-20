@@ -213,13 +213,9 @@ void kernel_main() {
                 cb_ex,
                 cb_xmm,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_size, block_size));
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
 
             /*
              * mask xmm
@@ -267,11 +263,8 @@ void kernel_main() {
             ckl::square<
                 cb_xmm,
                 cb_xmm2,
-                ckl::InputLifecycle::Bulk,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block_size, block_size));
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
 
             /*
              * Sum[(x-E[x])^2]
@@ -330,11 +323,10 @@ void kernel_main() {
                 cb_eps,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input>{},
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<cb_recip_std, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+            ckl::PackTile<cb_recip_std>{});
 
         cb_recip_std_obj.wait_front(onetile);
         if (rstd_has_value) {
@@ -370,13 +362,9 @@ void kernel_main() {
                 cb_ex,
                 cb_reuse,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_size, block_size));
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
 
             /*
              * (x - E[x]) * 1.0/sqrt(Var[x] + eps)
@@ -389,13 +377,9 @@ void kernel_main() {
                 cb_recip_std,
                 cb_gamma_beta_or_out,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_size, block_size));
+                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
 
             if (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
@@ -407,13 +391,9 @@ void kernel_main() {
                     cb_gamma,
                     cb_outg,
                     gamma_bcast,
-                    ckl::InputLifecycle::Bulk,
-                    ckl::InputLifecycle::Bulk,
-                    ckl::OutputLifecycle::Bulk,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
-                    ckl::OperandKind::Block,
-                    ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block_size, block_size));
+                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
             }
 
             if (beta_has_value) {
@@ -425,13 +405,9 @@ void kernel_main() {
                     cb_beta,
                     cb_out,
                     beta_bcast,
-                    ckl::InputLifecycle::Bulk,
-                    ckl::InputLifecycle::Bulk,
-                    ckl::OutputLifecycle::Bulk,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
-                    ckl::OperandKind::Block,
-                    ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block_size, block_size));
+                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
             }
         }  // num_inner loop
         cb_recip_std_obj.pop_front(onetile);

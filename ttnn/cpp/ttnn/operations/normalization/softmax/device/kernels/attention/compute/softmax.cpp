@@ -46,14 +46,10 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
             cb_max,
             ckl::BinaryFpuOp::Sub,
             ckl::BroadcastDim::Col,
-            ckl::InputLifecycle::DeferredPop,
-            ckl::InputLifecycle::Bulk,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::Dst::D0,
-            ckl::OperandKind::Block,
-            ckl::OperandKind::Scalar>{},
+            ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Bulk)>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
-        ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
     cb_out_obj.wait_front(Wt);
 }
 
@@ -124,8 +120,8 @@ void kernel_main() {
             cb_fused_scale,
             cb_scale_mask,
             ckl::BroadcastDim::Scalar,
-            ckl::InputLifecycle::Streaming,
-            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(Wt));
+            ckl::input(),
+            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(Wt));
 #ifdef CAUSAL_MASK
         cb_fused_attn_obj.wait_front(Wt);
 #else
@@ -141,16 +137,12 @@ void kernel_main() {
                 cb_fused_attn,
                 ckl::BinaryFpuOp::Add,
                 mask_bcast,
-                ckl::InputLifecycle::Chunked,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Block>{},
+                ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block)>{},
             ckl::OptionalChainElement<
                 !numeric_stable,
                 ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-            ckl::PackTile<cb_x, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
+            ckl::PackTile<cb_x, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -187,7 +179,7 @@ void kernel_main() {
                 ckl::OptionalChainElement<
                     !numeric_stable,
                     ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-                ckl::PackTile<cb_x, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+                ckl::PackTile<cb_x, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
@@ -196,12 +188,13 @@ void kernel_main() {
                     cb_mask_padded,
                     ckl::BinaryFpuOp::Add,
                     ckl::BroadcastDim::Row,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldBulk>{},  // cb_mask_padded: held scalar, chain waits(1), no pop
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::HeldBulk)>{},  // cb_mask_padded: held scalar, chain waits(1), no
+                                                                   // pop
                 ckl::OptionalChainElement<
                     !numeric_stable,
                     ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-                ckl::PackTile<cb_x, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+                ckl::PackTile<cb_x, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -219,10 +212,9 @@ void kernel_main() {
                 ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>,
                 cb_in0,
                 cb_exps,
-                ckl::InputLifecycle::Streaming,
-                ckl::OutputLifecycle::Streaming,
-                ckl::CopyTileReconfig::Input,
-                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(Wt));
+                ckl::input(),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(Wt));
 #endif
         }
 #endif
@@ -248,13 +240,9 @@ void kernel_main() {
             cb_recipsumexps,
             cb_out0,
             ckl::BroadcastDim::Col,
-            ckl::InputLifecycle::DeferredPop,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Chunked,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            ckl::OperandKind::Block,
-            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Wt, ndst));
+            ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+            ckl::input(ckl::InputLifecycle::Bulk),
+            ckl::output(ckl::OutputLifecycle::Chunked)>(ckl::EltwiseShape::tiles(Wt, ndst));
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the CBs are left balanced.

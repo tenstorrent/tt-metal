@@ -145,13 +145,12 @@ void kernel_main() {
                 cb_eps_id,
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Set>{1, 0u},
+                ckl::input(
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{1, 0u},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
             ckl::PackTile<cb_recip_sqrt_var_id>{});
 

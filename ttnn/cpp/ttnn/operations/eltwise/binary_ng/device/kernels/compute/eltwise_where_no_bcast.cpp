@@ -45,23 +45,13 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
         // cond -> D0 (block read, init_short for cb_cond).
-        ckl::CopyTile<
-            cb_cond,
-            ckl::Dst::D0,
-            ckl::InputLifecycle::Chunked,
-            ckl::CopyTileReconfig::Input,
-            ckl::OperandKind::Block>{},
+        ckl::CopyTile<cb_cond, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block)>{},
         // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for cb_tensor).
-        ckl::CopyTile<
-            cb_tensor,
-            kTensorSlot,
-            ckl::InputLifecycle::Chunked,
-            ckl::CopyTileReconfig::Input,
-            ckl::OperandKind::Block>{},
+        ckl::CopyTile<cb_tensor, kTensorSlot, ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block)>{},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
         ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
         ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<kFillSlot>>{scalar_value},
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
-        ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
 }

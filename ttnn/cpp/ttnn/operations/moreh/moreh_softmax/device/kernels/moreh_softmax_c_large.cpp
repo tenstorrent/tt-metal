@@ -6,8 +6,8 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Exp, Log, Recip
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp, Log, Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_minmax.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
@@ -50,8 +50,8 @@ void kernel_main() {
                     cb_max,
                     ckl::BinaryFpuOp::Sub,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldStream>{},
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_exps>{});
 #else
@@ -62,8 +62,8 @@ void kernel_main() {
                     cb_max,
                     ckl::BinaryFpuOp::Sub,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldStream>{},
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
                 ckl::Negative<ckl::Dst::D0>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_exps>{});
@@ -92,25 +92,25 @@ void kernel_main() {
                 cb_max,
                 cb_tmp,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
             ckl::sub<
                 cb_tmp,
                 cb_recipsumexps,
                 cb_out0,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #else
-            ckl::sub<cb_max, cb_in0, cb_tmp, ckl::BroadcastDim::None, ckl::InputLifecycle::HeldStream>(
+            ckl::sub<cb_max, cb_in0, cb_tmp, ckl::BroadcastDim::None, ckl::input(ckl::InputLifecycle::HeldStream)>(
                 ckl::EltwiseShape::tiles(onetile));
             ckl::sub<
                 cb_tmp,
                 cb_recipsumexps,
                 cb_out0,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #endif
 #else
 #ifdef SOFTMAX
@@ -121,8 +121,8 @@ void kernel_main() {
                     cb_max,
                     ckl::BinaryFpuOp::Sub,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldStream>{},
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_exps>{});
             ckl::mul<
@@ -130,8 +130,8 @@ void kernel_main() {
                 cb_recipsumexps,
                 cb_out0,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #else
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
@@ -140,8 +140,8 @@ void kernel_main() {
                     cb_max,
                     ckl::BinaryFpuOp::Sub,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldStream>{},
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
                 ckl::Negative<ckl::Dst::D0>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_exps>{});
@@ -150,8 +150,8 @@ void kernel_main() {
                 cb_recipsumexps,
                 cb_out0,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
 #endif
 #endif
         }

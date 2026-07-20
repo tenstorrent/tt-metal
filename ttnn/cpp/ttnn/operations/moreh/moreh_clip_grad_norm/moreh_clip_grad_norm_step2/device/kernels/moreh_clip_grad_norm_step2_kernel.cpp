@@ -44,39 +44,37 @@ void kernel_main() {
             ckl::copy<
                 cb_input,
                 cb_x,
-                ckl::InputLifecycle::Streaming,
-                ckl::OutputLifecycle::Streaming,
-                ckl::CopyTileReconfig::Input,
-                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(onetile));
         } else {
             ckl::add<
                 cb_input,
                 cb_x,
                 cb_x,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::Streaming,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(onetile));
         }
     }
     if (p_is_negative) {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
             ckl::PowerIterative<ckl::Dst::D0>{p},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<cb_xpow>{});
     } else {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
             ckl::PowerIterative<ckl::Dst::D0>{p},
             ckl::PackTile<cb_xpow>{});
     }
 
-    ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_x, cb_logx, ckl::InputLifecycle::NoWaitPop>(
+    ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_x, cb_logx, ckl::input(ckl::InputLifecycle::NoWaitPop)>(
         ckl::EltwiseShape::tiles(onetile));
 
     ckl::eltwise_chain(
@@ -86,8 +84,8 @@ void kernel_main() {
             cb_decimal,
             ckl::BinaryFpuOp::Mul,
             ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Streaming,
-            ckl::InputLifecycle::CallerManaged>{},
+            ckl::input(),
+            ckl::input(ckl::InputLifecycle::CallerManaged)>{},
         ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
         ckl::PackTile<cb_exp_lxmd>{});
 

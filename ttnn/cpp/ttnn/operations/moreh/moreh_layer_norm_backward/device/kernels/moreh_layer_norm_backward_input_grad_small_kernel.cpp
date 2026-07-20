@@ -98,15 +98,13 @@ void kernel_main() {
                 cb_rstd,
                 ckl::BinaryFpuOp::Mul,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::Dst::D0,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Set,
-                ckl::TileOffset::Unset>{1u, 0u},
-            ckl::PackTile<cb_recip_nrstd, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                ckl::input(
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Set),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>{1u, 0u},
+            ckl::PackTile<cb_recip_nrstd>{});
 
         // y = (x - mean) * rstd
         cb_y_obj.reserve_back(Wt);
@@ -310,15 +308,17 @@ void kernel_main() {
                     cb_dycopy,
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::Dst::D0,
-                    ckl::OperandKind::Scalar,
-                    ckl::OperandKind::Scalar,
-                    ckl::TileOffset::Set,
-                    ckl::TileOffset::Set>{wt, wt},
-                ckl::PackTile<cb_ydy, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    ckl::input(
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::OperandKind::Scalar,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileOffset::Set),
+                    ckl::input(
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::OperandKind::Scalar,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileOffset::Set)>{wt, wt},
+                ckl::PackTile<cb_ydy>{});
 
             // Compute cb_ydyadd
             if (wt == 0) {
@@ -378,15 +378,13 @@ void kernel_main() {
                     cb_dycopy,
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::Dst::D0,
-                    ckl::OperandKind::Scalar,
-                    ckl::OperandKind::Scalar,
-                    ckl::TileOffset::Unset,
-                    ckl::TileOffset::Set>{0u, wt},
-                ckl::PackTile<cb_ndy, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    ckl::input(ckl::InputLifecycle::CallerManaged),
+                    ckl::input(
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::OperandKind::Scalar,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileOffset::Set)>{0u, wt},
+                ckl::PackTile<cb_ndy>{});
 
             // cb_ndymdysum
             // n * dy - Sum[dy]
@@ -397,8 +395,8 @@ void kernel_main() {
                 cb_dysum,
                 cb_ndymdysum,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
@@ -411,15 +409,13 @@ void kernel_main() {
                     cb_ydysum,
                     ckl::BinaryFpuOp::Mul,
                     is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::Dst::D0,
-                    ckl::OperandKind::Scalar,
-                    ckl::OperandKind::Scalar,
-                    ckl::TileOffset::Set,
-                    ckl::TileOffset::Unset>{wt, 0u},
-                ckl::PackTile<cb_yydysum, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    ckl::input(
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::OperandKind::Scalar,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileOffset::Set),
+                    ckl::input(ckl::InputLifecycle::CallerManaged)>{wt, 0u},
+                ckl::PackTile<cb_yydysum>{});
 
             // Compute cb_tmp1
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
@@ -432,8 +428,8 @@ void kernel_main() {
                 cb_recip_nrstd,
                 cb_dx,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
         }  // Wt loop
         cb_dycopy_obj.pop_front(Wt);
         cb_y_obj.pop_front(Wt);

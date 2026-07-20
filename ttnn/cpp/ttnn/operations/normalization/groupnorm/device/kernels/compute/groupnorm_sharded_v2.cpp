@@ -302,11 +302,10 @@ void kernel_main() {
                 cb_ex_global_id,
                 cb_x_id,
                 ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(block_hw));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(block_hw));
             cb_ex_global.pop_front(1);
 
             ckl::mul<
@@ -314,13 +313,10 @@ void kernel_main() {
                 cb_input_mask_id,
                 cb_x_id,
                 ckl::BroadcastDim::None,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::DeferredPop,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Row>(ckl::EltwiseShape::grid(block_h, block_w));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Row),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::grid(block_h, block_w));
             reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
             // (x - E[x])^2
@@ -380,21 +376,22 @@ void kernel_main() {
                     cb_eps_id,
                     ckl::BinaryFpuOp::Add,
                     ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::CallerManaged>{},
+                    ckl::input(),
+                    ckl::input(ckl::InputLifecycle::CallerManaged)>{},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
-                ckl::PackTile<cb_ex2pe_id, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+                ckl::PackTile<
+                    cb_ex2pe_id,
+                    ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
             cb_ex2pe.wait_front(1);
             ckl::mul<
                 cb_x_id,
                 cb_ex2pe_id,
                 cb_x_id,
                 ckl::BroadcastDim::Scalar,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(block_hw));
+                ckl::input(),
+                ckl::input(ckl::InputLifecycle::CallerManaged),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::tiles(block_hw));
             cb_ex2pe.pop_front(1);
             cb_x.wait_front(block_hw);
             //  add or copy with previous output results
@@ -555,13 +552,10 @@ void kernel_main() {
                 cb_gamma_id,
                 cb_outgamma_id,
                 ckl::BroadcastDim::Row,
-                ckl::InputLifecycle::DeferredPop,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outgamma.wait_front(per_core_MN);
         } else {
             ckl::mul<
@@ -569,13 +563,10 @@ void kernel_main() {
                 cb_gamma_id,
                 cb_in_id,
                 ckl::BroadcastDim::Row,
-                ckl::InputLifecycle::BulkDrain,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(ckl::InputLifecycle::BulkDrain),
+                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 
@@ -586,13 +577,10 @@ void kernel_main() {
                 cb_beta_id,
                 cb_outbeta_id,
                 ckl::BroadcastDim::Row,
-                ckl::InputLifecycle::DeferredPop,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::OutputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outbeta.wait_front(per_core_MN);
         } else {
             ckl::add<
@@ -600,13 +588,10 @@ void kernel_main() {
                 cb_beta_id,
                 cb_in_id,
                 ckl::BroadcastDim::Row,
-                ckl::InputLifecycle::BulkDrain,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::None,
-                ckl::OperandKind::Scalar,
-                ckl::OperandKind::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(ckl::InputLifecycle::BulkDrain),
+                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 

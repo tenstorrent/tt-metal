@@ -33,8 +33,7 @@ void kernel_main() {
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
                 input(InputLifecycle::Bulk, OperandKind::Block),
-                input(InputLifecycle::Bulk, OperandKind::Row),
-                Dst::D0>{},
+                input(InputLifecycle::Bulk, OperandKind::Row)>{},
             PackTile<cb_out, output(OutputLifecycle::Bulk)>{});
     } else {  // Col index on B
         eltwise_chain(
@@ -45,8 +44,7 @@ void kernel_main() {
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
                 input(InputLifecycle::Bulk, OperandKind::Block),
-                input(InputLifecycle::Bulk, OperandKind::Col),
-                Dst::D0>{},
+                input(InputLifecycle::Bulk, OperandKind::Col)>{},
             PackTile<cb_out, output(OutputLifecycle::Bulk)>{});
     }
 }
