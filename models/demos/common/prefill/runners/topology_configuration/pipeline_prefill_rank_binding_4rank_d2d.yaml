@@ -38,6 +38,6 @@ global_env:
   # the manifest path (like the rest of global_env) must live here.
   PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi.json"
   PREFILL_STANDALONE: "1"   # standalone bring-up/pipeline mode, not the production request loop
-  PREFILL_FABRIC_MODE: "2d"   # D2D pipeline transport needs FABRIC_2D
+  PREFILL_FABRIC_MODE: "2d_torus_xy"   # XY sub-torus per galaxy; needs the 2d_torus_* modes from #48711
   PREFILL_STANDALONE_PCC: "0"
   PREFILL_STANDALONE_NCHUNKS: "11"
