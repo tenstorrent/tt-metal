@@ -125,6 +125,12 @@ def mesh_device(request, silicon_arch_name, device_params):
             _qe.HY_QWEN_SUBMESH = parent_device.create_submesh(
                 ttnn.MeshShape(1, 4), offset=ttnn.MeshCoordinate(rr + 1, 0)
             )
+        elif want_vae and want_qwen and rr + 1 <= parent_shape[0] and parent_shape[1] >= 8:
+            # Only ONE row left below the DiT (e.g. DiT sp=3 (3,8) uses rows 0-2):
+            # put VAE (1,4) and Qwen (1,4) SIDE-BY-SIDE in that row -- all disjoint,
+            # no chip is in two mesh contexts (overlapping compute deadlocks ttnn).
+            _vd.HY_VAE_SUBMESH = parent_device.create_submesh(ttnn.MeshShape(1, 4), offset=ttnn.MeshCoordinate(rr, 0))
+            _qe.HY_QWEN_SUBMESH = parent_device.create_submesh(ttnn.MeshShape(1, 4), offset=ttnn.MeshCoordinate(rr, 4))
         else:
             # Single extra stage: carve a same-shape submesh on the next block of chips.
             if want_vae and rr * 2 <= parent_shape[0]:
