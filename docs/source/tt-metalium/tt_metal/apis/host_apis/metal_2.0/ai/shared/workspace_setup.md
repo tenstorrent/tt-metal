@@ -2,7 +2,7 @@
 
 Use this when you have **no existing tt-metal checkout**. If you've been given an existing clone or worktree path, skip to **Run tests**.
 
-This doc is referenced by the [port recipe](../port/metal2.md) under "Before you begin." Scope: bootstrap only — clone, environment, build, test invocation patterns. The port itself lives in the recipe.
+This doc is referenced by the [port recipe](../port/metal2_port.md) under "Before you begin." Scope: bootstrap only — clone, environment, build, test invocation patterns. The port itself lives in the recipe.
 
 ## Clone
 
