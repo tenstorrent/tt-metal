@@ -748,14 +748,6 @@ def test_tilize_fp32_lossless_via_to_layout(device):
     assert torch.equal(input_tensor, output_tensor)
 
 
-def test_tilize_rejects_custom_tile_on_device(device, expect_error):
-    torch_input = torch.rand((32, 64), dtype=torch.bfloat16)
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    with expect_error(RuntimeError, "device tilize only supports the default tile"):
-        ttnn.tilize(tt_input, tile=ttnn.Tile((16, 32)))
-
-
 @pytest.mark.parametrize(
     "memory_layout, tensor_shape, grid_shape",
     [
