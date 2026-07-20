@@ -19,8 +19,10 @@ Required Options:
 
 Optional:
     --config <4x32|8x16>                    Mesh configuration (default: 4x32)
-    --use-docker <docker-image>             Run validation via mpi-docker with the given image
-                                            (if not provided, uses plain mpirun with local build)
+    --use-docker [docker-image]             Run validation via mpi-docker. If an image is given, uses it;
+                                            if the flag is passed with no image, uses the default:
+                                            $DOCKER_IMAGE_DEFAULT
+                                            (if the flag is omitted entirely, uses plain mpirun with local build)
     --num-iterations <number>               Number of validation iterations (default: 5)
                                             This is the inner per-run validation loop.
     --max-attempts <number>                 Number of times to run the full recovery (reset + validation)
@@ -37,7 +39,8 @@ Optional:
                                             (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
-    --output <directory>                    Output directory for logs and validation artifacts (default: recover-logs).
+    --output <directory>                    Output directory for logs and validation artifacts
+                                            (default: "<comma-separated-hosts>-<timestamp>").
                                             Passed to run_cluster_validation as --output-path so the
                                             unretrainable_channels.yaml artifact lands here too.
 
@@ -88,6 +91,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.74.0-dev20260620-6-gd9d52dfe7b6"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 SLEEP_DURATION=5
@@ -99,7 +103,7 @@ CHECK=false
 MPI_IF=""
 MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
-OUTPUT_DIR="recover-logs"
+OUTPUT_DIR=""  # default computed after --hosts is known: "<comma-separated-hosts>-<timestamp>"
 RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
@@ -144,11 +148,13 @@ while [[ $# -gt 0 ]]; do
             ;;
         --use-docker)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
-                echo "Error: --use-docker requires a non-empty value"
-                exit 1
+                # No value provided: fall back to the default image.
+                DOCKER_IMAGE="$DOCKER_IMAGE_DEFAULT"
+                shift
+            else
+                DOCKER_IMAGE="$2"
+                shift 2
             fi
-            DOCKER_IMAGE="$2"
-            shift 2
             ;;
         --num-iterations)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
@@ -331,6 +337,12 @@ else
         echo "Error: MPI interface auto-detection failed" >&2
         exit 1
     fi
+fi
+
+# Default output dir when not overridden by --output: the comma-separated host list followed by a
+# timestamp, e.g. "bh-glx-c01u02,bh-glx-c01u08-20260720_131500". Keeps each run's artifacts distinct.
+if [[ -z "$OUTPUT_DIR" ]]; then
+    OUTPUT_DIR="${HOSTS}-$(date +%Y%m%d_%H%M%S)"
 fi
 
 # Set log file path inside output directory (captures actual start time).
