@@ -80,7 +80,9 @@ int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     int device_id = 0, l2cpu = 0, pll = 1000;
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
-    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 8192, prod_delay = 0;
+    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 65536, prod_delay = 0;  // 256 KB/ring: relay never hostfull-stalls
+                                                                          // (gives the push-to-host headroom over
+                                                                          // the readers); fits 4 rings in the 2 MB win
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
