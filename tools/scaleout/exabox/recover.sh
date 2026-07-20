@@ -506,14 +506,21 @@ fi
 # validation succeeds. --num-iterations controls the inner validation loop; this controls how
 # many times the whole recovery is retried. Descriptor regeneration (Step 3) runs once after the
 # loop, only if every attempt failed.
+UNRETRAINABLE_YAML="$OUTPUT_DIR/unretrainable_channels.yaml"
 VALIDATION_EXIT=0
 for (( ATTEMPT=1; ATTEMPT<=MAX_ATTEMPTS; ATTEMPT++ )); do
 echo "=========================================="
 echo "Recovery attempt $ATTEMPT of $MAX_ATTEMPTS"
 echo "=========================================="
 
+# All attempts share $OUTPUT_DIR, but unretrainable_channels.yaml is only (re)written on one
+# specific validation failure path. Clear any artifact from a prior attempt so Step 3 can only
+# regenerate descriptors from evidence produced by the current (latest post-reset) attempt.
+rm -f "$UNRETRAINABLE_YAML"
+
 # Step 1: tt-smi reset
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
+RESET_EXIT=0
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
     # Host-tag every reset line for attribution. tt-smi writes key progress to the tty (not stdout) so
@@ -541,22 +548,38 @@ if [[ $ec -eq 0 ]]; then
 else
     printf '[%s][%(%H:%M:%S)T] Reset failed | Exit code: %s\n' "$h" -1 "$ec"
 fi
+# Propagate tt-smi's status so mpirun (and the caller) sees per-host reset failures.
+exit "$ec"
 RESET_CMD
-    mpirun --host "$HOSTS" \
+    # Capture mpirun's status without tripping `set -e` (the `if` context suspends it) so a reset
+    # failure retries the attempt instead of aborting the whole script. The remote command exits with
+    # tt-smi's status, so mpirun returns non-zero if any host's reset failed.
+    if mpirun --host "$HOSTS" \
         --mca btl_tcp_if_include "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
-        bash -c "$RESET_CMD"
+        bash -c "$RESET_CMD"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
 
-    echo ""
-    echo "Sleeping ${SLEEP_DURATION}s..."
-    sleep "$SLEEP_DURATION"
+    if [[ $RESET_EXIT -ne 0 ]]; then
+        echo ""
+        echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+    else
+        echo ""
+        echo "Sleeping ${SLEEP_DURATION}s..."
+        sleep "$SLEEP_DURATION"
+    fi
 else
     echo "Skipping tt-smi reset (--skip-reset)"
 fi
 
 # Step 2: Cluster validation
+# VALIDATION_EXIT carries the whole attempt's outcome: a failed reset short-circuits validation and
+# fails the attempt so the outer loop retries (or the script exits non-zero once attempts run out).
 VALIDATION_EXIT=0
-if [[ "$SKIP_VALIDATION" == false ]]; then
+if [[ $RESET_EXIT -ne 0 ]]; then
+    echo ""
+    echo "Skipping validation because reset failed on this attempt."
+    VALIDATION_EXIT=$RESET_EXIT
+elif [[ "$SKIP_VALIDATION" == false ]]; then
     VALIDATION_ARGS=("${DESCRIPTOR_ARGS[@]}")
     if [[ "$SEND_TRAFFIC" == true ]]; then
         VALIDATION_ARGS+=(--send-traffic)
@@ -620,9 +643,10 @@ else
 fi
 done
 
-# Step 3: Regenerate descriptors if validation hit unrecoverable state
+# Step 3: Regenerate descriptors if validation hit unrecoverable state.
+# UNRETRAINABLE_YAML is cleared before each attempt, so any file present here was produced by the
+# final (failed) attempt and reflects the latest post-reset state.
 if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
-    UNRETRAINABLE_YAML="$OUTPUT_DIR/unretrainable_channels.yaml"
     if [[ -f "$UNRETRAINABLE_YAML" ]]; then
         if [[ -z "$CABLING_DESCRIPTOR_PATH" || -z "$DEPLOYMENT_DESCRIPTOR_PATH" ]]; then
             echo ""
