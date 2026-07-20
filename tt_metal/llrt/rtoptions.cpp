@@ -799,7 +799,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Store command queues in device DRAM.
         // Default: false (use hugepages)
         // Usage: export TT_METAL_DRAM_BACKED_CQ=1
-        case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_DRAM_BACKED_CQ:
+            this->dram_backed_cq_env_var_set = true;
+            this->dram_backed_cq = is_env_enabled(value);
+            break;
 
         // TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES
         // Use synchronous direct buffer writes for simulator tensor preloads instead of FD CQ copies.

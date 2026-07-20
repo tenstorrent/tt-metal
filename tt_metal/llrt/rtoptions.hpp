@@ -347,6 +347,7 @@ class RunTimeOptions {
     bool force_jit_compile = false;
 
     // Store command queues in device DRAM
+    bool dram_backed_cq_env_var_set = false;
     bool dram_backed_cq = false;
 
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
@@ -841,6 +842,7 @@ public:
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
+    bool is_dram_backed_cq_specified() const { return dram_backed_cq_env_var_set; }
     bool get_dram_backed_cq() const { return dram_backed_cq; }
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 

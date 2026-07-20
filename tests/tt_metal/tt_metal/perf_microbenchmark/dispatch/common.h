@@ -982,6 +982,16 @@ inline bool is_quasar_sim() {
            tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
 }
 
+// Honour an explicit TT_METAL_DRAM_BACKED_CQ value, otherwise retain the DRAM-backed default required by the Quasar
+// simulator.
+inline bool is_quasar_cq_dram_backed() {
+    if (!is_quasar_sim()) {
+        return false;
+    }
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    return !rtoptions.is_dram_backed_cq_specified() || rtoptions.get_dram_backed_cq();
+}
+
 // Wrapper template that marks any base fixture as the Quasar-simulator-only variant; the constructor
 // sets quasar_simulator_variant_ before gtest's SetUp() reads it.
 template <class FDFixture>
@@ -1053,9 +1063,17 @@ protected:
         // Initialize common pointers
         auto& mcq = mesh_device_->mesh_command_queue();
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
-        // mgr_ = &FDMeshCQTestAccessor::sysmem(*fdcq_);
         device_ = mesh_device_->get_devices()[0];
         mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
+
+        if (Common::is_quasar_sim()) {
+            TT_FATAL(
+                mgr_->is_dram_backed() == Common::is_quasar_cq_dram_backed(),
+                "Quasar CQ backing configuration mismatch: SystemMemoryManager reports DRAM-backed={}, "
+                "but the test policy expects DRAM-backed={}",
+                mgr_->is_dram_backed(),
+                Common::is_quasar_cq_dram_backed());
+        }
 
         // Initialize common HW properties
         host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
@@ -1094,18 +1112,16 @@ protected:
     }
 
     // SD (slow dispatch) issue + completion queue sizes. Must fit in one device's hugepage slot
-    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. On Quasar simulation host
-    // hugepages are not available, so command queues must be stored in DRAM, and only 64 MB of physical DRAM space
-    // (QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) is available even though the bank size is 1 GB. The remaining addresses
-    // alias this physical space. The SD command queue must therefore fit in a single 64-MB window, so each half is
-    // capped at 8 MB on the Quasar simulator.
+    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. Quasar's default
+    // DRAM-backed policy uses fixed 8 MB queues in its 64 MB physical-DRAM window. An explicit
+    // TT_METAL_DRAM_BACKED_CQ=0 uses the same mapped-host split as WH/BH.
     uint32_t sd_issue_queue_size() const {
-        return Common::is_quasar_sim() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
-                                       : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+        return Common::is_quasar_cq_dram_backed() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
+                                                  : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
     uint32_t sd_completion_queue_size() const {
-        return Common::is_quasar_sim() ? QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE
-                                       : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+        return Common::is_quasar_cq_dram_backed() ? QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE
+                                                  : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
 
     // Helper function that polls completion queue until expected data is written into by dispatcher
@@ -1272,7 +1288,7 @@ protected:
         const std::chrono::duration<double> elapsed = end - start;
         log_info(tt::LogTest, "Ran in {:f} ms (for {} iterations)", elapsed.count() * 1000.0, num_iterations);
 
-        // On the Quasar simulator the completion queue is DRAM-backed; sync the host staging mirror before validating.
+        // DRAM-backed Quasar CQs require a host staging-buffer refresh before validation.
         this->refresh_completion_data();
 
         // Validate results
@@ -1324,8 +1340,11 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
     const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
 
+    const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
+    const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
+
     return {
-        {"IS_CQ_DRAM_BACKED", Common::is_quasar_sim() ? "1" : "0"},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed},
         {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"DISPATCH_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
@@ -1452,6 +1471,10 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     const CoreCoord& phys_dispatch) {
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
+
+    const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
+    const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
+
     return {
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
@@ -1470,7 +1493,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         // these share a slot id; on Quasar (prefetch+dispatch same core) they are distinct slots.
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
         {"DOWNSTREAM_CB_SEM_ID", std::to_string(downstream_cb_sem_id)},
-        {"IS_CQ_DRAM_BACKED", Common::is_quasar_sim() ? "1" : "0"},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed},
         {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"PCIE_BASE", std::to_string(pcie_base)},
         {"PCIE_SIZE", std::to_string(pcie_size)},
