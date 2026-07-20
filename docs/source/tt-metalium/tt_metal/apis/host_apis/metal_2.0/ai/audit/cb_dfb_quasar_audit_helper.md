@@ -1,6 +1,6 @@
-# CB → DFB Kernel Audit Report
+# CB → DFB Kernel Audit (Quasar uplift)
 
-> **Status:** Living document (2026-07-14). **Standalone device-side audit** — classifies legacy **kernel** CB usage and CB→DFB port readiness per op or ProgramFactory. Does **not** audit host `ProgramSpec`, binding multiplicity, or factory refactors ([`audit/metal2.md`](metal2.md) covers host/spec). **Scope is machine-discovered** from program factories and PR diffs — see [Automated scope discovery](#automated-scope-discovery).
+> **Status:** Living document (2026-07-14). **Standalone device-side audit** — classifies legacy **kernel** CB usage and its CB→DFB portability per op or ProgramFactory. **This is a Quasar-uplift readiness audit:** on WH/BH the Metal 2.0 port swaps `CircularBuffer` → `DataflowBuffer` **mechanically** (via `evil_*`, no semantic change), so nothing here blocks the WH/BH port — the redesign it flags is deferred to the **Quasar uplift** step. Does **not** audit host `ProgramSpec`, binding multiplicity, or factory refactors ([`audit/metal2.md`](metal2.md) covers host/spec). **Scope is machine-discovered** from program factories and PR diffs — see [Automated scope discovery](#automated-scope-discovery).
 >
 > **Companion docs:** [CB→DFB API whitelist](../shared/cb_dfb_api_whitelist.md) (CB API → DFB / evil_get|set mapping), [CB→DFB flowchart](../../human/CB-to-DFB-flowchart.svg), [Metal 2.0 port patterns](../shared/port_patterns.md) (host binding — cross-ref only), repo-root inventory `2026-07-07 Quasar CB port-readiness audit — illegal CB usage by op.md`.
 
@@ -16,7 +16,7 @@
 
 | Trigger | Example |
 |---------|---------|
-| Pre-kernel-port readiness | "Audit layernorm sharded Welford kernels for CB→DFB" |
+| Quasar-uplift readiness | "Audit layernorm sharded Welford kernels for CB→DFB" |
 | PR touching `*/kernels/*` | Diff-driven scope from changed kernel or factory file |
 | Port planning | Before rewriting `CircularBuffer` → `DataflowBuffer` in device code |
 
