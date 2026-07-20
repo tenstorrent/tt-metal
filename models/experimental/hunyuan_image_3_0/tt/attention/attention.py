@@ -307,14 +307,22 @@ class HunyuanTtAttention(LightweightModule):
         # width-sharded act path (~32c): isolation 36us vs 40us / in-model ~47us
         # (tests/perf/test_matmul_shard_sweep.py). allow_width_shard=False installs
         # decode_mm via l1_sharded_linear; auto alone is ~93us on this shape.
+        # Write the QKV matmul output straight into attn_mc's memory space. At small Sd
+        # the interleaved nlp_create_qkv_heads runs on a SINGLE core (num_blocks =
+        # Sd/32 = 1 tile-row) and reads/writes one tile at a time, so it is latency-bound
+        # on ~192 serial tile round-trips. Its output already lands in L1 (attn_mc is L1
+        # for Sd < RESID_L1_MAX_SEQ); landing the matmul output (its input) in L1 too
+        # turns the read-side DRAM round-trips into L1<->L1 ones. At large Sd attn_mc is
+        # DRAM (same as before) and the op already spreads across Sd/32 cores.
         xqkv = l1_sharded_linear(
             x,
             self.qkv_proj,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
             allow_width_shard=False,
+            out_memory_config=attn_mc,
         )
-        xqkv = to_interleaved_if_sharded(xqkv)
+        xqkv = to_interleaved_if_sharded(xqkv, memory_config=attn_mc)
 
         # ---- 2. Split into Q / K / V heads (GQA-aware) ---------------------
         # nlp_create_qkv_heads expects [B, 1, S, QKV_dim] (4D).
