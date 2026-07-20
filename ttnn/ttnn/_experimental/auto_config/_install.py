@@ -13,19 +13,31 @@ golden functions have been registered, so the wrappers can reuse the existing
 golden functions rather than redefining them.
 """
 
+import inspect
 import os
 
 import ttnn
 from ttnn.decorators import REGISTERED_OPERATIONS, get_golden_function
 
-_AUTO_CONFIG_DOC_SUFFIX = """
-
-Additional Keyword Args:
-    auto_config (bool, optional): Enables measured auto-selection and persistent caching for matmul recipes.
-        Defaults to `True`. If explicit low-level placement/program configuration arguments such as
-        `program_config`, `core_grid`, `compute_kernel_config`, or `output_tile` are supplied,
-        auto-configuration is bypassed and the requested configuration is used directly.
+# Kept as a self-contained reStructuredText ``.. note::`` directive so it appends cleanly to the
+# base op docstrings without forming a definition list or colliding with their existing
+# ``Keyword Args:`` section (which would break the Sphinx docs build under ``-W``).
+_AUTO_CONFIG_DOC_SUFFIX = """.. note::
+   This entrypoint also accepts an ``auto_config`` keyword argument (``bool``, default ``True``)
+   that enables measured auto-selection and persistent caching of matmul recipes. When explicit
+   low-level placement or program-configuration arguments (``program_config``, ``core_grid``,
+   ``compute_kernel_config`` or ``output_tile``) are supplied, auto-configuration is bypassed and
+   the requested configuration is used directly.
 """
+
+
+def _compose_doc(base_doc: str | None) -> str:
+    # ``inspect.cleandoc`` strips the base docstring's common leading indentation (the C++ op
+    # docstrings are indented) so the appended column-0 suffix shares a consistent indent and the
+    # combined text dedents cleanly for Sphinx.
+    base = inspect.cleandoc(base_doc or "")
+    return f"{base}\n\n{_AUTO_CONFIG_DOC_SUFFIX}"
+
 
 # Populated by ``install_public_wrappers`` with the original C++ operations so
 # the wrappers can dispatch to the kernel-backed base op.
@@ -165,8 +177,8 @@ def install_public_wrappers():
     matmul_golden = get_golden_function(_CPP_MATMUL)
     linear_golden = get_golden_function(_CPP_LINEAR)
 
-    matmul_doc = f"{_CPP_MATMUL.__doc__}{_AUTO_CONFIG_DOC_SUFFIX}"
-    linear_doc = f"{_CPP_LINEAR.__doc__}{_AUTO_CONFIG_DOC_SUFFIX}"
+    matmul_doc = _compose_doc(_CPP_MATMUL.__doc__)
+    linear_doc = _compose_doc(_CPP_LINEAR.__doc__)
 
     if _slow_dispatch_mode_enabled():
         # Keep the public matmul/linear API available, but avoid wrapping the
