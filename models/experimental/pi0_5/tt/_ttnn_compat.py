@@ -20,6 +20,11 @@ def nlp_create_qkv_heads_rope(
     mem = memory_config or ttnn.L1_MEMORY_CONFIG
     if hasattr(ttnn.experimental, "nlp_create_qkv_heads_rope"):
         return ttnn.experimental.nlp_create_qkv_heads_rope(xqkv, cos, sin, num_heads, num_kv_heads, memory_config=mem)
+    # Fallback: nlp_create_qkv_heads requires a sharded (non-width-sharded) output when its input is
+    # sharded. The DECODE_ALL path feeds a WIDTH-SHARDED qkv; convert it to interleaved first so the
+    # interleaved-in -> interleaved-out path is taken and the requested `mem` config is honored.
+    if xqkv.is_sharded():
+        xqkv = ttnn.sharded_to_interleaved(xqkv, mem)
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         xqkv,
         num_heads=num_heads,

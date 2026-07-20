@@ -47,9 +47,11 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 # ---------------------------------------------------------------------------
 # Weight upload helpers (host-side; allowed to use torch).
 # ---------------------------------------------------------------------------
-def _linear_weight_to_tt(w: torch.Tensor, dtype: "ttnn.DataType" = ttnn.bfloat8_b) -> ttnn.Tensor:
+def _linear_weight_to_tt(
+    w: torch.Tensor, dtype: "ttnn.DataType" = ttnn.bfloat8_b, tile: "Optional[ttnn.Tile]" = None
+) -> ttnn.Tensor:
     """Transpose a torch ``[out, in]`` linear weight to ttnn ``[in, out]`` host tensor."""
-    return from_torch_pi05(w.t().contiguous(), dtype=dtype)
+    return from_torch_pi05(w.t().contiguous(), dtype=dtype, tile=tile)
 
 
 def _norm_weight_to_tt(w: torch.Tensor) -> ttnn.Tensor:
@@ -323,8 +325,10 @@ class TTNNPi05AdaRMSGemmaBlock(StatefulTTNNModule):
         return None
 
     def preprocess_weights_impl(self):
-        self.tt_pre_attn_mod_w = _linear_weight_to_tt(self._pre_attn_mod_w, dtype=ttnn.bfloat16)
-        self.tt_pre_ffw_mod_w = _linear_weight_to_tt(self._pre_ffw_mod_w, dtype=ttnn.bfloat16)
+        self.tt_pre_attn_mod_w = _linear_weight_to_tt(
+            self._pre_attn_mod_w, dtype=ttnn.bfloat16, tile=ttnn.Tile((32, 32))
+        )
+        self.tt_pre_ffw_mod_w = _linear_weight_to_tt(self._pre_ffw_mod_w, dtype=ttnn.bfloat16, tile=ttnn.Tile((32, 32)))
         self.tt_pre_attn_mod_b = (
             from_torch_pi05(self._pre_attn_mod_b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16)
             if self._pre_attn_mod_b is not None
