@@ -57,6 +57,8 @@ Tensor sdpa(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    const std::optional<Tensor>& cu_window_seqlens = std::nullopt);
+    const std::optional<Tensor>& cu_window_seqlens = std::nullopt,
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt);
 
 }  // namespace ttnn::prim

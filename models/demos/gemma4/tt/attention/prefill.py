@@ -7,6 +7,10 @@ Prefill-mode attention forward pass for Gemma4.
 Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 """
 
+import os
+
+import torch
+
 import ttnn
 
 from .operations import (
@@ -26,6 +30,45 @@ from .operations import (
 from .weights import AttentionWeights
 
 TILE_HEIGHT = 32
+
+
+def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device):
+    """Resolve the per-request fill length as a device tensor for
+    ``paged_fill_cache``'s kernel-side bounded-fill cap, or None to fall back
+    to the host-side slice.
+
+    Only meaningful for a bounded (circular) cache.
+
+    * Traced prefill (``valid_seq_len is None`` / ``get_last_token=-1``): use the
+      persistent tensor stashed on ``config`` by the model
+      (``prefill_valid_len_dev``), refreshed by the generator out-of-trace.
+    * Eager opt-in (``GEMMA4_KERNEL_FILL_CAP``): build an inline tensor from the
+      known real length. Otherwise the caller host-slices the K/V fill input.
+    """
+    if config.cache_position_modulo is None:
+        return None
+    # Prefer the persistent per-request tensor only when the host length is
+    # unknown (traced prefill, get_last_token=-1). Eager multi-chunk still uses
+    # the host-side slice / inline tensor so each chunk can carry its own length.
+    dev = getattr(config, "prefill_valid_len_dev", None)
+    if dev is not None and valid_seq_len is None:
+        return dev
+    if os.environ.get("GEMMA4_KERNEL_FILL_CAP", "0").lower() not in ("1", "true", "yes"):
+        return None
+    if valid_seq_len is None:
+        return None
+    # Store the raw real length; the writer kernel rounds up to a whole block.
+    real_len = min(valid_seq_len, padded_seq_len)
+    if not (0 < real_len < padded_seq_len):
+        return None
+    return ttnn.from_torch(
+        torch.tensor([real_len], dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 def _prefill_forward_single(
@@ -73,7 +116,17 @@ def _prefill_forward_single(
         raise NotImplementedError("Gemma4 KV-shared layer cross-chunk prefill not implemented yet (Stage A-hard).")
     # Fill the current chunk's K/V at its physical blocks. For a single chunk the
     # chunk table equals the (full) page_table, so behavior is unchanged.
-    fill_page_table = chunk_page_table if is_chunked else page_table
+    #
+    # Bounded sliding (cache_position_modulo set): the writer wraps absolute
+    # positions into the window and looks up page_table[wrapped_block]. The
+    # layer's hybrid page_table has the correct physical blocks in that prefix.
+    # ``chunk_page_table`` is a slice of the *full-attention* table at absolute
+    # offsets — using it here would write sliding K/V into the wrong pool.
+    # Full-attention layers still need the absolute chunk slice.
+    if config.cache_position_modulo is not None:
+        fill_page_table = page_table
+    else:
+        fill_page_table = chunk_page_table if is_chunked else page_table
 
     xqkv = apply_qkv_projection(hidden_states, weights)
 
@@ -121,22 +174,50 @@ def _prefill_forward_single(
             # decode never reads. NOTE: a residual sub-tile boundary padding is a
             # known >32k long-context limitation, tracked in
             # docs/bounded_sliding_kv_cache_debug.md.
+            # Two ways to keep the bounded fill from wrapping padding over the real
+            # recent window:
+            #  (1) host-side slice: cap the input to a block-aligned fill_len >= the
+            #      real prompt before the fill. Works only when valid_seq_len (the
+            #      real length) is known here — i.e. eager prefill (get_last_token>=0).
+            #  (2) kernel-side cap: pass valid_seq_len as a device tensor; the writer
+            #      restricts the ring window to end there. Works under a captured
+            #      prefill trace too (get_last_token==-1), where valid_seq_len is None
+            #      but a per-request device tensor is refreshed outside the trace.
             k_fill, v_fill = tt_k, tt_v
-            if config.cache_position_modulo is not None and valid_seq_len is not None:
+            fill_kwargs = {}
+            valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
+            if valid_dev is not None:
+                fill_kwargs["valid_seq_len_tensor"] = valid_dev
+            elif config.cache_position_modulo is not None and valid_seq_len is not None:
                 fill_len = ((min(valid_seq_len, tt_k.shape[-2]) + eff_bs - 1) // eff_bs) * eff_bs
                 if 0 < fill_len < tt_k.shape[-2]:
                     k_fill = ttnn.slice(tt_k, [0, 0, 0, 0], [tt_k.shape[0], tt_k.shape[1], fill_len, tt_k.shape[3]])
                     v_fill = ttnn.slice(tt_v, [0, 0, 0, 0], [tt_v.shape[0], tt_v.shape[1], fill_len, tt_v.shape[3]])
             ttnn.experimental.paged_fill_cache(
-                k_cache, k_fill, fill_page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
+                k_cache,
+                k_fill,
+                fill_page_table,
+                batch_idx=user_id,
+                block_size=eff_bs,
+                **paged_modulo_kwargs,
+                **fill_kwargs,
             )
             ttnn.experimental.paged_fill_cache(
-                v_cache, v_fill, fill_page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
+                v_cache,
+                v_fill,
+                fill_page_table,
+                batch_idx=user_id,
+                block_size=eff_bs,
+                **paged_modulo_kwargs,
+                **fill_kwargs,
             )
             if k_fill is not tt_k:
                 k_fill.deallocate(True)
             if v_fill is not tt_v:
                 v_fill.deallocate(True)
+            # Free the inline-built cap tensor; leave a persistent (config-owned) one.
+            if valid_dev is not None and valid_dev is not getattr(config, "prefill_valid_len_dev", None):
+                valid_dev.deallocate(True)
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
@@ -226,14 +307,26 @@ def _prefill_forward_single(
         # paged cache. base_offset shifts the causal window to this chunk's
         # absolute positions [chunk_offset, chunk_offset+seq_len).
         k_cache, v_cache = kv_cache
+        nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = chunked_prefill_sdpa(
-            tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0, base_offset=chunk_offset
+            tt_q,
+            k_cache,
+            v_cache,
+            page_table,
+            user_id,
+            config.head_dim,
+            scale=1.0,
+            base_offset=chunk_offset,
+            num_kv_heads=nkv_local,
         )
     elif long_seq and config.is_sliding and sliding_window is not None:
         tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
     elif long_seq and not config.is_sliding and page_table is not None and kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
-        tt_sdpa = chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0)
+        nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+        tt_sdpa = chunked_prefill_sdpa(
+            tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0, num_kv_heads=nkv_local
+        )
     else:
         # HiFi4 + FP32 dest-acc SDPA: restore the softmax-reduce precision #47311 removed
         # (it dropped the reduce's forced-FP32 accumulation). fp32_dest_acc is safe on the
