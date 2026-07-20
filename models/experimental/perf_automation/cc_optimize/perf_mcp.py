@@ -1998,4 +1998,8 @@ def verify_tp_fracture(m: int, k: int, n: int, tp: int = 4) -> dict:
 
 
 if __name__ == "__main__":
+    try:
+        _rebuild_optimize_report()
+    except Exception:  # noqa: BLE001
+        pass
     mcp.run()
