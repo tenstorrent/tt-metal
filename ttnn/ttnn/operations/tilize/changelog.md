@@ -1,5 +1,85 @@
 # tilize — changelog
 
+## Refinement 2d — General cross-core path wide-W CB chunking + DRAM sharding  [x]
+
+- **Date**: 2026-07-20
+- **What was done**: BOTH levers landed fully.
+  - **Lever #1 — wide-W CB chunking of the general cross-core path.** The general
+    reader (`tilize_reader_general.cpp`) gains a chunk-outer / block-inner loop
+    mirroring the interleaved reader: it processes `Wt_chunk` (`_pick_wt_chunk`,
+    ≤8, a divisor of Wt) output tile-columns per pass, so each stick contributes
+    only the byte range `[k*chunk_width_bytes, (k+1)*chunk_width_bytes)` of the
+    full logical row. The npr subtlety (WIDTH/BLOCK-sharded input splits a row
+    into `npr = ceil(W/shard_w)` accessor pages) is handled by a per-stick overlap
+    loop: `shard_page = abs_byte / shard_page_bytes`, `page_off = abs_byte %
+    shard_page_bytes`, clamped to the chunk width — degenerates to a single read
+    for npr==1 (interleaved/HEIGHT). `_create_general_program_descriptor` now sizes
+    both CBs `2*Wt_chunk*tile` and wires the reader/compute/writer CT args for
+    chunking; `tilize_compute.cpp` + `tilize_writer.cpp` are reused UNCHANGED (they
+    already took `Wt_chunk`/`num_chunks`).
+  - **Lever #2 — same-spec DRAM both-sharded via the general path.** The zero-copy
+    routing is now guarded by both-L1 (a DRAM shard cannot be CB-aliased); same-spec
+    DRAM falls through to the general path, which reads/writes DRAM shard banks via
+    TensorAccessor with no aliasing (the op allocates a distinct output tensor).
+    `validate()` same-spec branch no longer requires L1; cross-spec resharding
+    stays L1-only (DRAM cross-spec is a separate axis, out of 2d scope).
+- **CB footprint before → after** (per core, per CB, the 2d deliverable):
+  - before: `2 * Wt * tile` — **scales with W** (e.g. HEIGHT shard W=2048 ⇒ Wt=64
+    ⇒ 2·64·2048 = 256 KB/CB; W=8192 ⇒ Wt=256 ⇒ 1 MB/CB ⇒ 2 CBs = 2 MB > 1.5 MB L1
+    ⇒ OOM).
+  - after: `2 * Wt_chunk * tile` with `Wt_chunk ≤ 8` — **constant in W** (32 KB/CB
+    bf16 regardless of W; 64 KB/CB fp32). Confirmed by
+    `test_2d_extreme_width_cb_under_budget` (W=8192, total CB < 100 KB, under the
+    1.5 MB budget) — the un-chunked path would have OOMed.
+- **validate()/SUPPORTED delta**: no SUPPORTED axis list changed (buffer
+  `dram_to_dram`, the sharded schemes, and fp32 were already in SUPPORTED from
+  Refinements 1–2). Lever #2 relaxes a validate()-internal sub-case refusal
+  (same-spec both-sharded no longer requires L1). No XPASS drift — registry-driven
+  `test_golden.py`+`test_regression.py` = 86 passed, 0 failed, 0 XPASS.
+- **Accuracy**: bit-exact identity (`torch.equal`, max_diff=0) for bf16 wide-W
+  HEIGHT crossover `[1,1,512,2048]` (Wt=64, wt_chunk=8, npr=1) and WIDTH crossover
+  `[1,1,256,1024]` (Wt=32, npr=8, chunk spans 2 shard pages); fp32 wide-W HEIGHT
+  `[1,1,256,2048]`; deep_seek WIDTH fp32 DRAM `[1,7168,2304]` (Wt=72, npr=8) within
+  atol/rtol=4e-3.
+- **Golden progress**: `test_golden_main_tests.py` **104 passed / 1 failed →
+  105 passed / 0 failed** — `test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row`
+  (the 2c-deferred DRAM case) now PASSES via lever #2. The remaining 2 errors
+  (`test_deepseek_v3_mla_tilize_trace_mode`) are the pre-existing
+  `use_module_device`+`device_params` infra conflict — not tilize, verified
+  identical at baseline. 2c golden targets unchanged: `test_tilize_nd_sharded` +
+  `test_tilize_nd_sharded_to_legacy_sharded` still 45 passed / 0 failed.
+- **No regression**: `test_golden.py` 77/55/0, `test_regression.py` 9 pass,
+  sharded unit `test_tilize_sharded.py` 25/25, acceptance `test_tilize.py` 35/35.
+- **Perf gate**: **DM-bound** (byte reshuffle; FPU throughput >> NoC feed —
+  unchanged from 2c). DM checklist review against the chunked reader:
+  - **CB bounded by a constant (never growing with Wt)** ✓ — the 2d deliverable,
+    now applied to the general path (the sole lever deferred from 2c).
+  - **One barrier per block** ✓ — the reader barriers once per `(chunk, block)`;
+    the writer once per `(chunk, block)` for its `Wt_chunk` writes.
+  - **No DRAM re-read penalty** ✓ — the num_chunks passes read DISJOINT column
+    ranges of every stick, so total input bytes read = W·H·elem exactly once, the
+    same as the un-chunked path. Bounding L1 costs no extra bandwidth here.
+  - depth-2 CBs → read/compute/write overlap ✓; row-wise core placement ✓.
+  - Accepted tradeoff (memory-budget skill §5): chunking splits a full-row read
+    (`row_bytes`) into `num_chunks` smaller per-chunk reads (`chunk_width_bytes`),
+    a minor per-transaction coalescing reduction — the necessary L1-vs-coalescing
+    trade for wide W. `Wt_chunk` is chosen as the largest divisor ≤8 to keep chunks
+    as large as the L1 bound allows.
+  - Device Tracy duration deferred (device profiler not enabled in this
+    pre-compiled-firmware build — same caveat every prior phase; the tested shapes
+    are correctness/L1-bound gates, not bandwidth benchmarks).
+- **Issues encountered / hangs**: none — no device hang across the 2d effort.
+  ttnn-static-analyzer on the changed reader: **0 structural findings** (CB
+  push/wait counts + chunk-outer/block-inner loop order agree across reader/
+  compute/writer; per-stick overlap loop terminates and covers exactly the chunk
+  width; CB capacity 2·Wt_chunk ≥ the Wt_chunk per-block reservation). Its one
+  theoretical caveat (misaligned NoC read if a WIDTH/BLOCK input shard width were
+  non-tile-aligned) is not reachable — shard specs are tile-aligned and validate()
+  enforces it.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_2d_debug.py`
+  (4 cases: wide-W HEIGHT crossover CB-bound + identity; WIDTH npr>1 crossover;
+  fp32 wide-W; extreme W=8192 CB-under-budget build check).
+
 ## Refinement 2c — Sharded I/O general cross-core NoC path  [~ partial]
 
 - **Date**: 2026-07-20

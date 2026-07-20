@@ -259,7 +259,7 @@ chunking for wide W. Also out of scope (pre-existing, not a regression):
 DRAM-sharded same-spec (`test_from_torch_conversion_deep_seek_mc...`, WIDTH
 sharded in DRAM) — 2c is L1 cross-core; DRAM sharding is a separate axis.
 
-### [ ] Refinement 2d — General cross-core path wide-W CB chunking (lever #4) + optional DRAM sharding
+### [x] Refinement 2d — General cross-core path wide-W CB chunking (lever #4) + optional DRAM sharding
 
 **Goal**: bound the general cross-core path's L1 footprint by a constant for
 wide-W sharded/crossover cases, and (optionally) extend it to DRAM-sharded
