@@ -10,6 +10,9 @@ This file holds only what is *shared*: cross-block decisions, the integration co
 detail — build steps, findings, PCC logs, open questions — lives in that block's file, not
 here.**
 
+> **Known bugs are tracked in `CLAUDE_XTTS_BUGS.md`** — the file to check when returning
+> to fix bugs.
+
 > Sibling effort: a compiler-based bringup (tt-xla, PJRT → tt-mlir, via tt-forge-models
 > PR #784) is logged in `/localdev/acicovic/tt-xla/CLAUDE_XTTS_FORGE.md` (owned by another
 > agent — read for model-internals detail, don't modify). This file is the TTNN/Metal path.
