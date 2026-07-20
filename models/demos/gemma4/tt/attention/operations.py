@@ -265,15 +265,16 @@ def chunked_prefill_sdpa(
     # another layer's view. eff_bs / num_kv_heads recover this layer's block layout
     # (Q drives head_dim). Only forwarded when they differ from the cache's declared
     # shape, so the non-shared (Option A) path takes the op's legacy branch unchanged.
-    block_size_override = None
-    num_kv_heads_override = None
+    paged_cache_geometry = None
     if num_kv_heads is not None:
         eff_bs = effective_block_size(k_cache, head_dim, num_kv_heads)
         cache_block_size = k_cache.padded_shape[2]
         cache_num_kv_heads = k_cache.padded_shape[1]
         if eff_bs != cache_block_size or num_kv_heads != cache_num_kv_heads:
-            block_size_override = eff_bs
-            num_kv_heads_override = num_kv_heads
+            paged_cache_geometry = ttnn.transformer.PagedCacheGeometryOverride(
+                block_size=eff_bs,
+                num_kv_heads=num_kv_heads,
+            )
     # head_dim=512 needs more L1/core, so use a smaller grid + 128 chunks (the
     # validated config); sliding-size head_dim uses the full grid.
     if head_dim >= 512:
@@ -327,8 +328,7 @@ def chunked_prefill_sdpa(
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
-            block_size=block_size_override,
-            num_kv_heads=num_kv_heads_override,
+            paged_cache_geometry=paged_cache_geometry,
         )
         q_chunk.deallocate(True)
         if pad:

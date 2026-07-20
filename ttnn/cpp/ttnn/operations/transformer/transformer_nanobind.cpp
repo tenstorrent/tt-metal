@@ -5,6 +5,7 @@
 #include "transformer_nanobind.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <tt_stl/reflection.hpp>
 
@@ -49,6 +50,21 @@ void py_module(nb::module_& mod) {
                 config.k_chunk_size,
                 config.exp_approx_mode,
                 config.max_cores_per_head_batch);
+        });
+
+    nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")
+        .def(nb::init<>())
+        .def(
+            nb::init<std::optional<uint32_t>, std::optional<uint32_t>>(),
+            nb::kw_only(),
+            nb::arg("block_size") = nb::none(),
+            nb::arg("num_kv_heads") = nb::none())
+        .def_rw("block_size", &PagedCacheGeometryOverride::block_size)
+        .def_rw("num_kv_heads", &PagedCacheGeometryOverride::num_kv_heads)
+        .def("active", &PagedCacheGeometryOverride::active)
+        .def("__repr__", [](const PagedCacheGeometryOverride& geo) {
+            return fmt::format(
+                "PagedCacheGeometryOverride(block_size={}, num_kv_heads={})", geo.block_size, geo.num_kv_heads);
         });
 
     bind_attention_softmax(mod);

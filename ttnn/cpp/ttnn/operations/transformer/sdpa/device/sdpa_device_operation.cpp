@@ -599,8 +599,7 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens,
-    std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -616,10 +615,7 @@ Tensor sdpa(
             .sliding_window_size = sliding_window_size,
             .is_windowed = cu_window_seqlens.has_value(),
             .paged_cache_geometry =
-                ttnn::operations::transformer::PagedCacheGeometryOverride{
-                    .block_size = block_size_override,
-                    .num_kv_heads = num_kv_heads_override,
-                },
+                paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

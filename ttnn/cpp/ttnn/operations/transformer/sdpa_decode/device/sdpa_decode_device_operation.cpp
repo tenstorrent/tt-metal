@@ -526,8 +526,7 @@ Tensor sdpa_decode(
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
-    std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -544,10 +543,7 @@ Tensor sdpa_decode(
         .use_mla = use_mla,
         .head_dim_v = head_dim_v,
         .paged_cache_geometry =
-            ttnn::operations::transformer::PagedCacheGeometryOverride{
-                .block_size = block_size_override,
-                .num_kv_heads = num_kv_heads_override,
-            },
+            paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
     };
 

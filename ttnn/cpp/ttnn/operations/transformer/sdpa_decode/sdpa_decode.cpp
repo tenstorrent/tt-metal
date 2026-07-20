@@ -112,8 +112,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -175,8 +174,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        block_size_override,
-        num_kv_heads_override,
+        std::move(paged_cache_geometry),
         cache_position_modulo);
 }
 

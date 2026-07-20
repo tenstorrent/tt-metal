@@ -310,11 +310,13 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
-            block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
-            num_kv_heads=sdpa_num_local_kv_heads,
+            paged_cache_geometry=ttnn.transformer.PagedCacheGeometryOverride(
+                block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
+                num_kv_heads=sdpa_num_local_kv_heads,
+            ),
             **paged_modulo_kwargs,
         )
     else:
@@ -468,8 +470,10 @@ def _packed_verify_sdpa(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=pc,
                 compute_kernel_config=compute_kernel_config,
-                block_size=block_size,
-                num_kv_heads=num_kv_heads,
+                paged_cache_geometry=ttnn.transformer.PagedCacheGeometryOverride(
+                    block_size=block_size,
+                    num_kv_heads=num_kv_heads,
+                ),
             )
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,

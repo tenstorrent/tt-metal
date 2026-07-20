@@ -8,11 +8,12 @@ vLLM's shared kv-cache groups let multiple attention layers share one physical K
 buffer. When those layers disagree on ``(block_size, head_dim)`` — e.g. Gemma4's
 sliding (block=128, head=256) and full (block=64, head=512) layers — the buffer is
 allocated for one layer's shape and the others must read it through their own view.
-The ``block_size`` kwarg lets a call do that: ``head_dim`` comes from Q's last dim,
-``block_size`` from the kwarg, and ``num_kv_heads * block_size * head_dim`` must be
-preserved across views of the same buffer.
+``PagedCacheGeometryOverride`` lets a call do that: ``head_dim`` comes from Q's last
+dim, ``block_size`` / ``num_kv_heads`` from the override, and
+``num_kv_heads * block_size * head_dim`` must be preserved across views of the same
+buffer.
 
-Coverage: legacy (no kwarg), no-op override (kwarg matches cache shape), override in
+Coverage: legacy (no override), no-op override (matches cache shape), override in
 both directions, and a negative case (byte-count mismatch).
 """
 
@@ -204,7 +205,7 @@ def test_override_matches_alloc_is_noop(device):
             program_config=program_config,
         )
         if use_override:
-            kwargs["block_size"] = block_size
+            kwargs["paged_cache_geometry"] = ttnn.transformer.PagedCacheGeometryOverride(block_size=block_size)
         return ttnn.to_torch(ttnn.transformer.paged_scaled_dot_product_attention_decode(q_tt, k_tt, v_tt, **kwargs))[
             :, :, :num_q_heads, :
         ]
@@ -285,7 +286,7 @@ def _run_flexible_geometry_test(
         cur_pos_tensor=cur_pos_tt,
         scale=scale,
         program_config=program_config,
-        block_size=view_block_size,
+        paged_cache_geometry=ttnn.transformer.PagedCacheGeometryOverride(block_size=view_block_size),
     )
     out = ttnn.to_torch(out_tt)[:, :, :num_q_heads, :]
 
@@ -320,7 +321,7 @@ def test_override_view_sliding_into_full_buffer(device):
     )
 
 
-def test_negative_byte_count_mismatch(device):
+def test_negative_byte_count_mismatch(device, expect_error):
     """Override breaking the per-block byte invariant must be rejected at validation."""
     torch.manual_seed(4)
     B = 2
@@ -342,14 +343,14 @@ def test_negative_byte_count_mismatch(device):
     q_padded = torch.nn.functional.pad(q, (0, 0, 0, 32 - num_q_heads), "constant", 0)
     q_tt = ttnn.Tensor(q_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-    with pytest.raises(RuntimeError, match="geometry mismatch"):
+    with expect_error(RuntimeError, "geometry mismatch"):
         ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_tt,
             k_tt,
             v_tt,
             page_table_tensor=page_table_tt,
             cur_pos_tensor=cur_pos_tt,
-            block_size=view_block_size,
+            paged_cache_geometry=ttnn.transformer.PagedCacheGeometryOverride(block_size=view_block_size),
         )
 
 
@@ -384,7 +385,7 @@ def _permute_view_general(t_alloc, view_kv, view_block_size, view_head_dim):
     return t.reshape(N, view_kv, view_block_size, view_head_dim)
 
 
-def test_negative_asymmetric_num_kv_heads_byte_count_mismatch(device):
+def test_negative_asymmetric_num_kv_heads_byte_count_mismatch(device, expect_error):
     """Different ``num_kv_heads`` between cache and call view *without* the per-block
     element count being preserved must be rejected at validation.
     """
@@ -412,13 +413,15 @@ def test_negative_asymmetric_num_kv_heads_byte_count_mismatch(device):
     q_padded = torch.nn.functional.pad(q, (0, 0, 0, 32 - num_q_heads), "constant", 0)
     q_tt = ttnn.Tensor(q_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-    with pytest.raises(RuntimeError, match="geometry mismatch"):
+    with expect_error(RuntimeError, "geometry mismatch"):
         ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_tt,
             k_tt,
             v_tt,
             page_table_tensor=page_table_tt,
             cur_pos_tensor=cur_pos_tt,
-            block_size=view_block_size,
-            num_kv_heads=view_kv,
+            paged_cache_geometry=ttnn.transformer.PagedCacheGeometryOverride(
+                block_size=view_block_size,
+                num_kv_heads=view_kv,
+            ),
         )

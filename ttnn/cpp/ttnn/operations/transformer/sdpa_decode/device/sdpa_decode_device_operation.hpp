@@ -127,8 +127,7 @@ Tensor sdpa_decode(
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
-    std::optional<uint32_t> block_size_override = std::nullopt,
-    std::optional<uint32_t> num_kv_heads_override = std::nullopt,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 }  // namespace ttnn::prim
