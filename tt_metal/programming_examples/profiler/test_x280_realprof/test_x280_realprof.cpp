@@ -165,6 +165,10 @@ int main(int argc, char** argv) {
     int cwork = 0;             // --cwork N: busy-wait N iters/record in each consumer (simulate Tracy-emit load)
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
                                // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
+    bool do_csv = false;       // --csv [path]: instead of Tracy, hold decoded records in memory (cheap append on
+                               // the hot path) and write them to CSV in large batches AFTER the drain -- so the
+                               // consumer callback never back-pressures the X280 (goal: 0 stalls, like the sink).
+    std::string csv_path = "tracy_captures/realprof.csv";
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -228,6 +232,11 @@ int main(int argc, char** argv) {
             cwork = std::stoi(next());
         } else if (a == "--tracy") {
             do_tracy = true;
+        } else if (a == "--csv") {
+            do_csv = true;
+            if (i + 1 < argc && std::string(argv[i + 1]).rfind("--", 0) != 0) {
+                csv_path = next();  // optional path arg
+            }
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -705,6 +714,24 @@ int main(int argc, char** argv) {
         sink_total.fetch_add(sink);
     };
 
+    // ---- CSV consumer (--csv): hold decoded records in memory and write them to CSV in large batches AFTER
+    // the drain. The hot-path callback is a bulk vector-append (a memcpy of the whole batch) -- no formatting,
+    // no I/O -- so it never back-pressures the X280 (like the sink). Pre-reserved so no realloc mid-run. A
+    // SINGLE consumer owns the buffer (no lock). The CSV formatting + file write happen post-run (see below).
+    std::vector<Batch> csv_batches;  // own the popped batch buffers by MOVE (O(1), zero-copy) -- no per-record work
+    if (do_csv) {
+        csv_batches.reserve(8192);  // batch-slot pointers; plenty for a full-grid run (~hundreds of batches)
+    }
+    auto csv_consumer = [&]() {
+        Batch b;
+        uint64_t cnt = 0;
+        while (mq.pop(b)) {
+            cnt += b.size();
+            csv_batches.push_back(std::move(b));  // steal the buffer; nothing copied on the hot path
+        }
+        consumed.fetch_add(cnt);
+    };
+
 #if defined(TRACY_ENABLE)
     // ---- Tracy consumer (--tracy): feed decoded records into the EXISTING RealtimeProfilerTracyHandler so
     // the zones visualize. A SINGLE consumer -- per-lane START/END must be pushed in emission order (Tracy
@@ -789,14 +816,21 @@ int main(int argc, char** argv) {
         for (uint64_t h = 0; h < ndh; h++) {
             flushers.emplace_back(flusher, h);
         }
-        bool tracy_spawned = false;
+        bool special_spawned = false;
+        const char* consumer_desc = nullptr;
+        if (do_csv) {
+            mconsumers.emplace_back(csv_consumer);  // ONE consumer: bulk-append records to memory (write at end)
+            special_spawned = true;
+            consumer_desc = "1 CSV consumer (in-memory -> batched CSV at end)";
+        }
 #if defined(TRACY_ENABLE)
-        if (do_tracy) {
+        if (!special_spawned && do_tracy) {
             mconsumers.emplace_back(tracy_consumer);  // ONE ordered consumer -> Tracy zones
-            tracy_spawned = true;
+            special_spawned = true;
+            consumer_desc = "1 Tracy consumer";
         }
 #endif
-        if (!tracy_spawned) {
+        if (!special_spawned) {
             if (do_tracy) {
                 printf("[tracy] build lacks TRACY_ENABLE -- falling back to sink consumers (no zones emitted)\n");
             }
@@ -807,7 +841,7 @@ int main(int argc, char** argv) {
         printf(
             "[mpmc] %llu flush+demux -> record MPMC -> %s\n",
             (unsigned long long)ndh,
-            tracy_spawned ? "1 Tracy consumer" : (std::to_string(mpmc) + " consumers").c_str());
+            special_spawned ? consumer_desc : (std::to_string(mpmc) + " consumers").c_str());
     } else if (nodrain) {
         printf("[nodrain] host consumer DISABLED, relay ignores flow control -- diagnostic (lossy)\n");
     } else if (rr_consumer) {
@@ -949,6 +983,54 @@ int main(int argc, char** argv) {
         mq.close();  // then signal consumers no more batches are coming
         for (auto& t : mconsumers) {
             t.join();
+        }
+        if (do_csv) {
+            // POST-drain CSV write, off the hot path: format rows into a reused buffer and fwrite in ~1 MB
+            // chunks (the "large batches"). No back-pressure risk -- the device is already idle here.
+            auto t0 = std::chrono::steady_clock::now();
+            FILE* f = std::fopen(csv_path.c_str(), "w");
+            if (!f) {
+                fprintf(stderr, "[csv] cannot open %s\n", csv_path.c_str());
+            } else {
+                std::fputs("lane,core,risc,type,zone_hash,timestamp,prog\n", f);
+                std::string buf;
+                buf.reserve(1u << 20);
+                char line[96];
+                size_t total = 0;
+                for (const auto& batch : csv_batches) {
+                    for (const auto& r : batch) {
+                        int n = std::snprintf(
+                            line,
+                            sizeof(line),
+                            "%u,%u,%u,%u,0x%x,%llu,0x%x\n",
+                            r.lane,
+                            r.lane / (uint32_t)NRISC,
+                            r.lane % (uint32_t)NRISC,
+                            r.type,
+                            r.zone,
+                            (unsigned long long)r.ts,
+                            r.prog);
+                        buf.append(line, (size_t)n);
+                        if (buf.size() >= (1u << 20)) {
+                            std::fwrite(buf.data(), 1, buf.size(), f);
+                            buf.clear();
+                        }
+                        total++;
+                    }
+                }
+                if (!buf.empty()) {
+                    std::fwrite(buf.data(), 1, buf.size(), f);
+                }
+                std::fclose(f);
+                uint64_t ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - t0)
+                                  .count();
+                printf(
+                    "[csv] wrote %zu records to %s in %llums (post-drain, batched)\n",
+                    total,
+                    csv_path.c_str(),
+                    (unsigned long long)ms);
+            }
         }
 #if defined(TRACY_ENABLE)
         if (do_tracy && tracy_handler) {
