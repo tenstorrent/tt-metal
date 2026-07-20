@@ -157,6 +157,7 @@ class TtPrefillRuntime:
             slot_num=self.config.num_users,
             kv_only_last_layer=self.config.kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,
+            use_fp8_compression=getattr(model_cfg, "USE_FP8_COMPRESSION", False),
             first_layer_idx=self.config.first_layer_idx,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,

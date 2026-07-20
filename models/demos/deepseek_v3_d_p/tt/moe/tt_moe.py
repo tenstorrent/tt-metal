@@ -159,6 +159,7 @@ class TtMoe(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         routing_use_l1_small_for_semaphores: bool = False,
         is_balanced: bool = False,
+        use_fp8_compression: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -197,6 +198,10 @@ class TtMoe(LightweightModule):
                 setup and run them sequentially on the full Tensix grid.
             is_balanced: If True, uses zigzag sequence placement for padding awareness.
                 Should match the is_balanced flag used in MLA/transformer.
+            use_fp8_compression: If True, fp8-compress the dispatch input before routing and
+                decompress the routed buffer afterward, so tokens cross the fabric as fp8 with
+                per-128-block scales riding in the dispatch metadata tail. Blackhole-only, and
+                requires metadata_len == 3 + emb_dim/128. Off by default (bf16 dispatch path).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -212,6 +217,17 @@ class TtMoe(LightweightModule):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        self.use_fp8_compression = use_fp8_compression
+
+        # The dispatch op copies each token's per-128-block fp32 scales into the metadata tail
+        # (fields 3..), so the buffer must reserve exactly those fields; otherwise dispatch fails
+        # its own validation at runtime with a less obvious message.
+        if use_fp8_compression:
+            expected_metadata_len = 3 + emb_dim // 128
+            assert emb_dim % 128 == 0 and metadata_len == expected_metadata_len, (
+                f"use_fp8_compression requires metadata_len == 3 + emb_dim/128 = {expected_metadata_len} "
+                f"(emb_dim={emb_dim}); got metadata_len={metadata_len}"
+            )
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -333,6 +349,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             subdevice_id=self.dispatch_sd_id,
+            fp8_output=use_fp8_compression,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -366,6 +383,9 @@ class TtMoe(LightweightModule):
         )
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        # Retained on self so the fp8 decompression in forward can reuse the same local-slot ->
+        # global-expert-id mapping that the routed expert uses.
+        self.global_expert_idx_table = global_expert_idx_tt
 
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
@@ -535,6 +555,15 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        # fp8-compress the dispatch input before the sub-device manager is loaded, so the cast
+        # runs on the full grid. The shared expert keeps the bf16 `x`; only the dispatch sees the
+        # fp8 copy, and its per-128-block scales ride in the dispatch metadata tail. `dispatch_input`
+        # aliases `x` on the bf16 path so the deallocation below stays single-owner.
+        if self.use_fp8_compression:
+            dispatch_input, dispatch_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+        else:
+            dispatch_input, dispatch_scales = x, None
+
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
@@ -555,15 +584,33 @@ class TtMoe(LightweightModule):
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
-            x,
+            dispatch_input,
             scores,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
+            scales=dispatch_scales,
         )
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.clear_loaded_sub_device_manager()
+
+        # Decompress the routed buffer after the sub-device manager is cleared, back on the full
+        # grid. Scales are read from the metadata tail (input_scale=None), using the same
+        # region-offset / token-count / global-expert-id trio the routed expert consumes.
+        if self.use_fp8_compression:
+            ttnn.deallocate(dispatch_input)
+            ttnn.deallocate(dispatch_scales)
+            dispatched_buffer = ttnn.experimental.deepseek_prefill.masked_per_token_cast_back(
+                dispatched_buffer,
+                None,
+                tt_expert_region_offsets,
+                tt_expert_token_counts,
+                self.global_expert_idx_table,
+                experts_per_chip=self.experts_per_chip,
+                output_dtype=ttnn.bfloat16,
+                metadata=metadata,
+            )
         # padding_config was shared with both the gate and dispatch; free it now that
         # dispatch (its last consumer) has been issued.
         if padding_config is not None:

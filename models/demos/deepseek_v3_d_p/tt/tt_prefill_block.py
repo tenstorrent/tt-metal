@@ -204,6 +204,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        use_fp8_compression: bool = False,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -306,6 +307,7 @@ class TtPrefillBlock(LightweightModule):
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
+                use_fp8_compression=use_fp8_compression,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -346,6 +348,7 @@ class TtPrefillBlock(LightweightModule):
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
+        use_fp8_compression=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -363,6 +366,8 @@ class TtPrefillBlock(LightweightModule):
             mesh_device.get_num_devices(),
             mesh_config.dispatch_group_size,
             dispatch_buffer_capacity_factor,
+            emb_dim=emb_dim,
+            fp8_scaled_input=use_fp8_compression,
         )
 
         return TtMoe(
@@ -396,6 +401,7 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=True,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            use_fp8_compression=use_fp8_compression,
         )
 
     def forward(
