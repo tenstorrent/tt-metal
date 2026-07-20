@@ -28,63 +28,18 @@ add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run)
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 """
 
-import os
-
 import pytest
-import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def _on_quasar():
-    # ttnn.get_arch_name() returns "invalid" under the simulator, so detect Quasar from the sim env
-    # vars the simulator run sets (ARCH_NAME=quasar / CHIP_ARCH=quasar).
-    return any("quasar" in os.environ.get(v, "").lower() for v in ("ARCH_NAME", "CHIP_ARCH"))
-
-
-def _height_sharded_config(shard_shape, core_grid):
-    return ttnn.create_sharded_memory_config(
-        shard_shape,
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-
-def _block_sharded_config(shard_shape, core_grid):
-    return ttnn.create_sharded_memory_config(
-        shard_shape,
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.BLOCK,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-
-def _width_sharded_config(shard_shape, core_grid):
-    return ttnn.create_sharded_memory_config(
-        shard_shape,
-        core_grid=core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-
-# Op table: name -> (ttnn fn, torch golden). add/subtract take the FPU compute kernel; multiply and
-# divide route the SFPU compute kernel by default (is_binary_sfpu_op is true unless fast-approx mode),
-# as does any fp32 op. SFPU builds+runs on Wormhole and Quasar (fp32 add/sub SFPU ported to Quasar in #49883).
-_OPS = {
-    "add": (lambda: ttnn.experimental.quasar.add, torch.add),
-    "subtract": (lambda: ttnn.experimental.quasar.subtract, torch.subtract),
-    "multiply": (lambda: ttnn.experimental.quasar.multiply, torch.multiply),
-    "divide": (lambda: ttnn.experimental.quasar.divide, torch.divide),
-}
-
-# PCC thresholds. NEVER weakened below what the descriptor path achieves for the same config.
-_PCC = {ttnn.bfloat16: 0.997, ttnn.float32: 0.9999}
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _on_quasar,
+    _run,
+    _run_mixed,
+    _act,
+    _height_sharded_config,
+    _block_sharded_config,
+    _width_sharded_config,
+)
 
 # Interleaved tensor: 32x40 tiles (1280 tiles) so split_work_to_cores spreads many tiles per core on
 # both an 8x8 (Wormhole) and an 8x4 (Quasar sim) worker grid -- ~20 tiles/core on 8x8, ~40/core on 8x4,
@@ -109,7 +64,6 @@ _BLOCK_SHAPE = (2 * 4 * 32, 2 * 4 * 32)  # 2x2 cores x [128,128] = [256, 256]
 # (e.g. height/width output = 64 tiles/core on 4 cores; block output = 16 tiles/core on a 16-core grid).
 # Mixed cases whose OUTPUT is INTERLEAVED do NOT use this shape -- they run on the full worker grid via
 # split_work_to_cores, so 256 tiles would be only ~4/core; they use _BIG_SHAPE below instead.
-_MIXED_SHAPE = (16 * 32, 16 * 32)
 # Height-sharded: 16 tile-rows down a 4-tall column => [128, 512] shard = 64 tiles/core.
 _MIXED_HEIGHT = _height_sharded_config([4 * 32, 16 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}))
 # Block-sharded: 16x16 tiles on a 4x4 grid => [128, 128] shard = 16 tiles/core (x<=3, y<=3 fit 8x4).
@@ -180,99 +134,6 @@ _BIG2_HEIGHT_B = _height_sharded_config([8 * 32, 32 * 32], ttnn.CoreRangeSet({tt
 # tiles/core, so both fit one bank.
 _BIG2_HEIGHT_G = _height_sharded_config([8 * 32, 32 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (4, 3))}))
 _BIG2_WIDTH_G = _width_sharded_config([32 * 32, 8 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 1), (3, 1))}))
-
-
-# Fused activations exercised by the op, each with its torch golden. A lhs (pre) activation applies to
-# operand A before the binary op; a post activation applies to the result. RELU is ResNet50's fused
-# residual activation; SILU is Llama's SwiGLU gate (models/tt_transformers/tt/mlp.py emits
-# ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])). GELU/TANH/SQUARE/SIGMOID
-# are further activations the WH-baseline matrix (QUASAR_LLK_GAPS.md Table 2) marks SUPPORTED on Quasar
-# (each has a Quasar ckernel + SfpuType + an #else ARCH_QUASAR compute-API branch); they are exercised by
-# test_no_bcast_activation_supported below.
-_ACT_GOLDEN = {
-    ttnn.UnaryOpType.RELU: torch.relu,
-    ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
-    ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
-    ttnn.UnaryOpType.TANH: torch.tanh,
-    ttnn.UnaryOpType.SQUARE: torch.square,
-    ttnn.UnaryOpType.SIGMOID: torch.sigmoid,
-}
-
-
-def _act(act_type):
-    return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
-
-
-def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=None, pcc=None):
-    torch.manual_seed(0)
-    ttnn_fn = _OPS[op_name][0]()
-    torch_fn = _OPS[op_name][1]
-
-    a = torch.randn(shape, dtype=torch.float32)
-    b = torch.randn(shape, dtype=torch.float32)
-    if op_name == "divide":
-        # Keep the divisor away from zero so bf16 PCC is meaningful.
-        b = b * 0.5 + 2.0
-
-    # Golden: lhs activation applies before the binary op, post activation after.
-    a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
-    golden = torch_fn(a_golden, b)
-    if post_act is not None:
-        golden = _ACT_GOLDEN[post_act](golden)
-
-    a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
-    b_tt = ttnn.from_torch(b, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
-
-    kwargs = {"memory_config": mem_config, "dtype": dtype_tt}
-    if post_act is not None:
-        kwargs["activations"] = _act(post_act)
-    if lhs_act is not None:
-        kwargs["input_tensor_a_activations"] = _act(lhs_act)
-
-    out_tt = ttnn_fn(a_tt, b_tt, **kwargs)
-    out_torch = ttnn.to_torch(out_tt)
-    # Guard against a degenerate constant output silently passing the correlation check: an
-    # operand-switch bug makes the kernel use the same operand twice (a, a) instead of (a, b), and for
-    # divide a/a = 1.0 everywhere, which assert_with_pcc can spuriously accept. If the golden varies,
-    # the output must vary too.
-    golden_std = golden.float().std()
-    if golden_std > 0.1:
-        assert (
-            out_torch.float().std() > 0.1 * golden_std
-        ), "output is ~constant while the golden varies (operand-switch?)"
-    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
-    return out_tt
-
-
-def _run_mixed(device, op_name, a_mem, b_mem, out_mem, dtype_tt, shape=_MIXED_SHAPE, pcc=None):
-    # Like _run, but with an INDEPENDENT memory config per operand (a, b, output) so the borrow-vs-NoC
-    # routing in the DFB factory is exercised across mixed sharded/interleaved layouts (borrow only when
-    # all three are L1-sharded on one matching grid; otherwise every operand is NoC-read/written).
-    torch.manual_seed(0)
-    ttnn_fn = _OPS[op_name][0]()
-    torch_fn = _OPS[op_name][1]
-
-    a = torch.randn(shape, dtype=torch.float32)
-    b = torch.randn(shape, dtype=torch.float32)
-    if op_name == "divide":
-        b = b * 0.5 + 2.0
-    golden = torch_fn(a, b)
-
-    a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=a_mem)
-    b_tt = ttnn.from_torch(b, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=b_mem)
-
-    out_tt = ttnn_fn(a_tt, b_tt, memory_config=out_mem, dtype=dtype_tt)
-    out_torch = ttnn.to_torch(out_tt)
-
-    # Same degenerate-constant guard as _run (catches an operand-switch / wrong-tile-pairing bug, the
-    # exact failure mode the mixed borrowed/NoC routing risks).
-    golden_std = golden.float().std()
-    if golden_std > 0.1:
-        assert (
-            out_torch.float().std() > 0.1 * golden_std
-        ), "output is ~constant while the golden varies (wrong tile pairing?)"
-    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
-    return out_tt
 
 
 @pytest.mark.parametrize("op_name", ["add", "subtract", "multiply"])

@@ -98,6 +98,16 @@ constexpr const char* kComputeFpuDfb =
 constexpr const char* kComputeSfpuDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
     "eltwise_binary_sfpu_no_bcast_dfb.cpp";
+// Subtile-broadcast DFB kernels. The bcast reader delivers the partial tile (BCAST_LLK path, no fill);
+// the row-bcast compute expands it via unary_bcast<ROW> through the intermediate llk_post DFB.
+constexpr const char* kReaderBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/reader_bcast_dfb.cpp";
+constexpr const char* kComputeFpuRowBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_row_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuRowBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_sfpu_row_bcast_dfb.cpp";
 
 // The compute kernel includes eltwise_utils_common.hpp (in kernels/compute) and its DFB preprocess
 // helper (in kernels_dfb/compute) by bare name; both directories go on the compute include path.
@@ -116,14 +126,32 @@ struct DfbKernelSources {
 };
 
 DfbKernelSources select_dfb_kernel_sources(SubtileBroadcastType subtile_broadcast_type, bool is_sfpu) {
-    TT_FATAL(
-        subtile_broadcast_type == SubtileBroadcastType::NONE,
-        "binary_ng Metal 2.0 factory only wires the no-broadcast (NONE) kernel sources");
-    return DfbKernelSources{
-        .reader = kReaderDfb,
-        .writer = kWriterDfb,
-        .compute = is_sfpu ? kComputeSfpuDfb : kComputeFpuDfb,
-    };
+    switch (subtile_broadcast_type) {
+        case SubtileBroadcastType::NONE:
+            return DfbKernelSources{
+                .reader = kReaderDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuDfb : kComputeFpuDfb,
+            };
+        case SubtileBroadcastType::ROW_A:
+        case SubtileBroadcastType::ROW_B:
+            // ROW subtile broadcast: the bcast reader delivers the partial tile and the row-bcast
+            // compute expands it via unary_bcast<ROW>, then runs the binary op -- FPU (add/subtract) or
+            // SFPU (multiply/divide). matches_metal_v2_slice restricts this path to bf16.
+            return DfbKernelSources{
+                .reader = kReaderBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuRowBcastDfb : kComputeFpuRowBcastDfb,
+            };
+        case SubtileBroadcastType::SCALAR_A:
+        case SubtileBroadcastType::SCALAR_B:
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
+        case SubtileBroadcastType::ROW_A_COL_B:
+        case SubtileBroadcastType::ROW_B_COL_A: break;  // rejected by matches_metal_v2_slice, not wired here
+    }
+    TT_THROW(
+        "binary_ng Metal 2.0 factory: unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
 }
 
 // --- Small pure helpers mirrored from the descriptor factory's anonymous namespace. They live in
@@ -366,18 +394,34 @@ ProgramArtifacts create_no_bcast_artifacts(
     const m2::TensorParamName T_A{"binary_ng_a"};
     const m2::TensorParamName T_B{"binary_ng_b"};
     const m2::TensorParamName T_C{"binary_ng_c"};
-    const m2::DFBSpecName IN0{"binary_ng_in0_dfb"};            // CBIndex::c_0
-    const m2::DFBSpecName IN1{"binary_ng_in1_dfb"};            // CBIndex::c_1
-    const m2::DFBSpecName OUT{"binary_ng_out_dfb"};            // CBIndex::c_2
-    const m2::DFBSpecName POST_LHS{"binary_ng_post_lhs_dfb"};  // CBIndex::c_3 (LHS activations)
-    const m2::DFBSpecName POST_RHS{"binary_ng_post_rhs_dfb"};  // CBIndex::c_4 (RHS activations)
+    const m2::DFBSpecName IN0{"binary_ng_in0_dfb"};                    // CBIndex::c_0
+    const m2::DFBSpecName IN1{"binary_ng_in1_dfb"};                    // CBIndex::c_1
+    const m2::DFBSpecName OUT{"binary_ng_out_dfb"};                    // CBIndex::c_2
+    const m2::DFBSpecName POST_LHS{"binary_ng_post_lhs_dfb"};          // CBIndex::c_3 (LHS activations)
+    const m2::DFBSpecName POST_RHS{"binary_ng_post_rhs_dfb"};          // CBIndex::c_4 (RHS activations)
+    const m2::DFBSpecName LLK_POST_LHS{"binary_ng_llk_post_lhs_dfb"};  // CBIndex::c_5 (unary_bcast out, LHS bcast)
+    const m2::DFBSpecName LLK_POST_RHS{"binary_ng_llk_post_rhs_dfb"};  // CBIndex::c_6 (unary_bcast out, RHS bcast)
     const m2::KernelSpecName READER{"binary_ng_reader"};
     const m2::KernelSpecName WRITER{"binary_ng_writer"};
     const m2::KernelSpecName COMPUTE{"binary_ng_compute"};
 
-    // Per-broadcast-type kernel-source selection (the descriptor's BinaryNgKernelConfig analogue); only
-    // the no-broadcast (NONE) triple is wired.
+    // Per-broadcast-type kernel-source selection (the descriptor's BinaryNgKernelConfig analogue): the
+    // no-broadcast (NONE) triple, plus the ROW subtile-broadcast reader/compute for ROW_A / ROW_B.
     const DfbKernelSources kernel_sources = select_dfb_kernel_sources(op.subtile_broadcast_type, is_sfpu);
+
+    // ROW subtile broadcast: ROW_A broadcasts the LHS operand (a), ROW_B the RHS operand (b). Exactly one
+    // holds on the row-bcast path (the gate admits only ROW_A / ROW_B here); both false on no-broadcast.
+    const bool bcast_lhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A;
+    const bool bcast_rhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B;
+
+    // The row-bcast compute processes exactly ONE tile per cycle (unary_bcast -> pack -> binary op on DST
+    // index 0) while advancing every DFB by num_tiles_per_cycle; that is only correct at
+    // num_tiles_per_cycle == 1 (the interleaved / non-borrowed path this task wires). A future borrowed
+    // or multi-tile broadcast path MUST revisit the kernel's per-tile loop before relaxing this.
+    TT_FATAL(
+        !(bcast_lhs || bcast_rhs) || num_tiles_per_cycle == 1,
+        "binary_ng Metal 2.0 factory: ROW subtile broadcast requires num_tiles_per_cycle == 1, got {}",
+        num_tiles_per_cycle);
 
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
     // with its resident L1 shard (num_entries == full shard, borrowed_from set); any NoC-read operand
@@ -421,6 +465,30 @@ ProgramArtifacts create_no_bcast_artifacts(
             std::nullopt));
     }
 
+    // llk_post intermediate DFB for the ROW subtile broadcast (c_5 for LHS bcast, c_6 for RHS bcast):
+    // the compute both produces (unary_bcast<ROW> -> pack) and consumes (binary op) it in program order
+    // on one thread, so num_tiles_per_cycle entries suffice -- the same self-loop precedent as the
+    // POST_LHS/POST_RHS activation DFBs. Format is the broadcast operand's own format (bf16 on this
+    // path; op_has_exp never reaches the LLK bcast path). Allocated only for the operand being broadcast.
+    if (bcast_lhs) {
+        dfbs.push_back(make_dfb(
+            LLK_POST_LHS,
+            static_cast<uint32_t>(a_tile.get_tile_size(a_inter_df)),
+            num_tiles_per_cycle,
+            a_inter_df,
+            a_tile,
+            std::nullopt));
+    }
+    if (bcast_rhs) {
+        dfbs.push_back(make_dfb(
+            LLK_POST_RHS,
+            static_cast<uint32_t>(b_tile.get_tile_size(b_inter_df)),
+            num_tiles_per_cycle,
+            b_inter_df,
+            b_tile,
+            std::nullopt));
+    }
+
     // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident
     // shard, no NoC) vs NoC-read code path per operand. HAS_SHARDING follows the OUTPUT layout: it tells
     // a NoC-read operand's tile walk to wrap each row onto one output-shard width (the descriptor passed
@@ -433,6 +501,23 @@ ProgramArtifacts create_no_bcast_artifacts(
     std::map<std::string, std::string> writer_defines = make_dataflow_defines(b_dtype);
     writer_defines["DST_SHARDED"] = c_borrowed ? "1" : "0";
     writer_defines["HAS_SHARDING"] = has_sharding ? "1" : "0";
+
+    // ROW subtile-broadcast defines. Set only on the row-bcast path so the no-broadcast define set is
+    // untouched. The bcast reader keys the partial-tile walk off SRC_BCAST / SRC_BCAST_B; BCAST_LLK=1
+    // means it delivers the partial tile (no FILL_TILE), leaving the broadcast to the compute's
+    // unary_bcast<ROW>. The row compute selects its c_5/c_6 llk_post mapping off SRC_BCAST[_B].
+    // BCAST_INPUT (0 = LHS bcast, 1 = RHS bcast) mirrors the descriptor's compute define.
+    if (bcast_lhs || bcast_rhs) {
+        const std::string src_bcast = bcast_lhs ? "1" : "0";
+        const std::string src_bcast_b = bcast_rhs ? "1" : "0";
+        const std::string bcast_input = bcast_lhs ? "0" : "1";
+        for (auto* defines : {&reader_defines, &compute_defines}) {
+            (*defines)["SRC_BCAST"] = src_bcast;
+            (*defines)["SRC_BCAST_B"] = src_bcast_b;
+            (*defines)["BCAST_LLK"] = "1";
+            (*defines)["BCAST_INPUT"] = bcast_input;
+        }
+    }
 
     // --- Compute config (mirrors the descriptor factory). ---
     const bool fp32_dest_acc_en = c_df == tt::DataFormat::UInt32 || c_df == tt::DataFormat::Int32 ||
@@ -546,6 +631,19 @@ ProgramArtifacts create_no_bcast_artifacts(
     if (has_rhs_act) {
         compute_dfb_bindings.push_back(m2::ProducerOf(POST_RHS, "post_rhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(POST_RHS, "post_rhs"));
+    }
+    // ROW subtile broadcast: the row compute both produces (unary_bcast<ROW> -> pack) and consumes
+    // (binary op) the llk_post intermediate — the same self-loop pair as post_lhs/post_rhs. Exactly one
+    // of LLK_POST_LHS (c_5, ROW_A) / LLK_POST_RHS (c_6, ROW_B) is allocated per op; whichever it is binds
+    // under the accessor name "llk_post", and that accessor-name binding is what lets the single compute
+    // kernel read either as dfb::llk_post.
+    if (bcast_lhs) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(LLK_POST_LHS, "llk_post"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(LLK_POST_LHS, "llk_post"));
+    }
+    if (bcast_rhs) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(LLK_POST_RHS, "llk_post"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(LLK_POST_RHS, "llk_post"));
     }
 
     m2::Group<std::string> compute_rt_names = {"num_tiles"};
