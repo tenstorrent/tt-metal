@@ -187,6 +187,14 @@ _KERNEL_LOG_PATH = Path(
 )
 _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
+_MAX_TRACE_FIX_RETRIES = int(os.environ.get("PERF_MCP_MAX_TRACE_FIX_RETRIES", "3"))
+_TRACE_SAFE_HINT = (
+    "the kernel WEDGED trace capture — a TRACE-COMPATIBILITY failure of the kernel, NOT a math error "
+    "(check_pcc validates math separately). Make it trace-safe and retry the SAME rung: warm up the "
+    "kernel once so its program is cached before capture; keep shapes/tile-counts/args static "
+    "(compile-time, no runtime host fallback inside the op); ensure it emits profiler zone markers so "
+    "capture completes. This is a fixable implementation issue, not an exhausted rung"
+)
 
 # kernel-authoring evidence markers, searched in the model source tree (grounds a recorded attempt)
 _KERNEL_MARKERS = ("generic_op", "ProgramDescriptor", "KernelDescriptor", "@ttl.", "ttl.operation", "import ttl")
@@ -507,6 +515,19 @@ def _tp_candidate(open_op: dict, op_code: str) -> bool:
     return (open_op.get("bound_by") or "").lower() in ("memory", "dram", "both")
 
 
+def _rung_state(matches, kind, budget):
+    clean = any((a.get("kernel_kind") or "").lower() == kind and not a.get("wedged") for a in matches)
+    wedged = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == kind and a.get("wedged"))
+    return (clean or wedged >= budget), wedged
+
+
+def _trace_compat_feedback(raw_reason: str) -> str:
+    rung = (_load_target().get("rung") or "").lower()
+    if rung not in ("tt-lang", "cpp"):
+        return raw_reason
+    return "%s\n%s" % (raw_reason, _TRACE_SAFE_HINT)
+
+
 def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool, str, str]:
     """DETERMINISTIC ladder gate for ONE open op. Returns (done, rung, reason).
 
@@ -557,8 +578,15 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
         )
     if _is_kernel_able(op_code):
-        if "tt-lang" not in kinds:
+        _tl_done, _tl_wedged = _rung_state(matches, "tt-lang", _MAX_TRACE_FIX_RETRIES)
+        if not _tl_done:
             if _ttl_available():
+                if _tl_wedged:
+                    return (
+                        False,
+                        "tt-lang",
+                        "%s (trace-fix %d/%d)" % (_TRACE_SAFE_HINT, _tl_wedged, _MAX_TRACE_FIX_RETRIES),
+                    )
                 return (
                     False,
                     "tt-lang",
@@ -568,7 +596,14 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             # on an un-actionable 'install-required' target. Skip the tt-lang rung and fall through to
             # the next lever so the run still completes on the levers that DO work. The end-of-run
             # summary flags that tt-lang was not used this run.
-        if "cpp" not in kinds:
+        _cpp_done, _cpp_wedged = _rung_state(matches, "cpp", _MAX_TRACE_FIX_RETRIES)
+        if not _cpp_done:
+            if _cpp_wedged:
+                return (
+                    False,
+                    "cpp",
+                    "%s (trace-fix %d/%d)" % (_TRACE_SAFE_HINT, _cpp_wedged, _MAX_TRACE_FIX_RETRIES),
+                )
             return (
                 False,
                 "cpp",
@@ -898,14 +933,14 @@ def measure_candidate() -> dict:
             _autorecord_wedge(_L1_OVERFLOW_MSG)
             return {"verdict": "REJECTED", "reason": _L1_OVERFLOW_MSG}
         _note_device_crash("measure_candidate")  # may tt-smi reset if this is a repeat (wedge)
-        _autorecord_wedge(f"wedged/crashed when tried: {_msg[-300:]}")
-        return {"verdict": "REJECTED", "reason": f"profiler crashed: {_msg[-600:]}"}
+        _autorecord_wedge(_trace_compat_feedback(f"wedged/crashed when tried: {_msg[-300:]}"))
+        return {"verdict": "REJECTED", "reason": _trace_compat_feedback(f"profiler crashed: {_msg[-600:]}")}
     _note_device_ok()
     dev = round(float(prof.get("device_ms", 0.0)), 4)
     if prof.get("capture_partial"):
         return {
             "verdict": "REJECTED",
-            "reason": f"partial_capture: profiler dropped markers ({prof['capture_partial']})",
+            "reason": _trace_compat_feedback(f"partial_capture: profiler dropped markers ({prof['capture_partial']})"),
             "device_ms": dev,
         }
     if not _BASELINE_PATH.exists():
