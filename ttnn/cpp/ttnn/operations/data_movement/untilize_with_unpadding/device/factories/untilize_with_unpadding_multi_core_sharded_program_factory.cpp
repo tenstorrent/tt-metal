@@ -39,8 +39,13 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     bool cross_shard_type = out_sharded && output.memory_config().memory_layout() != a.memory_config().memory_layout();
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
-    // and skip face1 and face3.
-    bool unpad_tensor_w_16 = output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
+    // and skip face1 and face3. Not compatible with the cross-shard-type writer
+    // (writer_unary_unpad_cross_sharded.cpp), which expects the compute kernel's normal untilized
+    // row-major output (from untilize.cpp), not this fast path's tiled face-copy output (from
+    // eltwise_copy.cpp) - only writer_unary_unpad_width_16_sharded.cpp knows how to extract faces
+    // 0 and 2 from that format, so disable the fast path whenever the cross-shard writer is used.
+    bool unpad_tensor_w_16 =
+        !cross_shard_type && output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -107,14 +112,24 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 cross_shard_core_infos.push_back({i, 0});
             }
         } else {
-            // BLOCK_SHARDED input
+            // BLOCK_SHARDED input. For COL_MAJOR orientation the physical x/y grid axes swap
+            // which one is the logical row-shard (KH) vs column-shard (KW) axis - same convention
+            // as compute_output_specs()'s BLOCK_SHARDED shard-shape derivation above. Once grid_cols
+            // is the KW axis and grid_rows is the KH axis (post-swap), a single division formula
+            // works for both orientations, since corerange_to_cores enumerates row_major as
+            // i = y*grid_cols_raw + x (x fastest) and !row_major as i = x*grid_rows_raw + y (y
+            // fastest) - i.e. i / grid_cols(post-swap) and i % grid_cols(post-swap) recover (kh, kw)
+            // in both cases.
             CoreRange bbox = all_cores.bounding_box();
-            uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;  // KW
-            uint32_t grid_rows = bbox.end_coord.y - bbox.start_coord.y + 1;  // KH
+            uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
+            uint32_t grid_rows = bbox.end_coord.y - bbox.start_coord.y + 1;
+            if (!row_major) {
+                std::swap(grid_cols, grid_rows);
+            }
             cross_kw = grid_cols;
             for (uint32_t i = 0; i < in_cores.size(); ++i) {
-                uint32_t kh = row_major ? (i / grid_cols) : (i % grid_rows);
-                uint32_t kw = row_major ? (i % grid_cols) : (i / grid_rows);
+                uint32_t kh = i / grid_cols;
+                uint32_t kw = i % grid_cols;
                 cross_shard_core_infos.push_back({kw, kh * shard_spec.shape[0]});
             }
         }

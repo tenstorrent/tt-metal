@@ -17,6 +17,26 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+// Number of column shards (KW) a legacy 2D ShardSpec's grid represents, in the orientation-aware
+// sense used by the cross-shard-type writer (writer_unary_unpad_cross_sharded.cpp): WIDTH_SHARDED's
+// grid is always 1xKW, and BLOCK_SHARDED's grid axes swap which one is the logical column-shard
+// axis under COL_MAJOR orientation (matches the convention in compute_output_specs() below and the
+// per-core kh/kw derivation in the sharded factory).
+uint32_t legacy_2d_shard_column_count(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
+    if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        return shard_spec.grid.num_cores();
+    }
+    CoreRange bbox = shard_spec.grid.bounding_box();
+    uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
+    uint32_t grid_rows = bbox.end_coord.y - bbox.start_coord.y + 1;
+    if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
+        std::swap(grid_cols, grid_rows);
+    }
+    return grid_cols;
+}
+}  // namespace
+
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
     if (input.layout() == Layout::ROW_MAJOR) {
@@ -31,16 +51,18 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
         }
         return UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory{};
     }
-    if (!operation_attributes.use_multicore) {
-        return UntilizeWithUnpaddingSingleCoreProgramFactory{};
-    }
     // Sharded output from interleaved input is only implemented in the row-split multi-core writer
     // (writer_unary_stick_layout_split_rows_multicore.cpp, which uses noc_async_write_sharded to
-    // split a row across B/W-sharded output shards). The block-interleaved writer hasn't been
-    // updated for that, so force the row-split factory whenever output is sharded, bypassing both
-    // the enough_space_height flag and the wide-row heuristic below.
+    // split a row across B/W-sharded output shards). The single-core writer and the block-interleaved
+    // writer (used for the wide-row heuristic) haven't been updated for that, so force the row-split
+    // factory whenever output is sharded - this takes priority over both use_multicore=false and
+    // enough_space_height/the wide-row heuristic below, since neither of those paths' writers can
+    // produce correct sharded output.
     if (operation_attributes.output_mem_config.is_sharded()) {
         return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
+    }
+    if (!operation_attributes.use_multicore) {
+        return UntilizeWithUnpaddingSingleCoreProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
         return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
@@ -94,6 +116,18 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
         // sharded RM input/output is not blocked by a row-per-page assumption. The output shard spec
         // is used verbatim from the caller (see compute_output_specs()) since RM shards have no
         // tile-alignment constraint to derive.
+        //
+        // Rank > 4 is rejected here: the public wrapper's squeeze/unsqueeze composite
+        // (build_ndiml_untilize_val / untilize_with_unpadding.cpp) unconditionally replaces
+        // output_tensor_end with the full input extents for rank > 4 and reshapes the result back
+        // to the original shape, discarding any real truncation request regardless of layout. That
+        // is a pre-existing gap for the TILE path too, but this device op previously rejected
+        // ROW_MAJOR input outright at every rank, so it never surfaced there; reject rank > 4 until
+        // the wrapper is taught to propagate output_tensor_end through the reshape.
+        TT_FATAL(
+            input_tensor_a.logical_shape().rank() <= 4,
+            "ROW_MAJOR input with rank > 4 is not yet supported for untilize_with_unpadding (the rank > 4 "
+            "squeeze/unsqueeze wrapper does not yet propagate output_tensor_end)");
         if (input_tensor_a.memory_config().is_sharded()) {
             TT_FATAL(
                 input_tensor_a.shard_spec().has_value(),
@@ -144,6 +178,25 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         "Output memory config layout ({}) must be BLOCK_SHARDED (or WIDTH_SHARDED with a "
                         "matching column shard width) when input is BLOCK_SHARDED and output is sharded",
                         operation_attributes.output_mem_config.memory_layout());
+                    if (same_type) {
+                        // Same-shard-type sharded output binds the output buffer directly as an L1
+                        // circular buffer (see the sharded factory's sharded_output_cb_index CB) -
+                        // dynamic CBs only work in L1, so DRAM is rejected here. It also copies each
+                        // input core's CB straight into the same physical output core, with no
+                        // cross-core row remapping, so a batch whose matrices straddle input shard
+                        // boundaries after height-unpadding would land on the wrong output core;
+                        // unbatched-only until that's implemented (matches the interleaved-output
+                        // restriction below).
+                        TT_FATAL(
+                            operation_attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                            "BLOCK_SHARDED -> BLOCK_SHARDED output must be in L1; got buffer_type={}",
+                            operation_attributes.output_mem_config.buffer_type());
+                        TT_FATAL(
+                            input_tensor_a.physical_volume() /
+                                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                                1,
+                            "Can only write unbatched output for BLOCK_SHARDED -> BLOCK_SHARDED");
+                    }
                     if (cross_to_width) {
                         TT_FATAL(
                             operation_attributes.output_mem_config.shard_spec().has_value(),
@@ -155,6 +208,31 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                             "output={}",
                             input_tensor_a.shard_spec().value().shape[1],
                             operation_attributes.output_mem_config.shard_spec().value().shape[1]);
+                        // Matching shard WIDTH alone is not enough: TensorSpec permits an output
+                        // grid with more cores/capacity than the logical output width actually
+                        // needs (e.g. 4 cores of shard width 32 for a logical width of 64 - only 2
+                        // of those shards hold real data), and comparing configured GRID counts
+                        // (as an earlier version of this check did) doesn't catch that - the writer
+                        // still launches every input column and uses its input-derived column
+                        // index, so noc_async_write_sharded maps the extra input columns onto
+                        // subsequent output rows instead of rejecting them, corrupting data. Compare
+                        // the EFFECTIVE output column-shard count (logical output width / shard
+                        // width) instead of the grid's configured capacity.
+                        uint32_t input_kw = legacy_2d_shard_column_count(
+                            input_tensor_a.shard_spec().value(), TensorMemoryLayout::BLOCK_SHARDED);
+                        uint32_t output_width = compute_output_specs(operation_attributes, input).padded_shape()[-1];
+                        uint32_t output_shard_width =
+                            operation_attributes.output_mem_config.shard_spec().value().shape[1];
+                        uint32_t effective_output_kw = tt::div_up(output_width, output_shard_width);
+                        TT_FATAL(
+                            input_kw == effective_output_kw,
+                            "BLOCK_SHARDED -> WIDTH_SHARDED requires the output to effectively span the same "
+                            "number of column shards as the input ({}), got {} (output width {} / shard width "
+                            "{}); width-unpadding that reduces the column-shard count is not yet supported",
+                            input_kw,
+                            effective_output_kw,
+                            output_width,
+                            output_shard_width);
                         TT_FATAL(
                             input_tensor_a.physical_volume() /
                                     (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
@@ -178,6 +256,13 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                         "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
                         operation_attributes.output_mem_config.memory_layout());
+                    // Same-shard-type sharded output binds the output buffer directly as an L1
+                    // circular buffer (see the sharded factory's sharded_output_cb_index CB) -
+                    // dynamic CBs only work in L1, so DRAM is rejected here.
+                    TT_FATAL(
+                        operation_attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                        "HEIGHT_SHARDED -> HEIGHT_SHARDED output must be in L1; got buffer_type={}",
+                        operation_attributes.output_mem_config.buffer_type());
                 } else {
                     TT_FATAL(
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -222,6 +307,15 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         "BLOCK_SHARDED with a matching column shard width)",
                         operation_attributes.output_mem_config.memory_layout(),
                         input_tensor_a.memory_config().memory_layout());
+                    if (same_type) {
+                        // Same-shard-type sharded output binds the output buffer directly as an L1
+                        // circular buffer (see the sharded factory's sharded_output_cb_index CB) -
+                        // dynamic CBs only work in L1, so DRAM is rejected here.
+                        TT_FATAL(
+                            operation_attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                            "WIDTH_SHARDED -> WIDTH_SHARDED output must be in L1; got buffer_type={}",
+                            operation_attributes.output_mem_config.buffer_type());
+                    }
                     if (cross_to_block) {
                         TT_FATAL(
                             operation_attributes.output_mem_config.shard_spec().has_value(),
@@ -233,6 +327,27 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                             "output={}",
                             input_tensor_a.shard_spec().value().shape[1],
                             operation_attributes.output_mem_config.shard_spec().value().shape[1]);
+                        // See the identical check in the BLOCK_SHARDED -> WIDTH_SHARDED branch above:
+                        // matching shard WIDTH alone doesn't guarantee matching column-shard COUNT
+                        // once width-unpadding is involved - compare the EFFECTIVE output column-shard
+                        // count (logical output width / shard width), not the output grid's configured
+                        // capacity (a 4-core BLOCK_SHARDED output with shard width 32 and logical width
+                        // 64 only effectively uses 2 of its 4 column shards).
+                        uint32_t input_kw = legacy_2d_shard_column_count(
+                            input_tensor_a.shard_spec().value(), TensorMemoryLayout::WIDTH_SHARDED);
+                        uint32_t output_width = compute_output_specs(operation_attributes, input).padded_shape()[-1];
+                        uint32_t output_shard_width =
+                            operation_attributes.output_mem_config.shard_spec().value().shape[1];
+                        uint32_t effective_output_kw = tt::div_up(output_width, output_shard_width);
+                        TT_FATAL(
+                            input_kw == effective_output_kw,
+                            "WIDTH_SHARDED -> BLOCK_SHARDED requires the output to effectively span the same "
+                            "number of column shards as the input ({}), got {} (output width {} / shard width "
+                            "{}); width-unpadding that reduces the column-shard count is not yet supported",
+                            input_kw,
+                            effective_output_kw,
+                            output_width,
+                            output_shard_width);
                         TT_FATAL(
                             input_tensor_a.physical_volume() /
                                     (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==

@@ -305,6 +305,39 @@ def test_width_block_sharded_cross_type_output_dtype(device, dtype, direction):
     assert untilized.memory_config().is_sharded()
 
 
+@pytest.mark.parametrize("direction", ["block_to_width", "width_to_block"])
+def test_width_block_sharded_cross_type_col_major_orientation(device, direction):
+    """WIDTH_SHARDED <-> BLOCK_SHARDED cross-type with a COL_MAJOR-oriented, RECTANGULAR
+    BLOCK_SHARDED side (2 logical row-shards x 4 logical column-shards, via a physical grid of
+    4 rows x 2 columns). For COL_MAJOR, the physical x/y grid axes swap which one is the logical
+    row-shard (KH) vs column-shard (KW) axis - a per-core (kh, kw) derivation that got this
+    backwards would write each shard's rows/columns to the wrong place, but a SQUARE grid with
+    square shards (as an earlier version of this test used) can't distinguish a correct swap from
+    a missing one, since grid_cols == grid_rows either way. This rectangular geometry (4 != 2, and
+    shard height 64 != shard width 32) actually exercises the swap."""
+    torch.manual_seed(99)
+    shape = [1, 1, 4 * TILE, 4 * TILE]
+    output_end = [0, 0, 4 * TILE - 1, 4 * TILE - 1]
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    # Physical grid: 4 rows x 2 cols. COL_MAJOR swaps axes, so logically this is KH=2 row-shards
+    # (= physical column count) x KW=4 column-shards (= physical row count); shard shape (2*TILE,
+    # TILE) = (64, 32) matches a 2x4 logical division of the 128x128 tensor.
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))})
+    block_col_major = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        L1,
+        ttnn.ShardSpec(grid, [2 * TILE, TILE], ttnn.ShardOrientation.COL_MAJOR),
+    )
+    width_cfg = _make_width_sharded_cfg(4, 4 * TILE, TILE)
+    input_memory_config, output_memory_config = (
+        (block_col_major, width_cfg) if direction == "block_to_width" else (width_cfg, block_col_major)
+    )
+
+    untilized = _check(device, torch_tensor, output_end, input_memory_config, output_memory_config)
+    assert untilized.memory_config().is_sharded()
+
+
 def test_width_block_sharded_cross_type_program_cache_reuse(device):
     torch.manual_seed(15)
     shape = [1, 1, 4 * TILE, 4 * TILE]
@@ -315,6 +348,58 @@ def test_width_block_sharded_cross_type_program_cache_reuse(device):
     for _ in range(2):
         torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
         _check(device, torch_tensor, output_end, input_memory_config, output_memory_config)
+
+
+def test_width_block_sharded_cross_type_mismatched_column_shard_count_rejected(device, expect_error):
+    """BLOCK_SHARDED -> WIDTH_SHARDED with matching column shard WIDTH but a different
+    column-shard COUNT (4 vs 2) must raise, not silently corrupt data. The writer launches every
+    input column shard and uses its input-derived column index; if the output has fewer column
+    shards than the input, noc_async_write_sharded would map the excess input columns onto
+    subsequent output rows instead of rejecting them."""
+    torch.manual_seed(17)
+    shape = [1, 1, 4 * TILE, 4 * TILE]
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # Input: BLOCK_SHARDED 2x4 grid, KW=4, shard width TILE.
+    input_memory_config = _make_block_sharded_cfg(2, 4, 2 * TILE, TILE)
+    tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
+    # Output: WIDTH_SHARDED with only 2 cores of the same shard width TILE (KW=2), unpadded to
+    # exactly the 2-core grid's total capacity (64) so the output tensor_spec itself is valid.
+    output_memory_config = _make_width_sharded_cfg(2, 4 * TILE, TILE)
+
+    with expect_error(RuntimeError, "requires the output to effectively span the same number of"):
+        ttnn.untilize_with_unpadding(
+            tile_tensor,
+            output_tensor_end=ttnn.Shape([0, 0, 4 * TILE - 1, 2 * TILE - 1]),
+            memory_config=output_memory_config,
+        )
+
+
+def test_width_block_sharded_cross_type_effective_column_count_rejected(device, expect_error):
+    """BLOCK_SHARDED -> WIDTH_SHARDED where the output GRID has capacity for as many column
+    shards as the input (matching column-shard COUNT check passes), but the logical output width
+    is unpadded so only some of those shards are effectively real - the writer would still launch
+    every input column and misroute the ones beyond the output's effective width into later output
+    rows, so this must be rejected on the EFFECTIVE (logical width / shard width) count, not just
+    the configured grid capacity."""
+    torch.manual_seed(22)
+    shape = [1, 1, 4 * TILE, 4 * TILE]
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # Input: BLOCK_SHARDED 2x4 grid, KW=4, shard width TILE.
+    input_memory_config = _make_block_sharded_cfg(2, 4, 2 * TILE, TILE)
+    tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
+    # Output: WIDTH_SHARDED with 4 cores of shard width TILE (grid capacity = 4*TILE = full
+    # width, matching input_kw=4 by grid count alone), but unpad to half the width (2*TILE) so
+    # only 2 of those 4 shards are effectively real.
+    output_memory_config = _make_width_sharded_cfg(4, 4 * TILE, TILE)
+
+    with expect_error(RuntimeError, "requires the output to effectively span the same number of"):
+        ttnn.untilize_with_unpadding(
+            tile_tensor,
+            output_tensor_end=ttnn.Shape([0, 0, 4 * TILE - 1, 2 * TILE - 1]),
+            memory_config=output_memory_config,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +509,7 @@ def test_block_sharded_dtype_int_uint32(device, dtype):
 
 
 # ---------------------------------------------------------------------------
-# ROW_MAJOR input (interleaved only - sharded RM input/output not yet supported)
+# ROW_MAJOR input/output: interleaved, legacy 2D-sharded, and cross-shard-type
 # ---------------------------------------------------------------------------
 
 
@@ -605,4 +690,60 @@ def test_row_major_sharded_output_program_cache_reuse(device):
             input_memory_config,
             output_memory_config,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+
+def test_row_major_single_core_honors_sub_core_grids(device):
+    """use_multicore=False for ROW_MAJOR input must still run within the caller's sub_core_grids
+    (on its first core), not hardcode core (0,0) - otherwise it could run outside the caller's
+    allowed sub-device grid and violate sub-device isolation."""
+    torch.manual_seed(18)
+    shape = [1, 1, 64, 64]
+    output_end = [0, 0, 50, 40]
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    rm_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    restricted_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 2))})
+
+    untilized = ttnn.untilize_with_unpadding(
+        rm_tensor,
+        output_tensor_end=ttnn.Shape(output_end),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        use_multicore=False,
+        sub_core_grids=restricted_grid,
+    )
+    result = ttnn.to_torch(untilized)
+    expected = torch_tensor[:, :, :51, :41]
+    assert_equal(result, expected)
+
+
+def test_row_major_rank_greater_than_4_not_yet_supported(device, expect_error):
+    """ROW_MAJOR input with rank > 4 is not yet supported: the rank > 4 squeeze/unsqueeze
+    composite path in the public wrapper (untilize_with_unpadding.cpp) unconditionally discards
+    the caller's real output_tensor_end and substitutes the full input extents - a silent full
+    pass-through instead of the requested truncation - regardless of layout. This is a
+    pre-existing gap for the TILE path too, but ROW_MAJOR input newly reaches it now that the
+    device op accepts ROW_MAJOR at all, so it must be explicitly rejected until
+    output_tensor_end is properly propagated through the reshape."""
+    torch.manual_seed(23)
+    shape = [1, 1, 1, 64, 64]
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    rm_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "ROW_MAJOR input with rank > 4 is not yet supported"):
+        ttnn.untilize_with_unpadding(
+            rm_tensor,
+            output_tensor_end=ttnn.Shape([0, 0, 0, 50, 40]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

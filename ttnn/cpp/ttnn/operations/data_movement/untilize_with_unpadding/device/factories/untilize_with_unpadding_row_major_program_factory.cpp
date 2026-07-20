@@ -79,10 +79,27 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingRowMajorProgramFactory::cre
 
     IDevice* device = input.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    // Honor use_multicore=false by restricting to a single core, same as every other factory's
+    // single-core path - otherwise this factory always spreads work across the full grid
+    // regardless of the flag, silently turning it into a no-op for ROW_MAJOR input. When the
+    // caller also supplied sub_core_grids, single-core mode must still run within that grid (the
+    // first core of it) rather than defaulting to (0,0), which could fall outside the caller's
+    // allowed sub-device grid - matches UntilizeWithUnpaddingSingleCoreProgramFactory's convention.
+    CoreRangeSet work_grid;
+    if (!operation_attributes.use_multicore) {
+        CoreRange default_core({0, 0}, {0, 0});
+        CoreRange core = operation_attributes.sub_core_grids.has_value()
+                             ? corerange_to_cores(operation_attributes.sub_core_grids.value()).at(0)
+                             : default_core;
+        work_grid = CoreRangeSet(core);
+    } else if (operation_attributes.sub_core_grids.has_value()) {
+        work_grid = operation_attributes.sub_core_grids.value();
+    } else {
+        work_grid = CoreRangeSet(
+            CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1}));
+    }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        operation_attributes.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grids.value(), num_unpadded_sticks)
-            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+        tt::tt_metal::split_work_to_cores(work_grid, num_unpadded_sticks);
 
     Buffer* src0_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -140,7 +157,6 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingRowMajorProgramFactory::cre
 
     std::vector<uint32_t> id_per_dim(num_dims);
     uint32_t num_sticks_written = 0;
-    uint32_t start_addr = src0_buffer->address();
     // No leading-offset misalignment (see comment above), so the reader always begins at an
     // aligned address and there is no memmove-based re-alignment step.
     constexpr uint32_t misalignment = 0;
@@ -173,42 +189,44 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingRowMajorProgramFactory::cre
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        std::vector<uint32_t> reader_kernel_args = {
-            start_addr,
-            reader_page_size,
-            unpadded_row_size_bytes,
-            unpadded_row_size_bytes_offset,
-            num_dims,
-            misalignment,
-            start_id,
-            num_sticks_per_core,
-            core_num_sticks_per_core_read,
-            core_num_read_per_barrier,
-            chunk_size,
-            num_chunks_per_stick,
-            last_chunk_size};
-        reader_kernel_args.insert(
-            reader_kernel_args.end(), num_unpadded_sticks_per_dim.begin(), num_unpadded_sticks_per_dim.end());
-        reader_kernel_args.insert(
-            reader_kernel_args.end(), num_padded_sticks_per_dim.begin(), num_padded_sticks_per_dim.end());
-        reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
+        // Built via RTArgList (not a plain std::vector<uint32_t>) so src0_buffer/dst_buffer are
+        // registered as buffer bindings - ProgramDescriptor only patches addresses registered this
+        // way on a program-cache hit; embedding them as plain uint32_t would leave a cache hit with
+        // new tensors reading/writing through the first invocation's stale addresses.
+        KernelDescriptor::RTArgList reader_kernel_args;
+        reader_kernel_args.push_back(src0_buffer);
+        reader_kernel_args.push_back(reader_page_size);
+        reader_kernel_args.push_back(unpadded_row_size_bytes);
+        reader_kernel_args.push_back(unpadded_row_size_bytes_offset);
+        reader_kernel_args.push_back(num_dims);
+        reader_kernel_args.push_back(misalignment);
+        reader_kernel_args.push_back(start_id);
+        reader_kernel_args.push_back(num_sticks_per_core);
+        reader_kernel_args.push_back(core_num_sticks_per_core_read);
+        reader_kernel_args.push_back(core_num_read_per_barrier);
+        reader_kernel_args.push_back(chunk_size);
+        reader_kernel_args.push_back(num_chunks_per_stick);
+        reader_kernel_args.push_back(last_chunk_size);
+        reader_kernel_args.append(num_unpadded_sticks_per_dim);
+        reader_kernel_args.append(num_padded_sticks_per_dim);
+        reader_kernel_args.append(id_per_dim);
 
-        std::vector<uint32_t> writer_kernel_args = {
-            dst_buffer->address(),
-            unpadded_row_size_bytes,
-            unpadded_row_size_bytes_offset,
-            num_sticks_per_core,
-            core_num_sticks_per_core_read,
-            core_num_read_per_barrier,
-            num_sticks_written,
-            writer_page_size,
-            chunk_size,
-            num_chunks_per_stick,
-            last_chunk_size};
+        KernelDescriptor::RTArgList writer_kernel_args;
+        writer_kernel_args.push_back(dst_buffer);
+        writer_kernel_args.push_back(unpadded_row_size_bytes);
+        writer_kernel_args.push_back(unpadded_row_size_bytes_offset);
+        writer_kernel_args.push_back(num_sticks_per_core);
+        writer_kernel_args.push_back(core_num_sticks_per_core_read);
+        writer_kernel_args.push_back(core_num_read_per_barrier);
+        writer_kernel_args.push_back(num_sticks_written);
+        writer_kernel_args.push_back(writer_page_size);
+        writer_kernel_args.push_back(chunk_size);
+        writer_kernel_args.push_back(num_chunks_per_stick);
+        writer_kernel_args.push_back(last_chunk_size);
 
         num_sticks_written += num_sticks_per_core;
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_kernel_args));
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
+        reader_desc.emplace_runtime_args(core, reader_kernel_args);
+        writer_desc.emplace_runtime_args(core, writer_kernel_args);
     }
 
     desc.kernels.push_back(std::move(reader_desc));
