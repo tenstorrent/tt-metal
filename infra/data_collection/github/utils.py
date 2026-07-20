@@ -274,8 +274,13 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
                 )
                 node_name = node_name or log_node_name
                 serial = serial or log_serial
+            # Prefer <node>_<serial>; if only the node name is available (e.g. CPU-only
+            # runners have no card serial), use the node name alone. Otherwise keep the
+            # truncated name above.
             if node_name and serial:
                 host_name = f"{node_name}_{serial}"
+            elif node_name:
+                host_name = node_name
 
     # Cleanup GitHub-hosted runner names because we're sending the whole thing, which is unnecessary
     # and clogs up the data with 1000s of hosts

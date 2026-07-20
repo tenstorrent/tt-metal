@@ -514,6 +514,30 @@ def test_civ2_host_name_uses_job_log_when_annotations_missing(tmp_path):
     assert row["host_name"] == "f06cs19_010001451172A025"
 
 
+def test_civ2_host_name_uses_node_name_only_when_serial_missing(tmp_path):
+    # CPU-only runner: node name present but no card serial -> use node name alone,
+    # never "<node>_None".
+    run_id, job_id = 666, 4
+    logs_dir = tmp_path / str(run_id) / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / f"{job_id}.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner tt-ubuntu-2204-large-stable-w77km-runner-djpn9 "
+        "is running on Kubernetes node: f10-cpu-01\n"
+        "2026-07-10T00:01:03.1Z Not a Tenstorrent card runner "
+        "(runner name: tt-ubuntu-2204-large-stable-w77km-runner-djpn9)\n"
+    )
+
+    job = _make_completed_civ2_job(
+        job_id,
+        "tt-ubuntu-2204-large-stable-w77km-runner-djpn9",
+        ["tt-ubuntu-2204-large-stable"],
+    )
+    job["run_id"] = run_id
+
+    row = get_job_row_from_github_job(job, {}, tmp_path)
+    assert row["host_name"] == "f10-cpu-01"
+
+
 def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):
     pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_passing_10662355710")
 
