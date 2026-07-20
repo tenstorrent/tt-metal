@@ -1,5 +1,101 @@
 # tilize — changelog
 
+## Refinement 2c — Sharded I/O general cross-core NoC path  [~ partial]
+
+- **Date**: 2026-07-20
+- **What was done**: shipped ALL of 2c's correctness scope via TWO mechanisms.
+  Both target golden tests now pass fully.
+  1. **Lever 2 — cliff/padded same-spec nd multi-shard** (host-only, no kernel).
+     `_create_sharded_program_descriptor` derives `num_blocks` from the PHYSICAL
+     per-core bank (`_physical_num_blocks = ceil(n_shards/n_cores) * shard_h/32`)
+     instead of `buffer_num_pages // n_cores`. `buffer_num_pages` counts only
+     LOGICAL width-split rows and under-counts padded/cliff banks; the physical
+     bank reserves `ceil(n_shards/n_cores)` uniform shard slots per core (padded
+     cliff slots included). The same-spec zero-copy kernel tilizes the whole
+     physical bank in place — identity holds because in/out share the slot layout
+     (a padded slot round-trips to the same padded slot; to_torch strips it).
+     `validate()` same-spec branch drops the even-split (`n_shards % n_cores`) and
+     `_has_padding` refusals. Unblocks `[3,160,160]`, `[5,4,160,160]`,
+     `[23,96,160]` same-spec nd.
+  2. **General cross-core path** (levers 1+3 unified; new
+     `_create_general_program_descriptor` + `kernels/tilize_reader_general.cpp`).
+     The decisive finding from the native `TilizeMultiCoreDefaultProgramFactory`:
+     it uses **NO cross-core semaphore/multicast**. Work is split across the
+     compute grid by OUTPUT tile-rows; each compute core reads the full-width RM
+     sticks for its tile-rows from the input via `TensorAccessor` (which resolves
+     each logical page to DRAM OR a remote L1 shard bank) and writes its Wt tiles
+     per tile-row via `TensorAccessor` to the output (DRAM or remote L1 banks).
+     The accessors' logical page ordering — input `page = row*npr + chunk`
+     (npr = ceil(W/shard_w) width-chunks per logical row); output tile
+     `page = tr*Wt + tc` — makes any-to-any placement correct with **zero DRAM
+     staging**. This one path covers: nd/WIDTH/BLOCK↔interleaved crossover (both
+     directions, single- AND multi-core), cross-spec nd→nd resharding, and
+     nd→legacy HEIGHT/WIDTH/BLOCK. It SUPERSEDES 2b's `_create_crossover_*`
+     split-reader/writer functions (removed — dead code).
+  3. **New reader `tilize_reader_general.cpp`** (only new kernel). Helper
+     deviation, documented at the file head: `read_sticks_for_tilize` is
+     stick-indexed (exactly one accessor page per logical row) and cannot
+     assemble a full-width stick from a WIDTH-split sharded input (one logical row
+     spans `npr` pages). The reader adds the per-row npr chunk loop the helper
+     lacks (last chunk clips to valid bytes); the L1 layout it produces (32 sticks
+     each strided by `row_bytes = W*elem`) is byte-identical to the helper's
+     TILE-granularity output, so `compute_kernel_lib::tilize` (reused
+     `tilize_compute.cpp`, Wt_chunk=Wt, num_chunks=1) and `tilize_writer.cpp` are
+     reused UNCHANGED. ttnn-static-analyzer: 0 structural findings; its one flagged
+     risk (accessor page-ordering) is empirically confirmed by the passing tests.
+- **validate()/SUPPORTED delta**: no categorical SUPPORTED axis widened (the
+  schemes/buffers were already in SUPPORTED from Refinement 2). `validate()`
+  restructured: same-spec allows cliff/padded; a cross-spec branch (both sharded,
+  different physical spec) and a crossover branch (one side sharded) now ACCEPT
+  (require L1 sharded side, tile-aligned output shard) instead of refusing. The
+  broad single-core+sharded EXCLUSIONS were **dropped** — the general path runs
+  correctly on a single compute core, and `test_tilize_nd_sharded` exercises
+  interleaved→nd with `use_multicore=False`. No registry INPUTS cell is
+  single-core sharded, so this does not widen the responsible set → no XPASS drift.
+- **Accuracy**: bit-exact identity (`torch.equal`, max_diff=0) bf16 across all 2c
+  sub-cases (crossover both dirs incl single-core + npr>1, cross-spec nd→nd,
+  nd→HEIGHT/WIDTH/BLOCK, cliff/padded same-spec nd rank 3/4).
+- **Golden progress (targets)**: `test_tilize_nd_sharded` +
+  `test_tilize_nd_sharded_to_legacy_sharded` = **45 passed / 28 skipped / 0
+  failed** (was 9 passed / 36 failed). **Both target tests fully pass** — the
+  2c "Done when" gate is met. The 28 skips are the tests' own skip conditions
+  (nd-input + single-core; output_shard_shape when output not nd).
+- **No regression**: `test_golden.py` + `test_regression.py` = **86 passed,
+  0 failed** (no XPASS drift); sharded unit `test_tilize_sharded.py` **25/25**
+  (retargeted the 2b refusal contracts — single-core crossover, WIDTH crossover,
+  padded multi-shard — from `expect_error` to identity assertions, since 2c now
+  supports them); acceptance `test_tilize.py` **35/35**. Full golden dir: 190
+  passed / 83 skipped / 1 failed / 2 errors — the 1 fail
+  (`test_from_torch_conversion_deep_seek_mc...`, WIDTH-sharded fp32 **DRAM**
+  same-spec) and 2 errors (`test_deepseek_v3_mla_tilize_trace_mode`
+  `use_module_device`+`device_params` infra conflict) are **pre-existing**
+  (verified identical at baseline commit `ead3f7cced`), out of 2c's L1-cross-core
+  scope, not regressions.
+- **Perf gate**: **DM-bound** (tilize is a byte reshuffle; the FPU throughput far
+  exceeds the NoC feed). Unlike same-spec zero-copy (zero transfers), the general
+  path touches NoC on both sides — reads RM sticks and writes TILE pages, each
+  resolved to DRAM or L1 shard banks. DM checklist: one barrier per block on both
+  reader and writer ✓; depth-2 CBs → read/compute/write overlap ✓; row-wise core
+  placement ✓; coalescing is per-chunk (npr shard-width reads/row) — adequate for
+  the tiny golden shapes. **CB-bounded lever NOT applied to the general path**:
+  CBs are `2*Wt*tile` with full `Wt` → L1-unbounded for a WIDE-W HEIGHT crossover
+  (bounded in practice for the golden shapes, Wt ≤ 72). This is the sole deferred
+  item → **Refinement 2d** (wide-W `Wt_chunk` chunking of the general
+  reader/writer). Device Tracy duration deferred (device profiler not enabled in
+  this pre-compiled-firmware build — same caveat every prior phase; golden shapes
+  are tiny correctness gates, not bandwidth-bound).
+- **Issues encountered / hangs**: none — no device hang across the whole 2c
+  effort. The TensorAccessor logical-page-ordering assumption (the one real
+  correctness risk) was validated incrementally (crossover → cross-spec →
+  nd→legacy), each bit-exact on first device run.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_2c_debug.py`
+  (11 cases: cliff same-spec ×4, crossover interleaved↔nd both dirs incl
+  single-core, cross-spec nd→nd, nd→HEIGHT/WIDTH/BLOCK). Probes `probe_020`
+  (2c geometry), `probe_021` (physical-bank formula).
+- **Deferred to Refinement 2d** (perf only): wide-W CB chunking of the general
+  path (lever #4); optional DRAM-sharded same-spec (the pre-existing deep_seek
+  DRAM case). Filed with concrete levers in `op_requirements.md`.
+
 ## Refinement 2b — Sharded I/O remainder (crossover + multi-shard same-spec)  [~ partial]
 
 - **Date**: 2026-07-20

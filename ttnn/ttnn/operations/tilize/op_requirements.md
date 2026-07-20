@@ -188,7 +188,7 @@ No regression (golden responsible 86/86, sharded unit 25/25, acceptance 35/35), 
 hangs. Deferred to **Refinement 2c** (all refused cleanly in `validate()`):
 WIDTH/BLOCK crossover, nd crossover, cross-spec resharding, cliff/padded multi-shard.
 
-### [ ] Refinement 2c — Sharded I/O general cross-core NoC path (nd/WIDTH/BLOCK crossover, cross-spec reshard, cliff cores)
+### [~] Refinement 2c — Sharded I/O general cross-core NoC path (nd/WIDTH/BLOCK crossover, cross-spec reshard, cliff cores)
 
 **Goal**: the sharded cases Refinement 2b still refuses — all requiring a shard's
 data to redistribute across cores via NoC (no contiguous per-core mapping), which
@@ -218,3 +218,75 @@ reshard (input spec ≠ output spec), WIDTH/BLOCK↔interleaved crossover
    with `Wt = full W/32` (not chunked), so a wide HEIGHT shard is L1-unbounded.
    Add the interleaved path's `Wt_chunk` chunking to the crossover reader/writer
    (they already accept `num_chunks`/`Wt_chunk` CT args).
+
+**Landed [~] (2026-07-20)**: ALL correctness scope shipped — both target
+golden tests pass fully (`test_tilize_nd_sharded` + `test_tilize_nd_sharded_to_legacy_sharded`
+= 45 passed / 28 skipped / **0 failed**, was 9/36-failed). Two mechanisms:
+- **Lever 2 — cliff/padded same-spec nd multi-shard** (`[3,160,160]`,
+  `[5,4,160,160]`, `[23,96,160]`): the same-spec zero-copy path now tilizes the
+  whole PHYSICAL per-core bank (`ceil(n_shards/n_cores)*shard_h/32` tile-rows,
+  padded cliff slots included) instead of `buffer_num_pages//n_cores` (which
+  counts only logical width-split rows and under-counts padded banks). Identity
+  holds because in/out share the slot layout. Host-only change; no kernel.
+- **General cross-core path** (levers 1+3 unified — `_create_general_program_descriptor`
+  + new `kernels/tilize_reader_general.cpp`): the KEY finding from the native
+  `TilizeMultiCoreDefaultProgramFactory` is that it uses **NO cross-core
+  semaphore/multicast**. Work is split across the compute grid by output
+  tile-rows; each compute core reads the full-width RM sticks for its tile-rows
+  from the input via `TensorAccessor` (resolving to DRAM OR remote L1 shard
+  banks) and writes its Wt tiles per tile-row via `TensorAccessor` to the output
+  (DRAM or remote L1 banks). The accessors' logical page ordering (input:
+  `row*npr + chunk`, npr = ceil(W/shard_w) width-chunks; output: `tr*Wt + tc`)
+  makes any-to-any placement work with **zero DRAM staging**. This one path
+  covers nd/WIDTH/BLOCK↔interleaved crossover (both directions, single- AND
+  multi-core), cross-spec nd→nd resharding, and nd→legacy HEIGHT/WIDTH/BLOCK.
+  The new reader is the only new kernel (helper `read_sticks_for_tilize` is
+  stick-indexed = one page per row and cannot assemble a width-split sharded
+  row; the reader adds the per-row npr chunk loop, producing byte-identical L1
+  layout to the helper so `compute_kernel_lib::tilize` + `tilize_writer.cpp` are
+  reused unchanged). `validate()` widened: same-spec drops the even-split /
+  no-padding refusals; cross-spec + crossover allowed (require L1 sharded side,
+  tile-aligned output shard); the broad single-core+sharded EXCLUSIONS dropped
+  (general path runs single-core; test exercises interleaved→nd multicore=False).
+  No regression: golden `test_golden.py`+`test_regression.py` 86 pass, sharded
+  unit 25/25, acceptance 35/35, no XPASS drift, no hangs.
+
+**Deferred to Refinement 2d** (perf, not correctness): the general path's CBs
+are `2*Wt*tile` with full `Wt = W/32`, so a WIDE HEIGHT crossover / wide-W
+sharded case is L1-unbounded (lever #4). The tested golden shapes are small
+(Wt ≤ 72) so bounded in practice, but the general reader/writer need `Wt_chunk`
+chunking for wide W. Also out of scope (pre-existing, not a regression):
+DRAM-sharded same-spec (`test_from_torch_conversion_deep_seek_mc...`, WIDTH
+sharded in DRAM) — 2c is L1 cross-core; DRAM sharding is a separate axis.
+
+### [ ] Refinement 2d — General cross-core path wide-W CB chunking (lever #4) + optional DRAM sharding
+
+**Goal**: bound the general cross-core path's L1 footprint by a constant for
+wide-W sharded/crossover cases, and (optionally) extend it to DRAM-sharded
+same-spec.
+
+**Verifier notes / concrete levers**:
+1. **Wide-W chunking of `_create_general_program_descriptor` + `tilize_reader_general.cpp`**:
+   today the reader reserves `Wt` pages/block and the CBs are `2*Wt*tile`
+   (L1-unbounded when `W` is large, e.g. a HEIGHT shard with `W=2048` ⇒ Wt=64).
+   Add a width-chunk outer loop: process `Wt_chunk` (constant, e.g. 8) output
+   tile-columns per pass, reading only the input width-chunks that feed those
+   output columns. The interaction with `npr` (input shard width-chunks) is the
+   subtlety — an output tile-column chunk `[c0*32 : (c0+Wt_chunk)*32)` maps to a
+   contiguous input byte-range that may span a subset of the `npr` shard pages;
+   compute per-chunk `chunk_col_byte_offset` + which shard pages to read. The
+   reused `tilize_compute.cpp` / `tilize_writer.cpp` already take `num_chunks` /
+   `Wt_chunk` CT args, so only the general reader + host wiring change. CB then
+   `2*Wt_chunk*tile` — constant in W. Verify with a wide-W HEIGHT crossover
+   (e.g. `[1,1,512,2048]` HEIGHT-sharded, 8 cores) that L1 stays bounded and
+   identity holds.
+2. **(Optional) DRAM-sharded same-spec**: route both-sharded DRAM (buffer_type
+   DRAM) same-spec through the general path instead of refusing "requires L1
+   buffers" (zero-copy can't alias DRAM, but the general TensorAccessor path
+   resolves DRAM shard banks fine). Unblocks
+   `test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row`
+   (WIDTH-sharded fp32 DRAM, shape `[1,7168,2304]`). Confirm L1 bound (needs
+   lever #1 first — Wt=72 there).
+
+**Done when**: a wide-W HEIGHT crossover keeps per-core CB L1 bounded by a
+constant (not `Wt`), identity preserved; no regression on the 2c golden targets.
