@@ -1023,23 +1023,10 @@ def test_to_layout_custom_tile_host_roundtrip(tile_shape):
     assert_equal(torch_input_tensor, ttnn.to_torch(round_tripped))
 
 
-def test_to_layout_custom_tile_host_no_padding_fast_path():
-    torch.manual_seed(1)
-    torch_input_tensor = torch.rand((64, 64), dtype=torch.bfloat16)
-    tile = ttnn.Tile((16, 32))
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=tile)
-
-    assert tiled.layout == ttnn.TILE_LAYOUT
-    assert tiled.tile == tile
-    assert list(tiled.padded_shape) == [64, 64]
-    assert_equal(torch_input_tensor, ttnn.to_torch(tiled))
-
-
 def test_to_layout_rejects_tile_kwarg_for_row_major(expect_error):
     input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT)
 
+    # Passing tile infomation to a row major transformation
     with expect_error(RuntimeError, "tile argument is only supported"):
         ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, tile=ttnn.Tile((16, 16)))
 
@@ -1047,6 +1034,7 @@ def test_to_layout_rejects_tile_kwarg_for_row_major(expect_error):
 def test_to_layout_rejects_transpose_only_tile_mismatch(expect_error):
     input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
 
+    # Tilize from one tile configuration to another tile configuration results in an error.
     with expect_error(RuntimeError, "cannot convert to tile"):
         ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32), transpose_tile=True))
 

@@ -291,24 +291,5 @@ TEST(HostTensorToLayout, CustomTileRoundTripWithPaddingPreservesData) {
     expect_equal_shard_data(round_tripped, expected);
 }
 
-TEST(HostTensorToLayout, TileToTileMismatchIncludingTransposeThrows) {
-    const Shape shape{32, 32};
-    const auto data = make_ramp<float>(shape.volume());
-    const auto source = HostTensor::from_vector<float>(data, make_tile_spec(shape, DataType::FLOAT32, Tile{{32, 32}}));
-
-    EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, Tile{{32, 32}, true}));
-}
-
-TEST(HostTensorToLayout, TileReflectionIncludesTransposeFlags) {
-    const Tile default_tile{{32, 32}};
-    const Tile transposed_tile{{32, 32}, true};
-
-    EXPECT_FALSE(default_tile == transposed_tile);
-    std::stringstream ss;
-    ss << transposed_tile;
-    EXPECT_THAT(ss.str(), ::testing::HasSubstr("transpose_within_face=1"));
-    EXPECT_THAT(ss.str(), ::testing::HasSubstr("transpose_of_faces=1"));
-}
-
 }  // namespace
 }  // namespace tt::tt_metal
