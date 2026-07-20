@@ -159,12 +159,20 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     writer_desc.named_compile_time_args = {{"cb_out", output_cb_index}};
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Core-invariant tensor base addresses are common runtime args (broadcast to all cores).
-    // Reader common args: idx 0 = in0 (a), idx 1 = in1 (b).
+    // Core-invariant common runtime args (broadcast to all cores).
+    // Reader common args: idx 0 = in0 (a), idx 1 = in1 (b), idx 2-9 = grid-wide matmul dims.
     {
         KernelDescriptor::RTArgList reader_common_rtargs;
         reader_common_rtargs.push_back(a);
         reader_common_rtargs.push_back(b);
+        reader_common_rtargs.push_back(Mt);
+        reader_common_rtargs.push_back(Kt);
+        reader_common_rtargs.push_back(Nt);
+        reader_common_rtargs.push_back(MtKt);
+        reader_common_rtargs.push_back(KtNt);
+        reader_common_rtargs.push_back(B);
+        reader_common_rtargs.push_back(uint32_t(bcast_batch));
+        reader_common_rtargs.push_back(MtNt);
         reader_desc.emplace_common_runtime_args(reader_common_rtargs);
     }
     // Writer common args: idx 0 = output.
@@ -186,9 +194,7 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_desc.emplace_runtime_args(
-            core,
-            {Mt, Kt, Nt, MtKt, KtNt, B, uint32_t(bcast_batch), num_tiles_written, num_output_tiles_per_core, MtNt});
+        reader_desc.emplace_runtime_args(core, {num_tiles_written, num_output_tiles_per_core});
         writer_desc.emplace_runtime_args(core, {num_output_tiles_per_core, num_tiles_written});
         num_tiles_written += num_output_tiles_per_core;
     }
