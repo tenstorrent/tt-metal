@@ -36,6 +36,48 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     }
 }
 
+// Like copy_block but NEVER applies the fused activation. Used by split-K NON-root bands (bottom band of a
+// Pk>1 chain) so they forward the RAW matmul partial up the reduction chain; the activation is applied
+// exactly once at the reduction ROOT (is_top). copy_block itself always applies activation when defined and
+// is used only where the block IS the final output (no-fusion path, or activation-only root).
+void copy_block_raw(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    copy_tile_to_dst_init_short(in_cb);
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(out_cb);
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            acquire_dst();
+            copy_tile(in_cb, tile_id, 0 /*dst*/);
+            pack_tile(0, out_cb);
+            release_dst();
+            tile_id++;
+        }
+        cb_push_back(out_cb, N_block_tiles);
+    }
+}
+
+// Split-K fusion root helper: intermediate_cb += reduce_cb, IN PLACE (result stays in intermediate_cb so the
+// existing bias/activation/addcmul primitives can consume it exactly as on the non-split-K path). Uses the
+// single-slot in-place refill idiom (wait/pop front, reserve/push back the same slot) already used by
+// add_bias_and_addcmul_block. Applies NO fusion — bias/activation/addcmul are applied afterward, once.
+void reduce_add_in_place(uint32_t intermediate_cb, uint32_t reduce_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    const uint32_t n_tiles = M_block_tiles * N_block_tiles;
+    add_tiles_init(intermediate_cb, reduce_cb);
+    reconfig_data_format(intermediate_cb, reduce_cb);
+    pack_reconfig_data_format(intermediate_cb);
+    cb_wait_front(intermediate_cb, n_tiles);
+    for (uint32_t t = 0; t < n_tiles; t++) {
+        acquire_dst();
+        add_tiles(intermediate_cb, reduce_cb, t, t, 0 /*dst*/);
+        pack_tile(0, intermediate_cb);
+        release_dst();
+    }
+    cb_pop_front(intermediate_cb, n_tiles);
+    cb_reserve_back(intermediate_cb, n_tiles);
+    cb_push_back(intermediate_cb, n_tiles);
+}
+
 // Split-K plan B: out = a + b, full elementwise (both M_block_tiles x N_block_tiles). Used by the
 // column reduction to add this band's matmul partial (a) to the running sum forwarded up from the band
 // below (b). Pushes out_cb one M-row at a time, matching copy_block/add_bias_block.
@@ -357,6 +399,15 @@ void kernel_main() {
     // split-K plan B: 1 if this is the bottom K-band (no incoming running sum), else 0. Always present.
     [[maybe_unused]] const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
 
+// Any fusion active => the reduction ROOT (is_top) applies bias/activation/addcmul exactly once after the
+// split-K partials are summed. Non-root bands forward the RAW partial (no fusion). When no fusion is active
+// this macro is undefined and the output stage is byte-identical to the historical no-fusion path.
+#if defined(FUSE_BIAS) || defined(FUSE_TERNARY) || defined(SFPU_OP_INIT_ACTIVATION)
+#define REGIME_A_FUSED 1
+    // is_top: 1 on the reduction root (Pk==1 => every core; Pk>1 => the top K-band). Present only when fused.
+    [[maybe_unused]] const uint32_t is_reduce_top = get_arg_val<uint32_t>(argidx++);
+#endif
+
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
     const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
@@ -515,13 +566,16 @@ void kernel_main() {
 #ifdef REDUCE_K
             // Split-K plan B column reduction: bottom band emits its own matmul partial; every other band
             // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
-            // (non-top bands) or writes it to DRAM (top band). K-par never fuses bias/ternary.
+            // (non-top bands) or writes it to DRAM (top band).
             cb_wait_front(intermediate_cb, out_block_num_tiles);
 #ifdef DIAG_NO_REDUCE
             // NO_REDUCE ablation: force the bottom-band copy path on EVERY core so it never waits for or adds
             // cb_reduce. The writer bypasses the matching reduction traffic; only the top band writes.
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-#else
+            cb_pop_front(intermediate_cb, out_block_num_tiles);
+#elif !defined(REGIME_A_FUSED)
+            // NO-FUSION path (byte-identical to the historical Regime-A output stage): top and non-top reduce
+            // bands are identical; the writer decides forward-up vs DRAM-write.
             if (is_reduce_bottom) {
                 copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             } else {
@@ -529,8 +583,51 @@ void kernel_main() {
                 reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
                 cb_pop_front(cb_reduce, out_block_num_tiles);
             }
-#endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
+#else
+            // FUSION-AWARE split-K: bias/activation/addcmul are applied EXACTLY ONCE at the reduction ROOT
+            // (is_reduce_top). Non-root bands forward the RAW partial (no fusion), so the reduction chain sums
+            // un-fused partials and the epilogue sees the true A@B (+ reduced K) before bias/act/addcmul.
+            if (!is_reduce_top) {
+                // Partial-forwarding band. RAW (copy_block_raw / reduce_add_block never apply activation).
+                if (is_reduce_bottom) {
+                    copy_block_raw(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+                } else {
+                    cb_wait_front(cb_reduce, out_block_num_tiles);
+                    reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
+                    cb_pop_front(cb_reduce, out_block_num_tiles);
+                }
+                cb_pop_front(intermediate_cb, out_block_num_tiles);
+            } else {
+                // Reduction ROOT (Pk==1: every core; Pk>1: top band). Sum the forwarded partial into
+                // intermediate (in place) when this is a Pk>1 chain, then apply the epilogue ONCE -> out_cb.
+                if (!is_reduce_bottom) {
+                    cb_wait_front(cb_reduce, out_block_num_tiles);
+                    reduce_add_in_place(intermediate_cb, cb_reduce, M_block_tiles, N_block_tiles);
+                    cb_pop_front(cb_reduce, out_block_num_tiles);
+                }
+#if defined(FUSE_TERNARY)
+                add_bias_and_addcmul_block(
+                    intermediate_cb,
+                    in2_cb,
+                    ternary_a_cb,
+                    ternary_b_cb,
+                    fused_ternary_scalar_uint,
+                    out_cb,
+                    M_block_tiles,
+                    N_block_tiles,
+                    broadcast_ternary_b);  // pops intermediate_cb internally
+#elif defined(FUSE_BIAS)
+                cb_wait_front(in2_cb, N_block_tiles);
+                add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);  // + activation
+                cb_pop_front(in2_cb, N_block_tiles);
+                cb_pop_front(intermediate_cb, out_block_num_tiles);
+#else   // activation-only root
+                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);  // applies SFPU activation
+                cb_pop_front(intermediate_cb, out_block_num_tiles);
+#endif  // fusion kind
+            }
+#endif  // fusion / no-fusion
 #elif !defined(FUSE_TERNARY)
             cb_wait_front(intermediate_cb, out_block_num_tiles);
 #ifndef FUSE_BIAS

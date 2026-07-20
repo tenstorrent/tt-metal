@@ -37,6 +37,18 @@ void kernel_main() {
     constexpr uint32_t use_reduce = get_compile_time_arg_val(13);      // 1 when Pk>1 (reduction chain active)
     constexpr auto in0_args = TensorAccessorArgs<14>();
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    // Optional fused-epilogue operands (appended by the factory in this order: bias, then ternary_a/_b).
+    // Present only when the matching define is set, so the no-fusion compile is unchanged.
+#if defined(FUSE_BIAS)
+    constexpr auto bias_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#if defined(FUSE_TERNARY)
+    constexpr auto ta_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+    constexpr auto tb_args = TensorAccessorArgs<ta_args.next_compile_time_args_offset()>();
+#endif
+#elif defined(FUSE_TERNARY)
+    constexpr auto ta_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto tb_args = TensorAccessorArgs<ta_args.next_compile_time_args_offset()>();
+#endif
 
     const uint32_t in0_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
@@ -72,6 +84,130 @@ void kernel_main() {
             q[i] = 0;
         }
     };
+
+    // ---- Optional fused-epilogue reads. This core produces the fused output (and therefore reads the
+    // bias/residual/gate operands into CBs c_4/c_5/c_6 for compute) only when it is the reduction ROOT:
+    //   Pk==1 (use_reduce==0): every core is its own root; Pk>1: only the top band (is_top).
+    // The compute kernel consumes these CBs and applies the epilogue exactly once. All gated by defines so
+    // the no-fusion compile is byte-identical. ----
+#if defined(FUSE_BIAS) || defined(FUSE_TERNARY) || defined(OUT_CHUNKS)
+    const bool fuse_root = (use_reduce == 0u) || (is_top != 0u);
+    uint32_t fidx = 17u;  // fusion/chunk runtime args follow the base 17 (never combined with diag ablations)
+#endif
+#if defined(FUSE_BIAS)
+    constexpr uint32_t bias_cb = 4;
+    const uint32_t bias_addr = get_arg_val<uint32_t>(fidx++);
+    const auto bias = TensorAccessor(bias_args, bias_addr, tile_bytes);
+#endif
+#if defined(FUSE_TERNARY)
+    constexpr uint32_t ta_cb = 5, tb_cb = 6;
+    const uint32_t ta_addr = get_arg_val<uint32_t>(fidx++);
+    const uint32_t tb_addr = get_arg_val<uint32_t>(fidx++);
+    const uint32_t bcast_gate = get_arg_val<uint32_t>(fidx++);
+#if defined(TERNARY_B_IS_FLOAT32)
+    constexpr uint32_t gate_tile_bytes = tile_bytes * 2u;  // fp32 gate tile = 2x bf16
+#else
+    constexpr uint32_t gate_tile_bytes = tile_bytes;
+#endif
+    const auto ta = TensorAccessor(ta_args, ta_addr, tile_bytes);
+    const auto tb = TensorAccessor(tb_args, tb_addr, gate_tile_bytes);
+#endif
+    auto zero_bytes = [](uint32_t addr, uint32_t nbytes) {
+        volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        const uint32_t nw = nbytes / 4u;
+        for (uint32_t i = 0; i < nw; ++i) {
+            q[i] = 0;
+        }
+    };
+    (void)zero_bytes;
+
+    // Feed the fused-epilogue operands for output sub-block `nb` into c_4/c_5/c_6, matching the consumption
+    // order/shape of compute's add_bias_block / add_bias_and_addcmul_block. Operands are indexed by GLOBAL
+    // (m,n) on the FULL-N stride (Nt); invalid tail positions (m>=valid_m or local col>=valid_n) are zeroed
+    // (never read out of range) — their fused output columns/rows are not written to DRAM.
+    [[maybe_unused]] auto feed_fused = [&](uint32_t nb) {
+        [[maybe_unused]] const uint32_t n_off = n_start + nb * N_block;  // global N tile base of this sub-block
+#if defined(FUSE_BIAS)
+        cb_reserve_back(bias_cb, N_block);
+        uint32_t pb = get_write_ptr(bias_cb);
+        for (uint32_t n = 0; n < N_block; ++n) {
+            if ((nb * N_block + n) < valid_n) {
+                noc_async_read_page(n_off + n, bias, pb);  // bias [1,N]: page = global N tile
+            } else {
+                zero_tile(pb);
+            }
+            pb += tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(bias_cb, N_block);
+#endif
+#if defined(FUSE_TERNARY)
+        if (bcast_gate) {  // gate [1,N]: one row for the whole sub-block
+            cb_reserve_back(tb_cb, N_block);
+            uint32_t pg = get_write_ptr(tb_cb);
+            for (uint32_t n = 0; n < N_block; ++n) {
+                if ((nb * N_block + n) < valid_n) {
+                    noc_async_read_page(n_off + n, tb, pg);
+                } else {
+                    zero_bytes(pg, gate_tile_bytes);
+                }
+                pg += gate_tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(tb_cb, N_block);
+        }
+        for (uint32_t m = 0; m < M_block; ++m) {  // residual [M,N] (+ full gate [M,N]) one M-row at a time
+            cb_reserve_back(ta_cb, N_block);
+            uint32_t pa = get_write_ptr(ta_cb);
+            for (uint32_t n = 0; n < N_block; ++n) {
+                if (m < valid_m && (nb * N_block + n) < valid_n) {
+                    noc_async_read_page((m_start + m) * Nt + (n_off + n), ta, pa);
+                } else {
+                    zero_tile(pa);
+                }
+                pa += tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(ta_cb, N_block);
+            if (!bcast_gate) {  // gate [M,N]: this M-row
+                cb_reserve_back(tb_cb, N_block);
+                uint32_t pg = get_write_ptr(tb_cb);
+                for (uint32_t n = 0; n < N_block; ++n) {
+                    if (m < valid_m && (nb * N_block + n) < valid_n) {
+                        noc_async_read_page((m_start + m) * Nt + (n_off + n), tb, pg);
+                    } else {
+                        zero_bytes(pg, gate_tile_bytes);
+                    }
+                    pg += gate_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(tb_cb, N_block);
+            }
+        }
+#endif
+    };
+
+    // Chunked output support (regime_a_matmul_split): route each output tile to the chunk buffer that owns
+    // its global N column. chunk = global_n / out_ntc, col = global_n % out_ntc; write page (m)*out_ntc+col
+    // into chunk-buffer `chunk`. All chunk buffers share the output TensorAccessorArgs (same [M, N/chunks]
+    // spec), differing only by base address. Not compiled unless OUT_CHUNKS (chunks>1); chunks==1 uses the
+    // original single-buffer write below (byte-identical).
+#if defined(OUT_CHUNKS)
+    constexpr uint32_t kMaxChunks = 16u;
+    const uint32_t n_chunks = get_arg_val<uint32_t>(fidx++);
+    const uint32_t out_ntc = get_arg_val<uint32_t>(fidx++);  // per-chunk N tiles
+    uint32_t chunk_addr[kMaxChunks];
+    chunk_addr[0] = out_addr;  // chunk 0 == writer arg 1
+    for (uint32_t c = 1; c < n_chunks; ++c) {
+        chunk_addr[c] = get_arg_val<uint32_t>(fidx++);
+    }
+    auto write_out_tile = [&](uint32_t m_row, uint32_t gn, uint32_t l1_addr) {
+        const uint32_t chunk = gn / out_ntc;
+        const uint32_t col = gn - chunk * out_ntc;
+        const auto oc = TensorAccessor(out_args, chunk_addr[chunk], tile_bytes);
+        noc_async_write_page(m_row * out_ntc + col, oc, l1_addr);
+    };
+#endif
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
@@ -262,13 +398,20 @@ void kernel_main() {
     if constexpr (!use_reduce) {
         // Pk == 1: every core is bottom AND top; compute produced its full block into out_cb -> write DRAM.
         for (uint32_t nb = 0; nb < N_bpc; ++nb) {
+#if defined(FUSE_BIAS) || defined(FUSE_TERNARY)
+            feed_fused(nb);  // supply bias/residual/gate; compute fuses -> out_cb (before we wait on it)
+#endif
             cb_wait_front(out_cb, out_blk);
             uint32_t r = get_read_ptr(out_cb);
             const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
                     if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
+#if defined(OUT_CHUNKS)
+                        write_out_tile(m_start + m, n_off + n, r + (m * N_block + n) * tile_bytes);
+#else
                         noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+#endif
                     }
                 }
             }
@@ -327,7 +470,12 @@ void kernel_main() {
             noc_semaphore_wait_min(red_ptr, nb + 1);  // prev forwarded block nb into it
             cb_push_back(cb_reduce, out_blk);         // compute reduce_add's it -> out_cb, pops cb_reduce
         }
-        cb_wait_front(out_cb, out_blk);  // compute produced reduced block nb
+#if defined(FUSE_BIAS) || defined(FUSE_TERNARY)
+        if (is_top) {
+            feed_fused(nb);  // ROOT only: supply bias/residual/gate for compute's single fused epilogue
+        }
+#endif
+        cb_wait_front(out_cb, out_blk);  // compute produced reduced (+ fused at top) block nb
         uint32_t r = get_read_ptr(out_cb);
         if (!is_top) {
             noc_semaphore_wait_min(redfree_ptr, nb + 1);  // next signalled its slot (nb%2) is free
@@ -348,7 +496,11 @@ void kernel_main() {
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
                     if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
+#if defined(OUT_CHUNKS)
+                        write_out_tile(m_start + m, n_off + n, r + (m * N_block + n) * tile_bytes);
+#else
                         noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+#endif
                     }
                 }
             }

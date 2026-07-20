@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/device.hpp>  // get_worker_noc_hop_distance (physical ring-order diag)
 
 #include "regime_a_matmul_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -63,12 +64,12 @@ void mkcb(Program& program, const CoreRangeSet& crs, uint32_t idx, uint32_t ntil
 RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::create(
     const RegimeAMatmulParams& operation_attributes,
     const RegimeAMatmulInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value) {
     Program program = CreateProgram();
 
     const auto& in0 = tensor_args.input_tensor;
     const auto& in1 = tensor_args.weight_tensor;
-    Tensor& out = tensor_return_value;
+    Tensor& out = tensor_return_value[0];  // chunk 0 (or the sole output when chunks==1)
     IDevice* device = in0.device();
 
     // Resolve config=None via the auto-selector (deterministic in the tile dims, program-cache-safe).
@@ -88,6 +89,18 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t Sm = cfg.m_slices ? cfg.m_slices : 1u;
     const uint32_t kb = cfg.k_block_tiles ? cfg.k_block_tiles : 1u;
     const uint32_t use_reduce = (Pk > 1u) ? 1u : 0u;
+
+    // ---- Fused epilogue + output-split detection (all off => byte-identical no-fusion path). ----
+    const bool has_bias = tensor_args.bias_tensor.has_value();
+    const bool has_ternary = operation_attributes.fused_ternary_scalar.has_value();
+    const bool has_activation = operation_attributes.fused_activation.has_value();
+    const bool gate_is_fp32 = has_ternary && tensor_args.fused_ternary_input_b->dtype() == DataType::FLOAT32;
+    // gate broadcast [1,N] (M tiles == 1) vs full [M,N].
+    const uint32_t broadcast_gate =
+        has_ternary ? (tensor_args.fused_ternary_input_b->padded_shape()[-2] / TILE_HEIGHT == 1u ? 1u : 0u) : 1u;
+    const int32_t chunks = operation_attributes.chunks < 1 ? 1 : operation_attributes.chunks;
+    const uint32_t n_chunks = static_cast<uint32_t>(chunks);
+    const uint32_t out_ntc = Nt_r / n_chunks;  // per-chunk N tiles (validated divisible + tile-aligned)
 
     // Test-only diagnostic ablations: mask 0 (public path) => all three define maps are EMPTY, so the
     // compile is byte-identical to production. Each DIAG_* define is scoped to the kernel(s) that #ifdef it.
@@ -443,6 +456,34 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         rdefs["IN0_REPL"] = "4";
     }
 
+    // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
+    // Compute-only fusion defines are collected here and merged into cdefs at compute-kernel creation.
+    std::map<std::string, std::string> fdefs_compute;
+    if (has_bias) {
+        wdefs["FUSE_BIAS"] = "1";
+        fdefs_compute["FUSE_BIAS"] = "1";
+    }
+    if (has_ternary) {
+        wdefs["FUSE_TERNARY"] = "1";
+        fdefs_compute["FUSE_TERNARY"] = "1";
+        if (gate_is_fp32) {
+            wdefs["TERNARY_B_IS_FLOAT32"] = "1";
+            fdefs_compute["TERNARY_B_IS_FLOAT32"] = "1";
+        }
+    }
+    if (n_chunks > 1u) {
+        wdefs["OUT_CHUNKS"] = "1";
+    }
+    if (has_activation) {
+        auto act = ttnn::operations::unary::utils::get_defines(
+            operation_attributes.fused_activation->op_type,
+            operation_attributes.fused_activation->params,
+            "ACTIVATION",
+            "fused_act_dst_id",
+            out.dtype());
+        fdefs_compute.insert(act.begin(), act.end());
+    }
+
     // ---- Core range sets: all cores + split-NoC groups (g0 = noc 0, g1 = noc 1) ----
     std::set<CoreRange> all_set, g0_set, g1_set;
     std::vector<CoreCoord> cores;
@@ -467,6 +508,20 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
     if (cb.cb7_tiles > 0u) {
         mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1 only)
+    }
+    // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
+    // [M,N] block, c_6 gate [1,N_sub] (broadcast) or [M,N] block. Sized to hold a full sub-block so the
+    // writer can stream all M rows while compute consumes them (matches minimal_matmul's ternary CB sizing).
+    const uint32_t out_blk_tiles = geo.M_block_capacity * geo.N_sub;
+    if (has_bias) {
+        mkcb(program, all_cores, 4, geo.N_sub, tt::DataFormat::Float16_b, kTileBytesBf16);
+    }
+    if (has_ternary) {
+        mkcb(program, all_cores, 5, out_blk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+        const tt::DataFormat gfmt = gate_is_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        const uint32_t gtsz = gate_is_fp32 ? kTileBytesFp32 : kTileBytesBf16;
+        const uint32_t gate_tiles = broadcast_gate ? geo.N_sub : out_blk_tiles;
+        mkcb(program, all_cores, 6, gate_tiles, gfmt, gtsz);
     }
 
     // ---- Semaphores ----
@@ -536,6 +591,14 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         use_reduce};           // 13
     TensorAccessorArgs(*in0.buffer()).append_to(wct);
     TensorAccessorArgs(*out.buffer()).append_to(wct);
+    // Fused-operand accessors, in the order the writer kernel expects: bias, then residual/gate.
+    if (has_bias) {
+        TensorAccessorArgs(*tensor_args.bias_tensor->buffer()).append_to(wct);
+    }
+    if (has_ternary) {
+        TensorAccessorArgs(*tensor_args.fused_ternary_input_a->buffer()).append_to(wct);
+        TensorAccessorArgs(*tensor_args.fused_ternary_input_b->buffer()).append_to(wct);
+    }
 
     // Split-NOC: reader on the core's in1 NoC, writer on the OTHER NoC.
     //   g0 (noc==0): reader RISCV_0/NOC0, writer RISCV_1/NOC1
@@ -558,7 +621,8 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         sbh,                   // 6 subblock_h
         sbw};                  // 7 subblock_w
     std::map<std::string, std::string> cdefs = {{"REDUCE_K", "1"}, {"IN0_KSLICE_RESIDENT", "1"}};
-    cdefs.insert(ddefs.begin(), ddefs.end());  // test-only diagnostic defines (empty for mask 0)
+    cdefs.insert(ddefs.begin(), ddefs.end());                  // test-only diagnostic defines (empty for mask 0)
+    cdefs.insert(fdefs_compute.begin(), fdefs_compute.end());  // fusion defines (empty for the no-fusion path)
     KernelHandle compute = CreateKernel(
         program,
         kComputeKernel,
@@ -661,12 +725,39 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 wa.push_back(pc.y);
             }
         }
+        // Fused-epilogue / output-split writer args (index 17+). Never combined with the diag ablations above
+        // (those only run via the internal diag entry, which passes no fusion). Order MUST match the writer
+        // kernel's fidx reads: bias, then residual/gate/broadcast, then chunk count/width/addresses.
+        if (has_bias) {
+            wa.push_back(tensor_args.bias_tensor->buffer()->address());
+        }
+        if (has_ternary) {
+            wa.push_back(tensor_args.fused_ternary_input_a->buffer()->address());
+            wa.push_back(tensor_args.fused_ternary_input_b->buffer()->address());
+            wa.push_back(broadcast_gate);
+        }
+        if (n_chunks > 1u) {
+            wa.push_back(n_chunks);
+            wa.push_back(out_ntc);
+            for (uint32_t c = 1; c < n_chunks; ++c) {
+                wa.push_back(tensor_return_value[c].buffer()->address());
+            }
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
-        // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero.
-        SetRuntimeArgs(
-            program, compute, cores[i], {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u});
+        // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero. When a fusion is active the
+        // reduction-root flag (is_top) follows, then the addcmul scalar bits + gate-broadcast flag.
+        std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
+        if (has_bias || has_ternary || has_activation) {
+            ca.push_back(cp.is_top ? 1u : 0u);
+        }
+        if (has_ternary) {
+            const float sc = *operation_attributes.fused_ternary_scalar;
+            ca.push_back(*reinterpret_cast<const uint32_t*>(&sc));
+            ca.push_back(broadcast_gate);
+        }
+        SetRuntimeArgs(program, compute, cores[i], ca);
     }
 
     return cached_program_t{
@@ -679,20 +770,29 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             .readerB = readerB,
             .writerA = writerA,
             .writerB = writerB,
-            .compute = compute}};
+            .compute = compute,
+            .has_bias = has_bias,
+            .has_ternary = has_ternary,
+            .n_chunks = n_chunks}};
 }
 
 void RegimeAMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const RegimeAMatmulParams& /*operation_attributes*/,
     const RegimeAMatmulInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& sv = cached_program.shared_variables;
 
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
-    const uint32_t out_addr = tensor_return_value.buffer()->address();
+    const uint32_t out_addr = tensor_return_value[0].buffer()->address();
+
+    // Fresh fused-operand / chunk addresses (cache replay with new buffers). Layout mirrors create()'s
+    // appended writer args (index 17+): [bias] [residual gate bcast] [n_chunks out_ntc chunk1..].
+    const uint32_t bias_addr = sv.has_bias ? tensor_args.bias_tensor->buffer()->address() : 0u;
+    const uint32_t ta_addr = sv.has_ternary ? tensor_args.fused_ternary_input_a->buffer()->address() : 0u;
+    const uint32_t tb_addr = sv.has_ternary ? tensor_args.fused_ternary_input_b->buffer()->address() : 0u;
 
     // Some configs place every core on a single NoC group (e.g. preaders==1 => all noc 0), leaving the
     // other group's kernel handles unset. Only fetch runtime-arg maps for groups that actually exist.
@@ -713,10 +813,25 @@ void RegimeAMatmulProgramFactory::override_runtime_arguments(
         auto& ra = (*(b ? readerB_args : readerA_args))[core.x][core.y];
         ra[0] = in1_addr;
 
-        // writer arg 0 = in0_addr, arg 1 = out_addr.
+        // writer arg 0 = in0_addr, arg 1 = out_addr (chunk 0).
         auto& wa = (*(b ? writerB_args : writerA_args))[core.x][core.y];
         wa[0] = in0_addr;
         wa[1] = out_addr;
+        uint32_t fidx = 17u;
+        if (sv.has_bias) {
+            wa[fidx++] = bias_addr;
+        }
+        if (sv.has_ternary) {
+            wa[fidx++] = ta_addr;
+            wa[fidx++] = tb_addr;
+            fidx++;  // broadcast_gate flag is shape-derived, unchanged across replays
+        }
+        if (sv.n_chunks > 1u) {
+            fidx += 2u;  // n_chunks, out_ntc (unchanged)
+            for (uint32_t c = 1; c < sv.n_chunks; ++c) {
+                wa[fidx++] = tensor_return_value[c].buffer()->address();
+            }
+        }
     }
 }
 

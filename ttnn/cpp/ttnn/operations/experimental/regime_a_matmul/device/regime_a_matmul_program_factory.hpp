@@ -23,19 +23,24 @@ struct RegimeAMatmulProgramFactory {
         tt::tt_metal::KernelHandle writerA{};
         tt::tt_metal::KernelHandle writerB{};
         tt::tt_metal::KernelHandle compute{};
+        // Fused-epilogue / output-split layout (so override_runtime_arguments can locate the appended writer
+        // args on a program-cache replay with fresh buffers). Writer fused args begin at index 17.
+        bool has_bias{false};
+        bool has_ternary{false};
+        uint32_t n_chunks{1};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
         const RegimeAMatmulParams& operation_attributes,
         const RegimeAMatmulInputs& tensor_args,
-        Tensor& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const RegimeAMatmulParams& operation_attributes,
         const RegimeAMatmulInputs& tensor_args,
-        Tensor& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim
