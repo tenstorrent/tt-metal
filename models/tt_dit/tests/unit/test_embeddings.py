@@ -20,7 +20,6 @@ import ttnn
 from ...layers.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
     Embedding,
-
     PixArtAlphaTextProjection,
     SD35CombinedTimestepTextProjEmbeddings,
     TimestepEmbedding,

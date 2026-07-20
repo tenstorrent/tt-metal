@@ -479,7 +479,6 @@ def _relative_position_bucket(relative_position: torch.Tensor, num_buckets: int,
     return relative_buckets
 
 
-
 class RelativePositionEmbeddings(Module):
     """
     Implements text token embeddings with relative positional encoding
