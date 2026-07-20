@@ -102,11 +102,6 @@ class LayerWeights:
     q_bias: Optional[ttnn.Tensor] = None
     k_bias: Optional[ttnn.Tensor] = None
     v_bias: Optional[ttnn.Tensor] = None
-    # Fused QKV projection for prefill: wq|wk|wv concatenated on the output dim so the
-    # three projections + head-split collapse to one linear + one nlp_create_qkv_heads
-    # (decode keeps the separate wq for its width-sharded fast path).
-    wqkv: Optional[ttnn.Tensor] = None  # [1,1,hidden, (n_heads+2*n_kv)*head_dim]
-    qkv_bias: Optional[ttnn.Tensor] = None  # [1,1,1, (n_heads+2*n_kv)*head_dim]
 
 
 @dataclass
@@ -212,10 +207,6 @@ def preprocess_lm_weights(
             k_bias=_b("attention.wk"),
             v_bias=_b("attention.wv"),
         )
-        # Prefill fused-QKV weight/bias (wq|wk|wv along the output dim).
-        lw.wqkv = ttnn.concat([lw.wq, lw.wk, lw.wv], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if lw.q_bias is not None and lw.k_bias is not None and lw.v_bias is not None:
-            lw.qkv_bias = ttnn.concat([lw.q_bias, lw.k_bias, lw.v_bias], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         layers.append(lw)
 
     return LMWeights(
@@ -290,13 +281,6 @@ def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.reshape(x, shape)
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-
-def _reshape_heads(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
-    """TILE-native reshape for attention head split/merge (last dim splits/merges into
-    tile-aligned head_dim=128 pieces).  Avoids the untilize→reshape→tilize round-trip of
-    ``_reshape_tt`` — validated bit-exact (PCC 1.0) for both S==1 and S>1, split and merge."""
-    return ttnn.reshape(x, shape)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -493,60 +477,43 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # QKV projections → per-head layout [B, n, S, hd] (matches PyTorch
-        # view(B,S,n,hd).transpose(1,2)).
-        if S == 1:
-            # Decode: keep the validated width-sharded wq fast path + separate bias add,
-            # then split heads with a TILE-native reshape+permute.
-            q = ttnn.linear(
-                x,
-                layer_w.wq,
-                compute_kernel_config=_HIFI4,
-                program_config=_QO_DECODE_PROGCFG,
-                memory_config=_QO_DECODE_OUT_MEMCFG,
-            )
-            k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if layer_w.q_bias is not None:
-                q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if layer_w.k_bias is not None:
-                k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if layer_w.v_bias is not None:
-                v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            q = ttnn.permute(_reshape_heads(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [B, n_heads, S, hd]
-            k = ttnn.permute(_reshape_heads(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
-            v = ttnn.permute(_reshape_heads(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
-        else:
-            # Prefill: single fused QKV matmul + one nlp_create_qkv_heads (splits and
-            # transposes q/k/v heads in one op) — collapses 3 linears + 3 bias-adds +
-            # 3 reshapes + 3 permutes into 3 ops.  Bit-exact vs the separate path.
-            qkv = ttnn.linear(x, layer_w.wqkv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if layer_w.qkv_bias is not None:
-                qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                qkv,
-                num_heads=n_heads,
-                num_kv_heads=n_kv,
-                transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # q:[B,n_heads,S,hd]  k,v:[B,n_kv,S,hd]
+        # QKV projections [B, 1, S, n*hd]
+        # wq is 1536x1536; on a single-token decode step (S==1) use the swept fast
+        # config (2.08x), else the auto config for prefill chunks.
+        q = ttnn.linear(
+            x,
+            layer_w.wq,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG if S == 1 else None,
+            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Apply RoPE on device (validated fp32 path).  ``cos_sin_tt`` is already sliced
-        # to [start_pos : start_pos+S] once per forward (shared across all 28 layers) —
-        # hoisted out of the layer loop to avoid 2 redundant slices/layer.
+        if layer_w.q_bias is not None:
+            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.k_bias is not None:
+            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.v_bias is not None:
+            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Reshape [B, 1, S, n*hd] → [B, S, n, hd] then permute → [B, n, S, hd]
+        # Matches PyTorch: view(B, S, n, hd).transpose(1, 2)
+        q = ttnn.permute(_reshape_tt(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [B, n_heads, S, hd]
+        k = ttnn.permute(_reshape_tt(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
+        v = ttnn.permute(_reshape_tt(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
+
+        # Apply RoPE on device (validated fp32 path); cos/sin sliced [start_pos : start_pos+S].
         if cos_sin_tt is not None:
-            c, s = cos_sin_tt
-            if S > 1:
-                # Prefill: fused single-op HF (rotate-half) RoPE — matches the manual
-                # fp32 path at PCC 0.999999 (validated) but collapses ~9 ops/call
-                # (typecast+slice+slice+neg+concat+2·mul+add+typecast) to one.  fp32
-                # cos/sin + HiFi4 keep the numerics; output is bf16 like the manual path.
-                q = ttnn.experimental.rotary_embedding_hf(q, c, s, is_decode_mode=False, compute_kernel_config=_HIFI4)
-                k = ttnn.experimental.rotary_embedding_hf(k, c, s, is_decode_mode=False, compute_kernel_config=_HIFI4)
-            else:
-                # Decode: keep the validated manual fp32 rope.
-                q = _apply_rope_ttnn(q, c, s)
-                k = _apply_rope_ttnn(k, c, s)
+            cos_tt, sin_tt = cos_sin_tt
+            c = ttnn.slice(
+                cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            s = ttnn.slice(
+                sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            q = _apply_rope_ttnn(q, c, s)
+            k = _apply_rope_ttnn(k, c, s)
 
         if S > 1:
             # ── Prefill: fp32 manual attention reading the fixed-cache prefix ──
@@ -579,9 +546,7 @@ class TTVibeVoiceLM:
                 S_total = S
                 k_all, v_all = k, v
 
-            # GQA: repeat_interleave KV heads → [B, n_heads, S_total, hd].  Done via
-            # per-head slice+concat (stays in TILE layout — ttnn.repeat_interleave was
-            # measured slower here: it untilizes→concats→tilizes internally).
+            # GQA: repeat_interleave KV heads → [B, n_heads, S_total, hd]
             repeat = n_heads // n_kv
             k_slices, v_slices = [], []
             for kv_idx in range(n_kv):
@@ -619,9 +584,7 @@ class TTVibeVoiceLM:
             attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.typecast(out, ttnn.bfloat16)
-            # Merge heads [B, n_heads, S, hd] → [B, 1, S, n_heads*hd] in one op (inverse
-            # of nlp_create_qkv_heads) — replaces permute + materializing reshape.
-            out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = _reshape_tt(ttnn.permute(out, (0, 2, 1, 3)), [B, 1, S, n_heads * head_dim])
         else:
             # ── Decode: write one token at start_pos, then fused flash-decode over the
             # cache prefix.  GQA handled natively (no KV-head materialization, no fp32
@@ -760,7 +723,6 @@ class TTVibeVoiceLM:
         start_pos: int = 0,
         kv_cache: Optional[KVCache] = None,
         return_last_hidden: bool = False,
-        compute_logits: bool = True,
     ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
         """Run transformer forward pass.
 
@@ -769,33 +731,22 @@ class TTVibeVoiceLM:
             start_pos: position offset for RoPE (for decode mode)
             kv_cache: optional KVCache for decode
             return_last_hidden: if True, return (last_hidden, logits) else (logits, None)
-            compute_logits: if False, skip the vocab-151936 lm_head matmul and return
-                ``logits=None``.  Used by chunked prefill for all but the final chunk
-                (only the last chunk's logits are consumed by the sampler), saving one
-                ~1.7 ms lm_head per intermediate chunk.
 
         Returns:
-            (logits [B, 1, S, vocab] or None, last_hidden or None)
+            (logits [B, 1, S, vocab], last_hidden or None)
         """
         B = inputs_embeds.shape[0]
         S = inputs_embeds.shape[2]
         cfg = self.cfg
 
-        # Slice the RoPE cos/sin to [start_pos : start_pos+S] ONCE here (shared across
-        # all 28 layers) instead of re-slicing inside every _attention_layer.
-        head_dim = cfg.head_dim
-        c = ttnn.slice(
-            self._cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        s = ttnn.slice(
-            self._sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        # Use precomputed full RoPE tables; _attention_layer slices [start_pos:start_pos+S]
+        cos_tt, sin_tt = self._cos_tt, self._sin_tt
 
         x = inputs_embeds
         if x.dtype == ttnn.float32:
             x = ttnn.typecast(x, ttnn.bfloat16)
         for layer_idx in range(cfg.num_hidden_layers):
-            x = self._transformer_layer(x, layer_idx, (c, s), kv_cache, start_pos)
+            x = self._transformer_layer(x, layer_idx, (cos_tt, sin_tt), kv_cache, start_pos)
 
         # Final norm
         x = ttnn.rms_norm(
@@ -808,23 +759,9 @@ class TTVibeVoiceLM:
 
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
 
-        # LM head projection → logits (skipped for non-final prefill chunks, whose
-        # logits are discarded — saves one vocab-151936 matmul per intermediate chunk).
-        if not compute_logits:
-            return None, last_hidden
-
-        # Only the LAST position's logits are consumed (greedy argmax of the next token),
-        # so for prefill (S>1) run lm_head on just the last row — bit-exact, and cuts the
-        # 256×1536×151936 matmul's M from S to 1 (1752→1215 µs, the compute portion; the
-        # 467 MB weight read is the remaining floor).  last_hidden stays full-S.
-        x_head = (
-            x
-            if S == 1
-            else ttnn.slice(x, [0, 0, S - 1, 0], [B, 1, S, x.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        )
-
+        # LM head projection → logits
         logits = ttnn.linear(
-            x_head,
+            x,
             self.w.lm_head_w,
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1065,7 +1002,6 @@ class TTVibeVoiceLM:
                 start_pos=start,
                 kv_cache=kv_cache,
                 return_last_hidden=return_last_hidden,
-                compute_logits=(end >= S),  # only the final chunk's logits are consumed
             )
         return logits, last_hidden
 
