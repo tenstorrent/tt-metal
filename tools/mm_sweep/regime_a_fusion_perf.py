@@ -15,8 +15,10 @@ import regime_a_bench as rb
 
 ROOT = rb.ROOT
 JSON = f"{HERE}/regime_a_fusion.json"
-REPORT = f"{HERE}/REGIME_A_FUSION_REPORT.md"
-FUSES = ["none", "bias", "act", "addcmul"]
+# Auto-generated perf table lives in its own file; the curated REGIME_A_FUSION_REPORT.md (correctness
+# matrix, unsupported combos, etc.) is hand-maintained and must NOT be clobbered by write_report().
+REPORT = f"{HERE}/REGIME_A_FUSION_PERF.md"
+FUSES = ["none", "bias", "act", "addcmul", "bias_act", "bias_addcmul", "chunk2", "bias_chunk2"]
 
 # (label, M, K, N, cfg=(Ns,Pk,Sm,kb,nsb) or None -> auto, note)
 MATRIX = [
@@ -51,26 +53,42 @@ def worker(M, K, N, Ns, Pk, Sm, kb, nsb, fuse):
                 k_slices=Pk, n_slices=Ns, m_slices=Sm, k_block_tiles=kb, n_subblock_tiles=nsb
             )
         kw = dict(config=cfg)
+        # Variant token set: bias / act / addcmul / chunk2 (composable). bias is applied before act;
+        # act and addcmul are mutually exclusive (validated). chunk2 => output column-split into 2 chunks.
+        parts = fuse.split("_")
+        want_bias = "bias" in parts
+        want_act = "act" in parts
+        want_addcmul = "addcmul" in parts
+        chunks = 2 if "chunk2" in parts else 1
         ref = (t0.float() @ t1.float())[0, 0]
-        if fuse == "bias":
+        if want_bias:
             bt = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)
             kw["bias_tensor"] = ttnn.from_torch(bt, layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
             ref = ref + bt.float().reshape(1, -1)
-        elif fuse == "act":
+        if want_act:
             kw["fused_activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
             ref = torch.relu(ref)
-        elif fuse == "addcmul":
+        if want_addcmul:
             rt = torch.randn(1, 1, M, N, dtype=torch.bfloat16)
             gt = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)
             kw["fused_ternary_scalar"] = 1.0
             kw["fused_ternary_input_a"] = ttnn.from_torch(rt, layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
             kw["fused_ternary_input_b"] = ttnn.from_torch(gt, layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
             ref = rt.float()[0, 0] + 1.0 * ref * gt.float()[0, 0]
-        out = ttnn.experimental.regime_a_matmul(in0, in1, **kw)  # warmup / compile / PCC
-        got = ttnn.to_torch(ttnn.from_device(out))[0, 0].float()
+
+        def run_op():
+            if chunks > 1:
+                return ttnn.experimental.regime_a_matmul_split(in0, in1, chunks, -1, **kw)
+            return ttnn.experimental.regime_a_matmul(in0, in1, **kw)
+
+        out = run_op()  # warmup / compile / PCC
+        if chunks > 1:
+            got = torch.cat([ttnn.to_torch(ttnn.from_device(o))[0, 0] for o in out], dim=-1).float()
+        else:
+            got = ttnn.to_torch(ttnn.from_device(out))[0, 0].float()
         ok, pcc = comp_pcc(ref, got, 0.999)
         for _ in range(rb.ITERS):
-            o = ttnn.experimental.regime_a_matmul(in0, in1, **kw)
+            o = run_op()
             ttnn.synchronize_device(dev)
         ttnn.ReadDeviceProfiler(dev)
     finally:
