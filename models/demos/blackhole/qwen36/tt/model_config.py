@@ -126,7 +126,9 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
-        # Fused qkvz+ab in-projection (gdn/tp.py fuses when qkvz weight is DRAM-sharded).
+        # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
+        # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
+        # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp
         self.gdn_value_dim_tp = self.gdn_value_dim // tp
         self.gdn_key_dim_tp = self.gdn_key_dim // tp
@@ -141,7 +143,7 @@ class Qwen36ModelArgs(ModelArgs):
         )
         self.attn_k_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
         self.attn_v_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
-        # Fused [q+gate | k | v] in-projection (QWEN36_FUSED_QKV).
+        # Fused [q+gate | k | v] in-projection (P4: QWEN36_FUSED_QKV) — one column-parallel matmul.
         self.attn_qkv_fused_dim_tp = self.n_local_heads * self.head_dim * 2 + 2 * kv_dim_per_device
         self.attn_qkv_fused_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.attn_qkv_fused_dim_tp)
         self.mlp_w1_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)

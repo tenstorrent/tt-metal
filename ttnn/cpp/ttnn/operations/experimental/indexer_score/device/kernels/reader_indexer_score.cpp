@@ -17,6 +17,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/block_cyclic_remap.hpp"  // shared invP remap
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool: calculate_and_prepare_reduce_scaler
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
@@ -54,23 +55,6 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
-
-template <uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
-FORCE_INLINE uint32_t logical_to_chunked_physical(uint32_t n) {
-    const uint32_t block_idx = n / ChunkLocal;
-    const uint32_t slab = block_idx / Sp;
-    const uint32_t shard = block_idx - slab * Sp;
-    return n + shard * ShardStrideGap - slab * SlabStrideGap;
-}
-
-template <bool BlockCyclic, uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
-FORCE_INLINE uint32_t logical_to_physical_page(uint32_t page) {
-    if constexpr (BlockCyclic) {
-        return logical_to_chunked_physical<ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(page);
-    } else {
-        return page;
-    }
-}
 
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
@@ -266,7 +250,7 @@ inline void read_k_chunk(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
-                const uint32_t seq_tile = logical_to_physical_page<
+                const uint32_t seq_tile = tt::block_cyclic::logical_to_physical_page<
                     block_cyclic,
                     bc_chunk_local,
                     bc_sp,
@@ -302,7 +286,7 @@ inline void read_k_chunk_streaming(
         uint32_t ptr = cb.get_write_ptr();
         for (uint32_t c = cbase; c < c_end; ++c) {
             if (c < k_tiles_in_unit) {
-                const uint32_t seq_tile = logical_to_physical_page<
+                const uint32_t seq_tile = tt::block_cyclic::logical_to_physical_page<
                     block_cyclic,
                     bc_chunk_local,
                     bc_sp,
