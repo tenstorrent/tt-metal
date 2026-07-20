@@ -5,13 +5,17 @@
 #
 # Full upstream flow (``bot_task=think_recaption``):
 #   cond image(s) + prompt
-#     → on-device VAE encode + SigLIP2 vision (tt/vision/i2i_bundle.py)
+#     → on-device VAE encode + SigLIP2 vision once (cached on host)
 #     → on-device AR think/recaption (``run_recaption_on_device``)
-#     → ``cot_text`` injected into I2I denoise bundle
+#     → reuse same resident backbone for denoise (skip 2nd VAE/ViT + backbone reload)
+#     → ``cot_text`` host-injected into I2I denoise bundle via cond cache
 #     → denoise_loop + CFG → VAE decode → PNG
 #
 # Direct edit (``bot_task=image``) skips the AR recaption stage.
 #
+# Disable backbone keepalive / cond cache reuse: HY_KEEP_BACKBONE=0
+#   (falls back to encode → free → AR → free → encode → rebuild denoise backbone).
+
 # Run (Instruct-Distil, 8-step meanflow, no CFG):
 #   HY_DISTIL=1 HY_NUM_LAYERS=32 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/demo/demo_i2i.py \
@@ -93,6 +97,9 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     HunyuanTokenizer,
     build_i2i_cfg_conds,
+    enrich_bundle_attention,
+    prepare_i2i_inputs,
+    prepare_recaption_inputs,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import (
     ensure_instruct_distil_weights,
@@ -110,6 +117,8 @@ from models.experimental.hunyuan_image_3_0.tt.pipeline import (
     upload_denoise_cond_mesh,
 )
 from models.experimental.hunyuan_image_3_0.tt.vision.i2i_bundle import (
+    apply_cond_encode_cache,
+    build_cond_encode_cache_tt,
     load_tt_cond_patch_embed,
     load_tt_cond_timestep_embedders,
     load_tt_vision_stack,
@@ -133,6 +142,8 @@ STEPS_ENV = os.environ.get("HY_STEPS")
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
 RECAPTION_LAYERS = int(os.environ.get("HY_RECAPTION_LAYERS", str(NUM_LAYERS)))
 RECAPTION_KV = os.environ.get("HY_RECAPTION_KV", "1") != "0"
+# Keep resident backbone across AR → denoise by caching cond VAE/ViT tokens on host.
+KEEP_BACKBONE = os.environ.get("HY_KEEP_BACKBONE", "1") != "0"
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "2.5"))
 SEED = int(os.environ.get("HY_SEED", "42"))
 VIT_LAYERS = int(os.environ.get("HY_VIT_LAYERS", "27"))
@@ -482,7 +493,19 @@ def main():
     timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
 
     use_tt_recaption_mesh = args.bot_task != "image" and _use_tt_recaption()
-    recap_bundle = None
+    # Keep one resident backbone when layer counts match (skip 2nd VAE/ViT + 140s reload).
+    keep_backbone = KEEP_BACKBONE and (not use_tt_recaption_mesh or RECAPTION_LAYERS == NUM_LAYERS)
+    if KEEP_BACKBONE and use_tt_recaption_mesh and RECAPTION_LAYERS != NUM_LAYERS:
+        print(
+            f"[demo_i2i] HY_KEEP_BACKBONE ignored: RECAPTION_LAYERS={RECAPTION_LAYERS} " f"!= NUM_LAYERS={NUM_LAYERS}",
+            flush=True,
+        )
+    shared_sp = 1 if RECAPTION_KV else 2
+    if keep_backbone:
+        print(
+            f"[demo_i2i] HY_KEEP_BACKBONE=1: cache cond embeds once, reuse backbone " f"(shared sp={shared_sp})",
+            flush=True,
+        )
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     print("[demo_i2i] opening pipeline mesh (2x2) ...", flush=True)
@@ -491,6 +514,7 @@ def main():
     invalidate_cond_encode_traces(mesh_device)
     backbone = None
     latent = None
+    cond_cache = None
     try:
         mesh_device.enable_program_cache()
         ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
@@ -505,7 +529,7 @@ def main():
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
-        # 0) optional on-device AR recaption (cond encode → release → backbone + LM head).
+        # 0) optional on-device AR recaption.
         if use_tt_recaption_mesh:
             print(f"[demo_i2i] recaption stage (bot_task={args.bot_task}) ...", flush=True)
             (
@@ -516,34 +540,71 @@ def main():
                 vision_tt,
                 aligner_tt,
             ) = _load_i2i_cond_stack(mesh_device, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
-            print("[demo_i2i] building recaption AR bundle (wte → VAE encode → ViT inject) ...", flush=True)
-            recap_bundle = prepare_recaption_ar_bundle_tt(
-                mesh_device,
-                tok,
-                args.prompt,
-                proc,
-                wte_tt,
-                cond_images=cond_for_bundle,
-                bot_task=args.bot_task,
-                system_prompt=recap_system,
-                sequence_template="instruct",
-                model_dir=model_dir,
-                vision=vision_tt,
-                aligner=aligner_tt,
-                cond_patch_embed=cond_patch_embed,
-                cond_time_embed=cond_time_embed,
-                cond_timestep_emb=cond_timestep_emb,
-                seed=SEED,
-            )
-            del wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt
-            release_stage_resources(mesh_device)
-            invalidate_cond_encode_traces(mesh_device)
+
+            if keep_backbone:
+                print(
+                    "[demo_i2i] encoding cond VAE/ViT once → host cache "
+                    "(backbone stays resident through denoise) ...",
+                    flush=True,
+                )
+                cond_cache = build_cond_encode_cache_tt(
+                    mesh_device,
+                    cond_for_bundle,
+                    model_dir=model_dir,
+                    vision=vision_tt,
+                    aligner=aligner_tt,
+                    cond_patch_embed=cond_patch_embed,
+                    cond_time_embed=cond_time_embed,
+                    cond_timestep_emb=cond_timestep_emb,
+                    seed=SEED,
+                    cond_encode_trace=False,
+                )
+                del wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt
+                release_stage_resources(mesh_device)
+                invalidate_cond_encode_traces(mesh_device)
+
+                print("[demo_i2i] building recaption AR bundle from cond cache (host) ...", flush=True)
+                recap_bundle = prepare_recaption_inputs(
+                    tok,
+                    args.prompt,
+                    cond_images=cond_for_bundle,
+                    bot_task=args.bot_task.split("_")[0] if args.bot_task == "think_recaption" else args.bot_task,
+                    system_prompt=recap_system,
+                    sequence_template="instruct",
+                )
+                recap_bundle = apply_cond_encode_cache(recap_bundle, wte, cond_cache)
+                recap_bundle.bot_task = args.bot_task
+                recap_bundle = enrich_bundle_attention(recap_bundle, proc)
+            else:
+                print("[demo_i2i] building recaption AR bundle (wte → VAE encode → ViT inject) ...", flush=True)
+                recap_bundle = prepare_recaption_ar_bundle_tt(
+                    mesh_device,
+                    tok,
+                    args.prompt,
+                    proc,
+                    wte_tt,
+                    cond_images=cond_for_bundle,
+                    bot_task=args.bot_task,
+                    system_prompt=recap_system,
+                    sequence_template="instruct",
+                    model_dir=model_dir,
+                    vision=vision_tt,
+                    aligner=aligner_tt,
+                    cond_patch_embed=cond_patch_embed,
+                    cond_time_embed=cond_time_embed,
+                    cond_timestep_emb=cond_timestep_emb,
+                    seed=SEED,
+                )
+                del wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt
+                release_stage_resources(mesh_device)
+                invalidate_cond_encode_traces(mesh_device)
 
             prefix_len = int(recap_bundle.input_ids.shape[1])
-            recap_sp = 1 if RECAPTION_KV else 2
+            recap_sp = shared_sp if keep_backbone else (1 if RECAPTION_KV else 2)
             print(
                 f"[demo_i2i] recaption prefix_len={prefix_len} layers={RECAPTION_LAYERS} "
-                f"max_new_tokens={MAX_NEW_TOKENS} kv_cache={RECAPTION_KV} sp={recap_sp}",
+                f"max_new_tokens={MAX_NEW_TOKENS} kv_cache={RECAPTION_KV} sp={recap_sp} "
+                f"keep_backbone={keep_backbone}",
                 flush=True,
             )
             t0 = time.time()
@@ -585,56 +646,80 @@ def main():
             if recap_result.image_size != image_size:
                 image_size = recap_result.image_size
             print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
-            print(
-                "[demo_i2i] releasing recaption backbone before denoise cond encode "
-                "(VAE/ViT needs DRAM headroom on shared mesh) ...",
-                flush=True,
-            )
-            del backbone
-            backbone = None
-            release_stage_resources(mesh_device)
-            invalidate_cond_encode_traces(mesh_device)
+
+            if keep_backbone:
+                # Denoise path does not apply ln_f; keep MoE stack resident.
+                backbone.apply_final_norm = False
+                print(
+                    "[demo_i2i] keeping resident backbone for denoise "
+                    "(cond embeds reused from host cache; skip VAE/ViT reload) ...",
+                    flush=True,
+                )
+            else:
+                print(
+                    "[demo_i2i] releasing recaption backbone before denoise cond encode "
+                    "(VAE/ViT needs DRAM headroom on shared mesh) ...",
+                    flush=True,
+                )
+                del backbone
+                backbone = None
+                release_stage_resources(mesh_device)
+                invalidate_cond_encode_traces(mesh_device)
             t = _mark("2_recaption_ar", t)
 
-        # 1) I2I denoise bundle (cond encode on shared mesh, then release cond weights).
-        if backbone is not None:
-            print(
-                "[demo_i2i] releasing backbone before denoise cond encode (VAE/ViT needs DRAM) ...",
-                flush=True,
+        # 1) I2I denoise bundle — from cond cache (keepalive) or second TT encode.
+        if keep_backbone and cond_cache is not None:
+            print("[demo_i2i] building I2I denoise bundle from cond cache (host) ...", flush=True)
+            bundle = prepare_i2i_inputs(
+                tok,
+                args.prompt,
+                cond_for_bundle,
+                image_size=image_size,
+                sequence_template="instruct",
+                system_prompt=denoise_system,
+                cot_text=cot_text,
             )
-            del backbone
-            backbone = None
+            bundle = apply_cond_encode_cache(bundle, wte, cond_cache)
+            bundle = enrich_bundle_attention(bundle, proc)
+        else:
+            if backbone is not None:
+                print(
+                    "[demo_i2i] releasing backbone before denoise cond encode (VAE/ViT needs DRAM) ...",
+                    flush=True,
+                )
+                del backbone
+                backbone = None
+                release_stage_resources(mesh_device)
+            (
+                wte_tt,
+                cond_patch_embed,
+                cond_time_embed,
+                cond_timestep_emb,
+                vision_tt,
+                aligner_tt,
+            ) = _load_i2i_cond_stack(mesh_device, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
+            print("[demo_i2i] building I2I denoise bundle (wte → VAE encode → ViT inject) ...", flush=True)
+            bundle = prepare_i2i_denoise_bundle_tt(
+                mesh_device,
+                tok,
+                args.prompt,
+                cond_for_bundle,
+                proc,
+                wte_tt,
+                model_dir=model_dir,
+                vision=vision_tt,
+                aligner=aligner_tt,
+                cond_patch_embed=cond_patch_embed,
+                cond_time_embed=cond_time_embed,
+                cond_timestep_emb=cond_timestep_emb,
+                image_size=image_size,
+                sequence_template="instruct",
+                system_prompt=denoise_system,
+                cot_text=cot_text,
+                seed=SEED,
+            )
+            del wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt
             release_stage_resources(mesh_device)
-        (
-            wte_tt,
-            cond_patch_embed,
-            cond_time_embed,
-            cond_timestep_emb,
-            vision_tt,
-            aligner_tt,
-        ) = _load_i2i_cond_stack(mesh_device, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
-        print("[demo_i2i] building I2I denoise bundle (wte → VAE encode → ViT inject) ...", flush=True)
-        bundle = prepare_i2i_denoise_bundle_tt(
-            mesh_device,
-            tok,
-            args.prompt,
-            cond_for_bundle,
-            proc,
-            wte_tt,
-            model_dir=model_dir,
-            vision=vision_tt,
-            aligner=aligner_tt,
-            cond_patch_embed=cond_patch_embed,
-            cond_time_embed=cond_time_embed,
-            cond_timestep_emb=cond_timestep_emb,
-            image_size=image_size,
-            sequence_template="instruct",
-            system_prompt=denoise_system,
-            cot_text=cot_text,
-            seed=SEED,
-        )
-        del wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt
-        release_stage_resources(mesh_device)
 
         cond_row, uncond_row = build_i2i_cfg_conds(bundle, wte, proc)
         img_slice = cond_row["gen_slice"]
@@ -751,9 +836,16 @@ def main():
                     weights,
                     num_layers=NUM_LAYERS,
                     apply_final_norm=False,
+                    sp_factor=shared_sp if keep_backbone else 2,
                     model_cache_name=model_cache_name,
                 )
                 print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
+            else:
+                print(
+                    f"[demo_i2i] reusing resident backbone for denoise "
+                    f"(layers={NUM_LAYERS}, sp={getattr(backbone, 'sp_factor', '?')}, ln_f=off)",
+                    flush=True,
+                )
             print("[demo_i2i] building timestep embedders ...", flush=True)
             te1 = HunyuanTtTimestepEmbedder(
                 mesh_device,
