@@ -73,50 +73,18 @@
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
 
-# SDXL device-perf, migrated from perf-device-models (single-card-perf-test :: stable_diffusion_xl).
-- name: SDXL device-perf base unet (WH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "unet and not refiner"
-  model: sdxl-perf
-  skus:
-    wh_n150:
-      timeout: 40
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL device-perf refiner unet (WH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "refiner"
-  model: sdxl-perf
-  skus:
-    wh_n150:
-      timeout: 40
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL device-perf (BH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
-  model: sdxl-perf
-  skus:
-    bh_p150:
-      timeout: 40
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL device-perf lora + vae + clip (WH)
+- name: SDXL device-perf tests
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || exit_code=$?
     pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "vae or clip" || exit_code=$?
     exit $exit_code
   model: sdxl-perf
   skus:
     wh_n150:
-      timeout: 35
+      timeout: 100
+    bh_p150:
+      timeout: 60
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield

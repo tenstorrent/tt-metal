@@ -703,117 +703,47 @@
 
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
-- name: SDXL unet-loop base + refiner 10 steps (WH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=5
-    exit_code=0
-    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
-    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
-    exit $exit_code
-  model: sdxl-nightly
-  skus:
-    wh_n150:
-      timeout: 40
-      tier: 2
-    wh_n300:
-      timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL unet-loop base + refiner 10 steps + base 50 steps (BH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    exit_code=0
-    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
-    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
-    TT_MM_THROTTLE_PERF=0 pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
-    exit $exit_code
-  model: sdxl-nightly
-  skus:
-    bh_p150:
-      timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL unet-loop base 50 steps (WH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=5
-    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
-  model: sdxl-nightly
-  skus:
-    wh_n150:
-      timeout: 40
-      tier: 2
-    wh_n300:
-      timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL unet-loop refiner 50 steps + lora (WH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=5
-    exit_code=0
-    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
-    exit $exit_code
-  model: sdxl-nightly
-  skus:
-    wh_n150:
-      timeout: 40
-      tier: 2
-    wh_n300:
-      timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL unet-loop refiner 50 steps (BH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=0
-    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
-  model: sdxl-nightly
-  skus:
-    bh_p150:
-      timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL demo tests base + lora (WH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    exit_code=0
-    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    exit $exit_code
-  model: sdxl-demo
-  skus:
-    wh_n150:
-      timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL demo tests base (BH)
+- name: SDXL (base) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   model: sdxl-demo
   skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
     bh_p150b_civ2:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+# tensor parralel requires 2 chips, so it is split out to a separate test
+- name: SDXL (base tensor-parallel) e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600
+  model: sdxl-demo
+  skus:
+    wh_n300:
       timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL demo tests base + refiner
+- name: SDXL (lora) e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  model: sdxl-demo
+  skus:
+    wh_n150:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: SDXL (base + refiner) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
@@ -828,7 +758,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL demo tests img2img + inpainting
+- name: SDXL (img2img + inpainting) e2e tests
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
@@ -842,19 +772,6 @@
       tier: 2
     bh_p150b_civ2:
       timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: SDXL demo tests cfg-parallel (WH)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=5
-    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600
-  model: sdxl-demo
-  skus:
-    wh_n300:
-      timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
