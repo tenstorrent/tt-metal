@@ -23,9 +23,22 @@
 #   models/common/rmsnorm.py                        — HunyuanTtRMSNorm wrapper
 #   models/tt_transformers/tt/attention.py          — qkv weight loading pattern (not used directly)
 
+import os
+
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+# SDPA flash-attention chunk sizes for the PREFILL path. TTNN's default auto-chunker is
+# ~3-8x slower than an explicit chunk at large ISL (measured at S=22784 and S=4096, both
+# the causal and masked paths). 256/256 is the largest square that fits L1 on BOTH the
+# causal (no mask) AND masked (extra mask CB) paths across the recaption (S<=22784) and
+# denoise (S~4096, seq-sharded) shapes — 512/256 fits the causal path but overflows L1 on
+# the masked path, and 512/512 overflows both. Tunable via env for perf sweeps. Decode's
+# single-row query keeps the default (auto) config — a big q_chunk would only pad 1 row.
+_SDPA_PREFILL_Q_CHUNK = int(os.environ.get("HY_SDPA_Q_CHUNK", "256"))
+_SDPA_PREFILL_K_CHUNK = int(os.environ.get("HY_SDPA_K_CHUNK", "256"))
+_SDPA_PREFILL_MIN_Q = 512  # below this local query length, keep the default config
 
 from ..cache import cache_file
 from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
@@ -416,7 +429,24 @@ class HunyuanTtAttention(LightweightModule):
             v_attn = _repeat_interleave_heads(v_attn, grp, dim=1, memory_config=attn_mc)
 
         # ---- 6. SDPA -------------------------------------------------------
-        is_causal = attention_mask is None and not use_cache
+        # A pure-causal prefill (no explicit mask) uses SDPA's built-in causal path:
+        # it skips the masked upper triangle (~3x faster at large ISL than passing a
+        # materialized S×S mask) and needs no mask tensor at all. Only valid when the
+        # query/key positions are aligned from 0 — i.e. the initial prefill; a decode
+        # step (offset query) always supplies its own row mask, so gate on decode_step
+        # rather than use_cache. SP (sp_factor>1) already asserts an explicit mask above.
+        is_causal = attention_mask is None and not decode_step
+        # Explicit flash-attention chunking on the prefill path — ~3-8x faster than the
+        # default auto-chunker at large ISL (see _SDPA_PREFILL_* above). Decode's 1-row
+        # query keeps the default (auto) config.
+        sdpa_program_config = None
+        if not decode_step and int(q_rot.shape[-2]) >= _SDPA_PREFILL_MIN_Q:
+            sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=_SDPA_PREFILL_Q_CHUNK,
+                k_chunk_size=_SDPA_PREFILL_K_CHUNK,
+                exp_approx_mode=False,
+            )
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
             k_attn,
@@ -424,6 +454,7 @@ class HunyuanTtAttention(LightweightModule):
             is_causal=is_causal,
             attn_mask=attention_mask,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=sdpa_program_config,
             memory_config=attn_mc,
         )
         q_rot.deallocate(True)
