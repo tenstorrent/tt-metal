@@ -27,8 +27,8 @@ void emit_runtime_args_hc_rm(
     KernelDescriptor& writer_desc,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    uint32_t num_cores_total,
-    uint32_t num_cores_y,
+    uint32_t num_cores,
+    const CoreRangeSet& all_cores,
     const CoreRangeSet& core_group_1,
     uint32_t num_sticks_per_core_group_1,
     const CoreRangeSet& core_group_2,
@@ -43,19 +43,19 @@ void emit_runtime_args_hc_rm(
     uint32_t max_read_size = 2048;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
 
-    reader_desc.runtime_args.reserve(num_cores_total);
-    writer_desc.runtime_args.reserve(num_cores_total);
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    reader_desc.runtime_args.reserve(num_cores);
+    writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores; i++) {
+        const CoreCoord& core = cores[i];
         uint32_t num_sticks_per_core;
 
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_sticks_per_core = num_sticks_per_core_group_2;
         } else {
-            num_sticks_per_core = 0;
+            TT_ASSERT(core_group_2.contains(core));
+            num_sticks_per_core = num_sticks_per_core_group_2;
         }
 
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
@@ -114,10 +114,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
 
     IDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, NCH);
@@ -136,7 +132,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_sticks * stick_size,
-        .core_ranges = total_cores,
+        .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
@@ -166,7 +162,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_partitioned_rm.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
+    reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
@@ -176,7 +172,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "writer_unary_transpose_hc_interleaved_start_id_rm.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
+    writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
@@ -186,8 +182,8 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
         writer_desc,
         input_tensor,
         output_tensor,
-        num_cores_total,
-        num_cores_y,
+        num_cores,
+        all_cores,
         core_group_1,
         num_sticks_per_core_group_1,
         core_group_2,

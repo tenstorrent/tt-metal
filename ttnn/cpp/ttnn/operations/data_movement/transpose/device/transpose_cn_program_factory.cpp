@@ -42,10 +42,6 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_pages);
@@ -88,7 +84,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_cn_interleaved_start_id.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
+    reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.defines = std::move(reader_defines);
     reader_desc.config = ReaderConfigDescriptor{};
@@ -99,7 +95,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "writer_unary_transpose_cn_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
+    writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.defines = std::move(writer_defines);
     writer_desc.config = WriterConfigDescriptor{};
@@ -115,14 +111,16 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     uint32_t batch_step = CHtWt - HtWt;
     uint32_t channel_step = NCHtWt - HtWt;
 
-    reader_desc.runtime_args.reserve(num_cores_total);
-    writer_desc.runtime_args.reserve(num_cores_total);
-    for (uint32_t i = 0, num_pages_read = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_pages_per_core = 0;
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    reader_desc.runtime_args.reserve(num_cores);
+    writer_desc.runtime_args.reserve(num_cores);
+    for (uint32_t i = 0, num_pages_read = 0; i < num_cores; i++) {
+        const CoreCoord& core = cores[i];
+        uint32_t num_pages_per_core;
         if (core_group_1.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
+        } else {
+            TT_ASSERT(core_group_2.contains(core));
             num_pages_per_core = num_pages_per_core_group_2;
         }
 

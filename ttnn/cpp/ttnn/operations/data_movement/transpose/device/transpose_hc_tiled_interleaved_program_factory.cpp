@@ -32,36 +32,25 @@ void emit_runtime_args_hc_tiled_interleaved(
     KernelDescriptor& writer_desc,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const CoreRange& total_cores) {
+    const CoreRangeSet& active_cores,
+    const CoreRangeSet& core_group_1,
+    uint32_t num_tiles_per_core_group_1,
+    const CoreRangeSet& core_group_2,
+    uint32_t num_tiles_per_core_group_2,
+    const CoreRangeSet& padded_core_group_1,
+    uint32_t padded_num_tiles_per_core_group_1,
+    const CoreRangeSet& padded_core_group_2,
+    uint32_t padded_num_tiles_per_core_group_2) {
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
 
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    auto tile_hw = tile_shape[0] * tile_shape[1];
-    uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
-    uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
-                                                           tile_shape[0]);  // only last row of Ct should have padding
-
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
-    auto
-        [padded_num_cores,
-         padded_all_cores,
-         padded_core_group_1,
-         padded_core_group_2,
-         padded_num_tiles_per_core_group_1,
-         padded_num_tiles_per_core_group_2] =
-            split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
-
-    all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    auto cores = corerange_to_cores(active_cores, std::nullopt);
+    uint32_t num_active_cores = cores.size();
 
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
-    // Need to set runtime args for all cores, not just the ones doing work.
-    for (const auto& core : total_cores) {
+    for (uint32_t i = 0; i < num_active_cores; i++) {
+        const CoreCoord& core = cores[i];
         uint32_t num_tiles_per_core;
         uint32_t padded_tiles_per_core;
 
@@ -114,16 +103,31 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
+    auto tile_hw = tile_shape[0] * tile_shape[1];
+    uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
+    uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] / tile_shape[0]);
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+    auto
+        [padded_num_cores,
+         padded_all_cores,
+         padded_core_group_1,
+         padded_core_group_2,
+         padded_num_tiles_per_core_group_1,
+         padded_num_tiles_per_core_group_2] =
+            split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
+
+    CoreRangeSet active_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t padding_cb_index = tt::CBIndex::c_1;
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * single_tile_size,
-        .core_ranges = total_cores,
+        .core_ranges = active_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
@@ -135,7 +139,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
     if (needs_padding) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = max_padding_write * input_tensor.element_size(),
-            .core_ranges = total_cores,
+            .core_ranges = active_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(padding_cb_index),
                 .data_format = cb_data_format,
@@ -194,7 +198,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
+    reader_desc.core_ranges = active_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
@@ -221,12 +225,25 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
+    writer_desc.core_ranges = active_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
-    emit_runtime_args_hc_tiled_interleaved(reader_desc, writer_desc, input_tensor, output_tensor, total_cores);
+    emit_runtime_args_hc_tiled_interleaved(
+        reader_desc,
+        writer_desc,
+        input_tensor,
+        output_tensor,
+        active_cores,
+        core_group_1,
+        num_tiles_per_core_group_1,
+        core_group_2,
+        num_tiles_per_core_group_2,
+        padded_core_group_1,
+        padded_num_tiles_per_core_group_1,
+        padded_core_group_2,
+        padded_num_tiles_per_core_group_2);
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

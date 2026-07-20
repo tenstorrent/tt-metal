@@ -24,8 +24,8 @@ void emit_runtime_args_hc_tiled(
     KernelDescriptor& writer_desc,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    uint32_t num_cores_total,
-    uint32_t num_cores_y,
+    uint32_t num_cores,
+    const CoreRangeSet& all_cores,
     const CoreRangeSet& core_group_1,
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
@@ -44,19 +44,19 @@ void emit_runtime_args_hc_tiled(
     uint32_t CtHWt = Ct * H * Wt;
     uint32_t CtWt = Ct * Wt;
 
-    reader_desc.runtime_args.reserve(num_cores_total);
-    writer_desc.runtime_args.reserve(num_cores_total);
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    reader_desc.runtime_args.reserve(num_cores);
+    writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+        const CoreCoord& core = cores[i];
         uint32_t num_tiles_per_core;
 
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            num_tiles_per_core = 0;
+            TT_ASSERT(core_group_2.contains(core));
+            num_tiles_per_core = num_tiles_per_core_group_2;
         }
 
         uint32_t h = num_tiles_read / CtWt % H;
@@ -109,10 +109,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
 
     IDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
@@ -135,7 +131,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
     uint32_t num_input_tiles = 2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * single_tile_size,
-        .core_ranges = total_cores,
+        .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
@@ -149,7 +145,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
         uint32_t src1_cb_index = 1;
         desc.cbs.push_back(CBDescriptor{
             .total_size = alignment,
-            .core_ranges = total_cores,
+            .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(src1_cb_index),
                 .data_format = cb_data_format,
@@ -173,7 +169,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_partitioned.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
+    reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
@@ -181,7 +177,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
     writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
+    writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
@@ -190,8 +186,8 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
         writer_desc,
         input_tensor,
         output_tensor,
-        num_cores_total,
-        num_cores_y,
+        num_cores,
+        all_cores,
         core_group_1,
         num_tiles_per_core_group_1,
         core_group_2,
