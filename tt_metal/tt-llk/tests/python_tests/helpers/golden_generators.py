@@ -2266,6 +2266,19 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32,
             MathOperation.UnaryMaxUint32,
             MathOperation.UnaryMinUint32,
+            # Comparison-to-zero on integer inputs (metal calculate_comp_int /
+            # calculate_comp_uint16 / calculate_eqz_uint32 / calculate_nez_uint32).
+            # Float inputs still take the float path (the __call__ gate also
+            # requires input_format.is_integer()).
+            MathOperation.EqualZero,
+            MathOperation.NotEqualZero,
+            MathOperation.LessThanZero,
+            MathOperation.GreaterThanZero,
+            MathOperation.LessThanEqualZero,
+            MathOperation.GreaterThanEqualZero,
+            # Int32 unary compare-against-scalar (metal calculate_comp_unary_int).
+            MathOperation.UnaryEq,
+            MathOperation.UnaryNe,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
@@ -2767,8 +2780,19 @@ class UnarySFPUGolden:
         )
         tensor = tensor.to(torch_dtype).flatten()
         tilized = tilize_block(tensor, dimensions, input_format).flatten()
-        op = self.ops[operation]
-        op_res = [int(op(int(x))) for x in tilized.tolist()]
+        # Int32 unary_eq/unary_ne compare each element against the integer scalar
+        # (metal calculate_comp_unary_int), not the fp32 0.5 threshold used for
+        # floats, so evaluate them directly here instead of via self.ops.
+        if operation in (MathOperation.UnaryEq, MathOperation.UnaryNe):
+            scalar = self._UNARY_COMP_INT_SCALAR
+            equal = operation == MathOperation.UnaryEq
+            op_res = [
+                int((int(x) == scalar) if equal else (int(x) != scalar))
+                for x in tilized.tolist()
+            ]
+        else:
+            op = self.ops[operation]
+            op_res = [int(op(int(x))) for x in tilized.tolist()]
         result = torch.tensor(op_res, dtype=torch_dtype)
         result = untilize_block(result, input_format, dimensions).flatten()
         return result
@@ -2951,6 +2975,9 @@ class UnarySFPUGolden:
     _FMOD_DIVISOR = 2.0
     _REMAINDER_DIVISOR = 2.0
     _UNARY_COMP_THRESHOLD = 0.5
+    # Integer scalar that Int32 unary_eq/unary_ne compare against (shared with
+    # sfpu_operations.h: UNARY_COMP_INT_SCALAR). Keep the two sides in sync.
+    _UNARY_COMP_INT_SCALAR = 5
     _UNARY_MAX_MIN_VALUE = 0.0
     _POLYGAMMA_ORDER = 1
     _XIELU_ALPHA_P = 1.0
