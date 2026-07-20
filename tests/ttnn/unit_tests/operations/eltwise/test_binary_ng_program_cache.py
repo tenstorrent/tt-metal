@@ -6,22 +6,23 @@
 Unit tests for binary_ng program cache behavior.
 
 Tests target potential caching issues.
-The binary_ng operation uses a single ProgramFactory with caching based on:
+The binary_ng operation uses a single ProgramFactory with the default
+reflection-based program-cache hash. The cache key is:
 
-to_hash(): binary_op_type, lhs/rhs/post_activations, memory_config, get_dtype(),
-           compute_kernel_config, sub_core_grids, subtile_broadcast_type,
-           is_sfpu, is_quant_op, is_where_op
+operation_attributes (via attribute_values()): binary_op_type,
+    lhs/rhs/post_activations, memory_config, output_dtype, compute_kernel_config,
+    sub_core_grids, subtile_broadcast_type, is_sfpu, is_quant_op, is_where_op,
+    input_layout_a/b, output_layout, equal_nan
 
-compute_program_hash(): attributes (via to_hash()), input tensor dtypes,
-                        input tensor memory_configs, shard_volumes
+tensor_args: the input/output Tensors are hashed in full via their TensorSpec,
+    so input dtype, memory_config AND logical_shape are part of the key.
 
-Fields correctly excluded from hash (handled by override_runtime_arguments):
-- logical_shape: not in compute_program_hash() by design - different logical
-  shapes share a cache entry and runtime arguments are updated accordingly
-- scalar.has_value(): not in to_hash(), but compute_program_hash branches
-  on input_tensor_b presence
-- input_dtype: not in to_hash(), but compute_program_hash includes input
-  tensor dtypes directly
+Fields excluded from the hash (re-applied by override_runtime_arguments on a
+cache hit):
+- buffer addresses: differently-allocated (incl. in-place, out=x) calls at the
+  same shape share one cache entry; addresses are re-applied at runtime
+- scalar value: not hashed; the scalar path vs tensor path differ because
+  tensor_args carries input_tensor_b only on the tensor path
 """
 
 import pytest
@@ -77,7 +78,7 @@ def run_scalar_ng_op(device, op, shape, scalar, dtype=ttnn.bfloat16, memory_conf
 
 
 # =============================================================================
-# Cache reuse tests (fields correctly excluded from hash)
+# Cache reuse tests (buffer addresses / scalar value excluded from hash)
 # =============================================================================
 
 
@@ -106,11 +107,9 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
 )
 def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, shape_first, shape_second):
     """binary_ng re-applies all per-dispatch state on a cache hit via override_runtime_arguments
-    (#48928). An in-place add (output_tensor aliases input) with different logical shapes shares one
-    cache entry (volume is excluded from the hash), so the second call is a cache HIT that reuses the
-    first program WITHOUT rebuild. binary_ng's override_runtime_arguments must re-derive every per-core
-    arg for the current shape or the reused program corrupts the result. Regression guard for the
-    in-place cache-hit path (the SDXL silu / moreh class of bug)."""
+    (#48928). With the default reflection hash, logical_shape is part of the key, so two different
+    shapes MISS and get distinct cache entries. This guards in-place correctness (output_tensor
+    aliases input) across the rebuild for both shapes (the SDXL silu / moreh class of bug)."""
 
     def inplace_add(shape, seed):
         torch.manual_seed(seed)
@@ -121,23 +120,23 @@ def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, 
         with device.cache_entries_counter.measure():
             tt_c = ttnn.add(tt_a, tt_b, output_tensor=tt_a)  # in-place
         # Prove the op is ACTUALLY in-place: if a future change ignored output_tensor or allocated a
-        # fresh output, PCC + single-cache-entry would still pass while no longer testing the alias.
+        # fresh output, PCC would still pass while no longer testing the alias.
         assert tt_c.buffer_address() == tt_a.buffer_address()
         return a + b, ttnn.to_torch(tt_c)
 
     ref1, out1 = inplace_add(shape_first, 0)
     assert_with_pcc(ref1, out1, 0.999)
 
-    ref2, out2 = inplace_add(shape_second, 1)  # cache HIT on the differently-shaped program
+    ref2, out2 = inplace_add(shape_second, 1)  # different shape -> distinct cache entry (miss)
     assert_with_pcc(ref2, out2, 0.999)
 
-    assert device.cache_entries_counter.total == 1  # proves it was a hit, not a rebuild masking the bug
+    assert device.cache_entries_counter.total == 2  # different logical shapes -> distinct entries
 
 
 def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache):
     """binary_ng in-place add on SHARDED tensors — the sharding mode SDXL exercised (silu) — driven
-    through binary_ng's override_runtime_arguments cache-hit path. Repeated at the SAME shard config
-    (sharded binary_ng keys shard_volume into the hash, so a different shape would MISS, not hit) but
+    through binary_ng's override_runtime_arguments cache-hit path. Repeated at the SAME shape/shard
+    config (logical_shape is part of the hash, so a different shape would MISS, not hit) but
     with freshly-allocated operands kept alive, so each cache HIT sees a DIFFERENT buffer address.
     binary_ng's tensor-backed CB / rt-arg addresses must be re-applied on the hit (no rebuild) or the
     result is stale."""
@@ -169,7 +168,7 @@ def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache)
 def test_ng_cache_mixed_inplace_outofplace_interleaved(device, isolate_program_cache, first_inplace):
     """REGRESSION (aliased address re-derivation): one cached INTERLEAVED program reused across a MIX of
     in-place (output_tensor aliases an input) and out-of-place calls sharing a single cache entry
-    (logical shape is excluded from the hash). The legacy resolve_bindings maps an aliased buffer to its
+    (same shape across all calls; only buffer addresses differ). The legacy resolve_bindings maps an aliased buffer to its
     FIRST occurrence, so a program built under one aliasing pattern and reused under another would patch
     the writer's output address from the wrong tensor slot. binary_ng's override_runtime_arguments
     re-derives every rt-arg address for the actual current tensors, so it MUST survive both orders —
@@ -232,7 +231,7 @@ def test_ng_cache_mixed_inplace_outofplace_sharded(device, isolate_program_cache
     for i, inplace in enumerate([first_inplace, not first_inplace, first_inplace, not first_inplace]):
         ref, out = do(i, inplace)
         assert_with_pcc(ref, out, 0.999)
-    # Same shard config across all calls (sharded binary_ng keys shard_volume) → one shared cache entry.
+    # Same shape/shard config across all calls → one shared cache entry.
     assert device.cache_entries_counter.total == 1
 
 
@@ -270,7 +269,7 @@ def test_ng_cache_miss_different_op_types(device, isolate_program_cache):
 
 def test_ng_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries.
-    Differentiated via input tensor dtype in compute_program_hash()."""
+    Differentiated via the input tensors' TensorSpec (dtype) in tensor_args."""
     shape = [1, 1, 32, 64]
 
     torch_ref1, tt_out1 = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.bfloat16)
@@ -301,7 +300,7 @@ def test_ng_cache_miss_different_memory_configs(device, isolate_program_cache):
 
 def test_ng_cache_miss_different_subtile_broadcast(device, isolate_program_cache):
     """Different subtile broadcast types -> different cache entries.
-    subtile_broadcast_type is in to_hash() and depends on last-2-dim shapes."""
+    subtile_broadcast_type is in the hash (operation_attributes) and depends on last-2-dim shapes."""
     # NONE: equal shapes
     torch_ref1, tt_out1 = run_binary_ng_op(device, ttnn.add, [1, 1, 32, 64], [1, 1, 32, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, tt_out1, 0.9999)
@@ -344,9 +343,8 @@ def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
 
 def test_ng_scalar_vs_tensor_cache_differentiation(device, isolate_program_cache):
     """Scalar op vs tensor op -> different cache entries.
-    scalar.has_value() is not in to_hash(), but compute_program_hash()
-    naturally differentiates because the scalar path excludes tensor_b
-    from hash arguments while the tensor path includes it."""
+    The scalar value is not hashed, but tensor_args naturally differentiates:
+    the scalar path carries no input_tensor_b while the tensor path does."""
     shape = [1, 1, 32, 64]
 
     # Scalar path
@@ -362,7 +360,7 @@ def test_ng_scalar_vs_tensor_cache_differentiation(device, isolate_program_cache
 
 def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
-    sub_core_grids is in to_hash() and directly determines worker_grid."""
+    sub_core_grids is in the hash (operation_attributes) and directly determines worker_grid."""
     shape = [1, 1, 32, 64]
 
     torch_a1 = torch.rand(shape, dtype=torch.float32)
@@ -392,8 +390,8 @@ def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
 
 def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cache):
     """Different input dtypes with same output dtype -> different cache entries.
-    input_dtype is not in to_hash(), but compute_program_hash() includes
-    input tensor dtypes directly, which compensates."""
+    The input dtype is not in operation_attributes, but tensor_args hashes each
+    input's TensorSpec (dtype), which differentiates them."""
     shape = [1, 1, 32, 64]
 
     # bfloat16 input -> float32 output
@@ -422,31 +420,30 @@ def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cac
 
 
 # =============================================================================
-# Cache reuse tests: logical_shape correctly excluded from hash
+# Cache miss tests: logical_shape included in the hash
 #
-# Different logical shapes share a cache entry by design. Hashing logical
-# shapes would be overkill since override_runtime_arguments handles shape
-# differences at runtime.
+# With the default reflection hash, tensor_args (and thus each Tensor's
+# TensorSpec.logical_shape) is part of the key, so different logical shapes get
+# distinct cache entries. override_runtime_arguments still re-applies per-core
+# args and buffer addresses on same-shape cache hits.
 # =============================================================================
 
 
-def test_ng_cache_reuse_different_logical_shapes(device, isolate_program_cache):
-    """Different logical shapes share 1 cache entry, different outputs (by design).
-    logical_shape is correctly excluded from compute_program_hash();
-    override_runtime_arguments handles shape differences at runtime."""
+def test_ng_cache_miss_different_logical_shapes(device, isolate_program_cache):
+    """Different logical shapes -> distinct cache entries, different outputs.
+    logical_shape is part of the default reflection hash (via TensorSpec)."""
     torch_ref1, tt_out1 = run_binary_ng_op(device, ttnn.add, [1, 1, 32, 32], [1, 1, 32, 32], dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, tt_out1, 0.9999)
 
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, [1, 1, 64, 64], [1, 1, 64, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.cache_entries_counter.total == 1
+    assert device.cache_entries_counter.total == 2
     assert tt_out1.shape != tt_out2.shape
 
 
-def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_program_cache):
-    """Correctness across multiple logical shapes sharing a single cache entry.
-    override_runtime_arguments correctly updates runtime args for each shape."""
+def test_ng_cache_different_logical_shapes_correctness(device, isolate_program_cache):
+    """Correctness across multiple logical shapes, each with its own cache entry."""
     for shape_dim in [32, 64, 128]:
         shape = [1, 1, shape_dim, shape_dim]
         torch_a = torch.rand(shape, dtype=torch.float32)
@@ -461,7 +458,7 @@ def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_pro
             tt_out = ttnn.add(tt_a, tt_b)
         assert_with_pcc(torch_ref, ttnn.to_torch(tt_out), 0.9999)
 
-    assert device.cache_entries_counter.total == 1
+    assert device.cache_entries_counter.total == 3
 
 
 # =============================================================================
