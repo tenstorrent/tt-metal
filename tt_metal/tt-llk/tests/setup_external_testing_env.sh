@@ -31,6 +31,7 @@ check_deps() {
 # Check for supported Python version
 check_python_version() {
     PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
+    local PYTHON_MAJOR PYTHON_MINOR
     PYTHON_MAJOR=$(printf '%s' "$PYTHON_VERSION" | cut -d. -f1)
     PYTHON_MINOR=$(printf '%s' "$PYTHON_VERSION" | cut -d. -f2)
     if ! [[ "$PYTHON_MAJOR" =~ ^[0-9]+$ && "$PYTHON_MINOR" =~ ^[0-9]+$ ]]; then
