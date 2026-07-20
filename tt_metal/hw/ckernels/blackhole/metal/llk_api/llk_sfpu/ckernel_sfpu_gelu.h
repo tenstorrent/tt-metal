@@ -8,7 +8,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"  // math::reset_counters, p_setrwc
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -203,7 +202,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
@@ -383,7 +381,6 @@ inline void calculate_gelu_tanh() {
 
 template <bool is_fp32_dest_acc_en>
 inline void gelu_tanh_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // initialise constants for _sfpu_tanh_fp32_accurate_
     tanh_init<false, true>();
 }
@@ -499,7 +496,6 @@ inline void calculate_gelu_derivative_polynomial() {
 
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         // Call sfpu_reciprocal_init directly: gelu derivative uses sfpu_reciprocal_iter
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is

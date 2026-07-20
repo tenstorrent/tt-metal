@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 
 using namespace sfpi;
@@ -69,7 +68,6 @@ inline void generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_topk_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     _init_generalized_moe_gate_topk<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
 }
 

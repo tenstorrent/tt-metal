@@ -6,7 +6,6 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
-#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -145,7 +144,6 @@ inline void calculate_cumsum(const bool first) {
 
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumsum_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     load_replay_buf(0, 16, [] {
         TTI_SFPADD(10, 7, 0, 0, 0);
         TTI_SFPNOP;

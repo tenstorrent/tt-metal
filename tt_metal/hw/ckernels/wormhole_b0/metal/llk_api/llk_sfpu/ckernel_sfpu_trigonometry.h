@@ -8,7 +8,6 @@
 #include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_sqrt.h"
 #include "ckernel_sfpu_sqrt_custom.h"
@@ -645,10 +644,6 @@ inline void calculate_asin() {
     }
 }
 
-inline void asin_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void acos_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
     for (int d = 0; d < ITERATIONS; d++) {
@@ -829,7 +824,6 @@ inline void calculate_sinh() {
 
 template <bool APPROXIMATION_MODE>
 void sine_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // P2 and P3 of four-part Cody-Waite reduction by PI.
     sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
@@ -839,7 +833,6 @@ void sine_init() {
 
 template <bool APPROXIMATION_MODE>
 void cosine_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
@@ -849,7 +842,6 @@ void cosine_init() {
 
 template <bool APPROXIMATION_MODE>
 void tangent_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
@@ -859,7 +851,6 @@ void tangent_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = -0.693145752f;   // -ln(2)_hi
@@ -872,7 +863,6 @@ void cosh_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void sinh_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = -0.693145752f;    // -ln(2)_hi
@@ -885,7 +875,6 @@ void sinh_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstIntPrgm0 = RECIPROCAL_GT0_MAGIC_SEED;
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
@@ -1214,7 +1203,6 @@ inline void calculate_atanh() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_inverse_hyperbolic() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // asinh/acosh route through calculate_log1p_fp32, which expects the log1p
     // polynomial constants in vConstFloatPrgm0/1/2. The sqrt used internally is
     // self-contained (_sfpu_sqrt_ge0_) and does not touch the program registers.
@@ -1223,7 +1211,6 @@ void init_inverse_hyperbolic() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_atanh() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // atanh routes through calculate_log1p_fp32; the reciprocal it uses is the
     // self-contained _sfpu_reciprocal_gt0_, so log1p owns the program registers.
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();

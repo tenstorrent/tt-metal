@@ -11,7 +11,6 @@
 #include "ckernel_sfpu_recip.h"
 
 #include "ckernel_sfpu_piecewise_rational.h"
-#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -103,7 +102,6 @@ inline void calculate_digamma() {
 
 template <bool APPROXIMATION_MODE>
 void digamma_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     // sfpu_reciprocal_init programs vConstFloatPrgm0/1/2 with the reciprocal's Newton seed;
     // all three stay reserved for it, so digamma must not repurpose Prgm1/Prgm2.
     sfpu_reciprocal_init();

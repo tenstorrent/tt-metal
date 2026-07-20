@@ -9,7 +9,6 @@
 #include <limits>
 
 #include "ckernel_sfpu_exp.h"
-#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -127,7 +126,6 @@ inline void calculate_exp2() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void exp2_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         // Coefficients for minimax polynomial.
         sfpi::vConstFloatPrgm0 = 0x1.62e42ep-1f;

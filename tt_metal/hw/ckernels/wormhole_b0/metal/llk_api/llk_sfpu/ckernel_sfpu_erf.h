@@ -11,7 +11,6 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 
 #include "ckernel_sfpu_piecewise_rational.h"
-#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -85,7 +84,6 @@ inline void calculate_erf() {
 
 template <bool APPROXIMATION_MODE>
 void erf_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 

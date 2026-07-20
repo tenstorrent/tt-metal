@@ -10,7 +10,6 @@
 
 // clang-format off: sfpi.h before polyval (polyval uses sfpi_inline); matches blackhole ordering
 #include "sfpi.h"
-#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
@@ -710,12 +709,6 @@ template <
     bool CLAMP_NEGATIVE = true,
     bool is_fp32_dest_acc_en = false>
 void exp_init() {
-    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
-    // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
-    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
-    sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
         //      A Fast, Compact Approximation of the Exponential Function
