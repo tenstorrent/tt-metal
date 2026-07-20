@@ -194,8 +194,10 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         if status in ("converged", "ran"):
             _mark_optimized(demo_dir, m, status, result)
         _rekey_module_section(demo_dir, m, node, status, upsert_report_section, index=idx)
+        _reorder_module_sections(demo_dir)
 
     _write_rollup(demo_dir, rows, upsert_report_section)
+    _reorder_module_sections(demo_dir)
 
     if getattr(args, "then_e2e", False):
         print("\n  [optimize/module] --then-e2e: confirming module wins survive the full pipeline")
@@ -231,6 +233,43 @@ def _rekey_module_section(demo_dir, module, node, status, upsert, index=""):
         "(no optimize detail recorded)",
     )
     upsert(demo_dir, "module:%s" % module, block)
+
+
+def _reorder_module_sections(demo_dir) -> None:
+    """Sort the ``module:<name>`` blocks in RUN_REPORT.md by their ``— N/total`` index,
+    so the report always reads 1,2,3,… regardless of write-order. Non-module sections
+    (bring-up, rollup) keep their positions; blocks are only rewritten into their existing
+    slots in sorted order, so no content is added or dropped. No-op if already sorted or
+    fewer than two module blocks. Best-effort: never raises."""
+    p = Path(demo_dir) / _REPORT_NAME
+    try:
+        txt = p.read_text()
+    except Exception:
+        return
+    pat = re.compile(r"<!-- BEGIN (module:[A-Za-z0-9_]+) -->.*?<!-- END \1 -->", re.S)
+    matches = list(pat.finditer(txt))
+    if len(matches) < 2:
+        return
+
+    def _idx(b):
+        mm = re.search(r"## Module: `[^`]+` — (\d+)/", b)
+        return int(mm.group(1)) if mm else 9999
+
+    blocks = [m.group(0) for m in matches]
+    order = [_idx(b) for b in blocks]
+    if order == sorted(order):
+        return
+    sorted_blocks = [b for _, b in sorted(enumerate(blocks), key=lambda kv: (_idx(kv[1]), kv[0]))]
+    out, last = [], 0
+    for m, sb in zip(matches, sorted_blocks):
+        out.append(txt[last : m.start()])
+        out.append(sb)
+        last = m.end()
+    out.append(txt[last:])
+    try:
+        p.write_text("".join(out))
+    except Exception:
+        pass
 
 
 def _write_rollup(demo_dir, rows, upsert):
