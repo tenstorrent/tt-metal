@@ -20,13 +20,14 @@ from triage import ScriptConfig, triage_field, run_script
 from run_checks import run as get_run_checks, RunChecks
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from configuration_provider import run as get_configuration
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache", "configuration_provider"],
 )
 
 
@@ -108,6 +109,10 @@ def read_ring_buffer_for_block(
 
 def run(args, context: Context):
     """Entry point for triage framework."""
+    config = get_configuration(args, context)
+    if not config.get_bool("watcher_enabled", default=False):
+        return None
+
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
