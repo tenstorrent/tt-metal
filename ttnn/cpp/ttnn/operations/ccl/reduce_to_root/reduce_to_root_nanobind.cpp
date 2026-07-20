@@ -23,44 +23,39 @@ void bind_reduce_to_root(nb::module_& mod) {
             Reduce-to-root operation. Performs sdpa tree reduction across 4 devices and stores the output on the root device only.
 
             Args:
-                input_tensor_l: the input tensor is a vector of values l of SDPA.
-                input_tensor_s: the input tensor is a vector of state s of SDPA.
-                input_tensor_m: the input tensor is a vector of state m of SDPA.
-                root_coord (ttnn.MeshCoordinate): Coordinate of the root device. Should be (1,0) for 4 devices setup.
+                input_tensor_l (ttnn.Tensor): the SDPA values (l) state tensor, sharded across the 4 devices.
+                input_tensor_s (ttnn.Tensor): the SDPA running-sum (s) state tensor, sharded across the 4 devices.
+                input_tensor_m (ttnn.Tensor): the SDPA running-max (m) state tensor, sharded across the 4 devices.
+                root_coord (ttnn.MeshCoordinate): Coordinate of the root device. Should be (1, 0) for the 4-device setup.
 
             Keyword Args:
-                topology (ttnn.Topology): Fabric topology.
-                output_tensor (ttnn.Tensor,optional): Optional output tensor.
-                intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.
+                scale_fp32 (float, optional): scale applied during the reduction. Defaults to `1.0`.
+                topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
+                output_tensor_l (ttnn.Tensor, optional): Preallocated output tensor for values. Defaults to `None`.
+                output_tensor_s (ttnn.Tensor, optional): Preallocated output tensor for sum. Defaults to `None`.
+                output_tensor_m (ttnn.Tensor, optional): Preallocated output tensor for max. Defaults to `None`.
+                intermediate_tensor (ttnn.Tensor, optional): Preallocated intermediate tensor. Defaults to `None`.
+                input_mux_cores (List[ttnn.CoreCoord], optional): the 4 mux core coordinates used for the reduction. Defaults to `None`.
 
-           Returns:
-               ttnn.Tensor output_tensor_l: the output tensor for values.
-                ttnn.Tensor output_tensor_s: the output tensor for sum.
-                ttnn.Tensor output_tensor_m: the output tensor for max.
+            Returns:
+                List[ttnn.Tensor]: the reduced (l, s, m) tensors, each with the same spec as the corresponding input. The results are valid only on the root device.
 
-            Example:
+            Supported dtypes and layouts:
 
-                >>> input_tensor_torch_l = torch.zeros((8,128), dtype=dtype)
-                >>> input_tensor_torch_s = torch.zeros((8,32), dtype=dtype)
-                >>> input_tensor_torch_m = torch.zeros((8,32), dtype=dtype)
+                .. list-table::
+                    :header-rows: 1
 
-                >>> input_tensor_l = ttnn.from_torch(
-                >>>     input_tensor_torch_l, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
-                >>> )
-                >>> input_tensor_s = ttnn.from_torch(
-                >>>     input_tensor_torch_s, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
-                >>> )
-                >>> input_tensor_m = ttnn.from_torch(
-                >>>     input_tensor_torch_m, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
-                >>> )
-                >>> root_coord= ttnn.MeshCoordinate((1,0))
-                >>> output_tensor_l, output_tensor_s, output_tensor_m = ttnn.reduce_to_root(
-                        input_tensor_l,
-                        input_tensor_s,
-                        input_tensor_m,
-                        root_coord,
-                        scale_fp32=1.0,
-                        topology=ttnn.Topology.Linear)
+                    * - Tensor
+                      - Dtypes
+                      - Layouts
+                    * - input_tensor_l / _s / _m
+                      - BFLOAT16
+                      - TILE
+
+                reduce_to_root operates on a fixed 4-device line topology with the root at (1, 0). All three input tensors must be sharded; each output preserves the spec of its corresponding input.
+
+            Memory Support:
+                - Sharded: required (L1)
             )doc";
 
     ttnn::bind_function<"reduce_to_root">(

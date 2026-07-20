@@ -1,0 +1,8 @@
+{
+  "env": {
+    "PREFILL_MODEL": "glm_5_2",
+    "PREFILL_NUM_LAYERS": "78",
+    "PREFILL_KV_ONLY_LAST_LAYER": "0",
+    "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32"
+  }
+}

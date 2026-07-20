@@ -274,6 +274,7 @@ def test_umt5_encoder(
         subfolder="text_encoder",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
         get_torch_state_dict=lambda: hf_model.state_dict(),
     )
 

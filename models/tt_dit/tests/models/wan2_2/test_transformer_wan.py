@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import time
 
 import pytest
@@ -16,10 +15,11 @@ from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.golden import load_golden, save_golden
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
@@ -43,6 +43,41 @@ ROPE_MAX_SEQ_LEN = 1024
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _load_model_and_golden(test_name, param_id):
+    """Resolve and log the model commit hash, retrieve cached golden data, and load the model.
+
+    Returns ``(commit_hash, golden, torch_model)`` where ``golden`` is None if no cached
+    golden data exists for this commit/test/param.
+    """
+    _, commit_hash = TorchWanTransformer3DModel.load_config(
+        MODEL_NAME, subfolder="transformer", return_commit_hash=True
+    )
+    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
+
+    golden = load_golden(commit_hash, test_name, param_id)
+
+    torch_model = TorchWanTransformer3DModel.from_pretrained(
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+    )
+    return commit_hash, golden, torch_model
+
+
+def _register_block_hooks(model):
+    """Register forward hooks on each transformer block to log when it is called."""
+    hooks = []
+    logger.info(type(model))
+    for idx, block in enumerate(model.blocks):
+
+        def _make_hook(block_idx):
+            def hook(module, input, output):
+                logger.info(f"Torch transformer block {block_idx} called")
+
+            return hook
+
+        hooks.append(block.register_forward_hook(_make_hook(idx)))
+    return hooks
+
+
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
     return DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
@@ -79,17 +114,44 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+COMMON_MESH_PARAMS = [
+    pytest.param(
+        (2, 2), 0, 1, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1nl2_line_is_fsdp0"
+    ),
+    pytest.param(
+        (2, 4), 0, 1, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1nl1_line_is_fsdp1"
+    ),
+    pytest.param(
+        (2, 4), 1, 0, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0nl1_line_is_fsdp1"
+    ),
+    # WH (ring) on 4x8
+    pytest.param(
+        (4, 8), 1, 0, 4, ring_params_req_exact_devices, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1"
+    ),
+    # BH (ring) on 4x8
+    pytest.param(
+        (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
+    ),
+]
+
+
 @pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
-        # WH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
-        pytest.param((4, 32), (4, 32), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    COMMON_MESH_PARAMS
+    + [
+        pytest.param(
+            (4, 8),
+            1,
+            0,
+            2,
+            line_params_req_exact_devices,
+            ttnn.Topology.Linear,
+            False,
+            id="4x8sp1tp0nl2_line_is_fsdp0",
+        ),
+        pytest.param(
+            (4, 32), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x32sp1tp0nl2_ring_is_fsdp0"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -103,7 +165,6 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
 )
 def test_wan_transformer_block(
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
@@ -115,12 +176,12 @@ def test_wan_transformer_block(
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
+    request,
 ) -> None:
     MIN_PCC = 0.999_500
     MAX_RMSE = 0.032
 
-    parent_mesh_device = mesh_device
-    mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
@@ -129,12 +190,61 @@ def test_wan_transformer_block(
     p_t, p_h, p_w = PATCH_SIZE
     spatial_seq_len = (T // p_t) * (H // p_h) * (W // p_w)
 
-    # Load Wan2.2-T2V-14B model from HuggingFace
-    parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-    )
+    param_id = request.node.name
+    commit_hash, golden, parent_torch_model = _load_model_and_golden("wan_transformer_block", param_id)
+    hooks = _register_block_hooks(parent_torch_model)
     torch_model = parent_torch_model.blocks[0]
     torch_model.eval()
+    state_dict = torch_model.state_dict()
+
+    if golden is not None:
+        spatial_input = golden["spatial_input"]
+        prompt_input = golden["prompt_input"]
+        temb_input = golden["temb_input"]
+        rope_cos = golden["rope_cos"]
+        rope_sin = golden["rope_sin"]
+        torch_rope_cos = golden["torch_rope_cos"]
+        torch_rope_sin = golden["torch_rope_sin"]
+        torch_spatial_out = golden["torch_spatial_out"]
+    else:
+        logger.warning("Computing reference results from scratch; this will be VERY SLOW.")
+        # Generate inputs with fixed seed
+        torch.manual_seed(0)
+        spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
+        prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
+        temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
+        rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+        rope_sin = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+        torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
+
+        logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+        with torch.no_grad():
+            torch_spatial_out = torch_model(
+                hidden_states=spatial_input,
+                encoder_hidden_states=prompt_input,
+                temb=temb_input,
+                rotary_emb=[torch_rope_cos, torch_rope_sin],
+            )
+
+        save_golden(
+            commit_hash,
+            "wan_transformer_block",
+            param_id,
+            {
+                "spatial_input": spatial_input,
+                "prompt_input": prompt_input,
+                "temb_input": temb_input,
+                "rope_cos": rope_cos,
+                "rope_sin": rope_sin,
+                "torch_rope_cos": torch_rope_cos,
+                "torch_rope_sin": torch_rope_sin,
+                "torch_spatial_out": torch_spatial_out,
+            },
+        )
+
+    for h in hooks:
+        h.remove()
+    del parent_torch_model, torch_model
 
     # Create TT model
     tt_model = WanTransformerBlock(
@@ -148,18 +258,15 @@ def test_wan_transformer_block(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    logger.info(f"Loading TT model from torch state dict...")
+    start = time.time()
+    tt_model.load_torch_state_dict(state_dict)
+    end = time.time()
+    logger.info(f"Time taken to load state dict: {end - start} seconds")
 
-    # Create input tensors
-    torch.manual_seed(0)
-    spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
-    temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
-
-    # Create ROPE embeddings
-    rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
-    rope_sin = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
-    torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
+    # Prepare ROPE embeddings
+    if golden is not None:
+        torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
 
     rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
     rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
@@ -200,16 +307,6 @@ def test_wan_transformer_block(
         ),
     )
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
-
-    # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    with torch.no_grad():
-        torch_spatial_out = torch_model(
-            hidden_states=spatial_input,
-            encoder_hidden_states=prompt_input,
-            temb=temb_input,
-            rotary_emb=[torch_rope_cos, torch_rope_sin],
-        )
 
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
@@ -342,19 +439,19 @@ def test_wan_workload_power(
 
 
 @pytest.mark.parametrize(
-    "dit_unit_test",
-    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
-)
-@pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
-        # WH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        # BH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    COMMON_MESH_PARAMS
+    + [
+        pytest.param(
+            (4, 8),
+            1,
+            0,
+            2,
+            line_params_req_exact_devices,
+            ttnn.Topology.Linear,
+            False,
+            id="4x8sp1tp0nl2_line_is_fsdp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -369,7 +466,6 @@ def test_wan_workload_power(
 )
 def test_wan_transformer_model(
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
@@ -380,30 +476,68 @@ def test_wan_transformer_model(
     prompt_seq_len: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
-    dit_unit_test: bool,
     reset_seeds,
+    request,
 ) -> None:
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
+    num_layers = 1
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
-    if dit_unit_test:
-        num_layers = 1
-        torch_model = TorchWanTransformer3DModel(num_layers=num_layers)
-    else:
-        torch_model = TorchWanTransformer3DModel.from_pretrained(
-            MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-        )
-        num_layers = NUM_LAYERS
-    torch_model.eval()
+    param_id = request.node.name
+    commit_hash, golden, torch_model = _load_model_and_golden("wan_transformer_model", param_id)
 
-    torch.manual_seed(0)
-    spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
-    timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+    # Truncate to 1 layer
+    torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
+    torch_model.eval()
+    hooks = _register_block_hooks(torch_model)
+    state_dict = torch_model.state_dict()
+
+    if golden is not None:
+        spatial_input = golden["spatial_input"]
+        prompt_input = golden["prompt_input"]
+        timestep_input = golden["timestep_input"]
+        torch_spatial_out = golden["torch_spatial_out"]
+    else:
+        logger.warning("Computing reference results from scratch; this will be VERY SLOW.")
+        # Generate inputs with fixed seed
+        torch.manual_seed(0)
+        spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
+        prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
+        timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+
+        logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+        with torch.no_grad():
+            torch_spatial_out = torch_model(
+                hidden_states=spatial_input,
+                encoder_hidden_states=prompt_input,
+                timestep=timestep_input,
+                return_dict=False,
+            )
+        torch_spatial_out = torch_spatial_out[0]
+        for h in hooks:
+            h.remove()
+        del torch_model
+
+        save_golden(
+            commit_hash,
+            "wan_transformer_model",
+            param_id,
+            {
+                "spatial_input": spatial_input,
+                "prompt_input": prompt_input,
+                "timestep_input": timestep_input,
+                "torch_spatial_out": torch_spatial_out,
+            },
+        )
+
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+
+    # TODO: This conversion looks sus
     tt_timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
     tt_model = _make_wan_transformer(
@@ -414,8 +548,9 @@ def test_wan_transformer_model(
         num_layers=num_layers,
     )
 
+    logger.info(f"Loading TT model from torch state dict...")
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(state_dict)
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
@@ -430,59 +565,83 @@ def test_wan_transformer_model(
     )
     del tt_model
 
-    # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    with torch.no_grad():
-        torch_spatial_out = torch_model(
-            hidden_states=spatial_input,
-            encoder_hidden_states=prompt_input,
-            timestep=timestep_input,
-            return_dict=False,
-        )
-    torch_spatial_out = torch_spatial_out[0]
-
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
-        # WH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        # BH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
-    ],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    COMMON_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 def test_wan_transformer_inner_step(
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
+    request,
 ) -> None:
     """Test inner_step against the torch reference, mimicking the pipeline denoising loop."""
     B = 1
     T, H, W = 8, 40, 50
     prompt_seq_len = 118
-
+    num_layers = 1
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
-    # Load pretrained torch model and truncate to 1 layer
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-    )
+    param_id = request.node.name
+    commit_hash, golden, torch_model = _load_model_and_golden("wan_transformer_inner_step", param_id)
+
+    # Truncate to 1 layer
     torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
     torch_model.eval()
+    hooks = _register_block_hooks(torch_model)
+    state_dict = torch_model.state_dict()
+
+    if golden is not None:
+        spatial_input = golden["spatial_input"]
+        prompt_input = golden["prompt_input"]
+        timestep_input = golden["timestep_input"]
+        torch_output = golden["torch_output"]
+    else:
+        logger.warning("Computing reference results from scratch; this will be VERY SLOW.")
+        # Generate inputs with fixed seed
+        torch.manual_seed(0)
+        spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
+        prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
+        timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+
+        logger.info(f"Running torch reference with spatial shape {spatial_input.shape}")
+        with torch.no_grad():
+            torch_output = torch_model(
+                hidden_states=spatial_input,
+                encoder_hidden_states=prompt_input,
+                timestep=timestep_input,
+                return_dict=False,
+            )
+        torch_output = torch_output[0]
+
+        save_golden(
+            commit_hash,
+            "wan_transformer_inner_step",
+            param_id,
+            {
+                "spatial_input": spatial_input,
+                "prompt_input": prompt_input,
+                "timestep_input": timestep_input,
+                "torch_output": torch_output,
+            },
+        )
+
+    for h in hooks:
+        h.remove()
+    del torch_model
 
     # Create 1-layer TT model with matching weights
     tt_model = _make_wan_transformer(
@@ -490,23 +649,23 @@ def test_wan_transformer_inner_step(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
-        num_layers=1,
+        num_layers=num_layers,
     )
+
+    logger.info(f"Loading TT model from torch state dict...")
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(state_dict)
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
-
-    # Create inputs
-    torch.manual_seed(0)
-    spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
-    timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
 
     # Prepare cached inputs on device (like the pipeline does once before the denoising loop)
     spatial_host, N = tt_model.preprocess_spatial_input_host(spatial_input)
     rope_cos_1HND, rope_sin_1HND, trans_mat = tt_model.prepare_rope_features(spatial_input)
-    prompt_1BLP = tt_model.prepare_text_conditioning(prompt_input)
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    prompt_1BLP = tt_model.prepare_text_conditioning(tt_prompt)
+
+    # TODO: This conversion looks sus
+    tt_timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
     spatial_device = from_torch(
         spatial_host, device=mesh_device, mesh_axes=[None, None, parallel_config.sequence_parallel.mesh_axis, None]
@@ -521,21 +680,10 @@ def test_wan_transformer_inner_step(
         rope_sin_1HND=rope_sin_1HND,
         trans_mat=trans_mat,
         N=N,
-        timestep_torch=timestep_input,
+        timestep=tt_timestep,
     )
     tt_output_1BNI = local_device_to_torch(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
     del tt_model
-
-    # Run torch reference
-    logger.info(f"Running torch reference with spatial shape {spatial_input.shape}")
-    with torch.no_grad():
-        torch_output = torch_model(
-            hidden_states=spatial_input,
-            encoder_hidden_states=prompt_input,
-            timestep=timestep_input,
-            return_dict=False,
-        )
-    torch_output = torch_output[0]
 
     assert_quality(torch_output, tt_output, pcc=MIN_PCC, relative_rmse=MAX_RMSE)

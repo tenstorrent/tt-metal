@@ -174,10 +174,16 @@
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 12
+      timeout: 28
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -223,6 +229,18 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+
+# Janus Pro unit tests: Blackhole only (P150).
+- name: Janus Pro-7B unit tests
+  cmd: |
+    pytest --timeout 600 models/experimental/janus_pro/tests/test_ci_dispatch.py
+  model: janus-pro-7b
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U0B25UFEEAX # Milos Micic
+  team: shield
 
 # Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
 # parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
@@ -710,8 +728,6 @@
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
 
-
-
 - name: TT-DiT Flux.1-schnell unit tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -732,11 +748,44 @@
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
-
   model: flux.1-dev
   skus:
     bh_quietbox_2:
       timeout: 20
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-T2V-A14B  unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
+  model: wan-2.2-t2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 150
+    #   tier: 1
+    wh_galaxy:
+      timeout: 150
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-I2V-A14B  unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py
+  model: wan-2.2-i2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 120
+    #   tier: 1
+    wh_galaxy:
+      timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

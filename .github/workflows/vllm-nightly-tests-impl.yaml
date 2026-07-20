@@ -30,7 +30,7 @@ on:
 
 jobs:
   generate-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
     steps:
@@ -207,10 +207,10 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456, \"l1_small_size\": 24576}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "default-chat-template-kwargs": "{\"enable_thinking\": false}",
-              "multimodal": false,
+              "multimodal": true,
               "owner_id": "U08HL8X1ECD"
             },
             {

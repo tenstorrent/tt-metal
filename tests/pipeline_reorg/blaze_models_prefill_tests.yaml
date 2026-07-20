@@ -8,7 +8,7 @@
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   sp_config: Single pod configuration (spsg) to run this test on.
+#   sp_config: Supercluster configuration (sc1) to run this test on.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -28,11 +28,11 @@
   test_type: moe_gate
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 20
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - MLA"
   cmd: |
@@ -50,11 +50,11 @@
   test_type: mla
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 20
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - MLA Chunked"
   cmd: |
@@ -66,11 +66,11 @@
   test_type: mla_chunked
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 30
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - KV cache table"
   cmd: |
@@ -88,11 +88,11 @@
   test_type: kv_cache_table
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 10
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Prefill Block"
   cmd: |
@@ -109,12 +109,12 @@
   test_type: prefill_block
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 20
 
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Transformer (Longbook 25k Trace)"
   cmd: |
@@ -131,11 +131,11 @@
   test_type: prefill_transformer
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 40
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Kimi MLA"
   cmd: |
@@ -147,11 +147,11 @@
   test_type: kimi_mla
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 15
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - DSA MLA (V3.2)"
   cmd: |
@@ -166,11 +166,11 @@
   test_type: dsa_mla
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 35
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - DSA MLA (GLM-5.1 + GLM-5.2 indexer reuse)"
   cmd: |
@@ -186,11 +186,11 @@
   test_type: dsa_mla_glm
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 16
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - GLM MoE"
   cmd: |
@@ -202,11 +202,11 @@
   test_type: glm_moe
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 20
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - GLM-5.1 Prefill Block"
   cmd: |
@@ -226,11 +226,11 @@
   test_type: glm_prefill_block
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 30
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Kimi MoE"
   cmd: |
@@ -241,16 +241,16 @@
   test_type: kimi_moe
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 35
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Kimi Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2.6-Cache/CI
 
     mpirun --pernode --tag-output bash -lc '
@@ -261,11 +261,11 @@
   test_type: kimi_prefill_block
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 30
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Prefill Block Determinism"
   cmd: |
@@ -284,11 +284,11 @@
   test_type: prefill_block_determinism
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 35
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Transformer Determinism"
   cmd: |
@@ -305,11 +305,11 @@
   test_type: prefill_transformer_determinism
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       timeout: 60
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 # Ring joint SDPA math-utilization perf checks (1 WAN, 1 MLA-100k, 1 Kimi chunked ring_mla).
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
@@ -329,12 +329,12 @@
   test_type: ring_joint_sdpa_perf
   test_group: sdpa_perf
   skus:
-    bh_spsg:
+    bh_sc1:
       # Both perf checks run in ~5.6 min; 23 leaves headroom for Galaxy variance.
       timeout: 23
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
 
 - name: "Blaze - Chunked Kimi (code_debug 55k)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
@@ -348,7 +348,8 @@
   #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
+    export LOGURU_LEVEL=INFO
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
     mpirun --pernode --tag-output bash -lc '
@@ -357,9 +358,9 @@
   test_type: kimi_chunked
   test_group: module
   skus:
-    bh_spsg:
+    bh_sc1:
       # Job takes under 20 minutes; 40 minute timeout provides buffer for variance and machines with less power.
       timeout: 40
   owner_id: U08RL15T4N8
   team: models
-  sp_config: spsg
+  sp_config: sc1
