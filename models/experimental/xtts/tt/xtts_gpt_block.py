@@ -15,6 +15,8 @@ Weight-layout notes:
     of ``ttnn.transformer.scaled_dot_product_attention``.
 """
 
+import math
+
 import torch
 import ttnn
 
@@ -25,6 +27,8 @@ from models.experimental.xtts.reference.xtts_gpt_block import (
     NUM_HEADS,
 )
 from models.common.lightweightmodule import LightweightModule
+
+NEG_INF = -1e30  # additive attention-mask fill for masked-out (future) positions
 
 
 def _to_device(torch_tensor, device):
@@ -150,6 +154,47 @@ class TtXttsGptBlock(LightweightModule):
         ttnn.deallocate(x)
         ttnn.deallocate(ao)
         return self._residual_ffn(xa), k, v
+
+    def forward_decode_static(self, x, k_cache, v_cache, onehot, keep, add_mask):
+        """Trace-compatible decode step over a FIXED-size KV cache (no concat growth).
+
+        ``k_cache``/``v_cache`` are ``[1, heads, MAX, head_dim]`` PERSISTENT buffers updated
+        IN PLACE at the current position with a device one-hot (``onehot`` ``[1, 1, MAX, 1]``,
+        ``keep = 1 - onehot``); attention then runs over the whole cache with an additive
+        position mask (``add_mask`` ``[1, 1, 1, MAX]``: 0 for cached positions, -inf ahead).
+        In-place cache writes + static shapes + device-only ops mean one capture replays at
+        any position and the caches accumulate across replays. Returns the FFN output."""
+        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
+        q, k, v = self._qkv(h)  # each [1, heads, 1, head_dim]
+        ttnn.deallocate(h)
+        # In-place cache write at the current position: cache = cache*keep + newKV*onehot.
+        # keep is 0 at the write row (1 elsewhere); onehot is 1 at the write row. The single
+        # token's K/V [1,h,1,d] broadcasts over MAX; onehot/keep [1,1,MAX,1] over heads/head_dim.
+        ttnn.multiply(k_cache, keep, output_tensor=k_cache)
+        ttnn.multiply(v_cache, keep, output_tensor=v_cache)
+        kw = ttnn.multiply(k, onehot)
+        vw = ttnn.multiply(v, onehot)
+        ttnn.add(k_cache, kw, output_tensor=k_cache)
+        ttnn.add(v_cache, vw, output_tensor=v_cache)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        ttnn.deallocate(kw)
+        ttnn.deallocate(vw)
+        # Masked attention over the full cache: softmax(q·Kᵀ/√d + mask) · V.
+        kT = ttnn.permute(k_cache, (0, 1, 3, 2))  # [1, heads, head_dim, MAX]
+        scores = ttnn.multiply(ttnn.matmul(q, kT), 1.0 / math.sqrt(HEAD_DIM))  # [1, heads, 1, MAX]
+        ttnn.deallocate(kT)
+        ttnn.deallocate(q)
+        scores = ttnn.add(scores, add_mask)
+        p = ttnn.softmax(scores, dim=-1)
+        ttnn.deallocate(scores)
+        attn = ttnn.matmul(p, v_cache)  # [1, heads, 1, head_dim]
+        ttnn.deallocate(p)
+        ao = self._attn_out(attn)
+        xa = ttnn.add(x, ao)
+        ttnn.deallocate(x)
+        ttnn.deallocate(ao)
+        return self._residual_ffn(xa)
 
     def forward_decode(self, x, k_cache, v_cache):
         """Decode one token. ``x`` is ``[b, 1, hidden]``; ``k_cache``/``v_cache`` are

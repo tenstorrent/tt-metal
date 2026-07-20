@@ -93,7 +93,7 @@ def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
 
     # Reference end to end (also the source of the codes teacher-forced into TT).
     reference = XttsReference(sd)
-    wav_ref, codes_ref, _ = reference.inference(wrapped, cond_mel, spk_wav, max_new_tokens=MAX_NEW_TOKENS)
+    wav_ref, codes_ref = reference.inference(wrapped, cond_mel, spk_wav, max_new_tokens=MAX_NEW_TOKENS)
 
     # TTNN end to end, same codes.
     tt = TtXtts(device, sd, reference.decoder_full)
