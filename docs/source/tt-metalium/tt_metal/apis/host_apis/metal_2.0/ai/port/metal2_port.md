@@ -238,6 +238,7 @@ For each legacy RTA or CTA that should *not* survive the port, list it with the 
   - *Case 2 (raw pointer) bindings.* If the audit classified a binding as **Case 2** (the kernel uses a raw base pointer), it still flows through the typed channel as a `TensorBinding`; the base pointer is pulled kernel-side via the sanctioned `get_bank_base_address` bridge (see [kernel-side whitelist rule 5](#kernel-side-whitelist) for the mechanics). List each affected binding here. **A Case 2 binding in a *compute* kernel is blocked** — no bridge exists there yet (rule 5) — so the port fails pending the compute-kernel `TensorBinding` fix. (Case 1 bindings — via `TensorAccessor`, the common case — need no special note.)
 - **Magic CB indices in CTAs**: replaced by `DFBBinding`. List each kernel's affected CTA slot.
 - **`TensorAccessorArgs` plumbing**: replaced by the binding mechanism end-to-end. List each `TensorAccessorArgs(buffer).append_to(cta)` site and its kernel-side `TensorAccessorArgs<N>()` / `next_compile_time_args_offset()` chain.
+- **Page-size 3rd-argument CTAs/RTAs**: a `page_size` value emitted solely to feed a `TensorAccessor`'s third constructor argument. Dropped — the binding token supplies the aligned page size automatically (see [kernel-side whitelist rule 3](#kernel-side-whitelist)). List each affected CTA/RTA slot. (The brief lists the accessor sites; a site could also carry a `TensorParameter` relaxation, which the brief flags separately.)
 - **Semaphore-ID RTAs**: replaced by `SemaphoreBinding`. List each kernel's affected RTA slot.
 - **Positional CTAs**: replaced by named CTAs. List each kernel's positional CTA list with the names you'll assign.
 
@@ -393,6 +394,8 @@ auto index = TensorAccessor(tensor::index);
 ```
 
 If positional RTAs survive after the buffer-address RTA goes away (uncommon — most ports also convert all RTAs to named per rule 4), re-index them.
+
+> *Third (page-size) argument drops.* Some legacy accessors pass an explicit page size as a **third** constructor argument — `TensorAccessor(args, addr, page_size)`, where `page_size` is a CTA or RTA value. The Metal 2.0 form takes no such argument: the binding token supplies the correct aligned page size automatically, so the third argument simply falls away in the collapse to `TensorAccessor(tensor::name)` (its host-side CTA/RTA emission drops with it — see [Dropped Plumbing](#dropped-plumbing)). **Don't preserve or re-thread it** — carrying the page size forward as a named arg recreates exactly the plumbing the binding model removes. The audit has already confirmed that every third-argument site reaching you is safe to drop, and lists the sites in the brief; a site whose page size could *not* be dropped never arrives (the audit gates it). A listed site may *additionally* carry a `TensorParameter` relaxation — the brief flags that separately; it is distinct port work, not part of the third-argument drop.
 
 > *Boundary note:* `dfb::name` implicitly converts to `uint32_t`; `sem::name` and `tensor::name` do not. The recipe assumes no out-of-op call site requires passing a `sem::` or `tensor::` handle — see [§Read this first](#read-this-first). If you encounter one, that's an assumption violation; stop and document per the off-ramp below.
 
