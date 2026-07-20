@@ -49,7 +49,7 @@ void emit_runtime_args_hc_rm(
 
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
-        uint32_t num_sticks_per_core;
+        uint32_t num_sticks_per_core = 0;
 
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_1;

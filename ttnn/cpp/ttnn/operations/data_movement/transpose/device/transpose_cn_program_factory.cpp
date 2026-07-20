@@ -116,7 +116,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     writer_desc.runtime_args.reserve(num_cores);
     for (uint32_t i = 0, num_pages_read = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
-        uint32_t num_pages_per_core;
+        uint32_t num_pages_per_core = 0;
         if (core_group_1.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_1;
         } else {
