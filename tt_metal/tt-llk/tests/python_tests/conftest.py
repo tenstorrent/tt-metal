@@ -35,7 +35,9 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
 # TEMPORARY
+_worker_suffix = f"_{os.environ['PYTEST_XDIST_WORKER']}" if _IS_XDIST_WORKER else ""
 os.environ.setdefault("TT_LOGGER_LEVEL", "debug")
+os.environ.setdefault("TT_LOGGER_FILE", f"test_run{_worker_suffix}_umd.log")
 from ttexalens import util as _exalens_util
 
 _exalens_util.Verbosity.set(_exalens_util.Verbosity.DEBUG)
