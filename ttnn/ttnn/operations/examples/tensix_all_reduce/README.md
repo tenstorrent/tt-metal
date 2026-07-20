@@ -29,6 +29,7 @@ pattern becomes the main design choice when the input and output are already sha
 | `mcast_all_gather` | The sender rotates through the group; each round multicasts one core's block to every member. | Replaces each all-to-all unicast round with one multicast. |
 | `reduce_root_mcast` | Non-root cores unicast to one root; the root reduces all blocks and multicasts the result. | Cuts communication, but serializes all reduction work on the root. |
 | `two_phase_reduce_mcast` | Up to `min(num_tiles, group_size - 1)` workers gather and reduce disjoint tile indices, write partials to the root, then the root multicasts the assembled result. | Keeps the reduced communication volume while parallelizing the root's compute and reads. |
+| `two_stage_grid_reduce` | Hierarchical reduce over the 2-D core grid. Stage 1: within each grid row the `cols` cores gather to their row's leader, which reduces them to a per-row partial. Stage 2: the `rows` row-leaders gather to the group root, which reduces the partials into the group sum. Stage 3: the root multicasts the sum to the whole group. | Splits the reduction across the two grid axes, so each gather stage has a small fan-in (`cols`, then `rows`) instead of one all-to-root fan-in of `rows*cols`, at the cost of one extra communication round. On a 1-D group (one row or one column) there is only one axis to reduce, so it collapses to the single gather-to-root path. |
 
 Every variant uses the same reducer: contributors are paired with FPU `add_tiles`, accumulated
 directly in FP32 DST via `acc_to_dest=true`, and packed once after the full reduction. The live
@@ -43,7 +44,7 @@ python -m ttnn.operations.examples.tensix_all_reduce [options]
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
-| `--variant` | `{all,ring_push,ring_pull,unicast_all_gather,mcast_all_gather,reduce_root_mcast,two_phase_reduce_mcast}` | `all` | methods to run |
+| `--variant` | `{all,ring_push,ring_pull,unicast_all_gather,mcast_all_gather,reduce_root_mcast,two_phase_reduce_mcast,two_stage_grid_reduce}` | `all` | methods to run |
 | `--group-shape` | `ROWS,COLS` | grid-derived sweep | rectangular shape of each group |
 | `--num-groups` | int | `1` | equal groups packed row-major into the worker grid |
 | `--num-tiles` | int | `6` | bf16 tiles contributed by every core |
@@ -59,6 +60,11 @@ python -m ttnn.operations.examples.tensix_all_reduce \
 # Compare ring reads and writes on sixteen half-row groups.
 python -m ttnn.operations.examples.tensix_all_reduce \
   --variant ring_push ring_pull --group-shape 1,4 --num-groups 16
+
+# Grid two-stage against the two root-based reducers on a 4x4 group.
+python -m ttnn.operations.examples.tensix_all_reduce \
+  --variant reduce_root_mcast two_phase_reduce_mcast two_stage_grid_reduce \
+  --group-shape 4,4 --num-groups 4 --num-tiles 6 --kernel-iters 10
 ```
 
 ## Measured result
@@ -100,6 +106,59 @@ root. For four-core groups its extra worker/root phase is not amortized, and roo
 Rotating multicast beats both rings on the 8- and 16-core shapes. The 16-core serpentine ring is
 especially costly because its reverse row fights NoC0's preferred direction. Push is slightly
 faster on 8-core lines, while pull wins on the 4- and 16-core rectangles.
+
+## Measured result - the 2-D reducers depend on the regime
+
+Blackhole box (`bh-50-special-mstaletovic-for-reservation-48229`, 2026-07-20), median of five
+trials, ten in-kernel all-reduces. Comparing the three reducers that make sense on a 2-D grid -
+`reduce_root_mcast` (flat), `two_phase_reduce_mcast` (tile-index workers), and `two_stage_grid_reduce`
+(grid-axis hierarchy). There is **no single winner**: it flips with **payload** (tiles per core) and
+**NoC contention** (how many groups share the worker grid). `Std / median` >= 5% marked noisy.
+
+**Isolated single group (`--num-groups 1`, 16 cores), 6 tiles/core:**
+
+| Group | `reduce_root_mcast` | `two_phase_reduce_mcast` | `two_stage_grid_reduce` | best |
+|---:|---:|---:|---:|---|
+| 2x8 | 4529.2 | **2286.8** | 3344.2 | two-phase, 1.98x vs root |
+| 8x2 | 4559.3 | **2335.9** | 3394.2 | two-phase, 1.95x |
+| 4x4 | 4555.9 | **2250.7** | 2867.5 | two-phase, 2.02x |
+
+**Same isolated group, 1 tile/core (latency floor):**
+
+| Group | `reduce_root_mcast` | `two_phase_reduce_mcast` | `two_stage_grid_reduce` | best |
+|---:|---:|---:|---:|---|
+| 2x8 | 1498.1 | 1981.0 | **1377.3** | grid two-stage, 1.09x vs root |
+| 8x2 | 1532.0 | 1975.1 | **1361.9** | grid two-stage, 1.12x |
+| 4x4 | 1547.1 | 1992.4 | **1271.0** | grid two-stage, 1.22x |
+
+**Grid-filling (groups packed across the 13x10 grid -> NoC contention), 6 tiles/core:**
+
+| Group | Groups | Cores | `reduce_root_mcast` | `two_phase_reduce_mcast` | `two_stage_grid_reduce` | best |
+|---:|---:|---:|---:|---:|---:|---|
+| 2x8 | 5 | 80 | 5338.8 | 6443.0 *(noisy)* | **3641.3** | grid two-stage, 1.47x vs root |
+| 8x2 | 6 | 96 | 6202.9 *(noisy)* | 6716.7 *(noisy)* | **3877.3** | grid two-stage, 1.60x |
+| 4x4 | 6 | 96 | 5208.5 | 4896.3 *(noisy)* | **3584.4** | grid two-stage, 1.45x |
+
+**Reading of the result - pick the reducer by regime:**
+- **`two_phase_reduce_mcast` wins an isolated group that has real payload** (16 cores, 6 tiles: ~2x
+  over root) because it parallelizes the reduction across tile indices. But it needs tiles to
+  parallelize - useless at 1 tile (`min(num_tiles, group_size-1)` = 1 worker, plus a wasted
+  worker->root handoff, so it is the *worst* there) - and it is **contention-sensitive**: from 1
+  group to 5 it goes 2286.8 -> 6443.0 ns and its noise jumps from ~1% to 15-28%.
+- **`two_stage_grid_reduce` is the robust default.** Its per-axis traffic is localized (each gather's
+  fan-in is only `cols`, then `rows`, never the whole `rows*cols`), so it is the **steadiest** in
+  every regime (<1% noise) and barely moves under contention (3344 -> 3641 ns from 1 -> 5 groups). It
+  wins under **grid-filling contention** (1.45-1.60x over root, and clear of the now-inflated
+  two-phase) and at the **1-tile latency floor**, and it is never worst. The cost is one extra
+  communication round, which is why it does *not* beat tile-index two-phase in an isolated,
+  well-fed group.
+- **`reduce_root_mcast` is the simple fallback** - one root serializes the whole `rows*cols` gather,
+  so it is never fastest but also never blows up; moderate and fairly steady.
+
+So: reach for **grid two-stage** when the grid is busy (many concurrent groups) or the payload is
+tiny; reach for **tile-index two-phase** for an isolated group with several tiles per core. On a 1-D
+group (single row or column) grid two-stage has only one axis to reduce and collapses to the root
+path.
 
 ## Run the predefined sweep
 
