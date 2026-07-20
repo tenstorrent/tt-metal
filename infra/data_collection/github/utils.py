@@ -262,13 +262,12 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         # analysis since it changes every pod. Instead, identify the physical node/card that ran
         # the job using the <node name>_<serial> emitted by the job-start hook annotations
         # Fall back to the truncated name above when the
-        # annotations are unavailable (e.g. not downloaded, or CPU-only runners without a serial).
+        # annotations are unavailable (e.g. not downloaded)
         if host_name.startswith("tt-ubuntu"):
             node_name, serial = get_civ2_node_name_and_serial_from_annotations(
                 github_job_id_to_annotations.get(github_job_id)
             )
-            # When annotations are unavailable
-            # Fall back to parsing the job log
+            # When annotations are unavailable, fall back to parsing the job log
             if not (node_name and serial):
                 log_node_name, log_serial = get_civ2_node_name_and_serial_from_job_log(
                     workflow_outputs_dir, github_job["run_id"], github_job_id

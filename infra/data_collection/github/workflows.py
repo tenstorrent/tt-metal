@@ -386,7 +386,7 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
     return github_job_id_to_test_reports
 
 
-# Markers printed by the CIv2 runner job-start hook (tenstorrent/github-ci-infra#1408).
+# Markers printed by the CIv2 runner job-start hook.
 # The same strings appear both as GitHub notice annotations and as plain stdout in the
 # "Set up runner" step of the job log.
 _CIV2_NODE_NAME_LOG_MARKER = "is running on Kubernetes node:"
