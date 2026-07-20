@@ -202,6 +202,7 @@ export GIT_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || 
 export CODEGEN_VERSION=$(tr -d '[:space:]' < codegen/agents/issue-solver/VERSION 2>/dev/null || echo "")
 export COMPILATION_ATTEMPTS=0
 export DEBUG_CYCLES=0
+export MAX_DEBUG_CYCLES=5
 export TESTS_TOTAL=0
 export TESTS_PASSED=0
 export PERF_RETRIES=0
@@ -574,11 +575,14 @@ verdicts `SUCCESS`, `COMPILE_FAILED`, `TESTS_FAILED`, `SIM_ISA_GAP`, `ENV_ERROR`
 `arch_results` (for `both`, a metal `SUCCESS` combines with the tt-llk result — the arch is
 green only if neither suite failed).
 
-## Step 5: Debug Once, Then Re-test Once
+## Step 5: Debug and Re-test
 
 If any arch returns `COMPILE_FAILED` or `TESTS_FAILED` — from either the tt-llk tester
-(Step 4) or the metal-tester (Step 4b) — record the failure and spawn `issue-worker.md`
-once more in debug/retry mode:
+(Step 4) or the metal-tester (Step 4b) — enter the debug/retry loop: spawn
+`issue-worker.md` in debug/retry mode, re-run the suite that failed, and repeat while
+any arch stays red — up to `MAX_DEBUG_CYCLES` (default 5) worker attempts.
+
+On each failing cycle, record the failure and spawn the retry worker:
 
 ```bash
 python codegen/scripts/run_json_writer.py failure \
@@ -592,13 +596,15 @@ python codegen/scripts/run_json_writer.py failure \
 python codegen/scripts/run_json_writer.py advance \
   --log-dir "$LOG_DIR" \
   --new-step "fix_tests" \
-  --new-message "Debugging multi-arch test failure for issue #${ISSUE_NUMBER}" \
+  --new-message "Debugging multi-arch test failure for issue #${ISSUE_NUMBER} (attempt $((DEBUG_CYCLES+1))/${MAX_DEBUG_CYCLES})" \
   --prev-result "test_failure" \
   --prev-message "$FAILURE_SUMMARY" \
   --agent "tester"
 ```
 
-The retry worker reads the existing plan plus the combined tester evidence, patches the shared implementation or narrows arch-specific scope when evidence supports that, and writes `${LOG_DIR}/agent_issue_worker_debug.md`. After it returns, increment `DEBUG_CYCLES`, then re-run the suite that failed once (Step 4 for a tt-llk failure, Step 4b for a metal failure). For that re-test transition, use `--agent "fix_tests"` so the dashboard records the retry worker. If the worker returns `HYPOTHESIS_REFUTED` (the failure is inherent to the fix, not a scope issue), finalize as `failed` with that evidence instead of re-testing.
+The retry worker reads the existing plan plus the combined tester evidence, patches the shared implementation or narrows arch-specific scope when evidence supports that, and writes `${LOG_DIR}/agent_issue_worker_debug.md`. After it returns, increment `DEBUG_CYCLES`, then re-run the suite that failed (Step 4 for a tt-llk failure, Step 4b for a metal failure). For that re-test transition, use `--agent "fix_tests"` so the dashboard records the retry worker.
+
+Repeat the loop while any arch is still red and `DEBUG_CYCLES < MAX_DEBUG_CYCLES`. Terminate the loop when every arch is green (proceed to Step 5.3), when `DEBUG_CYCLES == MAX_DEBUG_CYCLES` and an arch is still red (finalize as `failed` with the tester/worker evidence), or when the worker returns `HYPOTHESIS_REFUTED` (the failure is inherent to the fix, not a scope issue — finalize as `failed` with that evidence instead of continuing to loop).
 
 Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Mark the affected arch failed with a simulator obstacle. Continue evaluating other arches when possible.
 
