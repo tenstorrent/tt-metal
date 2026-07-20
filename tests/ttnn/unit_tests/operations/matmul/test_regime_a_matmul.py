@@ -386,6 +386,42 @@ def test_regime_a_fused_cache_replay(device):
         assert_with_pcc(ref, got.float(), 0.999)
 
 
+# =====================================================================================================
+# Systematic regression matrix: every fusion combination x each planner config class (Pk=1, Pk>1, Ns>1,
+# Sm>1, W>1 deep-K, and a non-divisible K tail via config=None). Guards that no fusion silently breaks
+# under any planner mode and that split-K applies the epilogue once at the reduction root in every class.
+# =====================================================================================================
+# (class label, M, K, N, cfg=(Ns,Pk,Sm,kb,nsb) or None -> auto). Configs reuse the validated per-class cases.
+_FUSE_CLASSES = [
+    ("pk1", 32, 6144, 3072, (1, 1, 1, 4, 6)),
+    ("pkGt1", 32, 6144, 3072, (1, 3, 1, 4, 6)),
+    ("nsGt1", 32, 2048, 2048, (2, 2, 1, 4, 4)),
+    ("smGt1", 128, 6144, 4608, (1, 6, 2, 2, 1)),
+    ("wGt1", 32, 15360, 3072, (1, 6, 1, 2, 3)),
+    ("tailK", 32, 6100, 4608, None),  # non-divisible K -> config=None auto-select
+]
+# (fusion label, _run_fused kwargs). Covers each epilogue, both combined epilogues, and chunking composed
+# with bias / addcmul / bias+activation.
+_FUSE_COMBOS = [
+    ("bias", dict(bias=True)),
+    ("act", dict(act="relu")),
+    ("addcmul", dict(scalar=1.0)),
+    ("bias_act", dict(bias=True, act="gelu")),
+    ("bias_addcmul", dict(bias=True, scalar=0.5)),
+    ("bias_chunk2", dict(bias=True, chunks=2)),
+    ("addcmul_chunk2", dict(scalar=0.7, chunks=2)),
+    ("bias_act_chunk2", dict(bias=True, act="relu", chunks=2)),
+]
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+@pytest.mark.parametrize("fl,fkw", _FUSE_COMBOS, ids=[c[0] for c in _FUSE_COMBOS])
+@pytest.mark.parametrize("cl,M,K,N,cfg", _FUSE_CLASSES, ids=[c[0] for c in _FUSE_CLASSES])
+def test_regime_a_fused_matrix(device, cl, M, K, N, cfg, fl, fkw):
+    Ns, Pk, Sm, kb, nsb = cfg if cfg else (1, None, 1, 4, 6)  # Pk=None -> config=None auto
+    _run_fused(device, M, K, N, Ns, Pk, Sm, kb, nsb, **fkw)
+
+
 # ---- Validation: invalid shapes / dim / chunks / dtypes / activation+addcmul must fail clearly. ----
 def _mk(device, shape, dtype=ttnn.bfloat16):
     return ttnn.from_torch(
