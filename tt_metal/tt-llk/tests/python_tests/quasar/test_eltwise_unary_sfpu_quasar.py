@@ -10,6 +10,7 @@ import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
+    ApproximationMode,
     DataCopyType,
     DestAccumulation,
     DestSync,
@@ -34,6 +35,7 @@ from helpers.stimuli_generator import (
 )
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
@@ -645,11 +647,24 @@ def generate_sfpu_unary_combinations():
     32-bit inputs always pair with dest_acc=Yes; 16-bit inputs sweep both dest_acc
     modes. Invalid format/dest_acc combinations are dropped via the shared filter.
 
+    Reciprocal, Exp, and Rsqrt each expose both a non-approximate kernel
+    (Newton-Raphson refined reciprocal / fp32-accurate exp / SQRT_23-bits rsqrt
+    ported from Blackhole) and an approximate one (raw ``approx_recip`` /
+    ``approx_exp`` / ``approx_recip(approx_sqrt)`` via the HW LUT), so they are
+    swept over both ApproximationMode values; every other op only has a single
+    implementation and is swept with ApproximationMode.No.
+
     Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
-    input_dimensions) tuples.
+    approx_mode, input_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
+        approx_modes = (
+            (ApproximationMode.No, ApproximationMode.Yes)
+            if cfg.mathop
+            in (MathOperation.Reciprocal, MathOperation.Exp, MathOperation.Rsqrt)
+            else (ApproximationMode.No,)
+        )
         for fmt in formats_for_op(cfg):
             in_fmt = fmt.input_format
 
@@ -678,17 +693,19 @@ def generate_sfpu_unary_combinations():
                         ImpliedMathFormat.No,
                         ImpliedMathFormat.Yes,
                     ]:
-                        for input_dimensions in cfg.input_dims:
-                            combinations.append(
-                                (
-                                    cfg.mathop,
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    implied_math_format,
-                                    runtime(input_dimensions),
+                        for approx_mode in approx_modes:
+                            for input_dimensions in cfg.input_dims:
+                                combinations.append(
+                                    (
+                                        cfg.mathop,
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        implied_math_format,
+                                        approx_mode,
+                                        runtime(input_dimensions),
+                                    )
                                 )
-                            )
 
     return combinations
 
@@ -707,9 +724,15 @@ def test_eltwise_unary_sfpu_quasar(
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
-    mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions = (
-        mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-    )
+    (
+        mathop,
+        formats,
+        dest_acc,
+        dest_sync,
+        implied_math_format,
+        approx_mode,
+        input_dimensions,
+    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
 
     is_typecast = mathop == MathOperation.Typecast
 
@@ -766,6 +789,7 @@ def test_eltwise_unary_sfpu_quasar(
         formats,
         templates=[
             MATH_OP(mathop=mathop),
+            APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(

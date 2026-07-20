@@ -3,36 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu
 {
-// Calculates RECIP for number of rows of output SFPU ops (Quasar = 2 rows)
-template <bool APPROXIMATION_MODE>
-inline void _calculate_reciprocal_sfp_rows_()
-{
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
-
-    TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::RECIP_MODE); // Read value from lreg[0], approximate recip, load back into lreg[1]
-
-    // Store from lreg[1] into dest register
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 0);
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
-inline void _calculate_reciprocal_()
-{
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        _calculate_reciprocal_sfp_rows_<APPROXIMATION_MODE>();
-        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
-    }
-}
-
 // Computes the reciprocal of a floating point value x.
+// max_iter selects the accuracy:
+//   0    -> approximate reciprocal only (sfpi::approx_recip, ~7-bit mantissa)
+//   1/2  -> Newton-Raphson refinement on top of the approximation (near full precision)
 template <int max_iter = 2>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x)
 {
@@ -74,12 +55,42 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x)
     return y;
 }
 
+// Programs the SFPU state the reciprocal op relies on:
+//   - ADDR_MOD_6: post-increment Dest by one SFPU pass (Quasar writes SFP_ROWS = 2 rows per pass),
+//     so the per-pass store advances Dest and the execute loop needs no separate increment.
+//   - vConstFloatPrgm0 = 2.0f: the Newton-Raphson constant, only read by the non-approximate path.
 template <bool APPROXIMATION_MODE>
-inline void _init_sfpu_reciprocal_()
+inline void _init_reciprocal_()
 {
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = ckernel::math::SFP_ROWS},
+    }
+        .set(ADDR_MOD_6);
+
     if constexpr (!APPROXIMATION_MODE)
     {
         sfpi::vConstFloatPrgm0 = 2.0f;
+    }
+}
+
+// Calculates RECIP over a full tile. Quasar exposes exactly two implementations:
+//   - approximate reciprocal via the HW nonlinear lookup table (sfpi::approx_recip), and
+//   - full-precision reciprocal (Newton-Raphson refinement on top of the LUT seed).
+// The LUT is ~1 ULP once the result lands in a bf16 Dest, so the Newton path is only worth
+// running for a 32-bit Dest in non-approximate mode; every bf16 case (and any explicit approx
+// request) uses the LUT.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+inline void _calculate_reciprocal_()
+{
+    constexpr int max_iter = (!is_fp32_dest_acc_en || APPROXIMATION_MODE) ? 0 : 2;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vFloat val = sfpi::dst_reg[0]; // load x from dest (SFPLOAD)
+        // Store back through ADDR_MOD_6 so the store both writes the result and advances Dest by one pass.
+        sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = _sfpu_reciprocal_<max_iter>(val);
     }
 }
 

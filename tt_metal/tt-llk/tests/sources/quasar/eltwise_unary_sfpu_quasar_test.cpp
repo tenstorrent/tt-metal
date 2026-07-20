@@ -161,7 +161,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_eltwise_sfpu_init_();
-    test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION>();
+    test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, APPROX_MODE>();
 
     const DataFormat sfpu_format = static_cast<DataFormat>(formats.sfpu_math);
 
@@ -170,7 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // so it is offset by params.DST_INDEX.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en>(params.DST_INDEX + i, sfpu_format);
+        test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>(params.DST_INDEX + i, sfpu_format);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

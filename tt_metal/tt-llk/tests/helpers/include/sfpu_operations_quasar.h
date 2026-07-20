@@ -72,7 +72,7 @@ inline constexpr bool is_zero_comp_op(SfpuType op)
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
  * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step.
  */
-template <SfpuType OPERATION>
+template <SfpuType OPERATION, bool APPROX = false>
 void init_unary_sfpu_operation_quasar()
 {
     if constexpr (OPERATION == SfpuType::gelu)
@@ -82,6 +82,18 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::square)
     {
         init_square();
+    }
+    else if constexpr (OPERATION == SfpuType::reciprocal)
+    {
+        _init_reciprocal_<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::exponential)
+    {
+        _init_exp_();
+    }
+    else if constexpr (OPERATION == SfpuType::rsqrt)
+    {
+        _init_rsqrt_<APPROX>();
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -159,7 +171,7 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
-template <SfpuType OPERATION, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
 void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32)
 {
     if constexpr (OPERATION == SfpuType::abs)
@@ -168,7 +180,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp_<true /* APPROX */, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp_<APPROX, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
@@ -180,7 +192,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true /* APPROX */, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<APPROX, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
@@ -200,7 +212,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_rsqrt_<ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_rsqrt_<APPROX, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
