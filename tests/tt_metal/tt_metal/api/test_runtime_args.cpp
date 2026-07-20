@@ -524,9 +524,18 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         auto workload2 =
             unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 4, true);
         auto& program2 = workload2.get_programs().at(device_range);
-        // Set common runtime args, automatically sent to all cores used by kernel.
+        // The kernel declares its common runtime args via the Metal 2.0 spec schema
+        // (num_common_runtime_varargs), so MakeProgramFromSpec has already reserved the CRTA buffer.
+        // Common runtime args can only be set once; write the values into the reserved buffer in place
+        // rather than calling SetCommonRuntimeArgs a second time. Args are sent to all cores used by kernel.
         std::vector<uint32_t> common_runtime_args = {0x30303030, 0x60606060, 0x90909090, 1234};
-        SetCommonRuntimeArgs(program2, 0, common_runtime_args);
+        RuntimeArgsData& common_rt_args = GetCommonRuntimeArgs(program2, 0);
+        TT_FATAL(
+            common_rt_args.size() == common_runtime_args.size(),
+            "Reserved common runtime args size {} does not match expected {}",
+            common_rt_args.size(),
+            common_runtime_args.size());
+        std::copy(common_runtime_args.begin(), common_runtime_args.end(), common_rt_args.data());
         detail::WriteRuntimeArgsToDevice(device, program2);
         distributed::EnqueueMeshWorkload(cq, workload2, false);
         distributed::Finish(cq);
