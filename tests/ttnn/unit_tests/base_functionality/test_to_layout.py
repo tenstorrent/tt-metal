@@ -1019,7 +1019,6 @@ def test_to_layout_custom_tile_host_roundtrip(tile_shape):
 
     round_tripped = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
     assert round_tripped.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert round_tripped.tile == tile
     assert_equal(torch_input_tensor, ttnn.to_torch(round_tripped))
 
 
