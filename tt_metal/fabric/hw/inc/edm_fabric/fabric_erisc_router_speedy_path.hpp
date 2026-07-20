@@ -164,6 +164,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        // [debug] Sender trace: one packet transmitted this pass (running total; diffed once per pass). Mirrors the
+        // hook in run_sender_channel_step_impl so speedy-serviced senders (VC2 always, worker-only VC0) also log.
+        if constexpr (sender_log_channel_enabled(sender_channel_index)) {
+            if (detailed_log_window_active) {
+                sender_log()->channels[sender_channel_index].sent++;
+            }
+        }
     }
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
@@ -177,6 +184,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             sender_channel_from_receiver_credits.increment_num_processed_completions(completions);
 
             sender_state.completion_count += completions;
+            // [debug] Sender trace: completions returned from the remote receiver (batched, can be > 1). The speedy
+            // path has no first-level ack (static_assert'd), so `acked` legitimately stays 0 for these channels.
+            if constexpr (sender_log_channel_enabled(sender_channel_index)) {
+                if (detailed_log_window_active) {
+                    sender_log()->channels[sender_channel_index].cmpl += completions;
+                }
+            }
         }
     }
 
@@ -213,6 +227,26 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                     channel_connection_established,
                     sender_channel_free_slots_stream_id);
             }
+        }
+    }
+
+    // [debug] Sender trace: stash this pass's end-of-pass levels + block-reason annotation for this channel's
+    // per-pass diff word (emitted after all serviced channels are visited). Mirrors run_sender_channel_step_impl:
+    // free_slots is re-read (a send may have bumped it); num_free_slots reflects any completions processed above.
+    if constexpr (sender_log_channel_enabled(sender_channel_index)) {
+        if (detailed_log_window_active) {
+            uint32_t free_slots_now = get_ptr_val(sender_channel_free_slots_stream_id);
+            uint32_t local_occ = WorkerInterfaceT::num_buffers - free_slots_now;
+            uint8_t reason = can_send ? SENDER_REASON_SENT
+                                      : (!has_unsent_packet ? SENDER_REASON_STARVED
+                                                            : (!receiver_has_space_for_packet ? SENDER_REASON_RXFULL
+                                                                                              : SENDER_REASON_TXQBUSY));
+            stash_sender_flow_state(
+                sender_channel_index,
+                local_occ,
+                outbound_to_receiver_channel_pointers.num_free_slots,
+                reason,
+                channel_connection_established);
         }
     }
     return progress;
