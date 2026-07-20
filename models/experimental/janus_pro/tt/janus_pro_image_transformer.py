@@ -24,7 +24,7 @@ class TtJanusProImageTransformer(LightweightModule):
         dtype,
         configuration,
         layers,
-        block_key="resblocks",
+        block_key="layers",
     ):
         super().__init__()
 
@@ -41,7 +41,7 @@ class TtJanusProImageTransformer(LightweightModule):
                 dtype=dtype,
                 configuration=configuration,
             )
-            for i in tqdm(range(layers), desc=f"Loading vision transformer layers")
+            for i in tqdm(range(layers), desc=f"Loading {layers} vision transformer blocks")
         ]
 
     def forward(self, x, mask=None):

@@ -96,6 +96,7 @@ class TtJanusProImageFeedForward(LightweightModule):
             # program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(x_in)
         if self.c_fc_bias is not None:
             c_fc_out = ttnn.add(c_fc_out, self.c_fc_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         c_fc_out = ttnn.gelu(c_fc_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -109,6 +110,7 @@ class TtJanusProImageFeedForward(LightweightModule):
             # program_config=pc_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(c_fc_out)
 
         # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
         c_proj_out = ttnn.reshape(c_proj_out, [batch_size, 1, seq_len, -1])
@@ -128,11 +130,15 @@ class TtJanusProImageFeedForward(LightweightModule):
                 num_buffers_per_channel=2,
             )
 
+            ttnn.deallocate(c_proj_out)
+
             pre_bias_output = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
+            ttnn.deallocate(w2_out_gathered)
         else:
             pre_bias_output = c_proj_out
 
         output = ttnn.add(pre_bias_output, self.c_proj_bias)
+        ttnn.deallocate(pre_bias_output)
         return output
