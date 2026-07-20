@@ -2953,13 +2953,17 @@ __attribute__((optimize("Os"))) void teardown(
 }
 
 __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode() {
+    // [PROBE 1 - PREINIT] Config registers BEFORE the init eth_enable_packet_mode() configures the queues.
+    // [PHASE 2: DISABLED] only probes 4-6 active this phase.
+    // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PREINIT);
     eth_enable_packet_mode(receiver_txq_id);
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
         reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
-    // [PKTMODE-PROBE] INIT snapshot disabled -- back to TX/RX counter mode.
+    // [PROBE 2 - INIT] Config after the init eth_enable_packet_mode() -- the golden baseline.
+    // [PHASE 2: DISABLED] only probes 4-6 active this phase.
     // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_INIT);
 }
 __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sender_side() {

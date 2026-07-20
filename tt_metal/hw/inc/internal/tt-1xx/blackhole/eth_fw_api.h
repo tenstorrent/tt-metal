@@ -489,15 +489,35 @@ inline uint32_t fabric_dbg_rd_reg(uint32_t addr) { return *reinterpret_cast<vola
 //   [6] TXPKT_CFG_SEL_HW    low16 = TXQ0 (0xFFB90084), high16 = TXQ1 (0xFFB91084)
 //   [7] TXQ1 dest MAC HI    (0xFFB9829C) raw
 //   [8] TXQ1 dest MAC LO    (0xFFB98298) raw
+//   [9] ACCEPT_AHEAD        low16 = TXQ0 (0xFFB9006C), high16 = TXQ1 (0xFFB9106C)  -- set at init by
+//       eth_txq_reg_write(ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD), NOT by eth_enable_packet_mode(), so the
+//       recovery-path config restore does NOT re-apply it. Prime suspect: does a retrain reset it?
 // Expected post-init values: [1] bit0 set; [2] bit1 set; [3] routing bits (bcast->RXQ0, mcast->RXQ1);
-// [4] 0; [5] TXQ0=0, TXQ1=0x111; [6] TXQ0=0, TXQ1=1; [7]/[8] TXQ1 mcast MAC (0x0100/0x00000001).
+// [4] 0; [5] TXQ0=0, TXQ1=0x111; [6] TXQ0=0, TXQ1=1; [7]/[8] TXQ1 mcast MAC (0x0100/0x00000001);
+// [9] TXQ0/TXQ1 = DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD.
 // NOTE: guarded on COMPILE_FOR_AERISC only (not PHYSICAL_AERISC_ID==0), so it fires on whichever ERISC
 // calls it -- the retrain-edge call is in ERISC0-only code, but the init call (txq1-active-mode setup)
 // runs on the receiver ERISC (ERISC1). The eth queue CTRL/routing regs are shared per-core, so either
 // ERISC reads the same values; call sites ensure a single writer at a time.
-// Distinct codewords so init-time and retrain-time snapshots can be told apart in the same log.
-constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_INIT = 0x5E5EDA02;     // snapshot taken at init (baseline)
-constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN = 0x5E5EDA03;  // snapshot taken at retrain-complete edge
+// Distinct codewords for each lifecycle point at which we snapshot the eth-queue config, so they can be
+// told apart in the same log. 7 measurement points across the config's life:
+//   [1] PREINIT    - before the init eth_enable_packet_mode() runs (registers at power-on/pre-config)
+//   [2] INIT       - right after the init eth_enable_packet_mode() (the golden baseline)
+//   [3] RUNTIME    - steady state during a test, traffic flowing, before any link drop (one-shot)
+//   [4] DROP       - the context switch a link-down edge is first detected
+//   [5] RETRAIN    - the link came back up (retrain succeeded), before the config-restore sequence
+//   [6] STATUSCHK  - after the (2nd) update_boot_results_eth_link_status_check() in the restore block
+//   [7] PKTMODE    - after eth_enable_packet_mode() re-applied the config in the restore block
+// NOTE: ring buffer is 32 entries and a snapshot is now 10 words (codeword + 9 regs), so exactly 3
+// snapshots fit (30 entries). Run in phases of <=3 active probes so they coexist in one dump without
+// eviction (phase 1: [1]/[2]/[3]; phase 2: [4]/[5]/[6]; phase 3: [5]/[6]/[7]).
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_PREINIT = 0x5E5EDA01;    // [1] before init config
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_INIT = 0x5E5EDA02;       // [2] after init config (baseline)
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN = 0x5E5EDA03;    // [5] retrain-complete edge
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_RUNTIME = 0x5E5EDA04;    // [3] steady-state during test
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_DROP = 0x5E5EDA05;       // [4] link-down edge detected
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_STATUSCHK = 0x5E5EDA06;  // [6] after 2nd link-status check
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE = 0x5E5EDA07;    // [7] after eth_enable_packet_mode
 inline void fabric_dbg_ringbuf_push_pktmode_snapshot([[maybe_unused]] uint32_t codeword) {
 #if defined(COMPILE_FOR_AERISC)
     WATCHER_RING_BUFFER_PUSH(codeword);
@@ -515,6 +535,9 @@ inline void fabric_dbg_ringbuf_push_pktmode_snapshot([[maybe_unused]] uint32_t c
         ((fabric_dbg_rd_reg(0xFFB91084) & 0xFFFF) << 16));    // [6] TXPKT_CFG_SEL_HW
     WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB9829C));  // [7] TXQ1 dest MAC HI
     WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98298));  // [8] TXQ1 dest MAC LO
+    WATCHER_RING_BUFFER_PUSH(
+        (fabric_dbg_rd_reg(0xFFB9006C) & 0xFFFF) |
+        ((fabric_dbg_rd_reg(0xFFB9106C) & 0xFFFF) << 16));  // [9] ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD (off 0x6C)
 #endif
 }
 
@@ -546,14 +569,6 @@ static void recover_eth_link_if_down() {
     // spans several calls still fires the config restore exactly once, on the call the link comes back.
     static bool eth_link_was_down = false;
 
-    // [#1] Always run the FW link-recovery entry point every context switch (formerly gated behind the
-    // `if (true)` debug hack -- now the permanent behavior). When the link is up this is a quick no-op
-    // in base FW; when it is down it drives the retrain. The entry point is optional in the FW API
-    // table (base/older FW may leave it null) -- gate on a non-zero pointer, since calling through null
-    // would jump to address 0 and hang the core.
-    const uint32_t eth_link_recovery_ptr =
-        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr);
-
     // Read PCS link status RAW (no is_link_up() debounce). Testing showed the debounce -- which on a
     // down-read busy-waits ERISC0 ~5.4B cycles -- correlates with ~4-8 links freezing after retrain (the
     // peer times out while ERISC0 is stalled and the link never re-establishes), whereas the raw-read
@@ -562,6 +577,25 @@ static void recover_eth_link_if_down() {
         return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR) == 1;
     };
 
+    // [PROBE 3 - RUNTIME] One-shot config snapshot during steady-state traffic: once ~100k packets have
+    // gone out and the link is up (i.e. a normal running test, before any injected link drop), capture the
+    // live config once. Static flag so it fires exactly once per core for the whole run.
+    // [PHASE 2: DISABLED] only probes 4-6 active this phase.
+    static bool eth_runtime_snap_done = false;
+    if (!eth_runtime_snap_done && pcs_link_up() &&
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR) > 100000u) {
+        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RUNTIME);
+        eth_runtime_snap_done = true;
+    }
+
+    // [#1] Always run the FW link-recovery entry point every context switch (formerly gated behind the
+    // `if (true)` debug hack -- now the permanent behavior). When the link is up this is a quick no-op
+    // in base FW; when it is down it drives the retrain. The entry point is optional in the FW API
+    // table (base/older FW may leave it null) -- gate on a non-zero pointer, since calling through null
+    // would jump to address 0 and hang the core.
+    const uint32_t eth_link_recovery_ptr =
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr);
+
     // Detect the DOWN edge exactly once, BEFORE the recovery call. The `!eth_link_was_down` gate latches
     // the down state on the first context switch that sees the link down, then short-circuits so we stop
     // re-reading while it stays down. eth_link_was_down persists until the post-recovery check below
@@ -569,6 +603,10 @@ static void recover_eth_link_if_down() {
     // the link already up in this same call) can't hide the down state and make us miss the edge.
     if (!eth_link_was_down && !pcs_link_up()) {
         eth_link_was_down = true;
+        // [PROBE 4 - DROP] Config as it stands the moment the link-down edge is first detected (before the
+        // FW recovery/retrain touches anything). Edge-gated by eth_link_was_down, so one snapshot per drop.
+        // [PHASE 3: DISABLED] only probes 5-7 active this phase.
+        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_DROP);
     }
 
     if (eth_link_recovery_ptr != 0) {
@@ -582,26 +620,41 @@ static void recover_eth_link_if_down() {
     // [#2] Immediately after recovery, if the link is now UP and we had seen it DOWN, restore the
     // eth-queue config the retrain corrupted (MAC_DA_HI/LO, TXQ_CTRL incl. disable_remote_drop_
     // notification, TXPKT_CFG_SEL, RXQ_CTRL, TX->RX queue map). Doing it here -- in the SAME context
-    // switch the link came back, before the main loop resumes traffic -- means no packet is ever
-    // sent/received over the freshly-retrained link under the corrupted config (the lost-in-flight
-    // window). Edge-triggered via eth_link_was_down (cleared here), so it fires exactly ONCE per
-    // retrain, not on every call the link is up (level-triggered).
+    // switch the link came back, before the main loop resumes traffic -- means no packet is sent/received
+    // over the freshly-retrained link under the corrupted config (the lost-in-flight window). Edge-
+    // triggered via eth_link_was_down (cleared here), so it fires exactly ONCE per retrain.
     //
-    // eth_link_was_down is checked first, so the link is polled here only once it has been seen down;
-    // this is the check that detects the link coming back up so the config restore can fire.
+    // Before restoring config: wait 1s, run the FW link-status check, then run the FW link-recovery entry
+    // point a SECOND time. The first recovery (block [#1] above) brought the link up; this tests whether a
+    // status-check + second recovery pass, after a full settle, cleans up whatever state leaves residual
+    // tail-stalls / lost-in-flight packets.
     if (eth_link_was_down && pcs_link_up()) {
         eth_link_was_down = false;
-        // Settle delay: wait 100ms after the link comes back up, before reconfiguring packet mode, to let
-        // the retrained link stabilize. Inside the if (edge-triggered -- eth_link_was_down is cleared
-        // above) so it fires exactly once per retrain, immediately before eth_enable_packet_mode(). The
-        // wait is inside the context switch (before the main loop resumes), so it does not reopen the
-        // lost-in-flight window. (A ~4.29s delay was tried earlier but WITH the is_link_up() debounce, so
-        // it was inconclusive; this retries a short settle now that the debounce -- the real freeze cause
-        // -- is gone, targeting the 2 residual freezes.)
-        eth_wait_cycles(100 * ETH_CLOCK_CYCLE_1MS);  // 100ms (ETH_CLOCK_CYCLE_1MS = 1e6 cycles = 1ms)
+        // [PROBE 5 - RETRAIN] Config the instant the link is back up (retrain succeeded), BEFORE the restore
+        // sequence below. Diffing this against PROBE 4 (DROP) shows exactly what the retrain corrupted.
+        fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN);
+        // 1s settle. Also guarantees the update_boot_results_eth_link_status_check() debounce
+        // (ETH_UPDATE_LINK_STATUS_INTERVAL_MS = 1000ms) has elapsed since the last check, so the FW
+        // link-status check below actually runs instead of no-oping inside the debounce window. Inside the
+        // context switch (before the main loop resumes), so it does not reopen the lost-in-flight window.
+        eth_wait_cycles(1000 * ETH_CLOCK_CYCLE_1MS);  // 1s (ETH_CLOCK_CYCLE_1MS = 1e6 cycles = 1ms)
+        // FW link-status check -- now past its 1s debounce (the wait above), so this actually invokes it.
+        update_boot_results_eth_link_status_check();
+        // [PROBE 6 - STATUSCHK] Config after the (2nd) FW link-status check -- did the status check itself
+        // change any config register?
+        fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_STATUSCHK);
+        // Second link-recovery pass (same entry point as [#1]). Null-guarded identically.
+        if (eth_link_recovery_ptr != 0) {
+            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
+            reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
+            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_DONE);
+        }
         // receiver_txq_id == 1 in the fabric router (see static_assert in kernel_main). Hardcoded 1
         // because receiver_txq_id is a kernel-TU constant not visible in this base header.
         eth_enable_packet_mode(1);
+        // [PROBE 7 - PKTMODE] Config after eth_enable_packet_mode() re-applied it -- should match the INIT
+        // baseline (PROBE 2) if the restore is complete.
+        fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE);
         if (was_retrained == 0) {
             was_retrained = 1;  // edge-triggered freeze/debug flag; one-shot, matches WAS_RETRAINED gate
         }
