@@ -346,5 +346,8 @@ results are appended after independent review.
   cycles; final verdict retained in `stage_review.md`.
 - Remediation/re-review: complete; no required work or material hard-check gaps
   remain.
-- Stage-owned local commit: recorded after this review below.
+- Stage-owned source/evidence commit: `3d35e46c5b5` (`Add Mistral Small 24B
+  full-model TTNN stage`). The generic 500 KB pre-commit size check was skipped
+  only for the required raw profiler log and compressed op table; all source,
+  formatting, include, and policy hooks passed.
 - Push: prohibited and not performed.
