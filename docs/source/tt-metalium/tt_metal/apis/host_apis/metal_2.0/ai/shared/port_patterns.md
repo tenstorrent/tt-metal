@@ -1,6 +1,6 @@
 # Metal 2.0 Op Port — Patterns & Anti-Patterns Catalog
 
-This catalog accumulates patterns and anti-patterns observed during Metal 2.0 op ports. It is referenced from the [feasibility audit](port_op_to_metal2_audit.md) for yellow-tier override guidance, from the [port recipe's planning step](port_op_to_metal2_recipe.md#plan-the-spec) for structural-decision reference, and from the recipe's verification step for the anti-pattern self-audit checklist.
+This catalog accumulates patterns and anti-patterns observed during Metal 2.0 op ports. It is referenced from the [feasibility audit](../audit/metal2.md) for yellow-tier override guidance, from the [port recipe's planning step](../port/metal2.md#plan-the-spec) for structural-decision reference, and from the recipe's verification step for the anti-pattern self-audit checklist.
 
 Each entry is self-contained. New entries land here as they're discovered during ports.
 
@@ -14,8 +14,8 @@ Entry shape — load-bearing fields, in order:
 Optional fields, used when the entry's substance requires them:
 - **Why this is hard** (before Decision): explanatory rationale when the recognition→decision step has non-obvious reasoning the porter benefits from understanding before reading the prescription. May also appear as **Why this is a sanctioned X exception** for sanctioned-exception entries.
 - **Correct port**: code or prose showing the right pattern. Most Pattern entries include this; omit when the Decision is fully prescriptive on its own.
-- **Constraint**: scoping fence on where the entry's authority ends. Beyond that boundary, capitulate per the recipe's [§When the discipline doesn't fit](port_op_to_metal2_recipe.md#when-the-discipline-doesnt-fit).
-- **Sanctioned exception note**: for sanctioned-exception entries, explicit acknowledgement that the prescription deviates from a stricter rule (typically the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) or [host-side scope discipline](port_op_to_metal2_recipe.md#host-side-stay-in-the-lane)), with the why-this-is-legitimate reasoning. Paired with the Category suffix.
+- **Constraint**: scoping fence on where the entry's authority ends. Beyond that boundary, capitulate per the recipe's [§When the discipline doesn't fit](../port/metal2.md#when-the-discipline-doesnt-fit).
+- **Sanctioned exception note**: for sanctioned-exception entries, explicit acknowledgement that the prescription deviates from a stricter rule (typically the [kernel-side whitelist](../port/metal2.md#kernel-side-whitelist) or [host-side scope discipline](../port/metal2.md#host-side-stay-in-the-lane)), with the why-this-is-legitimate reasoning. Paired with the Category suffix.
 - **Prerequisite**: Metal 2.0 framework commit / PR / version below which the pattern doesn't apply.
 - **See also**: cross-references.
 
@@ -118,9 +118,9 @@ experimental::DataflowBuffer dfb_scratch(dfb::scratch);  // (B) same
 
 **The verdict can flip per config — classify per instantiation, not per CB.** Whether a CB lands here (sync-free / single-ended) or is a genuine producer→consumer FIFO is *not* a fixed property of the CB; it can change across an op's configs. The same `buffer_index` can be a sync-free **scratchpad** (compute tilizes in place → self-loop) under one sharding and a **real FIFO** (a DM reader produces, compute consumes → ordinary DFB) under another. Re-run the litmus per code-path — one verdict applied across all configs mis-classifies the rest. **Canonical confuser:** conv2d `ACT_TILIZED` — height-sharded → sync-free scratchpad (self-loop); block/width-sharded → real FIFO.
 
-**Orthogonal — endpoint multiplicity.** A self-loop resolves too *few* endpoints (single-ended / sync-free). The opposite case — a CB with **2+ FIFO endpoints of one kind on a node** — is *not* a self-loop case; it is a **multi-binding** CB, port work in its own right (set the DFB multi-binding advanced option). See [DFB endpoint legality](port_op_to_metal2_audit.md#dfb-endpoint-legality-spsc).
+**Orthogonal — endpoint multiplicity.** A self-loop resolves too *few* endpoints (single-ended / sync-free). The opposite case — a CB with **2+ FIFO endpoints of one kind on a node** — is *not* a self-loop case; it is a **multi-binding** CB, port work in its own right (set the DFB multi-binding advanced option). See [DFB endpoint legality](../audit/metal2.md#dfb-endpoint-legality-spsc).
 
-**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [DFB endpoint legality](port_op_to_metal2_audit.md#dfb-endpoint-legality-spsc).
+**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [DFB endpoint legality](../audit/metal2.md#dfb-endpoint-legality-spsc).
 
 ---
 
@@ -176,14 +176,14 @@ The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the co
 
 **Category**: Pattern
 
-**Recognition signal**: Legacy code that places two or more `buffer_index` values on the *same* `CBDescriptor` — multi-element `format_descriptors`, multi-key `data_format_spec` map in the imperative form, or repeated `set_page_size` calls with different `buffer_index` arguments on the same `CircularBufferConfig`. The legacy intent is two logically distinct buffers sharing one L1 region. The audit's [Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed) catches this in the legacy inventory.
+**Recognition signal**: Legacy code that places two or more `buffer_index` values on the *same* `CBDescriptor` — multi-element `format_descriptors`, multi-key `data_format_spec` map in the imperative form, or repeated `set_page_size` calls with different `buffer_index` arguments on the same `CircularBufferConfig`. The legacy intent is two logically distinct buffers sharing one L1 region. The audit's [Aliased Circular Buffers entry](../audit/metal2.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed) catches this in the legacy inventory.
 
-**Decision**: Declare one `DataflowBufferSpec` per legacy `buffer_index`. Aliasing is an **advanced/ninja feature** — the `alias_with` field lives on `DFBAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)), reached via `DataflowBufferSpec::advanced_options.alias_with`. Set each spec's `advanced_options.alias_with` to mutually reference the others — the alias group must be a *strict clique* (every member names every other member). All members of the alias group share these legality constraints:
+**Decision**: Declare one `DataflowBufferSpec` per legacy `buffer_index`. Aliasing is an **advanced/ninja feature** — the `alias_with` field lives on `DFBAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)), reached via `DataflowBufferSpec::advanced_options.alias_with`. Set each spec's `advanced_options.alias_with` to mutually reference the others — the alias group must be a *strict clique* (every member names every other member). All members of the alias group share these legality constraints:
 - Same `num_entries * entry_size` (total backing size identical).
 - Bound to the same set of kernels.
 - Borrowed-memory consistency (either all `borrowed_from` matching `TensorParameter`s, or none borrowed).
 
-The validator enforces these as the three legality rules; missing any of them surfaces with a message in the [migration guide's troubleshooting table](../metal2_migration_guide.md#cryptic-error--likely-cause). The `DFBAdvancedOptions` header comments are the authoritative source for the field's contract — including the explicit "no clobbering guarantees" note: aliased DFBs share backing memory, and correctness of *which* logical buffer's data is live at any moment is the kernel author's responsibility.
+The validator enforces these as the three legality rules; missing any of them surfaces with a message in the [migration guide's troubleshooting table](migration_guide.md#cryptic-error--likely-cause). The `DFBAdvancedOptions` header comments are the authoritative source for the field's contract — including the explicit "no clobbering guarantees" note: aliased DFBs share backing memory, and correctness of *which* logical buffer's data is live at any moment is the kernel author's responsibility.
 
 **Correct port**:
 
@@ -200,7 +200,7 @@ For larger alias groups (three or more), every member names every other member i
 
 **Don't split** the aliased CB into independent, non-aliased DFBs. That changes the L1 footprint and breaks any kernel assumption that the indices shared an address.
 
-**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](../metal2_migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed); [Same-FIFO aliasing](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names) (the *other* kind of "aliasing" — don't confuse them).
+**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](../audit/metal2.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed); [Same-FIFO aliasing](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names) (the *other* kind of "aliasing" — don't confuse them).
 
 ---
 
@@ -383,7 +383,7 @@ WorkUnitSpec wu_g2{.name = "wu_g2", .kernels = {READER, WRITER, COMPUTE_G2},
                    .target_nodes = core_group_2};
 ```
 
-The framework validates that the two compute `KernelSpec`s have non-overlapping WU coverage and that their CONSUMER bindings of INPUT (and PRODUCER bindings of OUTPUT) match — the local hardware invariant that exactly one reader, one writer, and one compute run together at each node is preserved. (See [`dataflow_buffer_spec.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp) for the full canonical statement of the DFB endpoint invariant — including the third condition, "same kernel kind," that's implicit in this all-compute example.)
+The framework validates that the two compute `KernelSpec`s have non-overlapping WU coverage and that their CONSUMER bindings of INPUT (and PRODUCER bindings of OUTPUT) match — the local hardware invariant that exactly one reader, one writer, and one compute run together at each node is preserved. (See [`dataflow_buffer_spec.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp) for the full canonical statement of the DFB endpoint invariant — including the third condition, "same kernel kind," that's implicit in this all-compute example.)
 
 ---
 
@@ -393,12 +393,12 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 **Recognition signal**: A pybind file inside the op directory (typically `*_pybind.cpp` / `*_pybind.hpp`, or a `bindings/` subdirectory under the op) exposes a legacy host-API function that ceases to exist post-port. The canonical case is `create_program_descriptor` — once the op moves to a `MetalV2FactoryConcept` factory, that function is gone, and the pybind line that exposed it references a non-existent symbol. The rule generalizes: *any* pybind exposure of a legacy factory entry point that the port deletes falls under this entry.
 
-**Why this is a sanctioned host-side exception**: The [host-side scope discipline](port_op_to_metal2_recipe.md#host-side-stay-in-the-lane) keeps op-level host code outside the program factory body off-limits during the port. A pybind file is op-level host code outside the program factory body, so the blanket rule would forbid touching it — but a pybind line that references a vanished symbol is structurally untenable: leaving it as-is means the post-port code doesn't compile (or links against nothing). Deletion is mandatory; the rule's blanket prohibition is lifted *narrowly* for this case.
+**Why this is a sanctioned host-side exception**: The [host-side scope discipline](../port/metal2.md#host-side-stay-in-the-lane) keeps op-level host code outside the program factory body off-limits during the port. A pybind file is op-level host code outside the program factory body, so the blanket rule would forbid touching it — but a pybind line that references a vanished symbol is structurally untenable: leaving it as-is means the post-port code doesn't compile (or links against nothing). Deletion is mandatory; the rule's blanket prohibition is lifted *narrowly* for this case.
 
 **Decision**:
 
 1. **Delete** the pybind line(s) that expose the vanished function. Do not attempt to "update" the binding to point at the new factory's entry point (e.g., `create_program_artifacts`) — the two functions have different signatures and use patterns, and the Python-side callers (if any) need to be addressed separately, not silently retargeted. Make the smallest change that restores compilation: just remove the line(s).
-2. **Record the deletion prominently in the port report** under [Handoff points](port_op_to_metal2_recipe.md#handoff-points). Include: the pybind file path, the function name(s) deleted, and a one-line description of what the function was for (if you can tell from the surrounding code). This is a *user-visible API surface change* — downstream Python consumers (tests, notebooks, internal tooling) that called into the legacy entry point need to be findable by the people who maintain them. The prominent report entry is how they get found.
+2. **Record the deletion prominently in the port report** under [Handoff points](../port/metal2.md#handoff-points). Include: the pybind file path, the function name(s) deleted, and a one-line description of what the function was for (if you can tell from the surrounding code). This is a *user-visible API surface change* — downstream Python consumers (tests, notebooks, internal tooling) that called into the legacy entry point need to be findable by the people who maintain them. The prominent report entry is how they get found.
 
 **Constraint**: This exception applies *only* to pybind exposures of factory entry points that the Metal 2.0 port causes to disappear. Other op-level pybind lines — the user-facing op binding itself, attribute conversions, return-value handling — remain off-limits per the host-side scope discipline. If you're uncertain whether a given pybind line falls inside or outside the exception, the safe move is to leave it and write a finding in the report.
 
@@ -424,7 +424,7 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 **Category**: Caution
 
-**Recognition signal**: A `KernelSpec` declares `advanced_options.num_runtime_varargs > 0` (or `advanced_options.num_common_runtime_varargs > 0`), or a kernel uses `get_vararg(i)` / `get_common_vararg(i)`. The vararg fields live on `KernelAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)) — they're an explicit advanced/temporary mechanism slated for deprecation in favor of `std::array` typed arguments.
+**Recognition signal**: A `KernelSpec` declares `advanced_options.num_runtime_varargs > 0` (or `advanced_options.num_common_runtime_varargs > 0`), or a kernel uses `get_vararg(i)` / `get_common_vararg(i)`. The vararg fields live on `KernelAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)) — they're an explicit advanced/temporary mechanism slated for deprecation in favor of `std::array` typed arguments.
 
 **Decision**: Varargs are designed for kernels whose device-side code retrieves arguments via `get_vararg(i)` with `i` a runtime variable — the canonical case is an N-dimensional shape gated on a CTA-known `rank`. When each argument is referenced by a constant index (`get_vararg(0)`, `get_vararg(1)`, ...), the named form is clearer on both sides.
 
@@ -452,4 +452,4 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step explicitly notes any cross-op kernel sources, and the port report records the touch under "Open items for downstream" with the chosen path (in-place co-migration list, or fork) so the next sibling-op porter sees the coordination signal.
 
-**Excluded from "cross-op"**: kernel-lib (`ttnn/cpp/ttnn/kernel_lib/`) and standard framework APIs (`tt_metal/hw/inc/api/...`) — these are out of porter scope by the [recipe's scope boundary](port_op_to_metal2_recipe.md#read-this-first) and the porter does not modify them. Cross-op kernels are sources living in *another op's* kernel directory.
+**Excluded from "cross-op"**: kernel-lib (`ttnn/cpp/ttnn/kernel_lib/`) and standard framework APIs (`tt_metal/hw/inc/api/...`) — these are out of porter scope by the [recipe's scope boundary](../port/metal2.md#read-this-first) and the porter does not modify them. Cross-op kernels are sources living in *another op's* kernel directory.
