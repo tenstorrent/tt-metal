@@ -15,12 +15,15 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -76,6 +79,50 @@ static std::vector<uint8_t> read_file(const std::string& path) {
     return d;
 }
 
+// ---- real host pipeline (--mpmc): per-socket flush+demux -> device records -> MPMC -> M consumers ----
+// A fully-decoded device record. The flusher (per socket, in-order) resolves lane/seq/ts/prog so the
+// consumers are STATELESS (any consumer can process any batch -> a shared MPMC works).
+struct Rec {
+    uint32_t lane;
+    uint32_t seq;
+    uint64_t ts;
+    uint32_t prog;
+};
+using Batch = std::vector<Rec>;
+
+// Bounded MPMC queue of record batches (mutex + condvars). Batches are large, so the lock is hit rarely
+// (amortized) -- the point is the BOUND: when full, producers block = back-pressure up the pipeline.
+struct BatchQ {
+    std::mutex m;
+    std::condition_variable cv_pop, cv_push;
+    std::queue<Batch> q;
+    size_t cap;
+    bool closed = false;
+    explicit BatchQ(size_t c) : cap(c) {}
+    void push(Batch&& b) {
+        std::unique_lock<std::mutex> lk(m);
+        cv_push.wait(lk, [&] { return q.size() < cap; });
+        q.push(std::move(b));
+        cv_pop.notify_one();
+    }
+    bool pop(Batch& out) {
+        std::unique_lock<std::mutex> lk(m);
+        cv_pop.wait(lk, [&] { return !q.empty() || closed; });
+        if (q.empty()) {
+            return false;  // closed and drained
+        }
+        out = std::move(q.front());
+        q.pop();
+        cv_push.notify_one();
+        return true;
+    }
+    void close() {
+        std::unique_lock<std::mutex> lk(m);
+        closed = true;
+        cv_pop.notify_all();
+    }
+};
+
 int main(int argc, char** argv) {
     using namespace tt::tt_metal;
     setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -96,6 +143,9 @@ int main(int argc, char** argv) {
                                // amortizes NoC latency (rdrbench >2GB/s regime), drops per-risc round-robin. LOSSY.
     bool dualrelay = false;    // --dualrelay: one relay hart PER reader (decouple the two chip halves)
     bool adaptive = false;     // --adaptive: per-core switch -- bulk read when the core is mostly full, else per-risc
+    int mpmc = 0;              // --mpmc M: real host pipeline -- 2 per-socket flush+demux threads -> record MPMC
+                               // -> M consumer threads (0 = old offline capture+demux path)
+    int cwork = 0;             // --cwork N: busy-wait N iters/record in each consumer (simulate Tracy-emit load)
     uint32_t active_riscs = NRISC;
     int cx0 = -1, cy0 = -1, cx1 = -1, cy1 = -1;
     uint64_t read_noc = 0;
@@ -149,6 +199,10 @@ int main(int argc, char** argv) {
             dualrelay = true;
         } else if (a == "--adaptive") {
             adaptive = true;
+        } else if (a == "--mpmc") {
+            mpmc = std::stoi(next());
+        } else if (a == "--cwork") {
+            cwork = std::stoi(next());
         } else if (a == "--onelane") {
             active_riscs = 1;
         } else if (a == "--twolane") {
@@ -323,6 +377,8 @@ int main(int argc, char** argv) {
     // host ahead of the relay -> the ring never wraps -> no torn reads). This is also how a real profiler
     // would work: capture raw, post-process. ----
     std::atomic<bool> producers_done{false};
+    std::atomic<bool> device_done{false};          // set once the FW returned to idle => ALL data is in the host rings;
+                                                   // drainers then exit at hsent==acked (authoritative, not time-based)
     std::vector<std::vector<uint32_t>> accum(NL);  // demuxed per-lane stream (filled offline)
     std::vector<std::vector<uint32_t>> caps(ndh);  // one RAW capture per drain hart / host ring
     for (auto& cap : caps) {
@@ -345,7 +401,6 @@ int main(int argc, char** argv) {
         uint32_t acked = 0;
         auto start = std::chrono::steady_clock::now();
         auto next_log = start + std::chrono::seconds(1);
-        auto last_data = start;  // for the quiescence-based exit (we SPIN now, no sleep)
         for (;;) {
             auto now = std::chrono::steady_clock::now();
             if (h == 0 && now > next_log) {
@@ -364,15 +419,13 @@ int main(int argc, char** argv) {
             cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, soff, device_id, 0);  // SENT from sysmem
             h_us_hsent_v[h] += us(ta, std::chrono::steady_clock::now());
             if (hsent == acked) {
-                // SPIN (no sleep): the sent read is a cheap sysmem poll now, so keep the relay fed -- the old
-                // 200us sleep-on-empty was the throttle (relay spun on hostfull while the host slept). Exit
-                // once producers are done and the ring has been quiet ~500 ms.
-                if (producers_done.load() && us(last_data, now) > 500000) {
+                // SPIN (no sleep): the sent read is a cheap sysmem poll now, so keep the relay fed. Exit only
+                // when the DEVICE is fully drained (FW returned to idle => sent is final) and we've caught up.
+                if (device_done.load()) {
                     break;
                 }
                 continue;
             }
-            last_data = now;
             uint32_t avail = hsent - acked;
             if (avail > hring_words) {
                 overflow.fetch_add(1);
@@ -407,10 +460,155 @@ int main(int argc, char** argv) {
             h_us_hacked_v[h] += us(th, std::chrono::steady_clock::now());
         }
     };
+    // ---- --mpmc pipeline: per-socket flush+demux -> device-record MPMC -> M consumers ----
+    const size_t BATCH_RECS = 4096;  // records per batch (amortizes the MPMC lock)
+    BatchQ mq(64);                   // bounded (64 batches): full -> flusher blocks = back-pressure
+    std::atomic<uint64_t> consumed{0}, sink_total{0};
+    std::vector<uint64_t> fl_gaps(ndh, 0), fl_mk(ndh, 0);  // per-flusher (per-socket) verify results
+    // Flusher for socket h: drain ring h IN ORDER, demux (dispatch bulk/per-risc) + decode into fully-
+    // resolved device records + per-lane seq verify (this socket owns its half's lanes), push record batches
+    // to the MPMC. Demux MUST live here (sticky-src is in-order per stream); records are self-contained so
+    // the M consumers are stateless.
+    auto flusher = [&](uint64_t h) {
+        uint64_t hoff = data_off + h * ring_stride, soff = sent_off(h);
+        uint32_t acked = 0;
+        std::vector<uint32_t> cur_hi(NL, 0), cur_prog(NL, 0);
+        std::vector<uint64_t> exp_seq(NL, 0);
+        uint64_t gaps = 0, mk = 0;
+        Batch batch;
+        batch.reserve(BATCH_RECS);
+        std::vector<uint32_t> buf;
+        uint32_t cur_lane = 0xFFFFFFFF;
+        auto emit = [&](uint32_t lane, uint32_t w0, uint32_t w1) {
+            if (lane >= NL) {
+                return;
+            }
+            if (pp_is_sticky(w0)) {  // producer STICKY_META: refresh this lane's timer_hi + prog
+                cur_hi[lane] = pp_low27(w0);
+                cur_prog[lane] = w1;
+                return;
+            }
+            uint32_t seq = pp_low27(w0);  // marker
+            if (seq != (uint32_t)(exp_seq[lane] & PP_LOW27_MASK)) {
+                gaps++;
+            }
+            exp_seq[lane]++;
+            mk++;
+            batch.push_back(Rec{lane, seq, pp_full_ts(cur_hi[lane], w1), cur_prog[lane]});
+            if (batch.size() >= BATCH_RECS) {
+                mq.push(std::move(batch));
+                batch = Batch();
+                batch.reserve(BATCH_RECS);
+            }
+        };
+        auto start = std::chrono::steady_clock::now();
+        for (;;) {
+            auto now = std::chrono::steady_clock::now();
+            if (now - start > std::chrono::seconds(120)) {
+                printf("  [flusher %llu] WALL TIMEOUT\n", (unsigned long long)h);
+                break;
+            }
+            uint32_t hsent;
+            cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, soff, device_id, 0);  // SENT from sysmem
+            if (hsent == acked) {
+                if (device_done.load()) {  // FW idle => sent is final; caught up => done
+                    break;
+                }
+                continue;  // spin
+            }
+            uint32_t avail = hsent - acked;
+            if (avail > hring_words) {
+                overflow.fetch_add(1);
+                acked = hsent;
+                drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
+                continue;
+            }
+            uint32_t drain = avail & ~1u;  // sent is always a frame boundary -> buf holds whole frames
+            buf.resize(drain);
+            uint32_t st = acked % hring_words;
+            if (st + drain <= hring_words) {
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(buf.data()), drain * 4, hoff + (uint64_t)st * 4, device_id, 0);
+            } else {
+                uint32_t first = hring_words - st;
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(buf.data()), first * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                cluster.read_sysmem(
+                    reinterpret_cast<uint8_t*>(buf.data() + first), (drain - first) * 4, hoff, device_id, 0);
+            }
+            acked += drain;
+            total_words.fetch_add(drain);
+            drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
+            // decode buf (whole frames): dispatch bulk vs per-risc
+            size_t p = 0, sz = buf.size();
+            while (p + 1 < sz) {
+                uint32_t w0 = buf[p];
+                if (pp_is_bulkcore(w0)) {
+                    uint32_t core = pp_bulkcore_core(w0), rawn = buf[p + 1];
+                    uint32_t prefix = 2u + (uint32_t)NRISC;
+                    if (prefix & 1u) {
+                        prefix++;
+                    }
+                    if (p + prefix + rawn > sz) {
+                        break;
+                    }
+                    const uint32_t* meta = &buf[p + 2];
+                    const uint32_t* raw = &buf[p + prefix];
+                    for (uint32_t r = 0; r < (uint32_t)NRISC; r++) {
+                        uint32_t head_mod = pp_bulk_head(meta[r]), run = pp_bulk_run(meta[r]);
+                        uint32_t lane = core * (uint32_t)NRISC + r;
+                        const uint32_t* ring = raw + (size_t)r * RING_CAP;
+                        for (uint32_t i = 0; i + 1 < run; i += 2) {
+                            emit(lane, ring[(head_mod + i) % RING_CAP], ring[(head_mod + i + 1) % RING_CAP]);
+                        }
+                    }
+                    p += prefix + rawn;
+                } else if (pp_is_src(w0)) {
+                    cur_lane = pp_src_lane(w0);
+                    p += 2;
+                } else {
+                    emit(cur_lane, w0, buf[p + 1]);
+                    p += 2;
+                }
+            }
+        }
+        if (!batch.empty()) {
+            mq.push(std::move(batch));
+        }
+        fl_gaps[h] = gaps;
+        fl_mk[h] = mk;
+    };
+    // Consumer: pop record batches, do the "sink" work (a real profiler emits Tracy zones here). We do a
+    // representative touch of every record so the compiler can't elide it and the cost is real-ish.
+    auto consumer = [&]() {
+        Batch b;
+        uint64_t cnt = 0, sink = 0;
+        while (mq.pop(b)) {
+            for (auto& r : b) {
+                sink += r.ts ^ ((uint64_t)r.lane << 32) ^ r.seq ^ r.prog;
+                for (int d = 0; d < cwork; d++) {  // simulate per-record emit cost
+                    __asm__ volatile("" ::: "memory");
+                }
+                cnt++;
+            }
+        }
+        consumed.fetch_add(cnt);
+        sink_total.fetch_add(sink);
+    };
+    std::vector<std::thread> flushers, mconsumers;  // --mpmc threads
+
     // One host thread PER ring (default) -> ring 1 is never ack-starved by ring 0's servicing. --rrconsumer
     // falls back to a single thread round-robining all rings (the original behavior) for A/B comparison.
     std::vector<std::thread> consumers;
-    if (nodrain) {
+    if (mpmc > 0) {
+        for (uint64_t h = 0; h < ndh; h++) {
+            flushers.emplace_back(flusher, h);
+        }
+        for (int i = 0; i < mpmc; i++) {
+            mconsumers.emplace_back(consumer);
+        }
+        printf("[mpmc] %llu flush+demux -> record MPMC -> %d consumers\n", (unsigned long long)ndh, mpmc);
+    } else if (nodrain) {
         printf("[nodrain] host consumer DISABLED, relay ignores flow control -- diagnostic (lossy)\n");
     } else if (rr_consumer) {
         // one thread interleaves all rings in a single sweep loop (original behavior)
@@ -535,8 +733,26 @@ int main(int argc, char** argv) {
 
     drv.lim_wr_u64(P_STOP, 1);
     producers_done.store(true);
-    for (auto& c : consumers) {
-        c.join();
+    // Wait for the device FW to return to idle -- the drainers run CONCURRENTLY, so the relay can finish only
+    // once the host has drained its ring. When this returns, ALL data is in the host rings (sent is final);
+    // device_done lets the drainers exit at hsent==acked (authoritative, no premature time-based quit under
+    // heavy back-pressure).
+    if (!drv.wait_active_fw_returned(std::chrono::seconds(120))) {
+        fprintf(stderr, "[run] pipeline did not return to idle (unexpected)\n");
+    }
+    device_done.store(true);
+    if (mpmc > 0) {
+        for (auto& t : flushers) {
+            t.join();  // flushers finish draining first
+        }
+        mq.close();  // then signal consumers no more batches are coming
+        for (auto& t : mconsumers) {
+            t.join();
+        }
+    } else {
+        for (auto& c : consumers) {
+            c.join();
+        }
     }
     // sum the per-ring host op timers for the report
     uint64_t h_polls = 0, h_us_hsent = 0, h_us_ring = 0, h_us_hacked = 0;
@@ -545,9 +761,6 @@ int main(int argc, char** argv) {
         h_us_hsent += h_us_hsent_v[h];
         h_us_ring += h_us_ring_v[h];
         h_us_hacked += h_us_hacked_v[h];
-    }
-    if (!drv.wait_active_fw_returned(std::chrono::seconds(5))) {
-        fprintf(stderr, "[run] pipeline did not return to idle (unexpected)\n");
     }
 
     // ---- read per-lane producer STALL stats (did the ring fill -> did the producer block?) ----
@@ -620,161 +833,191 @@ int main(int argc, char** argv) {
         (unsigned long long)(h_us_hsent / 1000),
         (unsigned long long)(h_us_hacked / 1000));
 
-    // ---- offline demux: each drain hart's stream is independent (its own sticky-src sequence over a
-    // disjoint lane slice), so walk each capture separately and bind markers to the current STICKY-SRC ----
-    size_t cap_words = 0;
-    auto demux_t0 = std::chrono::steady_clock::now();
-    for (auto& cap : caps) {
-        cap_words += cap.size();
-        uint32_t cur_lane = 0xFFFFFFFF;
-        size_t p = 0, sz = cap.size();
-        while (p + 1 < sz) {
-            uint32_t w0 = cap[p];
-            if (pp_is_bulkcore(w0)) {
-                // RAW-BULK frame: [hdr 2][NRISC meta][pad?][rawn RAW]. Split per-risc using the meta, taking
-                // only the valid [head_mod, head_mod+run) circular slice of each ring block (ignore over-read).
-                uint32_t core = pp_bulkcore_core(w0);
-                uint32_t rawn = cap[p + 1];
-                uint32_t prefix = 2u + (uint32_t)NRISC;
-                if (prefix & 1u) {
-                    prefix++;
-                }
-                if (p + prefix + rawn > sz) {
-                    break;  // truncated (shouldn't happen)
-                }
-                const uint32_t* meta = &cap[p + 2];
-                const uint32_t* raw = &cap[p + prefix];
-                for (uint32_t r = 0; r < (uint32_t)NRISC; r++) {
-                    uint32_t head_mod = pp_bulk_head(meta[r]), run = pp_bulk_run(meta[r]);
-                    uint32_t lane = core * (uint32_t)NRISC + r;
-                    if (run == 0 || lane >= NL) {
-                        continue;
+    uint32_t active_lanes = num_cores * active_riscs;  // shared by the mpmc + offline summaries below
+    bool run_ok = false;                               // shared pass/fail for the exit code
+    if (mpmc > 0) {
+        // ---- --mpmc pipeline verify: the flushers already demuxed+decoded+verified (they own their half's
+        // lanes, in order); the consumers drained the record MPMC. Just tally. ----
+        uint64_t mk = 0, gaps = 0;
+        for (uint64_t h = 0; h < ndh; h++) {
+            mk += fl_mk[h];
+            gaps += fl_gaps[h];
+        }
+        uint64_t expected = (uint64_t)active_lanes * nmarkers;
+        bool ok = (gaps == 0 && mk == expected && consumed.load() == mk);
+        run_ok = ok;
+        printf(
+            "\n=== X280 profiler pipeline (--mpmc: %llu flush+demux -> record MPMC -> %d consumers) ===\n",
+            (unsigned long long)ndh,
+            mpmc);
+        printf(
+            "  markers      : %llu decoded / %llu consumed  (expected %llu)%s\n",
+            (unsigned long long)mk,
+            (unsigned long long)consumed.load(),
+            (unsigned long long)expected,
+            ok ? "  ALL LOSSLESS" : "  *** LOSS ***");
+        printf(
+            "  seq gaps     : %llu   ring overflow: %llu   (sink %llx)\n",
+            (unsigned long long)gaps,
+            (unsigned long long)overflow.load(),
+            (unsigned long long)sink_total.load());
+    } else {
+        // ---- offline demux: each drain hart's stream is independent (its own sticky-src sequence over a
+        // disjoint lane slice), so walk each capture separately and bind markers to the current STICKY-SRC ----
+        size_t cap_words = 0;
+        auto demux_t0 = std::chrono::steady_clock::now();
+        for (auto& cap : caps) {
+            cap_words += cap.size();
+            uint32_t cur_lane = 0xFFFFFFFF;
+            size_t p = 0, sz = cap.size();
+            while (p + 1 < sz) {
+                uint32_t w0 = cap[p];
+                if (pp_is_bulkcore(w0)) {
+                    // RAW-BULK frame: [hdr 2][NRISC meta][pad?][rawn RAW]. Split per-risc using the meta, taking
+                    // only the valid [head_mod, head_mod+run) circular slice of each ring block (ignore over-read).
+                    uint32_t core = pp_bulkcore_core(w0);
+                    uint32_t rawn = cap[p + 1];
+                    uint32_t prefix = 2u + (uint32_t)NRISC;
+                    if (prefix & 1u) {
+                        prefix++;
                     }
-                    const uint32_t* ring = raw + (size_t)r * RING_CAP;
-                    uint32_t first = (head_mod + run > RING_CAP) ? (RING_CAP - head_mod) : run;  // wrap split
-                    accum[lane].insert(accum[lane].end(), ring + head_mod, ring + head_mod + first);
-                    if (first < run) {
-                        accum[lane].insert(accum[lane].end(), ring, ring + (run - first));
+                    if (p + prefix + rawn > sz) {
+                        break;  // truncated (shouldn't happen)
                     }
+                    const uint32_t* meta = &cap[p + 2];
+                    const uint32_t* raw = &cap[p + prefix];
+                    for (uint32_t r = 0; r < (uint32_t)NRISC; r++) {
+                        uint32_t head_mod = pp_bulk_head(meta[r]), run = pp_bulk_run(meta[r]);
+                        uint32_t lane = core * (uint32_t)NRISC + r;
+                        if (run == 0 || lane >= NL) {
+                            continue;
+                        }
+                        const uint32_t* ring = raw + (size_t)r * RING_CAP;
+                        uint32_t first = (head_mod + run > RING_CAP) ? (RING_CAP - head_mod) : run;  // wrap split
+                        accum[lane].insert(accum[lane].end(), ring + head_mod, ring + head_mod + first);
+                        if (first < run) {
+                            accum[lane].insert(accum[lane].end(), ring, ring + (run - first));
+                        }
+                    }
+                    p += prefix + rawn;
+                } else if (pp_is_src(w0)) {
+                    cur_lane = pp_src_lane(w0);
+                    p += 2;
+                } else {
+                    if (cur_lane < NL) {
+                        accum[cur_lane].push_back(w0);
+                        accum[cur_lane].push_back(cap[p + 1]);
+                    }
+                    p += 2;
                 }
-                p += prefix + rawn;
-            } else if (pp_is_src(w0)) {
-                cur_lane = pp_src_lane(w0);
-                p += 2;
-            } else {
-                if (cur_lane < NL) {
-                    accum[cur_lane].push_back(w0);
-                    accum[cur_lane].push_back(cap[p + 1]);
-                }
-                p += 2;
             }
         }
-    }
-    uint64_t demux_us =
-        (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - demux_t0)
-            .count();
-    double demux_gbs = demux_us ? (double)cap_words * 4.0 / 1e3 / (double)demux_us : 0.0;
-    printf(
-        "  [capture] %zu raw words across %llu ring(s); OFFLINE demux %llu ms = %.2f GB/s (1 thread, post-run)\n",
-        cap_words,
-        (unsigned long long)ndh,
-        (unsigned long long)(demux_us / 1000),
-        demux_gbs);
+        uint64_t demux_us =
+            (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - demux_t0)
+                .count();
+        double demux_gbs = demux_us ? (double)cap_words * 4.0 / 1e3 / (double)demux_us : 0.0;
+        printf(
+            "  [capture] %zu raw words across %llu ring(s); OFFLINE demux %llu ms = %.2f GB/s (1 thread, post-run)\n",
+            cap_words,
+            (unsigned long long)ndh,
+            (unsigned long long)(demux_us / 1000),
+            demux_gbs);
 
-    // ---- verify each DEMUXED lane is complete + gap-free ----
-    uint32_t active_lanes = num_cores * active_riscs;
-    uint64_t ok_lanes = 0, total_markers = 0, total_stickies = 0, seq_gaps = 0, ts_bad = 0, prog_bad = 0,
-             short_lanes = 0;
-    const uint64_t TS_MASK44 = (1ull << 44) - 1;
-    std::vector<std::string> bad;
-    for (uint32_t L = 0; L < NL; L++) {
-        uint32_t r = L % NRISC;
-        if (r >= active_riscs) {
-            continue;
-        }
-        const auto& a = accum[L];
-        bool lane_ok = true;
-        uint32_t cur_hi = 0, cur_prog = 0;
-        bool have_ctx = false;
-        uint64_t exp_seq = 0, exp_ts = (((uint64_t)(r + 1) << 8)) & TS_MASK44, mkrs = 0;
-        for (size_t p = 0; p + 1 < a.size(); p += 2) {
-            uint32_t w0 = a[p], w1 = a[p + 1];
-            if (pp_is_sticky(w0)) {
-                cur_hi = pp_low27(w0) & 0xFFFu;
-                cur_prog = pp_payload32(w1);
-                have_ctx = true;
-                total_stickies++;
+        // ---- verify each DEMUXED lane is complete + gap-free ----
+        uint64_t ok_lanes = 0, total_markers = 0, total_stickies = 0, seq_gaps = 0, ts_bad = 0, prog_bad = 0,
+                 short_lanes = 0;
+        const uint64_t TS_MASK44 = (1ull << 44) - 1;
+        std::vector<std::string> bad;
+        for (uint32_t L = 0; L < NL; L++) {
+            uint32_t r = L % NRISC;
+            if (r >= active_riscs) {
                 continue;
             }
-            total_markers++;
-            mkrs++;
-            uint32_t seq = pp_low27(w0);
-            uint64_t full = pp_full_ts(cur_hi, pp_payload32(w1)) & TS_MASK44;
-            if (!have_ctx || cur_prog != prog_id) {
-                prog_bad++;
-                lane_ok = false;
+            const auto& a = accum[L];
+            bool lane_ok = true;
+            uint32_t cur_hi = 0, cur_prog = 0;
+            bool have_ctx = false;
+            uint64_t exp_seq = 0, exp_ts = (((uint64_t)(r + 1) << 8)) & TS_MASK44, mkrs = 0;
+            for (size_t p = 0; p + 1 < a.size(); p += 2) {
+                uint32_t w0 = a[p], w1 = a[p + 1];
+                if (pp_is_sticky(w0)) {
+                    cur_hi = pp_low27(w0) & 0xFFFu;
+                    cur_prog = pp_payload32(w1);
+                    have_ctx = true;
+                    total_stickies++;
+                    continue;
+                }
+                total_markers++;
+                mkrs++;
+                uint32_t seq = pp_low27(w0);
+                uint64_t full = pp_full_ts(cur_hi, pp_payload32(w1)) & TS_MASK44;
+                if (!have_ctx || cur_prog != prog_id) {
+                    prog_bad++;
+                    lane_ok = false;
+                }
+                if (seq != (exp_seq & 0x7FFFFFF)) {
+                    seq_gaps++;
+                    lane_ok = false;
+                }
+                if (full != exp_ts) {
+                    ts_bad++;
+                    lane_ok = false;
+                }
+                exp_seq++;
+                exp_ts = (exp_ts + ts_step) & TS_MASK44;
             }
-            if (seq != (exp_seq & 0x7FFFFFF)) {
-                seq_gaps++;
+            if (mkrs != nmarkers) {
                 lane_ok = false;
+                short_lanes++;
             }
-            if (full != exp_ts) {
-                ts_bad++;
-                lane_ok = false;
+            if (lane_ok) {
+                ok_lanes++;
+            } else if (bad.size() < 12) {
+                char b[128];
+                std::snprintf(
+                    b,
+                    sizeof(b),
+                    "  BAD lane L=%u c=%u r=%u  markers=%llu/%llu",
+                    L,
+                    L / NRISC,
+                    r,
+                    (unsigned long long)mkrs,
+                    (unsigned long long)nmarkers);
+                bad.emplace_back(b);
             }
-            exp_seq++;
-            exp_ts = (exp_ts + ts_step) & TS_MASK44;
         }
-        if (mkrs != nmarkers) {
-            lane_ok = false;
-            short_lanes++;
+        for (auto& s : bad) {
+            printf("%s\n", s.c_str());
         }
-        if (lane_ok) {
-            ok_lanes++;
-        } else if (bad.size() < 12) {
-            char b[128];
-            std::snprintf(
-                b,
-                sizeof(b),
-                "  BAD lane L=%u c=%u r=%u  markers=%llu/%llu",
-                L,
-                L / NRISC,
-                r,
-                (unsigned long long)mkrs,
-                (unsigned long long)nmarkers);
-            bad.emplace_back(b);
+        if (direct) {
+            printf(
+                "\n=== X280 linearized profiler (%llu direct drain hart(s), %llu host ring(s), sticky-src) ===\n",
+                (unsigned long long)ndrain,
+                (unsigned long long)ndh);
+        } else {
+            printf("\n=== X280 linearized profiler (2 readers + 1 relay + single host ring, sticky-src) ===\n");
         }
-    }
-    for (auto& s : bad) {
-        printf("%s\n", s.c_str());
-    }
-    if (direct) {
         printf(
-            "\n=== X280 linearized profiler (%llu direct drain hart(s), %llu host ring(s), sticky-src) ===\n",
-            (unsigned long long)ndrain,
-            (unsigned long long)ndh);
-    } else {
-        printf("\n=== X280 linearized profiler (2 readers + 1 relay + single host ring, sticky-src) ===\n");
-    }
-    printf(
-        "  lanes            : %llu ok / %u total%s\n",
-        (unsigned long long)ok_lanes,
-        active_lanes,
-        (ok_lanes == active_lanes) ? "  ALL LOSSLESS" : "  *** LOSS ***");
-    printf(
-        "  markers/stickies : %llu / %llu (expected %llu markers)\n",
-        (unsigned long long)total_markers,
-        (unsigned long long)total_stickies,
-        (unsigned long long)((uint64_t)active_lanes * nmarkers));
-    printf(
-        "  seq gaps         : %llu   short lanes: %llu\n",
-        (unsigned long long)seq_gaps,
-        (unsigned long long)short_lanes);
-    printf(
-        "  timestamp bad    : %llu   prog_id bad: %llu   ring overflow: %llu\n",
-        (unsigned long long)ts_bad,
-        (unsigned long long)prog_bad,
-        (unsigned long long)overflow.load());
+            "  lanes            : %llu ok / %u total%s\n",
+            (unsigned long long)ok_lanes,
+            active_lanes,
+            (ok_lanes == active_lanes) ? "  ALL LOSSLESS" : "  *** LOSS ***");
+        printf(
+            "  markers/stickies : %llu / %llu (expected %llu markers)\n",
+            (unsigned long long)total_markers,
+            (unsigned long long)total_stickies,
+            (unsigned long long)((uint64_t)active_lanes * nmarkers));
+        printf(
+            "  seq gaps         : %llu   short lanes: %llu\n",
+            (unsigned long long)seq_gaps,
+            (unsigned long long)short_lanes);
+        printf(
+            "  timestamp bad    : %llu   prog_id bad: %llu   ring overflow: %llu\n",
+            (unsigned long long)ts_bad,
+            (unsigned long long)prog_bad,
+            (unsigned long long)overflow.load());
+        run_ok = (ok_lanes == active_lanes);
+    }  // end offline (non-mpmc) demux+verify
     // producer stall summary: did the pipeline back-pressure the workload?
     uint64_t lanes_stalled = 0, tot_events = 0, tot_spins = 0, max_spins = 0;
     for (uint32_t L = 0; L < NL; L++) {
@@ -799,5 +1042,5 @@ int main(int argc, char** argv) {
         (unsigned long long)tot_spins,
         (unsigned long long)max_spins);
     std::fflush(stdout);
-    std::_Exit((ok_lanes == active_lanes) ? 0 : 1);
+    std::_Exit(run_ok ? 0 : 1);
 }

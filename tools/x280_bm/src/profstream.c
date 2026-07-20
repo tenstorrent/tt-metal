@@ -426,14 +426,17 @@ static void relay_run(
              * on the host (writes/overwrites at full rate). Isolates whether the reader is throttled by the
              * host consumer sink. LOSSY on purpose (host reads garbage / isn't run). */
             uint32_t hspace = nohostfc ? (uint32_t)hring_words : (uint32_t)hring_words - (hsent[h] - r32(HACKED(h)));
-            if (hspace == 0) {
+            /* Publish SENT only on WHOLE frames: copy the ENTIRE published snapshot (avail = whole frames,
+             * since the reader publishes PROD at frame boundaries) or nothing -- never a partial. So the host
+             * flusher can decode each drain as complete frames (a split bulk frame would misparse). avail is
+             * bounded by the SPSC (<= STAGE_WORDS), and the host ring is >= that, so the whole snapshot always
+             * fits once the host drains -> no deadlock. (Old min(avail,hspace) partial-copy caused non-frame-
+             * aligned SENT -> streaming demux corruption under back-pressure.) */
+            if (hspace < avail) {
                 hostfull++;
-                continue; /* ring h full -> skip to the OTHER reader (its own ring may have space), come back.
-                           * SAFE with per-reader rings: reader h's continuation returns to ring h, still
-                           * contiguous -- no other reader's frame can land on ring h. (The framing bug only
-                           * existed on a single SHARED ring; here each reader owns a ring.) */
+                continue; /* not enough room for the whole snapshot yet -> come back after the host drains */
             }
-            uint32_t run = avail < hspace ? avail : hspace;
+            uint32_t run = avail;
             uint64_t tc = rdcycle();
             /* copy reader h's SPSC words -> its OWN ring h, chunked (split at SPSC wrap and ring wrap) */
             uint32_t si = cn, di = hsent[h], leftw = run;
