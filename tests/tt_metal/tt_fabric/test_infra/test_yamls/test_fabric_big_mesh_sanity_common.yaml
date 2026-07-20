@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Shared big-mesh CI sanity suite (system-agnostic).
+# Single mesh id spanning one or more hosts; cross-host traffic is still intra-mesh,
+# so both 1D (Linear) and 2D (Mesh) topologies are valid.
+# High-level patterns only; system selection is via tt-run rank binding / mesh graph descriptor.
+Tests:
+  - name: "LinearNeighborExchange"
+    sync: true
+    fabric_setup:
+      topology: Linear
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: neighbor_exchange
+
+  - name: "MeshNeighborExchange"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: neighbor_exchange
+
+  - name: "MeshUnicastAllToAll"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [512, 1024, 2048, 4096]
+      num_packets: [50, 100]
+
+    defaults:
+      ftype: unicast
+
+    patterns:
+      - type: all_to_all
+
+  - name: "MeshUnicastRandomPairing"
+    fabric_setup:
+      topology: Mesh
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+
+    parametrization_params:
+      size: [1024, 2048]
+      num_packets: [100, 250]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 3
