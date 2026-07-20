@@ -232,6 +232,7 @@ struct Conv2dParams {
         "compute_kernel_config",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
+        "full_inner_dim",
         "enable_activation_reuse",
         "config_tensors_in_dram",
         "force_split_reader");
@@ -251,6 +252,7 @@ struct Conv2dParams {
             std::cref(this->compute_kernel_config),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
+            std::cref(this->full_inner_dim),
             std::cref(this->enable_activation_reuse),
             std::cref(this->config_tensors_in_dram),
             std::cref(this->force_split_reader));
