@@ -62,7 +62,9 @@ def dedup_argmax_enabled() -> bool:
     Off by default so the released terminal path is byte-for-byte unchanged. When
     on, :func:`denoise_step` collapses the two redundant full-vocab argmax
     reductions into one in the argmax-sampling (``gumbel_noise is None``) regime —
-    the RUN-first serving default (``serving.GUMBEL_MODES[0] == "argmax"``). See
+    the opt-in greedy RUN-first mode (``"argmax"``; the serving default is now the
+    stochastic ``"chunked"`` Gumbel-max = the model's reference sampler, so this
+    dedup only fires when argmax is explicitly selected). See
     :func:`_sample_and_argmax` for the bit-exactness argument and
     ``doc/optimize_perf/verify_terminal_dedup.py`` for the device gate.
     """

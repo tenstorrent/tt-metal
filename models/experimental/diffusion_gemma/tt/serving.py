@@ -66,11 +66,14 @@ from models.experimental.diffusion_gemma.tt.generate import (
 )
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache, prefix_cache_enabled
 
-# Sampling modes exposed to the serving layer. "argmax" is the RUN-first clean
-# argmax path (no full-vocab Gumbel materialization — fits full-depth 256K);
-# "chunked" is the no-materialize on-device Gumbel that also fits 256K; "host"
-# and "device" are the seeded-Gumbel debug/reference paths.
-GUMBEL_MODES = ("argmax", "chunked", "host", "device")
+# Sampling modes exposed to the serving layer. "chunked" is the DEFAULT: the
+# no-materialize on-device Gumbel-max sampler (argmax(logits/T + Gumbel)) that is
+# distribution-faithful to the model's reference EntropyBoundSampler / HF
+# multinomial(softmax(logits/T)) AND fits full-depth 256K. "argmax" is the greedy
+# RUN-first path (no Gumbel materialization, also fits 256K) — kept as an opt-in
+# speed/determinism mode. "host"/"device" are seeded-Gumbel debug/reference paths
+# that materialize the full-vocab Gumbel (OOM at 256K), for token-exact validation.
+GUMBEL_MODES = ("chunked", "argmax", "host", "device")
 
 
 def _validate_next_block_capacity(tt_model, *, start_pos: int, canvas_length: int) -> None:
@@ -136,7 +139,7 @@ class BlockDiffusionServingSession:
         tokenizer=None,
         vocab_size: int | None = None,
         seed: int = 0,
-        gumbel_mode: str = "argmax",
+        gumbel_mode: str = "chunked",
         gumbel_vocab_chunk_size: int = 1024,
         eos_token_id=None,
         stop_token_ids=None,

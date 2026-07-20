@@ -155,15 +155,17 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
     }
 
-    def __init__(self, *args, dg_state_dict=None, tokenizer=None, config=None, gumbel_mode="argmax", **kwargs):
+    def __init__(self, *args, dg_state_dict=None, tokenizer=None, config=None, gumbel_mode="chunked", **kwargs):
         super().__init__(*args, **kwargs)
         self._dg_state_dict = dg_state_dict
         self._tokenizer = tokenizer
         self._config = _with_vllm_max_denoise_steps(DiffusionConfig() if config is None else config)
         self.canvas_length = self._config.canvas_length
-        # Sampler memory strategy at the served context. "argmax" (RUN-first) and
-        # "chunked" both fit full-depth 256K; the full-vocab Gumbel materialization
-        # OOMs at 256K (see doc/context_contract.json).
+        # Sampler at the served context. DEFAULT "chunked": the no-materialize on-device
+        # Gumbel-max sampler that is distribution-faithful to the model's reference
+        # EntropyBoundSampler (HF multinomial(softmax(logits/T))) AND fits full-depth 256K.
+        # "argmax" (greedy RUN-first, also fits 256K) is opt-in via DG_VLLM_GUMBEL_MODE; the
+        # full-vocab Gumbel ("host"/"device") OOMs at 256K (see doc/context_contract.json).
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
         # One active session per batch row. A single contiguous model cache backs
         # one active sequence today (see module docstring); the dict is keyed by
@@ -226,14 +228,14 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         dram = _dram_snapshot(mesh_device, synchronize=False)
         logger.info(
             f"[DiffusionGemma vLLM] built model: max_seq_len={max_seq_len} "
-            f"n_layers={n_layers or 'full'} gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', 'argmax')}"
+            f"n_layers={n_layers or 'full'} gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', 'chunked')}"
         )
         _metric(
             "model_build",
             max_seq_len=max_seq_len,
             num_layers=n_layers or 30,
             model_build_s=round(model_build_s, 6),
-            gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", "argmax"),
+            gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", "chunked"),
             max_denoise_steps=diffusion_config.max_denoise_steps,
             trace_region_size_env=int(os.environ.get("DG_TRACE_REGION_SIZE", "0")),
             selfcond_prechunk_embed=os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "1"),
