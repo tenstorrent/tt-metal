@@ -257,14 +257,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
 
-    // EXACTLY the working whole-tile RV demo (untilize=1, inc_mode=1, buffer_addr=base,
-    // clr_dvalid=0, harness dvalid + section_done, no set_ttsync/wait_pack_idle) with ONE
-    // change: tile_dim = 16x1x1 instead of 16x16x4. Single op. Just testing whether the
-    // 16x1x1 geometry writes at all (data need not be correct).
+    // Single op, RAW addressing (inc_mode=0): input_addr = DEST row 0, l1_addr = first
+    // 16 datums of the result buffer (absolute 16B addr). buffer_addr unused in raw mode.
+    // Tests whether the raw input_addr/l1_addr path writes DEST row 0 -> L1 base.
     rv_pacr_gpr0_u g0     = {};
     g0.f.clr_dvalid       = 0;
-    g0.f.input_addr       = 0;
-    g0.f.l1_addr          = 0;
+    g0.f.input_addr       = 0;                         // first DEST row (source)
+    g0.f.l1_addr          = params.buffer_Res[0] / 16; // first 16 datums of target L1 (absolute 16B addr)
     g0.f.rows_to_untilize = 0;
 
     rv_pacr_gpr1_u g1    = {};
@@ -275,17 +274,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     rv_pacr_gpr2_u g2   = {};
     g2.f.packer_sel     = 0;
     g2.f.buffer_addr    = params.buffer_Res[0] / 16;
-    g2.f.tile_dim       = 0b101; // 16x1x1 — the ONLY change from the working demo (was 0 = 16x16x4)
+    g2.f.tile_dim       = 0b101; // 16x1x1
     g2.f.untilize       = 0;
-    g2.f.inc_mode       = 1;
+    g2.f.inc_mode       = 0; // RAW: use GPR0.input_addr / GPR0.l1_addr directly
     g2.f.inc_input_idx  = 0;
     g2.f.inc_output_idx = 0;
 
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
 
-    volatile std::uint32_t rv_res = do_rv_pacr(g0.val, g1.val, g2.val);
-    (void)rv_res;
+    for (std::uint32_t row = 0; row < 64; row++)
+    {
+        g0.f.input_addr = row; // DEST row to read
+
+        std::uint32_t lo5                = row & 0x1F;                       // low 5 bits
+        std::uint32_t rol                = ((lo5 << 1) | (lo5 >> 4)) & 0x1F; // rotate those left by 1
+        std::uint32_t l1_offset_in_bytes = (row & 0x20) | rol;               // keep bit 5
+
+        g0.f.l1_addr = params.buffer_Res[0] / 16 + (l1_offset_in_bytes << 1);
+
+        volatile std::uint32_t rv_res = do_rv_pacr(g0.val, g1.val, g2.val);
+        (void)rv_res;
+    }
 
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
