@@ -407,8 +407,8 @@ class HunyuanTtAttention(LightweightModule):
         # already correctly rotated. Done on the kv-head tensors (pre-GQA-expansion)
         # to gather the smaller num_kv_heads payload.
         if self.sp_factor > 1:
-            k_attn = self.ccl.all_gather(k_attn, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
-            v_attn = self.ccl.all_gather(v_attn, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+            k_attn = self.ccl.all_gather(k_attn, dim=2, mesh_axis=self.sp_axis, use_hyperparams=True)
+            v_attn = self.ccl.all_gather(v_attn, dim=2, mesh_axis=self.sp_axis, use_hyperparams=True)
 
         if use_cache and kv_cache is not None and not kv_cache.trace_fixed:
             # Cached K/V persist across ALL layers — must be DRAM, never L1. The
@@ -501,7 +501,7 @@ class HunyuanTtAttention(LightweightModule):
     def _tp_all_reduce(self, partial: ttnn.Tensor) -> ttnn.Tensor:
         """All-reduce a [B,1,S,H] o_proj partial over the TP axis (all-gather+sum)."""
         n = self.tp_factor
-        gathered = self.ccl.all_gather(partial, dim=0, mesh_axis=self.tp_axis, use_hyperparams=False)
+        gathered = self.ccl.all_gather(partial, dim=0, mesh_axis=self.tp_axis, use_hyperparams=True)
         ttnn.deallocate(partial)
         shape = list(gathered.shape)
         B = shape[0] // n
