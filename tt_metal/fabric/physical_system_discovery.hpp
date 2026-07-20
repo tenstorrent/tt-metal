@@ -49,9 +49,12 @@ LocalEthernetMetrics query_local_ethernet_metrics(
 namespace discovery_impl {
 // Internal discovery function - runs local discovery only.
 // all_hostnames_unique must be from resolve_hostname_uniqueness() called before this.
+// my_rank / world_size are the *global* identity of this participant (from the DistributedContext
+// under MPI, or from the SystemCoordinator for no-MPI service agents whose local context is size-1).
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::ClusterDescriptor& cluster_desc,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    int my_rank,
+    int world_size,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique);
 

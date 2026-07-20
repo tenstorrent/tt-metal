@@ -721,7 +721,8 @@ namespace discovery_impl {
 
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::ClusterDescriptor& cluster_desc,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    int my_rank,
+    int world_size,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
@@ -733,15 +734,15 @@ PhysicalSystemDescriptor run_local_discovery(
     const auto& eth_connections = cluster_desc.get_ethernet_connections();
     auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
 
-    auto my_rank = *(distributed_context->rank());
     auto hostname = get_local_discovery_hostname();
 
-    // Cluster descriptor basename (mock) or OS hostname (live). When multiple MPI ranks share the same
-    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with MPI rank so
-    // PSD merge keys stay unique and global eth links validate correctly.
-    auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
-                            ? (hostname + "_" + std::to_string(my_rank))
-                            : hostname;
+    // Cluster descriptor basename (mock) or OS hostname (live). When multiple ranks share the same
+    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with the global
+    // rank so PSD merge keys stay unique and global eth links validate correctly. `my_rank` /
+    // `world_size` are the *global* identity: under MPI they come from the DistributedContext; under a
+    // no-MPI ServiceCoordinator agent (whose local context is size-1) they come from the coordinator.
+    auto hostname_key =
+        (world_size > 1 && !all_hostnames_unique) ? (hostname + "_" + std::to_string(my_rank)) : hostname;
 
     // Set local hostname and rank (friend access allows direct access to private members)
     psd.get_host_mobo_name_map()[hostname_key] = get_mobo_name();
@@ -844,10 +845,11 @@ PhysicalSystemDescriptor run_local_discovery(
 
 PhysicalSystemDescriptor run_local_discovery_live(
     tt::umd::ClusterDescriptor& cluster_desc,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    int my_rank,
+    int world_size,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-    return run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+    return run_local_discovery(cluster_desc, my_rank, world_size, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
@@ -876,6 +878,13 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     bool all_hostnames_unique = (coordinator != nullptr) ? resolve_hostname_uniqueness_coordinated(*coordinator)
                                                          : resolve_hostname_uniqueness(distributed_context);
 
+    // Global identity used to key this host in the PSD. Under a no-MPI ServiceCoordinator agent the
+    // local DistributedContext is size-1, so identity must come from the coordinator (which carries the
+    // service-assigned world index/size); under MPI it comes from the DistributedContext as before.
+    const int my_rank = (coordinator != nullptr) ? coordinator->local_index(world) : *(distributed_context->rank());
+    const int world_size =
+        (coordinator != nullptr) ? coordinator->participant_count(world) : *(distributed_context->size());
+
     static constexpr bool dispatch_local_discovery = false;
     static constexpr bool dispatch_live_discovery = true;
 
@@ -884,14 +893,12 @@ PhysicalSystemDescriptor run_physical_system_discovery(
                                    : dispatch_live_discovery;
 
     PhysicalSystemDescriptor psd =
-        dispatch_live
-            ? discovery_impl::run_local_discovery_live(
-                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
-            : discovery_impl::run_local_discovery(
-                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+        dispatch_live ? discovery_impl::run_local_discovery_live(
+                            cluster_desc, my_rank, world_size, target_device_type, all_hostnames_unique)
+                      : discovery_impl::run_local_discovery(
+                            cluster_desc, my_rank, world_size, target_device_type, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
-    auto my_rank = *(distributed_context->rank());
     psd.set_discovery_data(get_local_discovery_hostname(), my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
