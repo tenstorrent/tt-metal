@@ -218,7 +218,7 @@ def _rekey_module_section(demo_dir, module, node, status, upsert, index=""):
     ``optimizing…`` outcome to the final status. When the run recorded no detail
     (0 attempts), re-seed the placeholder so the section still names the module."""
     section = _read_section(demo_dir, "module:%s" % module)
-    if section and "# Optimize (perf)" in section:
+    if section and ("Optimization summary" in section or "# Optimize (perf)" in section):
         section = re.sub(r"- outcome: \*\*[^*]*\*\*", "- outcome: **%s**" % status, section, count=1)
         upsert(demo_dir, "module:%s" % module, section)
         return
