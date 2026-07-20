@@ -34,7 +34,6 @@ union pack_untilize_stride_cfg_u
     pack_untilize_stride_cfg_t f;
 };
 
-constexpr static std::uint32_t TRISC_ID                = 2;
 constexpr static std::uint32_t PACR_STRIDE_OFFSET_ROWS = 8;
 static std::uint32_t clear_dest_bank_id                = 0;
 

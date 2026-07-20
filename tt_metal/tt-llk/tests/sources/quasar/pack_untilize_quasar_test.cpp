@@ -187,30 +187,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
 
+    // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time
+    std::uint32_t y_stride_external;
+
     if (tensor_shape.total_num_faces() == NUM_FACES)
     {
         _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
-
-        // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time
-        std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
-
-        // Both unpack_to_dest and !unpack_to_dest produce one tile row at a time
-        // into alternating banks (SyncHalf). Read from start of current bank (dest_idx 0);
-        // section_done zeroes that bank and switches packer to the other bank.
-        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
-        {
-            _llk_pack_untilize_(0, y * y_stride_external);
-            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-        }
+        y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     }
     else
     {
         _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+    }
 
+    for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+    {
         // Both unpack_to_dest and !unpack_to_dest produce one tile row at a time
         // into alternating banks (SyncHalf). Read from start of current bank (dest_idx 0);
         // section_done zeroes that bank and switches packer to the other bank.
-        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+        if (tensor_shape.total_num_faces() == NUM_FACES)
+        {
+            _llk_pack_untilize_(0, y * y_stride_external);
+            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        }
+        else
         {
             _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * FULL_CT_DIM, 0);
             _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
