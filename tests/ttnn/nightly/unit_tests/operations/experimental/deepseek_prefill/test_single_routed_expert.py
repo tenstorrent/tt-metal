@@ -180,12 +180,9 @@ SINGLE_EXPERT_MODELS = [
 # _xfail_blackhole (these cases pass on other arches, where an unconditional strict xfail would turn
 # CI red on XPASS). Each key is a space-separated set of id tokens that must ALL appear in the param
 # id, so a case can be scoped by any combination of layout ("x_tile"/"x_rm") and model/isl id.
-#   - gptoss_120b on the TILE x layout: the factory picks an in0_block_w_gu that does not divide
-#     K_gate_tiles for gptoss dims (K_gate_tiles % in0_block_w_gu == 0 TT_FATAL). The ROW_MAJOR x
-#     layout passes, so scope the xfail to x_tile only.
-_XFAIL = {
-    "x_tile gptoss_120b": "gptoss_120b K_gate tiling: factory picks in0_block_w_gu that does not divide K_gate_tiles on the TILE x layout (unified_routed_expert_ffn_program_factory.cpp:404)",
-}
+# Empty: the program factory now snaps in0_block_w_gu to a divisor of K_gate_tiles on every path
+# (not just when the L1 guard fires), so the prior gptoss_120b TILE-layout K_gate failure is fixed.
+_XFAIL = {}
 
 
 @pytest.fixture(autouse=True)
