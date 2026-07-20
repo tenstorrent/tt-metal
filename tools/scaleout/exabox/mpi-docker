@@ -250,12 +250,12 @@ default() {
     local base_mpirun_args="$output_tag_arg --prtemca oob_tcp_if_include $mpi_interface --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_include $mpi_interface"
 
     # Per-rank self-tagger: runs in the remote shell (outside the container), pipes the
-    # container's merged stdout/stderr, and stamps each line with the real host + time.
-    # Lines that already begin with their own "YYYY-MM-DD HH:MM:SS" timestamp only get
-    # [hostname] prepended so the time is not duplicated. No single quotes (would clash
-    # with the bash -c '...' wrapper); $(hostname)/$l are kept literal here and resolved
-    # on the rank at run time. pipefail preserves the container's exit code through the pipe.
-    local host_tag_pipe='while IFS= read -r l; do case $l in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*) printf "[%s] %s\n" "$(hostname)" "$l";; *) printf "[%s][%(%H:%M:%S)T] %s\n" "$(hostname)" -1 "$l";; esac; done'
+    # container's merged stdout/stderr, and stamps each line with a bare [real-host]
+    # prefix. The caller's tag_stream adds the time and avoids duplicating any timestamp
+    # the line already carries. No single quotes (would clash with the bash -c '...'
+    # wrapper); $(hostname)/$l are kept literal here and resolved on the rank at run
+    # time. pipefail preserves the container's exit code through the pipe.
+    local host_tag_pipe='while IFS= read -r l; do printf "[%s] %s\n" "$(hostname)" "$l"; done'
 
     # Add global MPI args to base
     if [[ ${#global_mpi_args[@]} -gt 0 ]]; then

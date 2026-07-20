@@ -5,24 +5,39 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 
-# Prefix every output line with [hostname][time] using the orchestrator host.
-# Two kinds of lines are emitted with a reduced tag to avoid duplicating a time:
-#   - lines that already carry a [host][time] tag (e.g. the per-rank tt-smi reset
-#     lines, tagged with their own remote hostname) pass through unchanged; and
-#   - lines that already begin with their own "YYYY-MM-DD HH:MM:SS" timestamp
-#     (e.g. Metal/UMD logs) only get [hostname] prepended, so the time is not
-#     printed twice on the same line.
+# Single place that prefixes each output line with a [hostname] tag, plus a
+# [HH:MM:SS] time only when the line does not already carry its own
+# "YYYY-MM-DD HH:MM:SS" timestamp (Metal/UMD/tt-smi logs), so the time is never
+# printed twice on one line. Ranks prepend a bare "[host] " tag at the source
+# (mpirun merges all ranks into one stream, so only the rank knows its own
+# hostname); this function keeps that host, decides the time, and also tags the
+# orchestrator's own local lines. The leading-timestamp check tolerates leading
+# ANSI colour codes (tt-smi runs under a pty and colourises its output). Lines
+# already fully tagged as "[host][time] " (e.g. from an earlier pass through this
+# function) are emitted unchanged so nothing is double-tagged.
 tag_stream() {
-    local line
-    local tagged_re='^\[[^]]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]'
-    local ts_re='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
+    local line host rest
+    local esc=$'\x1b'
+    local done_re='^\[[^][]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '
+    local rank_re='^\[([^][]*)\] (.*)$'
+    local ts_re="^(${esc}\[[0-9;]*[a-zA-Z])*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"
+    local self="${HOSTNAME:-$(hostname)}"
     while IFS= read -r line; do
-        if [[ "$line" =~ $tagged_re ]]; then
+        if [[ "$line" =~ $done_re ]]; then
             printf '%s\n' "$line"
-        elif [[ "$line" =~ $ts_re ]]; then
-            printf '[%s] %s\n' "${HOSTNAME:-$(hostname)}" "$line"
+            continue
+        fi
+        if [[ "$line" =~ $rank_re ]]; then
+            host="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
         else
-            printf '[%s][%(%H:%M:%S)T] %s\n' "${HOSTNAME:-$(hostname)}" -1 "$line"
+            host="$self"
+            rest="$line"
+        fi
+        if [[ "$rest" =~ $ts_re ]]; then
+            printf '[%s] %s\n' "$host" "$rest"
+        else
+            printf '[%s][%(%H:%M:%S)T] %s\n' "$host" -1 "$rest"
         fi
     done
 }
@@ -268,11 +283,10 @@ run_cluster_validation() {
     done
 
     if [[ $DOCKER_IMAGE == "none" ]]; then
-        # Self-tag each rank's output with its own [hostname][time] at the source
-        # (mpirun merges all ranks into one stream at the launcher, so tagging must
-        # happen on the rank). Lines that already begin with their own timestamp
-        # only get [hostname] prepended so the time is not duplicated. pipefail
-        # keeps run_cluster_validation's real exit code.
+        # Self-tag each rank's output with a bare [hostname] at the source (mpirun
+        # merges all ranks into one stream at the launcher, so only the rank knows
+        # its own hostname). tag_stream adds the time and avoids duplicating any
+        # timestamp the line already carries. pipefail keeps the real exit code.
         local bin_cmd
         bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
@@ -283,7 +297,7 @@ run_cluster_validation() {
         mpirun --host "$HOSTS" \
             --mca btl_tcp_if_include "$MPI_IF" \
             "${MPI_EXTRA_ARGS[@]}" \
-            bash -c "set -o pipefail; h=\$(hostname); $bin_cmd 2>&1 | while IFS= read -r l; do case \$l in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*) printf '[%s] %s\n' \"\$h\" \"\$l\";; *) printf '[%s][%(%H:%M:%S)T] %s\n' \"\$h\" -1 \"\$l\";; esac; done"
+            bash -c "set -o pipefail; h=\$(hostname); $bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
     else
         # mpi-docker tags each rank's output with [hostname][time] at the source
         # by default (real host, replacing mpirun's [jobid,rank] tag).
@@ -328,12 +342,7 @@ script -qefc "tt-smi -glx_reset" /dev/null |
     }
     END { if (seen) print buf }' |
     while IFS= read -r line; do
-        case $line in
-            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*)
-                printf '[%s] %s\n' "$h" "$line" ;;
-            *)
-                printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line" ;;
-        esac
+        printf '[%s] %s\n' "$h" "$line"
     done >&2
 ec=${PIPESTATUS[0]}
 echo "RESET_RESULT|$h|$ec"
