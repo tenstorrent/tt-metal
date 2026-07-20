@@ -98,6 +98,44 @@ def _enumerate_cores(core_ranges: "ttnn.CoreRangeSet"):
     return cores
 
 
+def _num_shards(tensor_shape, mem_config):
+    """Number of shards (product of per-dim ceil divisions, rank-aligned from
+    the right; legacy 2D specs cover the last-2-dims-folded view)."""
+    if mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
+        shard = list(mem_config.nd_shard_spec.shard_shape)
+    else:
+        shard = list(mem_config.shard_spec.shape)
+    ts = list(tensor_shape)
+    if len(shard) < len(ts):
+        h = 1
+        for d in ts[:-1]:
+            h *= d
+        ts = [h, ts[-1]]
+    k = min(len(shard), len(ts))
+    n = 1
+    for t, s in zip(ts[-k:], shard[-k:]):
+        n *= -(-t // s)  # ceil
+    return n
+
+
+def _physical_num_blocks(tensor_shape, mem_config, shard_h):
+    """Tile-rows in the PHYSICAL per-core bank (uniform across cores).
+
+    A sharded buffer reserves `ceil(n_shards / n_cores)` shard slots on every
+    core (uniform bank size; cliff cores' extra slots hold padding). Each shard
+    contributes `shard_h / 32` tile-rows, so the whole bank is
+    `ceil(n_shards/n_cores) * shard_h/32` tile-rows. For same-spec I/O the input
+    and output banks share this layout slot-for-slot, so tilizing the full
+    physical bank (padding included) preserves identity — the padded slots
+    round-trip to the same padded slots and to_torch strips them on readback.
+    """
+    _, _, grid = _shard_dims(mem_config)
+    n_cores = grid.num_cores()
+    n_shards = _num_shards(tensor_shape, mem_config)
+    max_shards_per_core = -(-n_shards // n_cores)  # ceil
+    return max_shards_per_core * (shard_h // TILE_H)
+
+
 def _create_sharded_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
@@ -127,9 +165,12 @@ def _create_sharded_program_descriptor(
     # k*(shard_h/32) tile-rows of Wt tiles straight into the concatenated output
     # bank in shard-index order (identity preserved because both sides use the
     # IDENTICAL spec). For one-shard-per-core this reduces to shard_h/32.
-    num_cores = grid.num_cores()
-    per_core_rows = input_tensor.buffer_num_pages() // num_cores
-    num_blocks = per_core_rows // TILE_H
+    # num_blocks spans the PHYSICAL per-core bank (every shard slot the core
+    # owns, padded cliff slots included). buffer_num_pages counts LOGICAL
+    # (width-split) rows, which under-counts padded/cliff banks — so derive from
+    # the physical shard geometry instead. Same-spec identity holds because the
+    # input and output banks share this slot layout.
+    num_blocks = _physical_num_blocks(list(input_tensor.shape), input_tensor.memory_config(), shard_h)
 
     # Input CB aliased onto the RM input shard. cb_descriptor_from_sharded_tensor
     # inherits the tensor's page size (one-row-per-page for ROW_MAJOR); override

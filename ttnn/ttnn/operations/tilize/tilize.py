@@ -288,22 +288,13 @@ def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True
         shard_h, shard_w = _folded_shard_shape(in_mc)
         if shard_h % TILE != 0 or shard_w % TILE != 0:
             raise UnsupportedAxisValue(f"tilize: sharded shard dims must be tile-aligned, got ({shard_h}, {shard_w})")
-        # Multi-shard-per-core (Refinement 2b): a core may own k = n_shards/n_cores
-        # contiguous FULL shards, tilized as one k*shard_h x shard_w bank. This
-        # requires an EVEN split (n_shards % n_cores == 0) and NO padded/cliff
-        # shards (every dim tiled exactly). Cliff cores (uneven split or partial
-        # shards) redistribute a shard's data and are deferred to Refinement 2c.
-        n_shards = _num_shards(shape, in_mc)
-        n_cores = _shard_spec_of(in_mc).grid.num_cores()
-        if n_shards % n_cores != 0:
-            raise UnsupportedAxisValue(
-                f"tilize: sharded path requires an even shard/core split "
-                f"(got {n_shards} shards over {n_cores} cores; cliff cores are Refinement 2c)"
-            )
-        if _has_padding(shape, in_mc):
-            raise UnsupportedAxisValue(
-                "tilize: sharded path requires full (non-padded) shards " "(padded/cliff shards are Refinement 2c)"
-            )
+        # Same-spec zero-copy handles multi-shard-per-core AND cliff/padded banks
+        # (Refinement 2c): each core tilizes its whole PHYSICAL bank — every shard
+        # slot it owns, ceil(n_shards/n_cores) slots uniform, padded cliff slots
+        # included — straight into the same-spec output bank. Identity holds
+        # because in/out share the slot layout, so a padded slot round-trips to
+        # the same padded slot and to_torch strips it on readback. No even-split
+        # or no-padding constraint needed here.
     elif in_mc.is_sharded() or out_mc.is_sharded():
         # --- interleaved <-> sharded crossover (Refinement 2b) ---
         # Supported: legacy HEIGHT_SHARDED, ROW_MAJOR, L1, tile-aligned,

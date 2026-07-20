@@ -201,15 +201,11 @@ def test_width_crossover_refused(device, expect_error):
         tilize(t, memory_config=out_mc)
 
 
-def test_padded_multishard_refused(device, expect_error):
-    """Cliff/padded shards (3 % 2 != 0, 160 % 64 != 0) are Refinement 2c."""
+def test_padded_multishard_same_spec_identity(device):
+    """Refinement 2c: cliff/padded same-spec nd multi-shard (3 % 2 != 0,
+    160 % 64 != 0) now tilizes the whole PHYSICAL bank in place — identity."""
+    x = torch.rand([3, 160, 160], dtype=torch.bfloat16)
     mc = _nd_mc(_crs(((0, 0), (1, 1))), (2, 64, 64), _ROW)
-    t = ttnn.from_torch(
-        torch.randn([3, 160, 160]).bfloat16(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=mc,
-    )
-    with expect_error(UnsupportedAxisValue, "."):
-        tilize(t, memory_config=mc)
+    t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mc)
+    res = ttnn.to_torch(tilize(t, memory_config=mc))
+    assert torch.equal(x, res)
