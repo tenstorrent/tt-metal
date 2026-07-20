@@ -2,6 +2,7 @@
 # this domain here without touching ttnn/CMakeLists.txt.
 add_subdirectory(combine)
 add_subdirectory(dispatch)
+add_subdirectory(dispatch_tilize)
 add_subdirectory(extract)
 add_subdirectory(inbound_socket_service_sync)
 add_subdirectory(insert)
@@ -28,6 +29,7 @@ target_link_libraries(
     INTERFACE
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
+        TTNN::Ops::Experimental::DeepSeekPrefill::DispatchTilize
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
@@ -61,6 +63,7 @@ target_sources(
     INTERFACE
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::DispatchTilize>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
