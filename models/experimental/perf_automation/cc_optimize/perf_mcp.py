@@ -1811,13 +1811,45 @@ def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
     return None
 
 
+def kv_cache_needed_by_scaling(ms_at_c, ms_at_2c, ratio_threshold=1.6):
+    if not isinstance(ms_at_c, (int, float)) or not isinstance(ms_at_2c, (int, float)):
+        return None
+    if ms_at_c <= 0:
+        return None
+    return (ms_at_2c / ms_at_c) >= ratio_threshold
+
+
+def _decode_is_recompute(model_root) -> bool:
+    try:
+        src = (Path(model_root) / "tt" / "pipeline.py").read_text(errors="ignore")
+    except Exception:
+        return False
+    s = "".join(src.split()).lower()
+    no_kv = ("use_cache=false" in s) or ("past_key_value=none" in s)
+    kv_write = any(
+        k in s for k in ("update_cache", "paged_update", "fill_cache", "kv_cache=", "cache_k[", "self.cache")
+    )
+    return no_kv and not kv_write
+
+
 def _decode_gate(prof: dict, attempts: list) -> dict | None:
     if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
         return None
-    if prof.get("decode_status") != "repeat_prefill":
+    repeat = prof.get("decode_status") == "repeat_prefill"
+    scale = kv_cache_needed_by_scaling(prof.get("decode_ms_at_c"), prof.get("decode_ms_at_2c"))
+    recompute = bool(scale) if scale is not None else _decode_is_recompute(_MODEL_ROOT)
+    if not (repeat or recompute):
         return None
     if any((a.get("kernel_kind") or "").lower() in ("structural-decode", "kv-cache") for a in attempts):
         return None
+    reason = (
+        "repeat_prefill: decode re-runs the full prefill every token (no cached decode_step / "
+        "KV-cache); add a KV-cache + single-token decode_step (recall_knobs(op_class='decode'))"
+        if repeat
+        else "recompute decode: per-token cost scales with capacity (use_cache=False, no KV-cache write) "
+        "-> O(capacity) recompute every token EVEN THOUGH it traces; add a KV-cache + single-token "
+        "decode_step (recall_knobs(op_class='decode'))"
+    )
     return {
         "op": "generation_loop",
         "op_class": "decode",
@@ -1826,10 +1858,7 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
         "grid": None,
         "weight_dtype": None,
         "next_rung": "structural-decode",
-        "reason": (
-            "repeat_prefill: decode re-runs the full prefill every token (no cached decode_step / "
-            "KV-cache); add a KV-cache + single-token decode_step (recall_knobs(op_class='decode'))"
-        ),
+        "reason": reason,
     }
 
 
