@@ -53,7 +53,11 @@ public:
 
     RoutingPlaneConnectionManager() : num_active_(0) {}
 
-    template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
+    // noc must be a non-type template param: open_start/open_finish take
+    // WORKER_HANDSHAKE_NOC as a compile-time template argument.
+    template <
+        BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
+        uint8_t noc = get_fabric_worker_noc()>
     static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
         constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
                                  build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;
@@ -68,7 +72,7 @@ public:
             conn.sender =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
-                conn.sender.open_start();
+                conn.sender.template open_start<false, false, noc>();
             }
         }
 
@@ -76,7 +80,7 @@ public:
 
         if constexpr (connect && wait_for_connection_open_finish) {
             for (uint32_t i = 0; i < mgr.num_active_; ++i) {
-                mgr.slots_[i].sender.open_finish();
+                mgr.slots_[i].sender.template open_finish<false, noc>();
             }
         }
 
