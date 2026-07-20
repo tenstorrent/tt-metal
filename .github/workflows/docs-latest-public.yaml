@@ -110,10 +110,6 @@ jobs:
       # ok because each post-commit pipeline definitely takes more than 30 min
       group: "pages-${{ github.ref }}"
       cancel-in-progress: false # WARNING: This will only queue a single job; all else will still be cancelled!
-    env:
-      # Expose as a job-level env so it can be read in step-level if: conditions.
-      # (The secrets context is not available in step if: expressions.)
-      DOCS_SEARCH_INGEST_API_KEY: ${{ secrets.DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT }}
     defaults:
       run:
         shell: bash
@@ -185,14 +181,31 @@ jobs:
             -f message="Update versions.json after ${DEPLOYED_VERSION} deploy" \
             -f content="$(echo "$payload" | base64 -w0)" \
             -f branch=gh-pages "${extra_args[@]}"
+      - name: Check OpenSearch ingest key
+        # Gate the indexer without exposing the write credential to the whole job.
+        # Only this trusted shell step and the indexer step below read the secret;
+        # the third-party deploy/artifact actions in this job never see it.
+        id: search-key
+        if: ${{ steps.deployment.outcome == 'success' }}
+        env:
+          DOCS_SEARCH_INGEST_API_KEY: ${{ secrets.DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT }}
+        run: |
+          if [ -n "${DOCS_SEARCH_INGEST_API_KEY}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping OpenSearch indexing because DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT is not set."
+          fi
       - name: Index docs into OpenSearch
-        # Runs only on successful deployments when the ingest key is available.
-        # The indexer reads docs/html files from the artifact downloaded above.
+        # The indexer reads the built HTML from the artifact downloaded above.
         # Non-critical post-deploy enhancement: a transient ingest failure must
         # not mark an otherwise-successful docs deploy as failed.
-        if: ${{ steps.deployment.outcome == 'success' && env.DOCS_SEARCH_INGEST_API_KEY != '' }}
+        if: ${{ steps.deployment.outcome == 'success' && steps.search-key.outputs.enabled == 'true' }}
         continue-on-error: true
         env:
+          # Scoped to this step only (not job-level) so the OpenSearch write
+          # credential is never exposed to the other actions in this job.
+          DOCS_SEARCH_INGEST_API_KEY: ${{ secrets.DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT }}
           SEARCH_API_BASE: https://csl860x2oj.execute-api.us-east-2.amazonaws.com/prod
           DOC_CATALOG_SOURCE_ID: docs-tenstorrent
           DOCS_ID_NAMESPACE: tt-metal

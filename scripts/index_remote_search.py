@@ -45,6 +45,49 @@ def _extract_title(content: str, fallback: str) -> str:
     return _strip_html_to_text(match.group(1)) or fallback
 
 
+def _extract_article_body(content: str) -> str:
+    """Return just the main article region of a Sphinx/RTD page.
+
+    The RTD theme wraps the real page content in an element carrying
+    ``itemprop="articleBody"``; everything else (sidebar, version selector,
+    top/side navigation, footer) is boilerplate chrome that repeats on every
+    page. Indexing the whole document would put that chrome into every body and
+    make unrelated pages match on navigation terms, distorting relevance.
+
+    Falls back to the full document when no article-body marker is present
+    (e.g. custom landing pages), so nothing is silently dropped.
+    """
+    start_match = re.search(
+        r"<(\w+)\b[^>]*\bitemprop\s*=\s*[\"']articleBody[\"'][^>]*>",
+        content,
+        flags=re.IGNORECASE,
+    )
+    if not start_match:
+        return content
+
+    tag = start_match.group(1)
+    open_re = re.compile(r"<" + re.escape(tag) + r"\b", re.IGNORECASE)
+    close_re = re.compile(r"</" + re.escape(tag) + r"\s*>", re.IGNORECASE)
+
+    # Walk forward from the opening tag, tracking nesting of the same tag, to
+    # find the matching close (handles nested <section>/<div> etc.).
+    depth = 1
+    pos = start_match.end()
+    while depth > 0:
+        next_close = close_re.search(content, pos)
+        if not next_close:
+            # Unbalanced markup: take everything after the opening tag.
+            return content[start_match.end() :]
+        next_open = open_re.search(content, pos)
+        if next_open and next_open.start() < next_close.start():
+            depth += 1
+            pos = next_open.end()
+        else:
+            depth -= 1
+            pos = next_close.end()
+    return content[start_match.end() : next_close.start()]
+
+
 def _iter_html_files(output_root: Path) -> Iterable[Path]:
     for path in output_root.rglob("*.html"):
         rel = path.relative_to(output_root).as_posix()
@@ -69,7 +112,8 @@ def _build_documents(
         rel = html_file.relative_to(output_root).as_posix()
         raw = html_file.read_text(encoding="utf-8", errors="ignore")
         title = _extract_title(raw, rel)
-        body = _strip_html_to_text(raw)
+        # Index only the article body, not the surrounding navigation chrome.
+        body = _strip_html_to_text(_extract_article_body(raw))
         doc_id = f"{catalog}:{id_namespace}:{version}:{rel}"
         url = f"{site_base_url}/{rel}"
         docs.append({"id": doc_id, "title": title, "body": body, "url": url})
