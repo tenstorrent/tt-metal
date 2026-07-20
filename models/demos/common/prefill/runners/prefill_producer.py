@@ -502,8 +502,11 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
 
 
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    """Read slot `slot_id`'s KV over [0, real_len) via the table and PCC-check it against the golden
-    trace (DeepSeek/Kimi MLA merged-kvpe single-config table). Returns the min PCC across layers."""
+    """Read slot `slot_id`'s KV over [0, real_len) via the table and validate it. Config 0 (the KVPE
+    cache) is PCC'd vs the golden trace. For a sparse/DSA model the merged table also carries config 1
+    (the index-key cache), which has NO golden — it is sanity-checked (finite + non-zero over its written
+    layers) so a broken config-1 migration / address table still fails. Returns the min KVPE PCC across
+    layers; raises on an index-cache sanity failure."""
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
@@ -536,6 +539,41 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
 
     logger.info(f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> {min_pcc:.6f}")
+
+    # config 1: index cache (sparse/DSA only). No golden -> sanity-check finite + non-zero so a broken
+    # config-1 migration / address table still fails. Config 1 holds all layers on GLM-5.1 and only the
+    # full-indexer layers on GLM-5.2, so iterate its OWN layer count, not NUM_LAYERS.
+    if table.num_configs() > 1:
+        index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
+        n_index_layers = table.config(1).num_layers
+        empty = []
+        for layer in range(n_index_layers):
+            decoded_rows = []
+            for pos in range(0, read_len, tokens_per_block):
+                loc = table.lookup(layer, pos, slot_id, 1)  # config 1 = index cache
+                unique_id = _resolve_unique_id(
+                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                )
+                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+                decoded_rows.append(_decode_bfp8_chunk(raw, index_head_dim))
+            dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
+            if not torch.isfinite(dev_ik).all():
+                raise AssertionError(
+                    f"[producer] index cache slot={slot_id} layer={layer} has non-finite values "
+                    "(bad config-1 migration or address table)"
+                )
+            if dev_ik.abs().sum() == 0:
+                empty.append(layer)
+        if empty:
+            raise AssertionError(
+                f"[producer] index cache slot={slot_id} all-zero over [0,{real_len}) for layers {empty} "
+                "(expected written index keys — bad config-1 migration or address table)"
+            )
+        logger.info(
+            f"[producer] slot {slot_id} index cache sanity OK over [0,{real_len}) across {n_index_layers} "
+            "layers (config 1; no golden -> finite + non-zero check only)"
+        )
+
     return min_pcc
 
 
