@@ -386,6 +386,43 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
     return github_job_id_to_test_reports
 
 
+# Markers printed by the CIv2 runner job-start hook (tenstorrent/github-ci-infra#1408).
+# The same strings appear both as GitHub notice annotations and as plain stdout in the
+# "Set up runner" step of the job log.
+_CIV2_NODE_NAME_LOG_MARKER = "is running on Kubernetes node:"
+_CIV2_SERIAL_LOG_MARKER = "serial number(s):"
+
+
+def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_run_id: int, github_job_id: int):
+    """Fallback parser for the CIv2 (node_name, serial) read from the job log.
+
+    Annotations may be absent. The job-start hook also prints these lines to stdout e.g.:
+        CIV2 runner <name> is running on Kubernetes node: <node>
+        CIV2 runner <name> has serial number(s): <serial>
+
+    Returns (node_name, serial), each None if not found (CPU-only runners have no serial).
+    """
+    log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    assert str(github_job_id).isdigit()
+    matching_logs = list(log_dir.glob(f"{github_job_id}.log"))
+    if not matching_logs or not matching_logs[0].exists():
+        logger.warning(f"Unable to find github job log file for job: {github_job_id}")
+        return None, None
+
+    ansi_pattern = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
+    node_name, serial = None, None
+    with open(matching_logs[0], "r", encoding="utf-8-sig") as log_f:
+        for line in log_f:
+            line = ansi_pattern.sub("", line)
+            if node_name is None and _CIV2_NODE_NAME_LOG_MARKER in line:
+                node_name = line.rsplit(_CIV2_NODE_NAME_LOG_MARKER, 1)[-1].strip() or None
+            elif serial is None and _CIV2_SERIAL_LOG_MARKER in line:
+                serial = line.rsplit(_CIV2_SERIAL_LOG_MARKER, 1)[-1].strip() or None
+            if node_name is not None and serial is not None:
+                break
+    return node_name, serial
+
+
 def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
     # Read <job_id>_annotations.json inside the logs dir
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"

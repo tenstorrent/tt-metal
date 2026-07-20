@@ -376,7 +376,7 @@ def test_generic_runner_labels_derived_from_sim_skus():
         # legacy partial wh_n300 labels
         (["N300", "in-service"], "wh_n300"),
         (["build", "in-service"], None),
-        (["tt-ubuntu-2204-medium-stable"], "tt-ubuntu-2204-medium-stable"),
+        (["tt-ubuntu-2204-medium-stable"], "cpu_medium"),
         (["tt-ubuntu-2204-large-stable"], "tt-ubuntu-2204-large-stable"),
     ],
 )
@@ -461,9 +461,55 @@ def test_civ2_host_name_falls_back_to_truncation_without_annotations():
         "tt-ubuntu-2204-n300-viommu-stable-abcde-runner-fghij",
         ["tt-ubuntu-2204-n300-viommu-stable"],
     )
-    # No node/serial annotations -> keep current ephemeral-suffix truncation behavior
+    # No node/serial annotations and no matching job log -> keep ephemeral-suffix truncation
     row = get_job_row_from_github_job(job, {}, INFRA_TESTS_DIR)
     assert row["host_name"] == "tt-ubuntu-2204-n300-viommu-stable-abcde-runner"
+
+
+def test_get_civ2_node_name_and_serial_from_job_log(tmp_path):
+    logs_dir = tmp_path / "777" / "logs"
+    logs_dir.mkdir(parents=True)
+
+    # Card runner: plain stdout lines plus the ::notice duplicates
+    (logs_dir / "9.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner foo is running on Kubernetes node: f06cs19\n"
+        "2026-07-10T00:01:02.2Z ::notice title=k8s-node-name::CIV2 runner foo is running on Kubernetes node: f06cs19\n"
+        "2026-07-10T00:01:03.1Z CIV2 runner with ephemeral name foo has serial number(s): 010001451172A025\n"
+    )
+    assert workflows.get_civ2_node_name_and_serial_from_job_log(tmp_path, 777, 9) == ("f06cs19", "010001451172A025")
+
+    # CPU-only runner: node present, serial line reports it is not a TT card
+    (logs_dir / "10.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner bar is running on Kubernetes node: cpu-node-1\n"
+        "2026-07-10T00:01:03.1Z Not a Tenstorrent card runner (runner name: bar)\n"
+    )
+    assert workflows.get_civ2_node_name_and_serial_from_job_log(tmp_path, 777, 10) == ("cpu-node-1", None)
+
+    # Missing log file
+    assert workflows.get_civ2_node_name_and_serial_from_job_log(tmp_path, 777, 999) == (None, None)
+
+
+def test_civ2_host_name_uses_job_log_when_annotations_missing(tmp_path):
+    run_id, job_id = 555, 3
+    logs_dir = tmp_path / str(run_id) / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / f"{job_id}.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner tt-ubuntu-2204-n300-stable-88b76-runner-clpfm "
+        "is running on Kubernetes node: f06cs19\n"
+        "2026-07-10T00:01:03.1Z CIV2 runner with ephemeral name tt-ubuntu-2204-n300-stable-88b76-runner-clpfm "
+        "has serial number(s): 010001451172A025\n"
+    )
+
+    job = _make_completed_civ2_job(
+        job_id,
+        "tt-ubuntu-2204-n300-stable-88b76-runner-clpfm",
+        ["tt-ubuntu-2204-n300-stable"],
+    )
+    job["run_id"] = run_id
+
+    # Empty annotations -> falls back to the job log
+    row = get_job_row_from_github_job(job, {}, tmp_path)
+    assert row["host_name"] == "f06cs19_010001451172A025"
 
 
 def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):

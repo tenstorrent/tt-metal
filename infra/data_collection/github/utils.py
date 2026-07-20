@@ -12,7 +12,10 @@ from typing import Optional, Union
 import yaml
 from loguru import logger
 
-from infra.data_collection.github.workflows import is_job_hanging_from_job_log
+from infra.data_collection.github.workflows import (
+    is_job_hanging_from_job_log,
+    get_civ2_node_name_and_serial_from_job_log,
+)
 from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
@@ -285,6 +288,14 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
             node_name, serial = get_civ2_node_name_and_serial_from_annotations(
                 github_job_id_to_annotations.get(github_job_id)
             )
+            # When annotations are unavailable
+            # Fall back to parsing the job log
+            if not (node_name and serial):
+                log_node_name, log_serial = get_civ2_node_name_and_serial_from_job_log(
+                    workflow_outputs_dir, github_job["run_id"], github_job_id
+                )
+                node_name = node_name or log_node_name
+                serial = serial or log_serial
             if node_name and serial:
                 host_name = f"{node_name}_{serial}"
 
