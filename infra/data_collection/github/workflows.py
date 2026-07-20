@@ -189,14 +189,19 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
         github_job_id = int(filename)
         assert github_job_id > 0
 
-        tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
+        # Re-derive the path from the validated integer ids (containment-checked) so the
+        # path handed to the file readers below is sanitized, not the raw globbed path.
+        safe_log_file = _safe_job_log_file(workflow_outputs_dir, workflow_run_id, github_job_id)
+        assert safe_log_file is not None and safe_log_file.is_file(), f"Unsafe or missing log file: {log_file}"
+
+        tt_smi_version = search_for_tt_smi_version_in_log_file_(safe_log_file)
         if tt_smi_version:
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
 
-        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
+        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(safe_log_file)
         for reset in tt_smi_reset:
             reset["workflow_attempt"] = workflow_attempt
-        assert tt_smi_reset is not None, f"Parser returned None for {log_file}"
+        assert tt_smi_reset is not None, f"Parser returned None for {safe_log_file}"
 
         assert github_job_id not in github_job_ids_to_tt_smi_resets, f"Duplicate reset key detected: {github_job_id}"
 
