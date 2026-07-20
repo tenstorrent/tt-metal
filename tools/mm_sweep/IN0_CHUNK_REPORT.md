@@ -56,4 +56,11 @@ Gate = stable multi-percent (≥~2%) win on ≥2 meaningful W>1 shapes, no contr
 correctness/cache/watcher, no host overhead. Result: **one shape clears ≥2% solidly (256×15360×768 −2.8%),
 one is borderline (256×2304×6144 −1.9%), one is marginal (128×15360×768 −1.1%)** — right at the gate
 boundary, and only for C1 on a narrow subclass. Controls clean, correctness bit-identical, watcher clean.
-Per the standing rule, C1 is **not made a production default automatically**; see the decision below.
+
+**Decision: keep C1 as an A/B diagnostic; no production change.** The win is real and stable but modest
+(one shape solidly ≥2%, one borderline, one marginal) and confined to the narrow-N nsb3 W≥3 subclass, so it
+does not warrant a production default / picker trigger now. `DIAG_IN0_CHUNK4/2/1` remain committed behind the
+hashed diag mask (mask 0 = the unchanged baseline ring, byte-identical); the public path, picker, placement,
+ring order, compute order, reduction, and in1 reader are all untouched. A narrow-N-W≥3 picker trigger for C1
+is a documented future candidate if the ~2–3% on the deep-K production shapes (e.g. 256×15360×768) becomes
+worth capturing. Recovery commit: `406f13b593b`.
