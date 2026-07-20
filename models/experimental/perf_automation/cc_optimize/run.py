@@ -1695,20 +1695,13 @@ def optimize_pipeline(
         if wedged:
             wedge_strikes += 1
             if wedge_strikes >= max_wedge:
-                if os.environ.get("PERF_MCP_SUPERVISED") == "1":
-                    print(
-                        "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — exiting so the supervisor "
-                        "reclaims the device (kills holders + reset) and restarts; ladder state is preserved."
-                        % wedge_strikes,
-                        flush=True,
-                    )
-                    _reclaim_device(devices)
-                    os._exit(75)
                 print(
-                    "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — aborting this pipeline "
-                    "(all committed wins are safe)." % wedge_strikes
+                    "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — reset device + continue in-process "
+                    "(no restart; process healthy, chips reset); ladder state is preserved." % wedge_strikes,
+                    flush=True,
                 )
-                break
+                print("  [optimize/cc] " + _reclaim_device(devices), flush=True)
+                wedge_strikes = 0
         else:
             wedge_strikes = 0
         rounds += 1
