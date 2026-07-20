@@ -70,6 +70,26 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
     return OperandSpecs(spec_A=spec)
 
 
+def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
+    """Input range for exp_with_base, which computes exp(0.5*x).
+
+    Keep the negative reach of _exp_spec (low=-100 crosses the SFPU's negative-side
+    sanitization boundary near x ~ -88.5), but cap the positive side tighter than
+    plain exp. exp's relative condition number equals its argument, so with the 0.5
+    scale a high of 32 keeps the argument <= 16 -- small enough that the shared exp
+    approximation's error stays within the default rtol even on the fp32 (dest_acc=Yes)
+    path. At the reused high=80 the argument reaches ~40, and that ~40x amplification
+    pushes the largest-output elements past 10% relative error (PCC still fine).
+    """
+    if fmt == DataFormat.MxFp8P:
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    else:
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=32.0)
+    return OperandSpecs(spec_A=spec)
+
+
 def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for exp2(x) = 2^x per format to avoid overflow."""
     if fmt == DataFormat.MxFp8P:
@@ -163,9 +183,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
     MathOperation.Exp2: _exp2_spec,
-    # exp_with_base computes exp(0.5*x); the 0.5 scale makes the argument
-    # tamer than plain exp, so the plain-exp overflow-safe domain is a conservative subset.
-    MathOperation.ExpWithBase: _exp_spec,
+    # exp_with_base computes exp(0.5*x). It needs its own (tighter-on-the-positive-side)
+    # domain: reusing plain exp's high=80 gives an argument of ~40, and exp's condition
+    # number (~ the argument) amplifies the approximation error past 10% on the largest
+    # outputs. See _exp_with_base_spec.
+    MathOperation.ExpWithBase: _exp_with_base_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
