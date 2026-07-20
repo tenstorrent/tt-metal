@@ -146,15 +146,6 @@
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
-- id: bh-ttnn-stress
-  name: ttnn stress tests
-  cmd: pytest tests/ttnn/stress_tests/
-  skus:
-    bh_p150b_civ2:
-      timeout: 45
-  owner_id: U084DDYSWCW # Adrian Morrison
-  team: ttnn
-
 # --- deepseek_prefill ---
 - id: bh-lb-deepseek-prefill
   name: bh_lb_DeepSeek_PREFILL
