@@ -322,6 +322,7 @@ std::optional<AllShardSpecs> get_shard_specs(
 
     const auto& predicate_shape = predicate_spec.padded_shape();
     const auto& output_shape = output_spec.padded_shape();
+    const auto& tile = output_spec.tile();
 
     TT_FATAL(get_shard_spec(output_spec).has_value(), "Output must have a shard spec");
     const auto& output_shard = *get_shard_spec(output_spec);
@@ -331,14 +332,14 @@ std::optional<AllShardSpecs> get_shard_specs(
             return *get_shard_spec(*spec);
         }
         if (spec.has_value()) {
-            return adjust_to_shape(output_shard, output_shape, spec->padded_shape());
+            return adjust_to_shape(output_shard, output_shape, spec->padded_shape(), tile);
         }
         return output_shard;
     };
 
     return AllShardSpecs{
         predicate_sharded ? *get_shard_spec(predicate_spec)
-                          : adjust_to_shape(output_shard, output_shape, predicate_shape),
+                          : adjust_to_shape(output_shard, output_shape, predicate_shape, tile),
         derive_shard_spec(true_spec, true_sharded),
         derive_shard_spec(false_spec, false_sharded),
         output_shard};
@@ -953,10 +954,23 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     }
     auto output_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t predicate_single_tile_size = tt::tile_size(predicate_data_format);
-    uint32_t value_true_single_tile_size = tt::tile_size(value_true_data_format);
-    uint32_t value_false_single_tile_size = tt::tile_size(value_false_data_format);
-    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    const auto& predicate_tile = predicate_tensor.tensor_spec().tile();
+    const auto& value_true_tile =
+        value_true_tensor.has_value() ? value_true_tensor->tensor_spec().tile() : predicate_tile;
+    const auto& value_false_tile =
+        value_false_tensor.has_value() ? value_false_tensor->tensor_spec().tile() : predicate_tile;
+    const auto& output_tile = output.tensor_spec().tile();
+
+    uint32_t predicate_single_tile_size = predicate_tile.get_tile_size(predicate_data_format);
+    uint32_t value_true_single_tile_size = value_true_tile.get_tile_size(value_true_data_format);
+    uint32_t value_false_single_tile_size = value_false_tile.get_tile_size(value_false_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+
+    // Attach TileDescriptor on TILE-layout CBs so JIT get_tile_size(cb) matches tiny tiles.
+    const auto predicate_tile_desc = TileDescriptor(predicate_tile);
+    const auto value_true_tile_desc = TileDescriptor(value_true_tile);
+    const auto value_false_tile_desc = TileDescriptor(value_false_tile);
+    const auto output_tile_desc = TileDescriptor(output_tile);
 
     // Get shard volumes (using TensorSpec)
     const auto shard_volumes = get_shard_volumes(
@@ -989,6 +1003,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             .buffer_index = static_cast<uint8_t>(predicate_tensor_cb),
             .data_format = predicate_data_format,
             .page_size = predicate_single_tile_size,
+            .tile = predicate_tile_desc,
         }}},
         .buffer = predicate_sharded ? predicate_tensor.buffer() : nullptr,
     });
@@ -1007,6 +1022,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(value_true_tensor_cb),
                 .data_format = value_true_data_format,
                 .page_size = value_true_single_tile_size,
+                .tile = value_true_tile_desc,
             }}},
             .buffer = true_sharded ? value_true_tensor->buffer() : nullptr,
         });
@@ -1020,6 +1036,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(value_false_tensor_cb),
                 .data_format = value_false_data_format,
                 .page_size = value_false_single_tile_size,
+                .tile = value_false_tile_desc,
             }}},
             .buffer = false_sharded ? value_false_tensor->buffer() : nullptr,
         });
@@ -1032,6 +1049,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(value_true_tensor_cb),
                 .data_format = value_true_data_format,
                 .page_size = value_true_single_tile_size,
+                .tile = value_true_tile_desc,
             }}},
             .buffer = true_sharded ? value_true_tensor->buffer() : nullptr,
         });
@@ -1045,6 +1063,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(value_false_tensor_cb),
                 .data_format = value_false_data_format,
                 .page_size = value_false_single_tile_size,
+                .tile = value_false_tile_desc,
             }}},
             .buffer = false_sharded ? value_false_tensor->buffer() : nullptr,
         });
@@ -1060,6 +1079,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
                 .data_format = predicate_data_format,
                 .page_size = predicate_single_tile_size,
+                .tile = predicate_tile_desc,
             }}},
         });
         desc.cbs.push_back(CBDescriptor{
@@ -1069,6 +1089,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
                 .data_format = value_true_data_format,
                 .page_size = value_true_single_tile_size,
+                .tile = value_true_tile_desc,
             }}},
         });
         desc.cbs.push_back(CBDescriptor{
@@ -1078,6 +1099,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
                 .data_format = value_false_data_format,
                 .page_size = value_false_single_tile_size,
+                .tile = value_false_tile_desc,
             }}},
         });
     }
@@ -1092,6 +1114,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             .buffer_index = static_cast<uint8_t>(output_tensor_cb),
             .data_format = output_data_format,
             .page_size = output_single_tile_size,
+            .tile = output_tile_desc,
         }}},
         .buffer = output_sharded ? output.buffer() : nullptr,
     });
