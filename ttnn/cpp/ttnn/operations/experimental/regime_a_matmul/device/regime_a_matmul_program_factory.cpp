@@ -442,16 +442,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["IN0_REPL"] = "4";
         rdefs["IN0_REPL"] = "4";
     }
-    // in0-ring chunk streaming (writer PHASE 1 only; baseline ring). IN0_CHUNK = C (bundle blocks); default
-    // (no define) = C=W = current whole-shard behaviour. Compute + in1 reader unchanged (chunks publish into
-    // the same CB0 offsets in the same K order).
-    if (diag & RegimeADiag::DIAG_IN0_CHUNK4) {
-        wdefs["IN0_CHUNK"] = "4";
-    } else if (diag & RegimeADiag::DIAG_IN0_CHUNK2) {
-        wdefs["IN0_CHUNK"] = "2";
-    } else if (diag & RegimeADiag::DIAG_IN0_CHUNK1) {
-        wdefs["IN0_CHUNK"] = "1";
-    }
 
     // ---- Core range sets: all cores + split-NoC groups (g0 = noc 0, g1 = noc 1) ----
     std::set<CoreRange> all_set, g0_set, g1_set;
