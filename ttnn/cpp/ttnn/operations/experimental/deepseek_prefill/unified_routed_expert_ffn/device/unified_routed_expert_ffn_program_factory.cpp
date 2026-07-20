@@ -53,6 +53,13 @@ constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
 // Reader's own `start` scratch, used when read_x_at_offset (x is a shared
 // buffer). Separate from the writer's so the two RISCs don't share one L1 page.
 constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
+// Row-major bf16 staging for x when x_is_row_major: the reader fills it with
+// row-major sticks and the compute kernel tilizes it to bf8_b into CB_IN0_X.
+// Allocated ONLY in row-major mode (unlike the tiny start scratches, this is a
+// full per-K-block bf16 block, so allocating it unconditionally would grow the
+// bf8_b path's L1). The CT-arg index is passed either way; the CB just isn't
+// created (and never touched by the kernels) when x is already TILE.
+constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -143,6 +150,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // below. Bounds the short-seq GRID_X search to the known-good 2D footprint
     // so we never risk an L1 OOM.
     const uint32_t x_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype()));
+    // Matmul input CB (cb_in0_x). On the row-major path the compute kernel
+    // tilizes bf16 x into it and packs bf8_b — keeping x bf8 through the matmul
+    // (as the TILE path does) instead of bf16, which halves this CB and frees L1
+    // for a larger per_core_M. cb_x_rm stays bf16 (the mcast/tilize source).
+    const uint32_t in0_x_ts = op.x_is_row_major ? tt::tile_size(tt::DataFormat::Bfp8_b) : x_ts;
     const uint32_t w_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_proj.dtype()));
     const uint32_t p_ts = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t im_ts = tt::tile_size(tt::DataFormat::Bfp8_b);
@@ -152,7 +164,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t pcN_d = (N_down_tiles_full + gx - 1) / gx;
         const uint32_t ibw_d = pcN_gu;
         uint64_t b = 0;
-        b += 2ull * pcM * ibw_gu * x_ts;     // CB_IN0_X (double-buffered)
+        b += (op.x_is_row_major ? 1ull : 2ull) * pcM * ibw_gu * in0_x_ts;  // CB_IN0_X (single-buf on RM)
+        if (op.x_is_row_major) {
+            b += 2ull * pcM * ibw_gu * p_ts;  // CB_X_RM bf16 staging (row-major only)
+        }
         b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_GATE
         b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_UP
         b += 2ull * ibw_d * pcN_d * w_ts;    // CB_IN1_DOWN
@@ -257,17 +272,23 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const tt::DataFormat up_df = tt::tt_metal::datatype_to_dataformat_converter(t.up_proj.dtype());
     const tt::DataFormat down_df = tt::tt_metal::datatype_to_dataformat_converter(t.down_proj.dtype());
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
-    // Intermediate and partials share the same format — required by the
-    // compute kernel's mm_init pattern (mm_init's 3rd arg drives the packer's
-    // data-format config; mismatched formats need explicit pack reconfig that
-    // the kernel doesn't do). Use bfp8_b for both: 1KB/tile is half the bf16
-    // cost so we fit in L1 with both intermediates and partials sized to the
-    // full per-core block.
+    // Partials vs intermediates deliberately differ in format; the compute
+    // kernel pack-reconfigs between them (partials <-> intermed) explicitly.
+    //   * partials_gu/partials_d are Float16_b: they hold the K-loop matmul
+    //     accumulator (PACKER_L1_ACC adds each K-block's result into the same L1
+    //     tiles), so block-float bf8 would lose precision across K-blocks. bf16
+    //     keeps a per-element mantissa for the running sum.
+    //   * intermediates (gate/up_intermed, activated) are Bfp8_b: post-activation
+    //     per-element values feeding the next matmul, not accumulators, so
+    //     1KB/tile (half the bf16 cost) is enough and saves L1.
     const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
 
-    const uint32_t x_tile_size = tt::tile_size(x_df);
+    // See in0_x_ts above: cb_in0_x is bf8_b on the row-major path (tilize output),
+    // else it matches x's dtype (bf8_b on the TILE path).
+    const tt::DataFormat in0_x_df = op.x_is_row_major ? tt::DataFormat::Bfp8_b : x_df;
+    const uint32_t in0_x_tile_size = tt::tile_size(in0_x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
     const uint32_t up_tile_size = tt::tile_size(up_df);
     const uint32_t down_tile_size = tt::tile_size(down_df);
@@ -292,7 +313,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // in the "circular buffers" section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * 2) * x_tile_size;                               // cb_in0_x
+        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
+                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
+        if (op.x_is_row_major) {
+            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+        }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
         total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;        // cb_in1_down
@@ -492,7 +517,24 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // while compute consumes K-block N. PM FPU util = 0 today says we're
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
-    make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles * 2, x_tile_size);
+    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
+    // both on the compute threads sharing DST -> serial), so a second slot buys no
+    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
+    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
+    // overlap).
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
+    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
+    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
+    // while N's posted mcast still drains — single-buffering reuses the slot
+    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
+    // unchanged.
+    if (op.x_is_row_major) {
+        make_cb(
+            CB_X_RM,
+            tt::DataFormat::Float16_b,
+            /*tiles=*/gu_in0_block_num_tiles * 2,
+            tt::tile_size(tt::DataFormat::Float16_b));
+    }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
     make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * 2, down_tile_size);
@@ -638,6 +680,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         static_cast<uint32_t>(op.read_x_at_offset),
         // CB_START_SCRATCH_READER — L1 page holding the fetched `start` vector.
         CB_START_SCRATCH_READER,
+        // x_is_row_major — 1 => x is ROW_MAJOR bf16; reader streams sticks into
+        // CB_X_RM and compute tilizes. 0 => x is TILE bf8_b, read directly.
+        static_cast<uint32_t>(op.x_is_row_major),
+        // CB_X_RM — row-major bf16 staging (only allocated/used in row-major mode).
+        CB_X_RM,
+        // TILE_HEIGHT — rows (token-row sticks) per tile-row; sizes the reader's
+        // row-major x reads and its token-count -> tile-row conversion.
+        TILE,
+        // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
+        // the row-major path).
+        tt::datum_size(tt::DataFormat::Float16_b),
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -754,8 +807,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // let compute convert count -> effective_chunks and bound the loop.
         op.local_expert_id,
         chunk_M_tiles,
+        // x_is_row_major — 1 => compute tilizes CB_X_RM -> CB_IN0_X before the
+        // gate/up matmul. 0 => x already TILE in CB_IN0_X (no tilize).
+        static_cast<uint32_t>(op.x_is_row_major),
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
+        // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
+        {"cb_x_rm", CB_X_RM},
         {"cb_in0_x", CB_IN0_X},
         {"cb_in1_gate", CB_IN1_GATE},
         {"cb_in1_up", CB_IN1_UP},

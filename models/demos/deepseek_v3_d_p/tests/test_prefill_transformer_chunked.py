@@ -40,7 +40,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -478,7 +478,8 @@ def run_chunked_transformer(
     # Sparse (DSA) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache (sparse_sdpa reads it
     # natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE default that dense
     # ring_mla wants. Match the cache format to the path.
-    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if resolve_has_indexer(config) else {}
+    has_indexer = resolve_has_indexer(config)
+    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if has_indexer else {}
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
@@ -492,21 +493,24 @@ def run_chunked_transformer(
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
     # forward, exactly like the KVPE cache. It is user-major layer-stacked
-    # [num_users*num_layers, 1, T, D_idx], so the indexer addresses slot user*num_layers + cache_layer_idx —
-    # allocate it with the SAME num_kvpe_cache_layers=num_layers as the KVPE cache. bf8 (half the memory,
-    # top-k within bf16 noise). Dense (non-sparse) variants get None (natural-path / dense MLA use no cache).
+    # [num_users*index_cache_layers, 1, T, D_idx], so the indexer addresses slot
+    # user*index_cache_layers + cache_layer_idx. Unlike the per-layer KVPE cache, the indexer stride is the
+    # COMPACTED full-indexer count (num_full_indexer_layers) for GLM-5.2 cross-layer reuse — "shared" layers
+    # reuse a "full" layer's cache and get no slot of their own — falling back to num_layers when there is no
+    # indexer_types map. bf8 (half the memory, top-k within bf16 noise). Dense variants get None.
     tt_index_kv_cache = None
-    if resolve_has_indexer(config):
+    if has_indexer:
         # A sparse config must carry index_head_dim; assert rather than silently defaulting so a
         # misconfigured (missing-field) sparse setup fails loudly with a clear message.
         assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
+        index_cache_layers = num_full_indexer_layers(config) or num_layers
         tt_index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
             mesh_device=mesh_device,
             seq_len=SEQ_CACHE,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_layers,
+            num_kvpe_cache_layers=index_cache_layers,
             num_users=1,
             dtype=ttnn.bfloat8_b,
         )

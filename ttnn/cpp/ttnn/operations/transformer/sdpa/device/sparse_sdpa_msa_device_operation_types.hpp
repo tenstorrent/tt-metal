@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include <optional>
 
 namespace ttnn::prim {
@@ -18,6 +19,8 @@ struct SparseSDPAMsaParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // Selects one [B,n_kv,T,*] cache slot. The value is patched as runtime K/V tile offsets and is not hashed.
     std::optional<uint32_t> cache_batch_idx = std::nullopt;
+    // Set -> the K/V cache is block-cyclic across SP; the gather kernels apply the invP block remap. Hashed.
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     // Global position of query row 0.
     // Set -> enforce a token-level causal mask on the diagonal block (the query's own block, whose later tokens are
     // future). Unset -> no token-level causality; the op attends the full selected blocks.
@@ -26,6 +29,7 @@ struct SparseSDPAMsaParams {
     std::optional<uint32_t> cluster_axis = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
+    bool has_block_cyclic() const { return block_cyclic.has_value(); }
 };
 
 struct SparseSDPAMsaInputs {
