@@ -271,7 +271,7 @@ extern "C" void __emule_fiber_park_locked(const void* key) {
 }
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
-extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
+extern "C" void __emule_fiber_read_latency(void) { efib::FiberScheduler::instance().latency_park(); }
 extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }

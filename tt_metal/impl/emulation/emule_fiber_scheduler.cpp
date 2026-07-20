@@ -38,7 +38,7 @@ namespace tt::tt_metal::emule_fiber {
 
 namespace {
 
-enum class FiberState : uint8_t { Ready, Running, Parked, QuiescenceDeferred, Done };
+enum class FiberState : uint8_t { Ready, Running, Parked, LatencyParked, Done };
 
 struct Fiber {
     ucontext_t ctx{};
@@ -87,9 +87,8 @@ struct FiberSchedulerImpl {
     std::vector<std::deque<Fiber*>> ready_;            // per-worker ready queues (fibers are
                                                        // pinned: ready_[w] holds only home==w)
     std::unordered_map<const void*, Fiber*> parked_;   // key -> intrusive list head
-    std::vector<Fiber*> quiescence_deferred_;          // fibers deferred to quiescence: re-queued
-                                                       // at lowest priority, released only once the
-                                                       // scheduler reaches quiescence (below)
+    std::vector<Fiber*> latency_parked_;               // fibers modeling NOC read latency:
+                                                       // released only at quiescence (below)
     std::vector<std::unique_ptr<Fiber>> all_;          // ownership of every spawned fiber
 
     unsigned K_ = 1;           // persistent pool size (read once at pool creation)
@@ -208,22 +207,22 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
         if (abort_flag_) break;
         // Spin-starvation release: a kernel busy-wait (do{invalidate_l1_cache();}while
         // (<raw L1 word>)) yields every iteration, so the ready queue never empties and
-        // full quiescence is never reached — quiescence-deferred reads never "complete" and a
+        // full quiescence is never reached — latency-parked reads never "complete" and a
         // raw-store lost wakeup never re-checks. On churn past the window with zero
         // progress, force-complete the reads AND wake every parked fiber to re-poll its
         // predicate. Gated so healthy runs (progress advancing) never trigger.
-        if (!quiescence_deferred_.empty() || !parked_.empty()) {
+        if (!latency_parked_.empty() || !parked_.empty()) {
             uint64_t p = progress_.load(std::memory_order_relaxed);
             uint64_t r = resumptions_.load(std::memory_order_relaxed);
             if (p != last_progress_val_) {
                 last_progress_val_ = p;
                 last_progress_resump_ = r;
             } else if (r - last_progress_resump_ > spin_release_window) {
-                for (Fiber* f : quiescence_deferred_) {
+                for (Fiber* f : latency_parked_) {
                     f->state = FiberState::Ready;
                     ready_[f->home].push_back(f);
                 }
-                quiescence_deferred_.clear();
+                latency_parked_.clear();
                 for (auto& kv : parked_) {
                     Fiber* f = kv.second;
                     while (f) {
@@ -248,18 +247,16 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
             // at W>1 (a worker counts itself idle before re-observing a just-enqueued
             // fiber). See tt-emule docs/fiber-engine.md.
             if (idle_ == W_ && running_ == 0 && !any_ready()) {
-                // Quiescence-defer release: a deferred fiber was re-queued at lowest
-                // priority to run only once every other runnable fiber has. We are at
-                // that quiescence point now — release them all back to ready. Clients
-                // use this to reproduce a silicon ordering (e.g. argmax's first read
-                // barrier, or a two-producer cb_wait_front letting its co-producer run).
+                // Read-latency model: a latency-parked fiber is an in-flight read. At
+                // quiescence the read "completes" — release them all (lowest priority),
+                // reproducing the silicon ordering some kernels lean on.
                 // See tt-emule docs/fiber-engine.md.
-                if (!quiescence_deferred_.empty()) {
-                    for (Fiber* f : quiescence_deferred_) {
+                if (!latency_parked_.empty()) {
+                    for (Fiber* f : latency_parked_) {
                         f->state = FiberState::Ready;
                         ready_[f->home].push_back(f);
                     }
-                    quiescence_deferred_.clear();
+                    latency_parked_.clear();
                     cv_.notify_all();
                     --idle_;
                     continue;
@@ -349,19 +346,17 @@ void FiberScheduler::park_locked(const void* key) {
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
 }
 
-void FiberScheduler::quiescence_park() {
-    // Defer the current fiber to scheduler quiescence: re-queue it at lowest priority,
-    // released only once every other runnable fiber has run (see worker_loop). No key, no
-    // predicate; takes mu_ itself and hands it to the worker loop across the switch (mirrors
-    // park_locked). Clients use it to reproduce a silicon ordering (argmax's first read
-    // barrier; a two-producer cb_wait_front letting its co-producer run).
+void FiberScheduler::latency_park() {
+    // Model NOC read latency: defer the current fiber as lowest-priority "in-flight" work,
+    // released only at quiescence (see worker_loop). No key, no predicate; takes mu_ itself
+    // and hands it to the worker loop across the switch (mirrors park_locked).
     Fiber* f = t_current;
     if (!f) {
-        return;  // only meaningful inside a fiber; insurance against a host-side call
+        return;  // read barriers only run inside a fiber; insurance against a host-side call
     }
     p_->mu_.lock();
-    f->state = FiberState::QuiescenceDeferred;
-    p_->quiescence_deferred_.push_back(f);
+    f->state = FiberState::LatencyParked;
+    p_->latency_parked_.push_back(f);
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
 }
 
@@ -466,8 +461,8 @@ std::string FiberSchedulerImpl::dump_parked() {
             os << " waiting on " << (name ? name : "sync object") << " (key " << key << ")\n";
         }
     }
-    if (!quiescence_deferred_.empty()) {
-        os << "  " << quiescence_deferred_.size() << " fiber(s) deferred to quiescence\n";
+    if (!latency_parked_.empty()) {
+        os << "  " << latency_parked_.size() << " fiber(s) in read-latency flight\n";
     }
     return os.str();
 }
@@ -537,7 +532,7 @@ void FiberScheduler::run_until_idle() {
         p_->deadlock_ = false;
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
-        p_->quiescence_deferred_.clear();
+        p_->latency_parked_.clear();
         // Per-run recovery watermarks — reset alongside progress_/resumptions_ (below).
         // A stale last_deadlock_repoll_progress_ from a prior run can collide with this
         // run's quiescence progress and skip the recovery re-poll → spurious deadlock.
@@ -597,7 +592,7 @@ void FiberScheduler::run_until_idle() {
         }
         p_->ready_.clear();
         p_->parked_.clear();
-        p_->quiescence_deferred_.clear();
+        p_->latency_parked_.clear();
         p_->all_.clear();   // frees Fiber stacks via ~Fiber
     }
 
