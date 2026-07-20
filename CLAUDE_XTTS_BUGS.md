@@ -7,47 +7,53 @@ Status legend: 🔴 open · 🟡 worked around · 🟢 fixed
 
 ---
 
-## BUG-1 🟡 `TTNNGPTDecoder` returns garbage when `max_seq` >> actual sequence length
+## BUG-1 🟢 `sdpa_decode` returns garbage when the KV-cache length is an ODD number of tiles
 - **Block:** 3 (GPT) — see `CLAUDE_XTTS_GPT.md`.
 - **Discovered:** 2026-07-17, during full-pipeline integration (GPT prefill+decode on TT).
-- **Component:** `models/experimental/xtts_v2/tt/ttnn_xtts_gpt_decode.py` → `TTNNGPTDecoder`
-  (the non-traced KV-cached decode).
+- **Root-caused & fixed:** 2026-07-20.
+- **Component:** `models/experimental/xtts_v2/tt/ttnn_xtts_gpt_decode.py` → both
+  `TTNNGPTDecoder` (non-traced) and `TTNNGPTTracedDecoder` (traced).
 
 ### Symptom
-Decode is correct when the KV cache is sized tightly to the sequence, but produces garbage
-when the cache is much larger than the actual decode position:
+Decode is correct when the KV cache is sized to certain lengths and garbage at others:
 - same emb/prompt → teacher-forced next-code agreement **96%** at `max_seq=256`,
   **0%** at `max_seq=736` (first generated code flips 81 → 405).
-- Prefill path (`TTNNGPTCore`) is unaffected; the traced decoder
-  (`TTNNGPTTracedDecoder`) is expected unaffected (it uses `cur_pos_tensor`).
+- Latent PCC vs the prefill golden: **0.9997** at `max_seq=256`, **0.631** at `max_seq=736`.
+- Originally (mis)attributed to "large unused cache region not masked" and to the
+  int-vs-tensor `cur_pos`. **Both wrong** — see below.
 
-### Root cause
-`TTNNGPTDecoder._attn_decode` calls
-`ttnn.transformer.scaled_dot_product_attention_decode(..., cur_pos=[self.pos])`
-with a **Python-int** `cur_pos`. The large unused/zero region of the preallocated cache
-beyond `cur_pos` is not masked cleanly, and the error grows with the number of unused
-slots. (Cache is `[1, n_head, max_seq, head_dim]`, zero-initialised.)
+### Root cause (corrected)
+`ttnn.transformer.scaled_dot_product_attention_decode` produces a wrong result whenever the
+**K/V cache sequence length is an *odd* number of 32-tiles** (i.e. not a multiple of 64),
+independent of `cur_pos` and independent of whether `cur_pos` is a Python int or a
+`cur_pos_tensor`. Measured with a fixed cache slice (`cur_pos` held at 0..63):
+
+| cache tiles | 8 (256) | 20 (640) | 21 (672) | 22 (704) | 23 (736) | 24 (768) | 28 (896) | 32 (1024) |
+|---|---|---|---|---|---|---|---|---|
+| latent PCC | 0.9997 | 0.9997 | **0.631** | 0.9997 | **0.631** | 0.9997 | 0.9997 | 0.9997 |
+
+Odd tile counts (21, 23) fail; even tile counts pass. `max_seq=256` (8 tiles, even) worked
+by luck; `max_seq=736` (23 tiles, odd) is the failure the pipeline hit. The non-traced and
+traced decoders fail **identically** (bit-for-bit PCC 0.6310340), which is what disproved the
+`cur_pos_tensor` hypothesis — the traced decoder already uses `cur_pos_tensor` and still fails.
+Passing an explicit `SDPAProgramConfig` (`k_chunk_size` 0/32) does **not** help either. This
+is an `sdpa_decode` flash-decode kernel bug (even-tile work-split assumption).
+
+### Fix (applied)
+Round the allocated KV-cache seq length **up to a multiple of 64** (even tile count) in both
+decoders' `__init__`: `self.max_seq = ((max_seq + 63) // 64) * 64`, and allocate the zero
+cache with `self.max_seq`. Trace-compatible (fixed graph), no per-step slicing, negligible
+memory cost. Verified: requests `max_seq` 256→256, 605→640, 736→768 all give PCC **0.99972**
+on both the non-traced and traced decoders.
 
 ### Why tests missed it
-`tests/test_gpt_decode_pcc.py` sizes `max_seq = round_up(S)` (tight), so the unused region
-is small and the error stays negligible (PCC 0.9997). No test exercised a large `max_seq`.
+`tests/test_gpt_decode_pcc.py` sizes `max_seq = round_up(S)` to a multiple of 32 — which for
+the short golden (S=64 → 64 = 2 tiles) happened to be even. See the regression test added at
+`tests/test_gpt_decode_pcc.py` (odd-tile `max_seq` case).
 
-### Fix (planned)
-1. Switch `TTNNGPTDecoder` to a device **`cur_pos_tensor`** (int32 `[1]`, updated in place)
-   instead of `cur_pos=[int]` — mirror what `TTNNGPTTracedDecoder` already does with
-   `paged_update_cache(update_idxs_tensor=...)` + `sdpa_decode(cur_pos_tensor=...)`.
-2. Add a regression test: decode with a large `max_seq` (e.g. 736) and assert PCC vs the
-   prefill golden stays >0.999.
-
-### Current workaround
-Callers size `max_seq` close to the real sequence length. The temp pipeline
-(`$CLAUDE_JOB_DIR/tmp/pipe/phase_tt.py`) sets `max_seq = round_up(S_hint)` from coqui's
-sequence length and caps `max_new` accordingly.
-
-### Repro
-Feed a fixed prompt/emb through `TTNNGPTDecoder` twice, once with tight `max_seq` and once
-with a large one, and compare `mel_head` argmax agreement (or latent PCC) vs a golden — the
-large-cache run diverges.
+### Repro (historical)
+Feed the golden `inputs_embeds` [1,64,1024] through `TTNNGPTDecoder` at `max_seq=736`
+(pre-fix) vs `768` and compare latent PCC vs `golden/gpt/latents.pt`: 0.631 vs 0.9997.
 
 ---
 

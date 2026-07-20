@@ -45,14 +45,18 @@ class TTNNGPTDecoder(TTNNGPTCore):
             activation_dtype=ttnn.bfloat16,
             attention="sdpa",
         )
-        self.max_seq = max_seq
+        # BUG-1: scaled_dot_product_attention_decode returns garbage when the KV-cache
+        # sequence length is an ODD number of 32-tiles (e.g. 736 = 23 tiles -> PCC 0.63).
+        # An even tile count (multiple of 64) is always correct. Round the cache up so the
+        # flash-decode kernel never sees an odd tile count, whatever length the caller asks.
+        self.max_seq = ((max_seq + 63) // 64) * 64
         self.pos = 0
         self.k_cache = []
         self.v_cache = []
         cfg = self.config
         import torch
 
-        zeros = torch.zeros(1, cfg.n_head, max_seq, cfg.head_dim)
+        zeros = torch.zeros(1, cfg.n_head, self.max_seq, cfg.head_dim)
         for _ in range(cfg.n_layer):
             self.k_cache.append(ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device))
             self.v_cache.append(ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device))
@@ -134,8 +138,10 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         import torch
 
         cfg = self.config
-        self.max_seq = max_seq
-        zeros = torch.zeros(1, cfg.n_head, max_seq, cfg.head_dim)
+        # BUG-1: sdpa_decode is wrong when the KV-cache length is an odd number of 32-tiles;
+        # round up to an even tile count (multiple of 64). See TTNNGPTDecoder for details.
+        self.max_seq = ((max_seq + 63) // 64) * 64
+        zeros = torch.zeros(1, cfg.n_head, self.max_seq, cfg.head_dim)
         self.k_cache = [
             ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             for _ in range(cfg.n_layer)
