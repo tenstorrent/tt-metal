@@ -221,10 +221,20 @@ geometry reversal: **3,066 → 20,097 cycles** for lines and **43,065 cycles** o
 `2x8`.
 
 ## ⭐⭐⭐ T3 — [`tensix_all_reduce`](tensix_all_reduce/README.md)
-**Concepts:** Tensix-to-Tensix collective topology and reduction work distribution.
+**Concepts:** Tensix-to-Tensix collective topology and reduction work distribution (seven variants,
+incl. two grid-hierarchy vs. flat-root reducers).
 **Situation:** every core in each rectangular L1-sharded group contributes the same tile block,
 and every member needs the elementwise group sum.
 **Measured result:** with FPU destination-reuse reduction, two-phase worker reduction beats ring
 push by **4.64–4.73×** on 8-core lines and **6.48×** on a 16-core `2x8` group (**8.36 µs** versus
-**54.18 µs**, 9.8% noise). On 4-core groups, root reduction is fastest at **4.00 µs** because the
-extra two-phase handoff is not amortized.
+**54.18 µs**, 9.8% noise, WH B0). On 4-core groups, root reduction is fastest at **4.00 µs** because
+the extra two-phase handoff is not amortized. On **fully 2-D groups the best reducer is
+regime-dependent** (Blackhole): under **grid-filling / multi-group NoC contention**,
+`two_stage_grid_reduce` (hierarchical reduce along one grid axis then the other: reduce x →
+row-leaders, reduce y → root, mcast back) wins — **1.45–1.60×** over flat root, **3.58–3.88 µs**, and
+the only steady variant (<1% vs 15–28% noise) because its per-axis fan-in stays small (`cols`, then
+`rows`) and its traffic is localized. But in an **isolated single group with several tiles/core** the
+tile-index `two_phase_reduce_mcast` wins instead (**~2×** over root) by parallelizing across tiles;
+at **1 tile/core** grid two-stage wins again (low fan-in; two-phase degenerates to one worker).
+Rule of thumb: **grid two-stage when the grid is busy or the payload is tiny; tile-index two-phase
+for an isolated, well-fed group.** On a 1-D group grid two-stage collapses to the single root reduce.
