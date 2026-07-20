@@ -280,17 +280,27 @@ def _create_general_program_descriptor(
     wt = w // TILE_W
     nt_h = folded_h // TILE_H
     row_bytes = w * elem_size
+    tile_row_bytes = TILE_W * elem_size
 
-    # Input read geometry: interleaved => one full-width page per row; sharded =>
-    # ceil(W / shard_width) width-chunk pages per row (last chunk padded).
+    # Wide-W chunking (Refinement 2d, lever #1): process Wt_chunk output tile-cols
+    # per pass so the CBs are 2*Wt_chunk*tile — bounded by a constant, not Wt.
+    # _pick_wt_chunk returns a divisor of wt so the chunks tile W exactly.
+    wt_chunk = _pick_wt_chunk(wt)
+    num_chunks = wt // wt_chunk
+    chunk_width_bytes = wt_chunk * tile_row_bytes
+
+    # Input read geometry: interleaved / HEIGHT-sharded => one full-width page per
+    # row (npr=1); WIDTH/BLOCK-sharded => ceil(W / shard_width) width-split pages
+    # per row. A chunk's byte range may span a subset of these shard pages — the
+    # general reader walks the overlap per stick (see kernel header).
     in_mc = input_tensor.memory_config()
     if in_mc.is_sharded():
         _, in_shard_w, _ = _shard_dims(in_mc)
         npr = -(-w // in_shard_w)  # ceil
-        chunk_bytes = in_shard_w * elem_size
+        shard_page_bytes = in_shard_w * elem_size
     else:
         npr = 1
-        chunk_bytes = row_bytes
+        shard_page_bytes = row_bytes
 
     # Work split across the compute grid by output tile-rows (independent work —
     # each core reads its own input rows and writes its own output tiles).
@@ -304,17 +314,18 @@ def _create_general_program_descriptor(
     assignment = _assign_tile_rows(nt_h, num_cores)
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
-    # Streaming CBs, double-buffered, bounded by Wt (small for the sharded golden
-    # shapes; wide-W HEIGHT crossover chunking is a perf follow-up, Refinement 2d).
+    # Streaming CBs, double-buffered, bounded by Wt_chunk (constant in W — the
+    # Refinement 2d wide-W bound: 2*Wt_chunk*tile regardless of how wide the
+    # tensor is).
     cb_rm_in_desc = ttnn.CBDescriptor(
-        total_size=2 * wt * in_tile_size,
+        total_size=2 * wt_chunk * in_tile_size,
         core_ranges=core_ranges,
         format_descriptors=[
             ttnn.CBFormatDescriptor(buffer_index=CB_RM_IN, data_format=in_dtype, page_size=in_tile_size)
         ],
     )
     cb_tiled_out_desc = ttnn.CBDescriptor(
-        total_size=2 * wt * out_tile_size,
+        total_size=2 * wt_chunk * out_tile_size,
         core_ranges=core_ranges,
         format_descriptors=[
             ttnn.CBFormatDescriptor(buffer_index=CB_TILED_OUT, data_format=out_dtype, page_size=out_tile_size)
@@ -324,13 +335,13 @@ def _create_general_program_descriptor(
     in_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
 
-    reader_ct_args = [wt, row_bytes, chunk_bytes, npr]
+    reader_ct_args = [wt_chunk, num_chunks, chunk_width_bytes, row_bytes, shard_page_bytes, npr]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct_args = [out_tile_size, wt, wt, 1]  # Wt, Wt_chunk=Wt, num_chunks=1
+    writer_ct_args = [out_tile_size, wt, wt_chunk, num_chunks]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     is_fp32_in, compute_config = _fp32_compute_config(in_dtype, out_dtype)
-    compute_ct_args = [wt, 1, is_fp32_in]
+    compute_ct_args = [wt_chunk, num_chunks, is_fp32_in]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
