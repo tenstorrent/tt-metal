@@ -16,11 +16,13 @@ import ttnn
 
 CB_GATHER = 0
 CB_PARTIAL = 3
+CB_STAGE2 = 4
 CB_OUTPUT = 16
 
 SEM_PROGRESS = 0
 SEM_MCAST_READY = 1
 SEM_MCAST_CONSUMED = 2
+SEM_STAGE2 = 3
 
 VARIANTS = (
     "ring_push",
@@ -29,6 +31,7 @@ VARIANTS = (
     "mcast_all_gather",
     "reduce_root_mcast",
     "two_phase_reduce_mcast",
+    "two_stage_grid_reduce",
 )
 
 
@@ -587,6 +590,213 @@ void kernel_main() {
 """
 
 
+_GRID_REDUCE_COMPUTE_KERNEL = r"""
+#include <stdint.h>
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+
+// Reduce `num_blocks` contiguous blocks (each `num_tiles` tiles) waiting in `in_cb` into a single
+// `num_tiles` block pushed to `out_cb`.  Contributors are paired with FPU add_tiles accumulating in
+// FP32 DST; an odd block count seeds DST with one copied block.  The live DST batch is the
+// JIT-derived DEST_AUTO_LIMIT.
+inline void reduce_blocks(uint32_t in_cb, uint32_t out_cb, uint32_t num_blocks, uint32_t num_tiles) {
+    constexpr uint32_t max_dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
+    CircularBuffer in(in_cb);
+    CircularBuffer out(out_cb);
+
+    in.wait_front(num_blocks * num_tiles);
+    for (uint32_t tile_base = 0; tile_base < num_tiles; tile_base += max_dst_tiles) {
+        const uint32_t remaining = num_tiles - tile_base;
+        const uint32_t dst_tiles = remaining < max_dst_tiles ? remaining : max_dst_tiles;
+        out.reserve_back(dst_tiles);
+        tile_regs_acquire();
+
+        uint32_t first_pair = 0;
+        if (num_blocks & 1) {
+            copy_tile_to_dst_init_short(in_cb);
+            for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
+                copy_tile(in_cb, tile_base + tile, tile);
+            }
+            first_pair = 1;
+        }
+
+        if (num_blocks > 1) {
+            add_tiles_init(in_cb, in_cb, true);
+            for (uint32_t block = first_pair; block < num_blocks; block += 2) {
+                for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
+                    const uint32_t lhs = block * num_tiles + tile_base + tile;
+                    const uint32_t rhs = (block + 1) * num_tiles + tile_base + tile;
+                    add_tiles(in_cb, in_cb, lhs, rhs, tile);
+                }
+            }
+        }
+
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
+            pack_tile(tile, out_cb);
+        }
+        tile_regs_release();
+        out.push_back(dst_tiles);
+    }
+    in.pop_front(num_blocks * num_tiles);
+}
+
+void kernel_main() {
+    constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_stage2 = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_output = get_compile_time_arg_val(3);
+
+    const uint32_t stage1_blocks = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t kernel_iters = get_arg_val<uint32_t>(2);
+    const uint32_t is_root = get_arg_val<uint32_t>(3);
+    const uint32_t stage2_blocks = get_arg_val<uint32_t>(4);
+
+    // All CBs are the same bf16 tile format, so one init covers the packer/unpacker for both stages.
+    binary_op_init_common(cb_gather, cb_gather, cb_partial);
+
+    for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+        // Stage 1: reduce this row's blocks into the row partial.
+        reduce_blocks(cb_gather, cb_partial, stage1_blocks, num_tiles);
+        // Stage 2 (root only): reduce the gathered row partials into the group sum.
+        if (is_root) {
+            reduce_blocks(cb_stage2, cb_output, stage2_blocks, num_tiles);
+        }
+    }
+}
+"""
+
+
+_TWO_STAGE_GRID_KERNEL = r"""
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "hostdevcommon/common_values.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+
+using namespace dataflow_kernel_lib;
+
+void kernel_main() {
+    constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_stage2 = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_output = get_compile_time_arg_val(3);
+    constexpr uint32_t scalars = McastArgs<4, 8>::next_compile_time_args_offset();
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
+    constexpr uint32_t rows = get_compile_time_arg_val(scalars + 2);
+    constexpr uint32_t cols = get_compile_time_arg_val(scalars + 3);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 4);
+    constexpr uint32_t stage1_sem_id = get_compile_time_arg_val(scalars + 5);
+    constexpr uint32_t stage2_sem_id = get_compile_time_arg_val(scalars + 6);
+    constexpr auto mc = McastArgs<4, 8>();
+
+    const uint32_t input_addr = get_arg_val<uint32_t>(0);
+    const uint32_t output_addr = get_arg_val<uint32_t>(1);
+    const uint32_t my_col = get_arg_val<uint32_t>(2);
+    const uint32_t my_row = get_arg_val<uint32_t>(3);
+    const uint32_t leader_x = get_arg_val<uint32_t>(4);
+    const uint32_t leader_y = get_arg_val<uint32_t>(5);
+    const uint32_t root_x = get_arg_val<uint32_t>(6);
+    const uint32_t root_y = get_arg_val<uint32_t>(7);
+    constexpr uint32_t payload_bytes = num_tiles * page_bytes;
+
+    Semaphore<> stage1(stage1_sem_id);
+    Semaphore<> stage2(stage2_sem_id);
+    Noc noc;
+
+    const bool is_leader = (my_col == 0);
+    const bool is_root = is_leader && (my_row == 0);
+
+    if (is_root) {
+        // Reduces its own row (stage 1), assembles the row partials (stage 2), then multicasts.
+        CircularBuffer gather(cb_gather);
+        CircularBuffer partial(cb_partial);
+        CircularBuffer stage2cb(cb_stage2);
+        CircularBuffer output(cb_output);
+        auto sender = mc.sender(noc);
+        for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+            gather.reserve_back(cols * num_tiles);
+            const uint32_t gather_addr = gather.get_write_ptr();
+            noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], input_addr), gather_addr, payload_bytes);
+            noc_async_read_barrier();
+            if (cols > 1) {
+                stage1.wait_min((iter + 1) * (cols - 1));
+            }
+            gather.push_back(cols * num_tiles);
+
+            stage2cb.reserve_back(rows * num_tiles);
+            const uint32_t stage2_addr = stage2cb.get_write_ptr();
+            partial.wait_front(num_tiles);
+            const uint32_t partial_addr = partial.get_read_ptr();
+            noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], partial_addr), stage2_addr, payload_bytes);
+            noc_async_read_barrier();
+            partial.pop_front(num_tiles);
+            if (rows > 1) {
+                stage2.wait_min((iter + 1) * (rows - 1));
+            }
+            stage2cb.push_back(rows * num_tiles);
+
+            output.wait_front(num_tiles);
+            sender.send(output_addr, output_addr, payload_bytes);
+            output.pop_front(num_tiles);
+        }
+    } else if (is_leader) {
+        // Reduces its own row (stage 1) and forwards the row partial to the root (stage 2 input).
+        CircularBuffer gather(cb_gather);
+        CircularBuffer partial(cb_partial);
+        CircularBuffer stage2cb(cb_stage2);
+        auto receiver = mc.receiver(noc);
+        for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+            gather.reserve_back(cols * num_tiles);
+            const uint32_t gather_addr = gather.get_write_ptr();
+            noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], input_addr), gather_addr, payload_bytes);
+            noc_async_read_barrier();
+            if (cols > 1) {
+                stage1.wait_min((iter + 1) * (cols - 1));
+            }
+            gather.push_back(cols * num_tiles);
+
+            partial.wait_front(num_tiles);
+            const uint32_t partial_addr = partial.get_read_ptr();
+            const uint32_t stage2_addr = stage2cb.get_write_ptr();
+            noc_async_write(
+                partial_addr,
+                get_noc_addr(root_x, root_y, stage2_addr + my_row * payload_bytes),
+                payload_bytes);
+            noc_async_write_barrier();
+            stage2.up(noc, root_x, root_y, 1);
+            partial.pop_front(num_tiles);
+            receiver.receive();
+        }
+    } else {
+        // Row member: contributes its block to the row leader (stage 1), then takes the broadcast.
+        CircularBuffer gather(cb_gather);
+        auto receiver = mc.receiver(noc);
+        const uint32_t gather_addr = gather.get_write_ptr();
+        for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+            noc_async_write(
+                input_addr,
+                get_noc_addr(leader_x, leader_y, gather_addr + my_col * payload_bytes),
+                payload_bytes);
+            noc_async_write_barrier();
+            stage1.up(noc, leader_x, leader_y, 1);
+            receiver.receive();
+        }
+    }
+}
+"""
+
+
 def _core_range_set(cores):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
 
@@ -854,6 +1064,81 @@ def _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles,
     return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
 
 
+def _create_two_stage_grid_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
+    rows, cols = layout.group_shape
+    # A 1-D group has only one grid axis to reduce along, so the hierarchy collapses to a single
+    # gather-to-root: reuse the root-reduce path directly rather than run a degenerate second stage.
+    if rows == 1 or cols == 1:
+        return _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
+
+    device = input_tensor.device()
+    config = ttnn.McastConfig(rotating_sender=False, sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
+    helpers = []
+    for group in layout.groups:
+        root_logical = ttnn.CoreCoord(*group.cores[0])
+        helpers.append(ttnn.Mcast2D(device, group.core_range_set, root_logical, config))
+    mcast_ct = list(helpers[0].compile_time_args())
+
+    dataflow_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    leader_cores = []
+    for group, helper in zip(layout.groups, helpers):
+        root_virtual = device.worker_core_from_logical_core(ttnn.CoreCoord(*group.cores[0]))
+        leader_virtual = []
+        for row in range(rows):
+            leader = device.worker_core_from_logical_core(ttnn.CoreCoord(*group.cores[row * cols]))
+            leader_virtual.append((leader.x, leader.y))
+        for index, (x, y) in enumerate(group.cores):
+            my_row = index // cols
+            my_col = index % cols
+            leader_x, leader_y = leader_virtual[my_row]
+            core = ttnn.CoreCoord(x, y)
+            dataflow_rt[x][y] = [
+                input_tensor.buffer_address(),
+                output_tensor.buffer_address(),
+                my_col,
+                my_row,
+                leader_x,
+                leader_y,
+                root_virtual.x,
+                root_virtual.y,
+            ] + list(helper.runtime_args(core))
+            if my_col == 0:
+                leader_cores.append((x, y))
+                compute_rt[x][y] = [cols, num_tiles, kernel_iters, 1 if index == 0 else 0, rows]
+
+    leader_ranges = _core_range_set(leader_cores)
+    cbs = [
+        _normal_cb(CB_GATHER, layout.core_ranges, cols * num_tiles, page_bytes, input_tensor.dtype),
+        _normal_cb(CB_PARTIAL, leader_ranges, num_tiles, page_bytes, output_tensor.dtype),
+        _normal_cb(CB_STAGE2, leader_ranges, rows * num_tiles, page_bytes, output_tensor.dtype),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor),
+    ]
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_STAGE2, core_ranges=layout.core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=layout.core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
+    ]
+    dataflow = _inline_kernel(
+        _TWO_STAGE_GRID_KERNEL,
+        layout.core_ranges,
+        [CB_GATHER, CB_PARTIAL, CB_STAGE2, CB_OUTPUT]
+        + mcast_ct
+        + [num_tiles, page_bytes, rows, cols, kernel_iters, SEM_PROGRESS, SEM_STAGE2],
+        dataflow_rt,
+        ttnn.ReaderConfigDescriptor(),
+    )
+    compute = _inline_kernel(
+        _GRID_REDUCE_COMPUTE_KERNEL,
+        leader_ranges,
+        [CB_GATHER, CB_PARTIAL, CB_STAGE2, CB_OUTPUT],
+        compute_rt,
+        ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
+    )
+    return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
+
+
 def create_program_descriptor(
     input_tensor,
     output_tensor,
@@ -897,7 +1182,9 @@ def create_program_descriptor(
         )
     if variant == "reduce_root_mcast":
         return _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
-    return _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
+    if variant == "two_phase_reduce_mcast":
+        return _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
+    return _create_two_stage_grid_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
 
 
 def all_reduce(
