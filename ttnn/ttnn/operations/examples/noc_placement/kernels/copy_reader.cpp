@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// reader_placement reader (NCRISC / NoC0) — identical for every placement.
+// noc_placement copy reader (NCRISC) — identical for every placement.
 //
 // Reads this core's contiguous range of interleaved DRAM pages, one whole page
 // at a time, into the reader->writer CB. The kernel is byte-for-byte the same
