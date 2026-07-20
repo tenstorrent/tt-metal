@@ -93,7 +93,7 @@ void kernel_main() {
                     noc_async_read_barrier();
                     noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
                     // Drain this stick's loop-back read OUT of cb_pad_align before the next stick's read
-                    // (above) overwrites cb_pad_align. Both target the same scratch, so without this barrier
+                    // (above) overwrites cb_pad_align. Both access the same scratch, so without this barrier
                     // the next read-in can land while this read-out is still sourcing from it (WAR on the
                     // shared scratch). See issue #50154 (finding #9).
                     noc_async_read_barrier();
