@@ -18,7 +18,7 @@ from typing import Optional, Tuple
 
 import ttnn
 
-from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05
+from models.experimental.pi0_5.tt.tile_config import ACT_DTYPE, TILE_HEIGHT, TILE_WIDTH, from_torch_pi05
 from models.experimental.pi0_5.tt._ttnn_compat import (
     concat_heads_matmul,
     decode_all_supported,
@@ -164,9 +164,6 @@ def _matmul_decode_pws(a, b_pws, n_blocks, device, out_dtype=ttnn.bfloat16, inte
     Reshards A to WIDTH-SHARDED L1 over ``_RESHARD_CORES`` (matmul_decode hard-requires width-sharded
     in0), emits a WIDTH-SHARDED ``[padded_m, N/n_blocks]`` output over ``n_blocks`` base cores, and
     optionally converts the result back to interleaved L1."""
-    print(
-        f"matmul_decode_pws: a.shape={a.shape}, b_pws.shape={b_pws.shape}, n_blocks={n_blocks}, device={device}, out_dtype={out_dtype}, interleaved_output={interleaved_output}"
-    )
     m, k = a.shape[-2], a.shape[-1]
     a_ws = ttnn.to_memory_config(a, width_sharded_l1_config(m, k, device, _RESHARD_CORES))
     n = b_pws.shape[-1] // _K_BLOCKS
@@ -184,6 +181,85 @@ def _matmul_decode_pws(a, b_pws, n_blocks, device, out_dtype=ttnn.bfloat16, inte
     ttnn.deallocate(a_ws)
     if interleaved_output:
         out = ttnn.sharded_to_interleaved(out, _L1)
+    return out
+
+
+def _gated_residual(residual, gate, x):
+    """``residual + gate * x`` (adaRMS gated residual). Equivalent to ``ttnn.addcmul`` but preserves
+    the activation tile geometry -- ``addcmul`` always emits a 32-row tile, which breaks the tiny-tile
+    (16x32) residual stream; the binary mul/add keep the input tile."""
+    scaled = ttnn.multiply(gate, x, memory_config=_L1)
+    out = ttnn.add(residual, scaled, memory_config=_L1)
+    ttnn.deallocate(scaled)
+    return out
+
+
+def _tiny_to_32_tile(x, device):
+    """Retile a tiny (M<32) TILE-layout activation up to a 32x32 tile, zero-padding the sequence
+    (dim -2) to a multiple of 32. The pad is done via a tile-layout ``concat`` (padding a tiny tile
+    in place corrupts data, and a non-32-aligned collapsed height can't be untilized), then an
+    untilize -> tilize(32) reinterprets the geometry."""
+    import torch
+
+    s = x.shape[-2]
+    s32 = ((s + 31) // 32) * 32
+    if s32 != s:
+        shp = list(x.shape)
+        shp[-2] = s32 - s
+        z = from_torch_pi05(torch.zeros(*shp), dtype=x.dtype, device=device, memory_config=_L1)
+        x = ttnn.concat([x, z], dim=2, memory_config=_L1)
+        ttnn.deallocate(z)
+    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.tilize(rm, tile=ttnn.Tile((32, 32)), memory_config=_L1)
+    ttnn.deallocate(rm)
+    return out
+
+
+def _sdpa_retile_32(q, k, v, scale, device):
+    """SDPA for a tiny-tile (M<32) activation stream. The flash SDPA kernel is only numerically
+    correct with 32-row query/key tiles (a 16-row tile gives PCC ~0.5), so retile q/k/v up to a
+    32x32 tile, run the standard non-causal SDPA with a padded-key mask, then retile the result back
+    to the tiny tile. This decode path is non-causal full attention (the validated mask semantics),
+    so the only masking required is -inf on the zero-padded key columns."""
+    import torch as _torch
+
+    nh, sq, hd = q.shape[1], q.shape[-2], q.shape[-1]
+    skv = k.shape[-2]
+    sq32 = ((sq + 31) // 32) * 32
+    skv32 = ((skv + 31) // 32) * 32
+
+    q32 = _tiny_to_32_tile(q, device)
+    k32 = _tiny_to_32_tile(k, device)
+    v32 = _tiny_to_32_tile(v, device)
+
+    mask_t = _torch.zeros(1, 1, sq32, skv32)
+    if skv32 > skv:
+        mask_t[:, :, :, skv:] = -1e30
+    mask = ttnn.from_torch(
+        mask_t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=ttnn.Tile((32, 32)),
+    )
+    out32 = ttnn.transformer.scaled_dot_product_attention(
+        q32,
+        k32,
+        v32,
+        attn_mask=mask,
+        is_causal=False,
+        scale=scale,
+        compute_kernel_config=get_sdpa_compute_kernel_config(),
+        memory_config=_L1,
+    )
+    for t in (q32, k32, v32, mask):
+        ttnn.deallocate(t)
+    rm = ttnn.to_layout(out32, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(out32)
+    rm = ttnn.slice(rm, [0, 0, 0, 0], [q.shape[0], nh, sq, hd])
+    out = ttnn.tilize(rm, tile=ttnn.Tile((TILE_HEIGHT, TILE_WIDTH)), memory_config=_L1)
+    ttnn.deallocate(rm)
     return out
 
 
@@ -271,11 +347,11 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                 # reshard_input=True,
                 # reshard_cores=_RESHARD_CORES,
                 # compute_kernel_config=_LOFI,
-                dtype=ttnn.bfloat8_b,
+                dtype=ACT_DTYPE,
                 output_mem_config=_qkv_out_mc,
             )
         else:
-            qkv = self._proj(hidden_states, self.tt_wqkv, ttnn.bfloat8_b, m_t, _g, _expert_ck)
+            qkv = self._proj(hidden_states, self.tt_wqkv, ACT_DTYPE, m_t, _g, _expert_ck)
         # Fused create-qkv-heads + q/k RoPE in ONE dispatch (custom op; byte-identical to
         # nlp_create_qkv_heads + 2x rotary_embedding, PCC 1.0). Replaces 3 launches with 1.
         q, k, v = nlp_create_qkv_heads_rope(qkv, cos, sin, self.num_heads, self.num_kv_heads, memory_config=_L1)
@@ -304,6 +380,10 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
             new_cache = (k, v) if use_cache else None
             if _use_kv_sdpa:
                 attn_out = kv_sdpa(q, k, v, attn_mask=attention_mask, scale=self.scale)
+            elif TILE_HEIGHT < 32:
+                # Tiny-tile activations: flash SDPA is only correct at a 32-row tile, so run it at
+                # 32x32 and retile back (see _sdpa_retile_32).
+                attn_out = _sdpa_retile_32(q, k, v, self.scale, self.device)
             else:
                 kv_seq = k.shape[-2]
                 _sdpa_kwargs = {"memory_config": _L1}
@@ -516,8 +596,7 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         else:
             attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache)
             ttnn.deallocate(normed)
-            # Fused gated residual: hidden + ga*attn_out in one addcmul (was multiply + add).
-            hidden_states = ttnn.addcmul(hidden_states, ga, attn_out, memory_config=_L1)
+            hidden_states = _gated_residual(hidden_states, ga, attn_out)
             ttnn.deallocate(attn_out)
 
         normed = self._apply_ada(hidden_states, sf1, shf, self._eps)
@@ -533,7 +612,7 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         else:
             mlp_out = self.mlp(normed)
             ttnn.deallocate(normed)
-            hidden_states = ttnn.addcmul(hidden_states, gf, mlp_out, memory_config=_L1)
+            hidden_states = _gated_residual(hidden_states, gf, mlp_out)
             ttnn.deallocate(mlp_out)
 
         if owned:

@@ -31,7 +31,7 @@ _apply_production_env_defaults()
 import pytest  # noqa: E402
 import torch  # noqa: E402
 from models.experimental.pi0_5.tt.tt_pipeline.denoise_pipeline import perf_suffix_len
-from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05
+from models.experimental.pi0_5.tt.tile_config import ACT_DTYPE, TILE_HEIGHT, from_torch_pi05
 
 ttnn = pytest.importorskip("ttnn")
 
@@ -155,8 +155,8 @@ def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, pref
     stage._prefix_kv = []
     for gi in range(_LO, _HI):
         pk, pv = prefix_kv[gi]
-        pk_dev = from_torch_pi05(pk, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
-        pv_dev = from_torch_pi05(pv, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pk_dev = from_torch_pi05(pk, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pv_dev = from_torch_pi05(pv, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
         stage._prefix_kv.append((pk_dev, pv_dev))
         dev += [pk_dev, pv_dev]
     cond_dev = from_torch_pi05(adarms_cond, dtype=ttnn.bfloat16, device=submesh)

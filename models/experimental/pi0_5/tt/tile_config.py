@@ -8,8 +8,11 @@ from typing import Any, Optional
 import ttnn
 
 # M-dimension tile height. Use 16 for M16 decode paths; 32 for legacy 32×32 geometry.
-TILE_HEIGHT = 32
+TILE_HEIGHT = 16
 TILE_WIDTH = 32
+# Tiny tile (TILE_HEIGHT < 32) only supports bfloat16 activations; the legacy 32×32 geometry keeps
+# the packed bfloat8_b activation dtype.
+ACT_DTYPE = ttnn.bfloat16 if TILE_HEIGHT < 32 else ttnn.bfloat8_b
 
 _BLOCKED_DTYPES = frozenset({ttnn.bfloat8_b, ttnn.bfloat4_b})
 
@@ -46,4 +49,4 @@ def from_torch_pi05(
     )
 
 
-__all__ = ["TILE_HEIGHT", "TILE_WIDTH", "pi05_tile", "from_torch_pi05"]
+__all__ = ["TILE_HEIGHT", "TILE_WIDTH", "ACT_DTYPE", "pi05_tile", "from_torch_pi05"]
