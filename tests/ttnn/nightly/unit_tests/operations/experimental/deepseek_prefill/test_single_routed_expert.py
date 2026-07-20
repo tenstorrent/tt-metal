@@ -35,13 +35,6 @@ SINGLE_CHIP_MESH_PARAMS = [
     ),
 ]
 
-# Token-count sweep for the single-expert profiling test, applied per model with that model's
-# (emb_dim, hidden_dim). The (num_tokens, id) pairs are model-independent.
-_TOKEN_SWEEP = [
-    (1024, "1k"),
-    (25600, "25k"),
-]
-
 
 def run_single_routed_expert(
     mesh_device,
@@ -182,99 +175,109 @@ SINGLE_EXPERT_MODELS = [
 ]
 
 
-# Registry of currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}"
-# param id -> xfail reason (with tracking issue), so CI stays green while linked issues are worked
-# on. _TOKEN_SWEEP_XFAIL is applied (strict) only on blackhole by _xfail_blackhole_token_sweep;
-# _FAKED_XFAIL by single_routed_expert_faked_params. Both are empty: the factory's adaptive L1 guard
-# (shrinks per-core CBs to fit L1 and picks an in0_block_w_gu that divides K_gate_tiles) resolved the
-# prior dsv4_pro L1 and gptoss_120b K_gate failures. Add an entry when a new blackhole-specific
-# failure appears (these pass on other arches); delete it once resolved.
-_TOKEN_SWEEP_XFAIL = {}
-_FAKED_XFAIL = {}
-
-
-def single_routed_expert_token_sweep_params():
-    """Build the per-model (num_tokens, emb_dim, hidden_dim) parametrization over _TOKEN_SWEEP.
-    Non-baseline models carry the extended_model marker so they stay gated as before; the
-    _TOKEN_SWEEP_XFAIL cases are xfail'd per-arch by _xfail_blackhole_token_sweep, not here."""
-    params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
-        for num_tokens, tag in _TOKEN_SWEEP:
-            test_id = f"{name}-{tag}"
-            marks = (pytest.mark.extended_model,) if extended else ()
-            params.append(
-                pytest.param(num_tokens, config.EMB_SIZE, config.MOE_INTERMEDIATE_SIZE, marks=marks, id=test_id)
-            )
-    return params
+# Registry of currently-failing single-routed-expert cases -> xfail reason (with tracking issue), so
+# CI stays green while linked issues are worked on. Applied strict, only on blackhole, by
+# _xfail_blackhole (these cases pass on other arches, where an unconditional strict xfail would turn
+# CI red on XPASS). Each key is a space-separated set of id tokens that must ALL appear in the param
+# id, so a case can be scoped by any combination of layout ("x_tile"/"x_rm") and model/isl id.
+#   - gptoss_120b on the TILE x layout: the factory picks an in0_block_w_gu that does not divide
+#     K_gate_tiles for gptoss dims (K_gate_tiles % in0_block_w_gu == 0 TT_FATAL). The ROW_MAJOR x
+#     layout passes, so scope the xfail to x_tile only.
+_XFAIL = {
+    "x_tile gptoss_120b": "gptoss_120b K_gate tiling: factory picks in0_block_w_gu that does not divide K_gate_tiles on the TILE x layout (unified_routed_expert_ffn_program_factory.cpp:404)",
+}
 
 
 @pytest.fixture(autouse=True)
-def _xfail_blackhole_token_sweep(request, silicon_arch_name):
-    """Strict-xfail the _TOKEN_SWEEP_XFAIL cases only on blackhole: the K_gate / L1 issues are
-    blackhole-specific and these cases pass on other arches, where an unconditional strict xfail
-    would turn CI red on XPASS. Keyed by the full param id so each (model, token-count) is marked
-    independently."""
-    if silicon_arch_name != "blackhole" or request.node.name.split("[")[0] != "test_single_routed_expert_models":
+def _xfail_blackhole(request, silicon_arch_name):
+    """Strict-xfail the _XFAIL cases only on blackhole: the K_gate / L1 issues are blackhole-specific
+    and these cases pass on other arches, where an unconditional strict xfail would turn CI red on
+    XPASS. A case matches when every whitespace-separated token of the key appears in the param id."""
+    if silicon_arch_name != "blackhole":
         return
     callspec = getattr(request.node, "callspec", None)
     if callspec is None:
         return
-    for param_id, reason in _TOKEN_SWEEP_XFAIL.items():
-        if callspec.id.endswith(param_id):
+    for key, reason in _XFAIL.items():
+        if all(token in callspec.id for token in key.split()):
             request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
             break
 
 
-@pytest.mark.parametrize("num_tokens, emb_dim, hidden_dim", single_routed_expert_token_sweep_params())
-@pytest.mark.parametrize(
-    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
-)
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-def test_single_routed_expert_models(
-    mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int, x_row_major: bool
-):
-    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim, x_row_major=x_row_major)
+# All active-token sweeps run against a fixed 5K allocated buffer: 5120 dispatch rows with only the
+# first `active_tokens` holding real data; the rest is zero padding.
+_ISL_ALLOCATED_TOKENS = 5120
+
+# Functional sweep: a few active-token counts across every model, on both WH and BH. Two off-tile-
+# boundary primes (one below 256, one above 3K) plus a round 1K.
+_ISL_FUNCTIONAL_SWEEP = [251, 1024, 3001]
+
+# Exhaustive sweep: the full fill range from empty to fully-packed, restricted to the two largest
+# models to keep runtime bounded. Blackhole-only, since active < allocated exercises device-side
+# count-aware sparsity (skipping matmuls on the inactive padding rows), which is a Blackhole feature.
+_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k26", "glm_51")
 
 
-# (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per
-# model with that model's (emb_dim, hidden_dim). The alloc/active pairs are model-independent.
-_FAKED_SWEEP = [
-    (1024, 0, "1k-alloc-0k-active"),
-    (25600, 4096, "25k-alloc-4k-active"),
-]
-
-
-def single_routed_expert_faked_params():
-    """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization
-    over _FAKED_SWEEP. Reuses SINGLE_EXPERT_MODELS, so non-baseline models stay gated behind the
-    extended_model marker exactly as the separate tests were."""
+def _isl_params(active_sweep, only_models=None):
+    """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization over
+    `active_sweep`, all against the fixed _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so
+    non-baseline models stay gated behind the extended_model marker; `only_models` restricts to a
+    subset of model names."""
     params = []
     for name, config, extended in SINGLE_EXPERT_MODELS:
-        for alloc, active, tag in _FAKED_SWEEP:
-            test_id = f"{name}-{tag}"
+        if only_models is not None and name not in only_models:
+            continue
+        for active in active_sweep:
             marks = (pytest.mark.extended_model,) if extended else ()
-            if test_id in _FAKED_XFAIL:
-                marks += (pytest.mark.xfail(reason=_FAKED_XFAIL[test_id], strict=True),)
             params.append(
                 pytest.param(
-                    alloc,
+                    _ISL_ALLOCATED_TOKENS,
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
                     marks=marks,
-                    id=test_id,
+                    id=f"{name}-isl-{active}",
                 )
             )
     return params
 
 
-@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", single_routed_expert_faked_params())
+@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+def test_single_routed_expert_functional(
+    mesh_device,
+    device_params,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    x_row_major: bool,
+):
+    run_single_routed_expert(
+        mesh_device,
+        device_params,
+        allocated_tokens,
+        emb_dim,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=x_row_major,
+    )
+
+
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
-def test_single_routed_expert_faked_token_count_models(
+def test_single_routed_expert_isl_sweep(
     mesh_device,
     device_params,
     allocated_tokens: int,
