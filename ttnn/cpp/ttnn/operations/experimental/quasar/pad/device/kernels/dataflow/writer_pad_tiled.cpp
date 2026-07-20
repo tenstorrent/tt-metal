@@ -2,49 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port of pad's tiled multicore writer (private to PadTileMulticoreProgramFactory).
+// Device-side NoC + TensorAccessor logic is unchanged; resource access moves to the Metal 2.0 named
+// handles (dfb::/tensor::/args::):
+//   - c_0 input stream -> dfb::cb_input (CONSUMER of the reader's producer)
+//   - c_2 pad scratch   -> dfb::cb_pad_val (PRODUCER+CONSUMER self-loop)
+//   - legacy c_1 (output CB) was dead (the writer streams straight to the output tensor) and is dropped.
+// The four per-dim arrays are seeded from uniform per-rank varargs into local scratch (see reader).
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
-// This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
-// either the input or padding respectively
-// For example, if we are padding (2, 2, 32, 32) -> (4, 4, 64, 64), then we condense the inner dims to tiles:
-// (2, 2, 1, 1) -> (4, 4, 2, 2) and as incrementing through writing the output, [0:2, 0:2, 0:1, 0:1] will be
-// tiles read from input, and the rest will be padding. So for this writer kernel, if we are within
-// [0:2, 0:2, 0:1, 0:1] we wait for the reader to send us the correct tile, and then write it, otherwise we
-// write padding.
+// This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills
+// the output with either the input or padding respectively.
 void kernel_main() {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_val_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(4);
-    constexpr uint32_t pad_value = get_compile_time_arg_val(5);
-    constexpr uint32_t element_size = get_compile_time_arg_val(6);
+    constexpr uint32_t num_dims = get_arg(args::num_dims);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t pad_value = get_arg(args::pad_value);
+    constexpr uint32_t element_size = get_arg(args::element_size);
     constexpr uint32_t num_elements = page_size / element_size;
 
-    uint32_t rt_ind = 0;
-    const uint32_t output_addr = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t num_pages_to_write = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t start_offset = get_arg_val<uint32_t>(rt_ind++);
-    volatile tt_l1_ptr uint32_t* input_page_shape = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_ind));
-    volatile tt_l1_ptr uint32_t* output_page_shape = input_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* input_id_per_dim = output_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* output_id_per_dim = input_id_per_dim + num_dims;
+    const uint32_t num_pages_to_write = get_arg(args::num_pages_to_write);
+    const uint32_t start_offset = get_arg(args::start_offset);
 
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    // Vararg layout (per core): [input_page_shape | output_page_shape | input_id_per_dim | output_id_per_dim].
+    uint32_t input_page_shape[MAX_NUM_DIMS];
+    uint32_t output_page_shape[MAX_NUM_DIMS];
+    uint32_t input_id_per_dim[MAX_NUM_DIMS];
+    uint32_t output_id_per_dim[MAX_NUM_DIMS];
+    for (uint32_t d = 0; d < num_dims; ++d) {
+        input_page_shape[d] = get_vararg(d);
+        output_page_shape[d] = get_vararg(num_dims + d);
+        input_id_per_dim[d] = get_vararg(2 * num_dims + d);
+        output_id_per_dim[d] = get_vararg(3 * num_dims + d);
+    }
 
-    const auto s0 = TensorAccessor(dst_args, output_addr);
+    const auto s0 = TensorAccessor(tensor::dst);
     Noc noc;
-    CircularBuffer cb_input(input_cb_id);
-    CircularBuffer cb_pad_val(pad_val_cb_id);
+    DataflowBuffer cb_input(dfb::cb_input);
+    DataflowBuffer cb_pad_val(dfb::cb_pad_val);
 
-    // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
+    // Reserve and fill the pad-value scratchpad, generalized for any contiguous dtype.
     cb_pad_val.reserve_back(1);
     uint32_t l1_write_addr = cb_pad_val.get_write_ptr();
     volatile tt_l1_ptr uint8_t* pad_val_page = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
@@ -55,12 +60,10 @@ void kernel_main() {
         }
     }
     cb_pad_val.push_back(1);
-    // Our scratchpad cb is now a tile full of padding.
 
     bool within_input_region;
     uint32_t output_page_offset = start_offset;
 
-    // Loop over all output pages to write
     for (uint32_t out_pages_written = 0; out_pages_written < num_pages_to_write; out_pages_written++) {
         within_input_region = true;
         for (uint32_t d = 0; d < num_dims; d++) {
@@ -70,8 +73,6 @@ void kernel_main() {
             }
         }
 
-        // We have two cases, if we are within the input region, we wait for the reader to send us the correct tile
-        // Otherwise we simply write the padding tile we have in our circular buffer
         if (within_input_region) {
             cb_input.wait_front(1);
             noc.async_write(

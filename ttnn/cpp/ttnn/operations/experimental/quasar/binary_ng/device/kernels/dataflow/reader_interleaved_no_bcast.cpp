@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -29,7 +30,7 @@ void kernel_main() {
     constexpr auto cb_id_src = tt::CBIndex::c_0;
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
+    DataflowBuffer cb_src(cb_id_src);
 
 #if SRC_SHARDED
     cb_src.reserve_back(src_num_tiles);

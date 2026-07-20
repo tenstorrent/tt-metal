@@ -46,7 +46,17 @@ def test_binary_scalar_ops(input_shapes, device, ttnn_fn):
 
 
 @pytest.mark.parametrize("op_name", ["add", "sub", "mul"])
-@pytest.mark.parametrize("scalar", [7, -13, 0, 100000, -100000])
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        7,
+        -13,
+        0,
+        -1,
+        2,
+        10000,
+    ],
+)
 def test_binary_scalar_int32_arithmetic(device, op_name, scalar):
     """Verify int32 tensor + int scalar passes the scalar as int32 (not float)."""
     ttnn_fn = getattr(ttnn, op_name)
@@ -56,8 +66,10 @@ def test_binary_scalar_int32_arithmetic(device, op_name, scalar):
             1,
             -1,
             0,
+            2147483640,
             2147483647,
             -2147483647,
+            -2147483648,
             1000,
             -1000,
             42,
@@ -71,19 +83,13 @@ def test_binary_scalar_int32_arithmetic(device, op_name, scalar):
             -77,
             2,
             -2,
-            3,
-            -3,
             10,
             -10,
             100,
             -100,
             7,
-            8,
             9,
             11,
-            12,
-            13,
-            14,
             15,
         ],
         dtype=torch.int32,
@@ -117,8 +123,6 @@ def test_binary_scalar_uint32_arithmetic(device, op_name, scalar):
             4000000000,
             4294967290,
             4294967291,
-            4294967292,
-            4294967293,
             4294967294,
             4294967295,
             16777215,
@@ -187,37 +191,22 @@ def test_binary_scalar_int32_relational(device, ttnn_fn, scalar):
     torch_input = torch.tensor(
         [
             -100,
-            -42,
+            42,
             -1,
             0,
             1,
-            42,
-            100,
             200,
             -200,
             -50,
             -10,
-            5,
-            10,
-            50,
-            150,
+            2147483640,
+            2147483647,
+            -2147483647,
+            -2147483648,
             300,
             -300,
             -150,
             -5,
-            2,
-            3,
-            15,
-            80,
-            250,
-            -250,
-            -80,
-            -15,
-            -3,
-            -2,
-            7,
-            99,
-            101,
         ],
         dtype=torch.int32,
     )
@@ -232,22 +221,64 @@ def test_binary_scalar_int32_relational(device, ttnn_fn, scalar):
     assert torch.equal(expected, result)
 
 
-def test_binary_scalar_int32_large_values(device):
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        16777217,
+        16777366,
+        2147483640,
+        2147483647,
+        -2147483647,
+        -2147483540,
+        -2147483648,
+    ],
+)
+def test_binary_scalar_int32_large_values(scalar, device):
     """Verify that large int32 scalars are not corrupted by float conversion.
 
     Values > 2^24 cannot be represented exactly in float32.  With ScalarVariant
     they should be packed as int32 directly and arrive on the device unchanged.
     """
-    large_scalar = 2**24 + 1  # 16777217 — not exactly representable as float32
 
-    torch_input = torch.zeros([1, 1, 32, 32], dtype=torch.int32)
-    expected = torch.add(torch_input, large_scalar)
+    torch_input = torch.ones([1, 1, 32, 32], dtype=torch.int32)
+    expected = torch.add(torch_input, scalar)
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_output = ttnn.add(tt_input, large_scalar)
+    tt_output = ttnn.add(tt_input, scalar)
     result = ttnn.to_torch(tt_output)
 
     assert torch.equal(expected, result), (
-        f"Large scalar {large_scalar} was likely truncated to float. "
+        f"Large scalar {scalar} was likely truncated to float. "
+        f"Expected {expected.flatten()[0].item()}, got {result.flatten()[0].item()}"
+    )
+
+
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        16777217,
+        16777366,
+        2147483640,
+        2147483647,
+        4294967200,
+        4294967294,
+    ],
+)
+def test_binary_scalar_uint32_large_values(scalar, device):
+    """Verify that large uint32 scalars are not corrupted by float conversion.
+
+    Values > 2^24 cannot be represented exactly in float32.  With ScalarVariant
+    they should be packed as uint32 directly and arrive on the device unchanged.
+    """
+
+    torch_input = torch.ones([1, 1, 32, 32], dtype=torch.int64)
+    expected = torch.add(torch_input, scalar)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.add(tt_input, scalar)
+    result = ttnn.to_torch(tt_output, dtype=torch.int64)
+
+    assert torch.equal(expected, result), (
+        f"Large scalar {scalar} was likely truncated to float. "
         f"Expected {expected.flatten()[0].item()}, got {result.flatten()[0].item()}"
     )

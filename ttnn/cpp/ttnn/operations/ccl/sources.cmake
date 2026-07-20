@@ -58,3 +58,21 @@ set(TTNN_OP_CCL_API_HEADERS
     mesh_partition/mesh_partition.hpp
     shared_with_host/hetergeneous_data_structs.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/ccl/CMakeLists.txt (see the `if(TARGET ttnn)`
+# block there). Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra as a
+# required co-owner.
+set(TTNN_OP_CCL_NANOBIND_SRCS
+    ccl_nanobind.cpp
+    all_broadcast/all_broadcast_nanobind.cpp
+    all_gather/all_gather_nanobind.cpp
+    all_reduce/all_reduce_nanobind.cpp
+    all_to_all_combine/all_to_all_combine_nanobind.cpp
+    all_to_all_dispatch/all_to_all_dispatch_nanobind.cpp
+    broadcast/broadcast_nanobind.cpp
+    mesh_partition/mesh_partition_nanobind.cpp
+    reduce_scatter/reduce_scatter_nanobind.cpp
+    reduce_to_root/reduce_to_root_nanobind.cpp
+)

@@ -5,14 +5,14 @@
 #include "untilize_with_unpadding.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
 static ttnn::Shape squeeze_vector_shape(ttnn::Shape output_shape) {
     if (output_shape.rank() > 4) {
-        ttnn::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
+        ttsl::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
         output_shape_4d[0] = 1;
         int extra_rank = output_shape.size() - 4;
         for (int i = extra_rank; i >= 0; i--) {
@@ -53,7 +53,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(
+            auto unsqueezed_tensor = ttnn::operations::experimental::quasar::reshape(
                 output,
                 *original_shape,
                 std::nullopt,              /*Memory Config*/
@@ -75,9 +75,10 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
+    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32 ||
+                            input_tensor.dtype() == DataType::FLOAT32;
 
-    ttnn::SmallVector<uint32_t> output_end_vector;
+    ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
     if (input_shape.rank() > 4) {

@@ -83,6 +83,40 @@ void create_tensor_cb(
 
 namespace {
 
+// Pick a routing-plane link index that is VALID for each dispatch-axis neighbor's own forwarding
+// direction. get_forwarding_link_indices resolves the forwarding direction first and returns links in
+// that direction, so on a ring the wrap-direction neighbor may not share the line direction's valid
+// link index. Broadcasting a single {core_link} to every connection would land the wrap connection on
+// an EDM plane that never services it -> the worker hangs in open_finish. Indexing core_link into each
+// neighbor's own valid-link set keeps the choice valid for that direction while still spreading sender
+// cores across links where more than one plane exists. (Shared by the tile and row-major paths below;
+// kept file-local because the natural shared home, ccl/common, is outside this op's code ownership.)
+std::vector<uint32_t> compute_per_neighbor_forwarding_links(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    uint32_t core_link,
+    const char* axis_label) {
+    std::vector<uint32_t> per_conn_links;
+    per_conn_links.reserve(dst_nodes.size());
+    for (const auto& dst_node : dst_nodes) {
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+        TT_FATAL(
+            !links.empty(), "No forwarding links from {} to {} neighbor {}", src_fabric_node_id, axis_label, dst_node);
+        log_debug(
+            tt::LogOp,
+            "FABRIC_2D {} link select: src={} dst={} dir={} core_link={} valid_links={} -> {}",
+            axis_label,
+            src_fabric_node_id,
+            dst_node,
+            tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+            core_link,
+            links.size(),
+            links[core_link % links.size()]);
+        per_conn_links.push_back(links[core_link % links.size()]);
+    }
+    return per_conn_links;
+}
+
 // Tile-layout path: TILE inputs, fused untilize across N untilize cores per sender
 // (num_untilizers_per_sender, u1..uN); sender is fabric-only.
 tt::tt_metal::ProgramDescriptor create_at_tile_layout(
@@ -97,7 +131,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.indices_tensor;
-    auto weights_tensor = tensor_args.weights_tensor;
     auto offsets_tensor = tensor_args.expert_offsets_tensor;
     auto dispatch_table_tensor = tensor_args.expert_dispatch_table_tensor;
 
@@ -272,14 +305,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_1,
         "untilize_indices_scratch");
-    // c_2: weights scratch
-    detail::create_tensor_cb(
-        desc,
-        untilize_core_grid,
-        weights_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_2,
-        "untilize_weights_scratch");
     // c_3: offsets (full tensor, mutated in place per batch as the shared running counter).
     // The owner untilize core (local_core_id==0) loads expert_offsets[] here once at startup;
     // non-owners leave it uninitialized and pull/push the owner's copy under the baton each
@@ -474,10 +499,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     // ==================== Compile-time args for the sender writer kernel ====================
     std::vector<uint32_t> compile_time_args = {
-        // CB IDs (10)
+        // CB IDs (9)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id (row-major path only)
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
-        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_weights_id
         static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
         static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_route_info_id
         static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_payload_for_writer_id
@@ -486,19 +510,17 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         static_cast<uint32_t>(tt::CBIndex::c_8),  // cb_packet_header_id
         static_cast<uint32_t>(tt::CBIndex::c_9),  // cb_dispatch_table_id
 
-        // Page counts (7)
+        // Page counts (6)
         detail::get_num_pages(input_tensor),
         detail::get_num_pages(indices_tensor),
-        detail::get_num_pages(weights_tensor),
         detail::get_num_pages(offsets_tensor),
         detail::get_num_pages(output_tensor),
         detail::get_num_pages(metadata_tensor),
         detail::get_num_pages(dispatch_table_tensor),
 
-        // Page sizes (7)
+        // Page sizes (6)
         detail::get_page_size(input_tensor),
         detail::get_page_size(indices_tensor),
-        detail::get_page_size(weights_tensor),
         detail::get_page_size(offsets_tensor),
         detail::get_page_size(output_tensor),
         detail::get_page_size(metadata_tensor),
@@ -520,10 +542,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         mesh_view.num_cols(),
         linearized_mesh_coord,
 
-        // Aligned page sizes (7)
+        // Aligned page sizes (6)
         detail::get_aligned_page_size(input_tensor),
         detail::get_aligned_page_size(indices_tensor),
-        detail::get_aligned_page_size(weights_tensor),
         detail::get_aligned_page_size(offsets_tensor),
         detail::get_aligned_page_size(output_tensor),
         detail::get_aligned_page_size(metadata_tensor),
@@ -543,10 +564,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         operation_attributes.max_dispatch_buffer_token_size,
     };
 
-    // Append TensorAccessorArgs for all 7 tensors
+    // Append TensorAccessorArgs for all 6 tensors
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
@@ -587,8 +607,32 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     tt::tt_metal::KernelHandle writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kd));
 
+    // ==================== Padding-config scratch CBs (untilize cores) ====================
+    // The untilize reader and writer run on the SAME untilize core (separate RISCs), so each needs
+    // its own scratch CB index for the [local_real_tokens, pad_side] row. c_16/c_17 are free on
+    // untilize cores (the c_16-c_18 writer set lives only on sender cores).
+    const bool has_padding_config = tensor_args.padding_config.has_value();
+    constexpr auto cb_padding_config_reader = tt::CBIndex::c_16;
+    constexpr auto cb_padding_config_writer = tt::CBIndex::c_17;
+    if (has_padding_config) {
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            tensor_args.padding_config.value(),
+            /*buffering_factor=*/1,
+            cb_padding_config_reader,
+            "padding_config_reader");
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            tensor_args.padding_config.value(),
+            /*buffering_factor=*/1,
+            cb_padding_config_writer,
+            "padding_config_writer");
+    }
+
     // ==================== Untilize core kernels ====================
-    // Reader (RISCV_1): routing decisions, DRAM reads for input/indices/weights/offsets/dispatch_table,
+    // Reader (RISCV_1): routing decisions, DRAM reads for input/indices/offsets/dispatch_table,
     //                   publishes per-batch route plan to writer via c_14.
     // Writer (RISCV_0): drains c_14 plan, executes local DRAM writes for the local path and direct
     //                   NOC writes into the owning sender's writer-CB set for local_core_id (set s)
@@ -616,34 +660,37 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             local_core_id,                                         // 5
             total_workers,                                         // 6
             static_cast<uint32_t>(tt::CBIndex::c_1),               // 7: cb_indices_id
-            static_cast<uint32_t>(tt::CBIndex::c_2),               // 8: cb_weights_id
-            static_cast<uint32_t>(tt::CBIndex::c_3),               // 9: cb_offsets_id
-            static_cast<uint32_t>(tt::CBIndex::c_9),               // 10: cb_dispatch_table_id
-            static_cast<uint32_t>(tt::CBIndex::c_14),              // 11: cb_plan_id
-            read_batch_size,                                       // 12
-            detail::get_aligned_page_size(indices_tensor),         // 13
-            detail::get_aligned_page_size(weights_tensor),         // 14
-            detail::get_aligned_page_size(offsets_tensor),         // 15
-            detail::get_aligned_page_size(dispatch_table_tensor),  // 16
-            detail::get_num_pages(offsets_tensor),                 // 17: offsets_pages
-            detail::get_num_pages(dispatch_table_tensor),          // 18: dispatch_table_pages
-            operation_attributes.num_experts_per_tok,              // 19
-            operation_attributes.num_routed_experts,               // 20: n_routed_experts
-            operation_attributes.max_dispatch_buffer_token_size,   // 21
-            s,                                                     // 22: dispatch_core_idx
-            num_cores,                                             // 23: num_dispatch_cores
-            mesh_view.num_devices(),                               // 24: num_devices
-            mesh_view.num_rows(),                                  // 25
-            mesh_view.num_cols(),                                  // 26
-            linearized_mesh_coord,                                 // 27
-            static_cast<uint32_t>(topology),                       // 28
-            block_ct_dim_dispatch,                                 // 29: must match the compute kernel
+            static_cast<uint32_t>(tt::CBIndex::c_3),               // 8: cb_offsets_id
+            static_cast<uint32_t>(tt::CBIndex::c_9),               // 9: cb_dispatch_table_id
+            static_cast<uint32_t>(tt::CBIndex::c_14),              // 10: cb_plan_id
+            read_batch_size,                                       // 11
+            detail::get_aligned_page_size(indices_tensor),         // 12
+            detail::get_aligned_page_size(offsets_tensor),         // 13
+            detail::get_aligned_page_size(dispatch_table_tensor),  // 14
+            detail::get_num_pages(offsets_tensor),                 // 15: offsets_pages
+            detail::get_num_pages(dispatch_table_tensor),          // 16: dispatch_table_pages
+            operation_attributes.num_experts_per_tok,              // 17
+            operation_attributes.num_routed_experts,               // 18: n_routed_experts
+            operation_attributes.max_dispatch_buffer_token_size,   // 19
+            s,                                                     // 20: dispatch_core_idx
+            num_cores,                                             // 21: num_dispatch_cores
+            mesh_view.num_devices(),                               // 22: num_devices
+            mesh_view.num_rows(),                                  // 23
+            mesh_view.num_cols(),                                  // 24
+            linearized_mesh_coord,                                 // 25
+            static_cast<uint32_t>(topology),                       // 26
+            block_ct_dim_dispatch,                                 // 27: must match the compute kernel
         };
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(untilize_reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(untilize_reader_compile_args);
+        if (has_padding_config) {
+            // padding_config accessor + scratch CB id appended LAST so the existing index layout is unchanged.
+            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer())
+                .append_to(untilize_reader_compile_args);
+            untilize_reader_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_reader));
+        }
 
         // ===== Writer compile args =====
         std::vector<uint32_t> untilize_writer_compile_args = {
@@ -664,8 +711,18 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(untilize_writer_compile_args);
         tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(untilize_writer_compile_args);
+        if (has_padding_config) {
+            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer())
+                .append_to(untilize_writer_compile_args);
+            untilize_writer_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_writer));
+        }
 
         auto untilize_kernel_defines = fabric_defines;  // carries AXIS define if set
+        auto untilize_writer_defines = fabric_defines;
+        if (has_padding_config) {
+            untilize_kernel_defines["HAS_PADDING_CONFIG"] = "1";
+            untilize_writer_defines["HAS_PADDING_CONFIG"] = "1";
+        }
 
         CoreRangeSet single_untilize_core({CoreRange(all_untilize_cores[j])});
         tt::tt_metal::KernelDescriptor untilize_reader_kd;
@@ -690,6 +747,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         untilize_writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         untilize_writer_kd.core_ranges = single_untilize_core;
         untilize_writer_kd.compile_time_args = std::move(untilize_writer_compile_args);
+        untilize_writer_kd.defines = {untilize_writer_defines.begin(), untilize_writer_defines.end()};
         untilize_writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
@@ -745,7 +803,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     std::vector<uint32_t> base_runtime_args = {
         input_tensor.buffer()->address(),
         indices_tensor.buffer()->address(),
-        weights_tensor.buffer()->address(),
         offsets_tensor.buffer()->address(),
         output_tensor.buffer()->address(),
         metadata_tensor.buffer()->address(),
@@ -759,19 +816,18 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     };
 
     // Helper: promote a flat uint32_t RT arg vector into an RTArgList with the
-    // first 7 positions converted to Buffer* (so BufferBindings are auto-
+    // first 6 positions converted to Buffer* (so BufferBindings are auto-
     // registered for those slots), preserving all other positions verbatim.
     auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args) {
         tt::tt_metal::KernelDescriptor::RTArgList args;
         args.reserve(raw_args.size());
         args.push_back(input_tensor.buffer());
         args.push_back(indices_tensor.buffer());
-        args.push_back(weights_tensor.buffer());
         args.push_back(offsets_tensor.buffer());
         args.push_back(output_tensor.buffer());
         args.push_back(metadata_tensor.buffer());
         args.push_back(dispatch_table_tensor.buffer());
-        for (size_t i = 7; i < raw_args.size(); ++i) {
+        for (size_t i = 6; i < raw_args.size(); ++i) {
             args.push_back(raw_args[i]);
         }
         return args;
@@ -784,12 +840,14 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         const auto& group = sender_untilize_groups[core_idx];
 
         std::vector<uint32_t> writer_runtime_args = base_runtime_args;
-        writer_runtime_args[11] = core_idx;  // dispatch_core_idx
+        writer_runtime_args[10] = core_idx;  // dispatch_core_idx
 
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race where a fast peer's exit-inc lands during the post-init
         // set(0) window).
-        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+        writer_runtime_args.push_back(
+            (uint32_t)exit_semaphore.address());  // smuggled-rta-ok: persistent GlobalSemaphore (created once in
+                                                  // TT_CCL, reused) — L1 address stable across program-cache hits
 
         // ===== Sender writer (tile-layout): handshake + per-entry fabric send + credit =====
         // Shared single-id semaphores (one per-core slot on each untilizer): pushed once.
@@ -823,14 +881,17 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
                 // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
                 // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
                 // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
+                // appended args.
+                //
+                // Pick a forwarding link valid for each neighbor's own direction (see
+                // compute_per_neighbor_forwarding_links above for why a single broadcast {core_link} hangs).
+                const std::vector<uint32_t> per_conn_links =
+                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "dispatch-axis");
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
                     dst_nodes,
-                    {core_link},
+                    per_conn_links,
                     desc,
                     writer_kernel_id,
                     sender_core,
@@ -866,7 +927,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         tt::tt_metal::KernelDescriptor::RTArgList untilize_reader_rt_args;
         untilize_reader_rt_args.push_back(input_tensor.buffer());
         untilize_reader_rt_args.push_back(indices_tensor.buffer());
-        untilize_reader_rt_args.push_back(weights_tensor.buffer());
         untilize_reader_rt_args.push_back(offsets_tensor.buffer());
         untilize_reader_rt_args.push_back(dispatch_table_tensor.buffer());
         untilize_reader_rt_args.push_back(0u);                           // token_start_idx
@@ -886,6 +946,10 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             untilize_reader_rt_args.push_back((uint32_t)next_noc.y);
             untilize_reader_rt_args.push_back(turn_semaphore_id);
         }
+        // padding_config base address appended last (as Buffer* so it refreshes on cache hit).
+        if (has_padding_config) {
+            untilize_reader_rt_args.push_back(tensor_args.padding_config.value().buffer());
+        }
         desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
             all_untilize_cores[j], untilize_reader_rt_args);
 
@@ -902,6 +966,10 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         untilize_writer_rt_args.push_back(space_avail_semaphore_id);
         untilize_writer_rt_args.push_back(output_tensor.buffer());
         untilize_writer_rt_args.push_back(metadata_tensor.buffer());
+        // padding_config base address appended last (as Buffer* so it refreshes on cache hit).
+        if (has_padding_config) {
+            untilize_writer_rt_args.push_back(tensor_args.padding_config.value().buffer());
+        }
         desc.kernels[writer_untilize_kernel_ids[j]].emplace_runtime_args(
             all_untilize_cores[j], untilize_writer_rt_args);
     }
@@ -922,7 +990,6 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.indices_tensor;
-    auto weights_tensor = tensor_args.weights_tensor;
     auto offsets_tensor = tensor_args.expert_offsets_tensor;
     auto dispatch_table_tensor = tensor_args.expert_dispatch_table_tensor;
 
@@ -1009,14 +1076,6 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_1,
         "indices_scratch");
-    // c_2: weights scratch (reader-only)
-    detail::create_tensor_cb(
-        desc,
-        sender_core_grid,
-        weights_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_2,
-        "weights_scratch");
     // c_3: offsets (reader-only, full tensor)
     detail::create_tensor_cb(
         desc,
@@ -1125,10 +1184,9 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
 
     // Compile-time args shared by reader and writer
     std::vector<uint32_t> compile_time_args = {
-        // CB IDs (10)
+        // CB IDs (9)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
-        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_weights_id
         static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
         static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_route_info_id
         static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_payload_for_writer_id
@@ -1137,19 +1195,17 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         static_cast<uint32_t>(tt::CBIndex::c_8),  // cb_packet_header_id
         static_cast<uint32_t>(tt::CBIndex::c_9),  // cb_dispatch_table_id
 
-        // Page counts (7)
+        // Page counts (6)
         detail::get_num_pages(input_tensor),
         detail::get_num_pages(indices_tensor),
-        detail::get_num_pages(weights_tensor),
         detail::get_num_pages(offsets_tensor),
         detail::get_num_pages(output_tensor),
         detail::get_num_pages(metadata_tensor),
         detail::get_num_pages(dispatch_table_tensor),
 
-        // Page sizes (7)
+        // Page sizes (6)
         detail::get_page_size(input_tensor),
         detail::get_page_size(indices_tensor),
-        detail::get_page_size(weights_tensor),
         detail::get_page_size(offsets_tensor),
         detail::get_page_size(output_tensor),
         detail::get_page_size(metadata_tensor),
@@ -1171,10 +1227,9 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         mesh_view.num_cols(),
         linearized_mesh_coord,
 
-        // Aligned page sizes (7)
+        // Aligned page sizes (6)
         detail::get_aligned_page_size(input_tensor),
         detail::get_aligned_page_size(indices_tensor),
-        detail::get_aligned_page_size(weights_tensor),
         detail::get_aligned_page_size(offsets_tensor),
         detail::get_aligned_page_size(output_tensor),
         detail::get_aligned_page_size(metadata_tensor),
@@ -1194,10 +1249,9 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         operation_attributes.max_dispatch_buffer_token_size,
     };
 
-    // Append TensorAccessorArgs for all 7 tensors
+    // Append TensorAccessorArgs for all 6 tensors
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
@@ -1214,6 +1268,26 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
 
+    // Padding-config support: only the reader reads the config, so it gets a dedicated copy of the
+    // compile args (config TensorAccessorArgs + scratch CB id appended last) and the
+    // HAS_PADDING_CONFIG define. The writer keeps the shared compile args.
+    const bool has_padding_config = tensor_args.padding_config.has_value();
+    constexpr auto cb_padding_config_sender = tt::CBIndex::c_14;
+    auto reader_compile_args = compile_time_args;
+    auto reader_defines = fabric_defines;
+    if (has_padding_config) {
+        detail::create_tensor_cb(
+            desc,
+            sender_core_grid,
+            tensor_args.padding_config.value(),
+            /*buffering_factor=*/1,
+            cb_padding_config_sender,
+            "padding_config");
+        tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer()).append_to(reader_compile_args);
+        reader_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_sender));
+        reader_defines["HAS_PADDING_CONFIG"] = "1";
+    }
+
     // Single reader kernel shared across all senders.  (Legacy code stored one
     // handle per sender for uniform override_runtime_arguments iteration; the
     // descriptor framework uses BufferBindings on cache hit so the duplication
@@ -1224,8 +1298,8 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         "reader_dispatch.cpp";
     reader_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kd.core_ranges = sender_core_grid;
-    reader_kd.compile_time_args = compile_time_args;
-    reader_kd.defines = {fabric_defines.begin(), fabric_defines.end()};
+    reader_kd.compile_time_args = reader_compile_args;
+    reader_kd.defines = {reader_defines.begin(), reader_defines.end()};
     reader_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
@@ -1250,11 +1324,10 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
 
     // Runtime args: all cores process all tokens, experts split round-robin.
     // Build as a flat uint32_t vector so the fabric helper can extend it, then
-    // promote to an RTArgList with Buffer* in the first seven slots.
+    // promote to an RTArgList with Buffer* in the first six slots.
     std::vector<uint32_t> base_runtime_args = {
         input_tensor.buffer()->address(),
         indices_tensor.buffer()->address(),
-        weights_tensor.buffer()->address(),
         offsets_tensor.buffer()->address(),
         output_tensor.buffer()->address(),
         metadata_tensor.buffer()->address(),
@@ -1267,18 +1340,24 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         num_cores,                    // num_dispatch_cores
     };
 
-    auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args) {
+    // Reader-only: padding_config base address sits at fixed index 12 and is promoted to a Buffer*
+    // so its BufferBinding refreshes on cache hit. The writer's index 12 is its exit_semaphore
+    // (stable GlobalSemaphore address) and must stay a plain uint32_t.
+    auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args, bool is_reader) {
         tt::tt_metal::KernelDescriptor::RTArgList args;
         args.reserve(raw_args.size());
         args.push_back(input_tensor.buffer());
         args.push_back(indices_tensor.buffer());
-        args.push_back(weights_tensor.buffer());
         args.push_back(offsets_tensor.buffer());
         args.push_back(output_tensor.buffer());
         args.push_back(metadata_tensor.buffer());
         args.push_back(dispatch_table_tensor.buffer());
-        for (size_t i = 7; i < raw_args.size(); ++i) {
-            args.push_back(raw_args[i]);
+        for (size_t i = 6; i < raw_args.size(); ++i) {
+            if (is_reader && has_padding_config && i == 12) {
+                args.push_back(tensor_args.padding_config.value().buffer());
+            } else {
+                args.push_back(raw_args[i]);
+            }
         }
         return args;
     };
@@ -1288,12 +1367,23 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         std::vector<uint32_t> reader_runtime_args = base_runtime_args;
         std::vector<uint32_t> writer_runtime_args = base_runtime_args;
 
-        reader_runtime_args[11] = core_idx;
-        writer_runtime_args[11] = core_idx;
+        reader_runtime_args[10] = core_idx;
+        writer_runtime_args[10] = core_idx;
+
+        // Reader-only: padding_config address at index 12 (right after the 12 base args). The
+        // promote helper rebinds it to a Buffer* so it refreshes on cache hit.
+        if (has_padding_config) {
+            reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value()
+                                              .buffer()
+                                              ->address());  // smuggled-rta-ok: promoted to a Buffer* binding at reader
+                                                             // index 12 below — refreshes on cache hit
+        }
 
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race; mirrors the combine fix).
-        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+        writer_runtime_args.push_back(
+            (uint32_t)exit_semaphore.address());  // smuggled-rta-ok: persistent GlobalSemaphore (created once in
+                                                  // TT_CCL, reused) — L1 address stable across program-cache hits
 
         if (operation_attributes.num_links > 0) {
             // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
@@ -1310,14 +1400,15 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
                 // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
                 // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
                 // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
+                // appended args. Pick a forwarding link valid for each neighbor's own direction (see
+                // compute_per_neighbor_forwarding_links above) rather than broadcasting one {core_link}.
+                const std::vector<uint32_t> per_conn_links =
+                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "dispatch-axis");
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
                     dst_nodes,
-                    {core_link},
+                    per_conn_links,
                     desc,
                     writer_kernel_id,
                     sender_core,
@@ -1338,9 +1429,9 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         }
 
         desc.kernels[reader_kernel_id].emplace_runtime_args(
-            sender_core, promote_rt_args_with_buffer_bindings(reader_runtime_args));
+            sender_core, promote_rt_args_with_buffer_bindings(reader_runtime_args, /*is_reader=*/true));
         desc.kernels[writer_kernel_id].emplace_runtime_args(
-            sender_core, promote_rt_args_with_buffer_bindings(writer_runtime_args));
+            sender_core, promote_rt_args_with_buffer_bindings(writer_runtime_args, /*is_reader=*/false));
         core_idx++;
     }
 

@@ -17,7 +17,6 @@
 
 #include "slice.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
-#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_tile.hpp"
 
 namespace ttnn::operations::experimental::quasar::detail {
 
@@ -25,14 +24,14 @@ namespace {
 
 ttnn::Tensor slice_small_vector_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& slice_start,
-    const ttnn::SmallVector<int>& slice_end,
-    const std::optional<ttnn::SmallVector<int>>& step,
+    const ttsl::SmallVector<int>& slice_start,
+    const ttsl::SmallVector<int>& slice_end,
+    const std::optional<ttsl::SmallVector<int>>& step,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<CoreRangeSet>&& sub_core_grids) {
-    const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+    const auto step_value = step.value_or(ttsl::SmallVector<int>(slice_end.size(), 1));
     return ttnn::operations::experimental::quasar::slice(
         input_tensor,
         slice_start,
@@ -71,7 +70,7 @@ void bind_slice(nb::module_& mod) {
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
     // than a vector with a fixed size default value
-    ttnn::bind_function<"slice">(
+    ttnn::bind_function<"slice", "ttnn.experimental.quasar.">(
         mod,
         doc,
         // Overload 1: Tensor args version (uint32_t template parameter)
@@ -80,7 +79,7 @@ void bind_slice(nb::module_& mod) {
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
-                const std::optional<ttnn::SmallVector<uint32_t>>&,
+                const std::optional<ttsl::SmallVector<uint32_t>>&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
                 const std::optional<float>&,
@@ -118,7 +117,7 @@ void bind_slice(nb::module_& mod) {
             nb::arg("output_tensor") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
-        // Overload 3: SmallVector<int> version (int32_t template parameter)
+        // Overload 3: ttsl::SmallVector<int> version (int32_t template parameter)
         ttnn::overload_t(
             &slice_small_vector_wrapper,
             nb::arg("input_tensor"),
@@ -161,19 +160,6 @@ void bind_slice_descriptor(nb::module_& mod) {
             &ttnn::prim::qsr::SliceDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
-
-    nb::class_<ttnn::prim::qsr::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::qsr::SliceParams& operation_attributes,
-               const ttnn::prim::qsr::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::qsr::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
 }
 
 }  // namespace ttnn::operations::experimental::quasar::detail

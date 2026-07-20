@@ -38,7 +38,7 @@ HostTensor create_simple_host_tensor(const Shape& shape, DataType dtype = DataTy
     auto spec = create_simple_spec(shape, dtype);
     auto buffer = DistributedHostBuffer::create(distributed::MeshShape{1});
     auto topology = TensorTopology();
-    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
+    return HostTensor::from_buffer(std::move(buffer), std::move(spec), std::move(topology));
 }
 
 // Type trait tests verifying HostTensor's semantic constraints
@@ -80,7 +80,7 @@ TEST(HostTensorTest, ConstructionWithHostBuffer) {
     std::vector<float> data(shape.volume(), 1.0f);
     HostBuffer host_buffer(std::move(data));
 
-    HostTensor tensor(std::move(host_buffer), std::move(spec), std::move(topology));
+    HostTensor tensor = HostTensor::from_buffer(std::move(host_buffer), std::move(spec), std::move(topology));
 
     EXPECT_EQ(tensor.logical_shape(), shape);
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);

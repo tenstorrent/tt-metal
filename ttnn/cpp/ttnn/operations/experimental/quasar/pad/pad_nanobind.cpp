@@ -38,13 +38,13 @@ void bind_pad(nb::module_& mod) {
             List of ttnn.Tensor: the output tensor.
     )doc";
 
-    ttnn::bind_function<"pad">(
+    ttnn::bind_function<"pad", "ttnn.experimental.quasar.">(
         mod,
         doc,
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const ttnn::SmallVector<std::array<uint32_t, 2>>&,
+                const ttsl::SmallVector<std::array<uint32_t, 2>>&,
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,

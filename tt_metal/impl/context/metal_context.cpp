@@ -140,7 +140,7 @@ void MetalContext::initialize_device_manager(
     size_t l1_small_size,
     size_t trace_region_size,
     const tt_metal::DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
@@ -251,8 +251,11 @@ void MetalContext::initialize(
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
-    // Watcher server always created, since we use it to register kernels
-    watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
+    // Emulated devices have no firmware for the watcher to poll; skip it. A null
+    // watcher is handled downstream (kernel registration, teardown).
+    if (get_cluster().get_target_device_type() != tt::TargetDevice::Emule) {
+        watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
+    }
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
     if (rtoptions().get_experimental_noc_debug_dump_enabled()) {
@@ -295,13 +298,17 @@ void MetalContext::initialize(
     if (dprint_server_) {
         dprint_server_->attach_devices();
     }
-    watcher_server_->init_devices();
+    if (watcher_server_) {
+        watcher_server_->init_devices();
+    }
 
     risc_firmware_initializer_->run_launch_phase(device_ids);
 
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
-    watcher_server_->attach_devices();
+    if (watcher_server_) {
+        watcher_server_->attach_devices();
+    }
 }
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
@@ -709,8 +716,13 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
+    // Source the mock flag from rtoptions (the centralized env-var/programmatic parsing)
+    // rather than re-detecting env vars here. get_target_device() == Mock is true for both
+    // env-var and programmatic mock, and -- crucially -- false for Emule (which sets the same
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH but functionally executes kernels and must not skip
+    // firmware init) and for Simulator.
     std::string mock_cluster_desc_path =
-        env_->get_descriptor().is_mock_device() ? env_->get_descriptor().mock_cluster_desc_path() : "";
+        rtoptions().get_target_device() == tt::TargetDevice::Mock ? rtoptions().get_mock_cluster_desc_path() : "";
     context_descriptor_ = std::make_shared<ContextDescriptor>(
         env_,
         this,
@@ -737,7 +749,7 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
         /*trace_region_size=*/0,
         worker_l1_size,
         DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t>{},
+        ttsl::Span<const std::uint32_t>{},
         rtoptions().get_mock_cluster_desc_path());
 }
 

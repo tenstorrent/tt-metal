@@ -1,15 +1,13 @@
-# This workflow can be run between 3 and 7 AM UTC
-name: "Fabric Test on a BH Quad"
+name: "(SC4) Health check & Fabric Test"
 
 on:
   schedule:
-    - cron: "0 11 * * 1-5" # Runs weekdays at 11:00 AM UTC
+    - cron: "0 5 * * *" # Runs every day at 5:00 AM UTC
   workflow_dispatch:
-    inputs:
-      note:
-        description: 'This workflow can be run between 12 PM and 4 PM UTC'
-        required: false
-        default: ""
+
+permissions:
+  id-token: write
+  contents: read
 
 run-name: Fabric Test on a BH Quad
 jobs:
@@ -34,9 +32,6 @@ jobs:
     name: Create Allocation for 32x4 RINGxRING
     needs: build-artifact
     timeout-minutes: 30
-    outputs:
-      ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
-      mgd: ${{ steps.mgd.outputs.mgd }}
     runs-on:
       group: exabox
       labels: exabox-multihost
@@ -45,22 +40,15 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
 
-      - name: MGD
-        id: mgd
+      - name: Extract allocation spec from SKU
+        id: extract-spec
         run: |
-          MGD_CONFIG='
-            mesh_descriptors {
-              name: \"M0\"
-              arch: BLACKHOLE
-              device_topology { dims: [ 32,4 ] dim_types: [ RING,RING ] }
-              host_topology   { dims: [ 4,1 ] }
-              channels { count: 2 policy: RELAXED }
-            }
-            top_level_instance { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }
-          '
-          echo "mgd<<EOF" >> $GITHUB_OUTPUT
-          echo "$MGD_CONFIG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          pip3 install PyYAML
+          {
+            echo "allocation_spec<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sc4-mgd"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create allocation
         id: allocation
@@ -68,96 +56,11 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-metal
           namespace: ttop-ci
-          spec: |
-            allocationType: Count
-            count: 4
-            matchLabels:
-              exabox.tenstorrent.com/purpose: ci-metal
-              exabox.tenstorrent.com/superpod: A29
-
-      - name: Get Allocation data
-        uses: ./.github/actions/ttop-get-allocation-data
-        id: get-allocation-data
-        with:
-          allocationName: ci-${{ github.run_id }}-metal
-          namespace: ttop-ci
-
-  reset:
-    name: Reset cards
-    needs: [build-artifact, create-allocation]
-    timeout-minutes: 15
-    runs-on:
-      group: exabox
-      labels: exabox-multihost
-    env:
-      OMPI_MCA_btl_tcp_if_include: ens5f0np0
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-      PRTE_MCA_prte_fwd_environment: "true"
-      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-      VIRTUAL_ENV: /opt/venv
-      HOME: /home/user
-      PIP_CACHE_DIR: /home/user/.cache/pip
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-
-      - name: Parse docker image
-        id: parse-image
-        run: |
-          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
-          REPOSITORY="${IMAGE%:*}"
-          TAG="${IMAGE##*:}"
-          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Create environment
-        uses: ./.github/actions/ttop-create-environment
-        timeout-minutes: 5
-        with:
-          environmentName: ci-${{ github.run_id }}-reset
-          allocationName: ci-${{ github.run_id }}-metal
-          allocationNamespace: ttop-ci
-          workerRepository: ${{ steps.parse-image.outputs.repository }}
-          workerTag: ${{ steps.parse-image.outputs.tag }}
-          useDevHostMount: 'true'
-
-      # We use setup-tt-run just to setup MPI, MGD can be dummy
-      - name: Setup tt-run
-        uses: ./.github/actions/ttop-configure-tt-run
-        timeout-minutes: 5
-        with:
-          directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
-          copyToWorkers: false
-          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
-
-      - name: Print hostnames
-        working-directory: /tmp
-        run: |
-          mpirun --tag-output --pernode \
-            hostname
-
-      - name: Reset cards
-        working-directory: /tmp
-        timeout-minutes: 10
-        run: |
-          mpirun --tag-output --pernode \
-            bash -lc 'tt-smi -glx_reset && sleep 300'
-
-      - name: Delete environment
-        if: always()
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName: ci-${{ github.run_id }}-reset
-          namespace: ttop-ci
+          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
 
   run:
     name: Run test
-    needs: [build-artifact, create-allocation, reset]
+    needs: [build-artifact, create-allocation]
     runs-on:
       group: exabox
       labels: exabox-multihost-with-nfs
@@ -166,7 +69,7 @@ jobs:
       PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
       PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+      PRTE_MCA_prte_default_hostfile: /etc/ttop/hostfile
       PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
@@ -190,9 +93,15 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: Get Allocation data
+        uses: ./.github/actions/ttop-get-allocation-data
+        with:
+          allocationName: ci-${{ github.run_id }}-metal
+          allocationNamespace: ttop-ci
+
       - name: Create environment
         uses: ./.github/actions/ttop-create-environment
-        timeout-minutes: 5
+        timeout-minutes: 30
         with:
           environmentName: ci-${{ github.run_id }}-metal
           allocationName: ci-${{ github.run_id }}-metal
@@ -201,15 +110,7 @@ jobs:
           workerTag: ${{ steps.parse-image.outputs.tag }}
           useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
-
-      - name: Setup tt-run
-        uses: ./.github/actions/ttop-configure-tt-run
-        timeout-minutes: 5
-        with:
-          directory: /ci/ttrun
-          mgd: ${{ needs.create-allocation.outputs.mgd }}
-          copyToWorkers: false
-          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
+          path: /etc/ttop
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -226,6 +127,7 @@ jobs:
       - name: Unpack artifacts & install
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
+          rm -rf /ci/tt-metal
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           if ! command -v zstd >/dev/null 2>&1; then
             echo "zstd not found in runner context, installing fallback..."
@@ -245,7 +147,14 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          mpirun --pernode cp -r /ci/tt-metal /home/user
+          # Unpack build artifact locally as well. Pipeline config generation runs on the runner
+          # and expects test binaries under /ci/tt-metal/build/test.
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
+          sudo rm -rf /home/user/tt-metal
+          sudo mkdir -p /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user
+          cp -r /ci/tt-metal /home/user/
+          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
           # Unpack artifacts
@@ -261,6 +170,85 @@ jobs:
           fi
           mpirun --pernode uv pip install "${ttnn_wheels[@]}"
 
+      - name: Reset cards and validate cluster
+        working-directory: /tmp
+        timeout-minutes: 30
+        run: |
+          MAX_RECOVERY_ATTEMPTS=10
+
+          echo "--- Pre-check: tt-smi visibility on all hosts ---"
+          mpirun --pernode --tag-output \
+            bash -lc '
+              snapshot=$(tt-smi --snapshot_no_tty --snapshot)
+              driver=$(jq -r ".host_info.Driver // \"unknown\"" <<< "$snapshot")
+              tt_smi=$(jq -r ".host_sw_vers.tt_smi // \"unknown\"" <<< "$snapshot")
+              echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
+            ' || true
+
+          run_cluster_validation() {
+            mpirun --pernode --tag-output \
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+              --send-traffic \
+              --hard-fail \
+              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+              --num-iterations 5
+          }
+
+          echo "--- Checking cluster health before reset ---"
+          if run_cluster_validation; then
+            echo "SUCCESS: Cluster validation passed without reset"
+            exit 0
+          fi
+
+          for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
+            echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
+            reset_success=false
+            validation_success=false
+
+            echo "--- Resetting cards with tt-smi ---"
+            if mpirun --pernode tt-smi -glx_reset; then
+              reset_success=true
+            else
+              echo "WARNING: Reset failed on attempt $attempt"
+            fi
+
+            if [ "$reset_success" = true ]; then
+              echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+              sleep 5
+
+              echo "--- Running cluster validation ---"
+              if run_cluster_validation; then
+                validation_success=true
+              else
+                echo "WARNING: Validation failed on attempt $attempt"
+              fi
+            else
+              echo "WARNING: Skipping validation because reset failed on attempt $attempt"
+            fi
+
+            if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
+              echo "SUCCESS: Reset and cluster validation passed on attempt $attempt"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+              echo "Sleeping 30s before retry..."
+              sleep 30
+            fi
+          done
+
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
+          exit 1
+
+      - name: Verify ttnn imports on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            python3 -c "import ttnn; print(\"ttnn import: OK\")"
+            python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
+          '
+
       - name: Run Physical discovery test
         timeout-minutes: 10
         run: |
@@ -269,17 +257,24 @@ jobs:
       - name: Run System Health Check
         timeout-minutes: 10
         run: |
-          mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
+          mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+            /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health --min-connections 2
 
       - name: Run Fabric Test
         timeout-minutes: 20
+        working-directory: /home/user/tt-metal
         run: |
-          tt-run --skip-mgd-check --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
+          TTRUN_DIR=/etc/ttop
+          PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+          tt-run --skip-mgd-check --skip-executable-check \
+            --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
             /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_superpod_short_running.yaml
 
   cleanup:
     name: Cleanup
-    needs: [run, reset, create-allocation]
+    needs: [run, create-allocation]
     if: always()
     runs-on:
       group: exabox
@@ -293,13 +288,6 @@ jobs:
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName: ci-${{ github.run_id }}-metal
-          namespace: ttop-ci
-
-      # Redundantly try to drop reset env - reset job might have failed
-      - name: Delete reset environment
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName: ci-${{ github.run_id }}-reset
           namespace: ttop-ci
 
       - name: Delete allocation

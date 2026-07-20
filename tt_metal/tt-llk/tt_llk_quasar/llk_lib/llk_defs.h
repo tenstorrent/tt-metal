@@ -71,13 +71,6 @@ enum class Transpose : std::uint8_t
     Both      = 3,
 };
 
-enum class TilizeUnpackerSel : std::uint8_t
-{
-    UnpA  = 0,
-    UnpB  = 1,
-    UnpAB = 2,
-};
-
 enum class SfpuType : std::uint32_t
 {
     tanh,
@@ -110,6 +103,15 @@ enum class SfpuType : std::uint32_t
     le_int,
     ge_int,
     mul_int,
+    topk_local_sort,
+    topk_merge,
+    topk_rebuild,
+    equal_zero,
+    not_equal_zero,
+    less_than_zero,
+    greater_than_zero,
+    less_than_equal_zero,
+    greater_than_equal_zero,
 };
 
 enum class DstSync : std::uint8_t
@@ -125,6 +127,13 @@ enum class MathFidelity : std::uint8_t
     HiFi3 = 3,
     HiFi4 = 4
 };
+
+// Quasar: UnpackToDestEn is the explicit op-writer unpack-to-dest flag (default false). It is NOT
+// defined here, it is emitted as a `constexpr bool` into the JIT-generated chlkc_descriptors.h
+// (from ComputeHardwareConfig::unpack_to_dest_en), like DST_ACCUM_MODE. Defining it here would bake
+// the wrong value: llk_defs.h is pulled in (via ckernel.h) before any generated header is available.
+// (WH/BH keep UnpackToDestEn hardcoded here and infer routing from 32-bit format).
+// Quasar: UnpackToDestDis entirely unused, removed as well.
 
 enum class StochRndType : std::uint8_t
 {

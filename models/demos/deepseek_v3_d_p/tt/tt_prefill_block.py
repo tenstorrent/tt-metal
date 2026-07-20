@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple, Union
 
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
@@ -16,6 +16,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+
+# Per-axis CCL topology. A scalar applies to both mesh axes; a 2-tuple (row = SP-axis-0,
+# col = TP-axis-1) configures each axis independently — e.g. (Ring, Linear) for
+# FABRIC_2D_TORUS_Y, where only the SP axis is wrapped into a ring.
+PerAxisTopology = Tuple[ttnn.Topology, ttnn.Topology]
+TopologyArg = Union[ttnn.Topology, PerAxisTopology]
 
 
 class TtPrefillBlock(LightweightModule):
@@ -70,7 +76,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int = 1024,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -182,7 +188,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -206,7 +212,18 @@ class TtPrefillBlock(LightweightModule):
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
-        self.topology = topology
+        # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
+        # axis independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
+        # axis into a ring, so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
+        # on cluster_axis=tp_axis) must stay Linear even when the SP-axis MoE dispatch/combine
+        # run Ring. Applying Ring to the unwrapped TP axis deadlocks: get_usable_topology keeps
+        # Ring (the coords span the axis) and the all-gather waits forever on a wrap link that
+        # has no physical fabric edge. MoE receives the full `topology` and splits row/col itself.
+        assert (
+            not isinstance(topology, tuple) or len(topology) == 2
+        ), f"per-axis topology must be a 2-tuple (sp_axis_0, tp_axis_1), got {topology!r}"
+        tp_topology = topology[1] if isinstance(topology, tuple) else topology
+        self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
@@ -225,7 +242,7 @@ class TtPrefillBlock(LightweightModule):
             epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
-            topology=topology,
+            topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
@@ -242,6 +259,7 @@ class TtPrefillBlock(LightweightModule):
             seq_len=max_seq_len if max_seq_len is not None else seq_len,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
+            topology=tp_topology,  # MLA's q/kv all-gathers run on the TP axis (cluster_axis=tp_axis)
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
@@ -262,7 +280,7 @@ class TtPrefillBlock(LightweightModule):
             epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
-            topology=topology,
+            topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
@@ -287,15 +305,25 @@ class TtPrefillBlock(LightweightModule):
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                is_balanced=is_balanced,
             )
         else:
+            # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
+            # so GLM-5.1 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
+            # is always safe (== default for 7168-dim models); hidden_dim only overrides when the config
+            # exposes intermediate_size (GLM does; DSv3/Kimi fall back to the TtFfn default).
+            _dense_ffn_kwargs = {}
+            if getattr(config, "intermediate_size", None):
+                _dense_ffn_kwargs["hidden_dim"] = config.intermediate_size
             self.ffn = TtFfn(
                 mesh_device=mesh_device,
                 torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
+                emb_dim=emb_dim,
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                **_dense_ffn_kwargs,
             )
 
     @staticmethod
@@ -307,7 +335,7 @@ class TtPrefillBlock(LightweightModule):
         sp_axis,
         emb_dim,
         num_links,
-        topology,
+        topology: TopologyArg,
         gate_fallback_mode,
         routed_expert_activations_dtype,
         routed_expert_weights_dtype,
@@ -317,6 +345,7 @@ class TtPrefillBlock(LightweightModule):
         weight_cache_path=None,
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
+        is_balanced=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -366,6 +395,7 @@ class TtPrefillBlock(LightweightModule):
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+            is_balanced=is_balanced,
         )
 
     def forward(
@@ -381,6 +411,11 @@ class TtPrefillBlock(LightweightModule):
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
     ):
         """
         Args:
@@ -390,8 +425,8 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates: if True, forward to TtMoe so it runs its
                 intermediates-gated checks (per-chip dispatch buffer overflow,
                 region-offset bounds). Has no effect on dense layers.
-            on_layer_complete: optional callback passed to MLA. In chunked prefill MLA writes the
-                chunk, zeros the pad window past actual_end, then fires this per layer.
+            on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
+                the chunk this block zeros the pad window past actual_end, flushes, then fires this.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
                 write offset = cumulative valid-KV count before it; None for single-shot). Selects
                 MLA's chunked path; requires the block to have been built with is_chunked=True.
@@ -400,6 +435,9 @@ class TtPrefillBlock(LightweightModule):
             return_kv_intermediates: if True, MLA surfaces its 4 KV stages (tt_kv, tt_kv_nope,
                 tt_kv_rope, tt_kvpe) and this returns (output_tensor, kv_intermediates_dict) — also
                 carrying post_mla_residual + post_attn_norm — instead of (output_tensor, kv_cache).
+            actual_isl: actual (unpadded) count of real tokens; threaded to the MoE FFN for
+                padding-aware routing.
+            padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
@@ -407,26 +445,60 @@ class TtPrefillBlock(LightweightModule):
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
+        seq_len_local = attn_norm_out.shape[2]
         mla_out = self.mla.forward(
             attn_norm_out,
             rope_tensors,
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
-            on_layer_complete=on_layer_complete,
             actual_start=actual_start,
-            actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
+            indexer_indices=indexer_indices,
+            return_indexer_indices=return_indexer_indices,
+            index_kv_cache=index_kv_cache,
         )
         kv_intermediates = None
-        if return_kv_intermediates:
+        mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
+        if return_kv_intermediates and return_indexer_indices:
+            mla_out, kv_intermediates, mla_indices = mla_out
+        elif return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
+        elif return_indexer_indices:
+            mla_out, mla_indices = mla_out
         ttnn.deallocate(attn_norm_out)
+
+        # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
+        # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
+        # 128-boundary; zero that pad window so the decode side reads clean zeros. The synchronize
+        # flushes the (async) zero to device before on_layer_complete hands this layer's KV to the
+        # migration worker, which reads the cache over NoC out-of-band from the ttnn command queue —
+        # without the flush it could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
+        # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
+        if on_layer_complete is not None:
+            assert actual_end is not None, "actual_end required when on_layer_complete is set"
+            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
+            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
+            # sparse.
+            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    kvpe_cache,
+                    cache_user_id,
+                    cache_layer_idx,
+                    self.mla.layer_num,
+                    actual_end,
+                    seq_len_local * self.mla.sp_factor,
+                    self.mla.sp_axis,
+                )
+            ttnn.synchronize_device(self.mesh_device)
+            on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block
             # output is unused (no FFN, no further layers). Return (None, None)
             # so the transformer can short-circuit.
+            if return_indexer_indices:
+                return None, None, None
             return None, None
 
         x = ttnn.add(x, mla_out)
@@ -442,7 +514,12 @@ class TtPrefillBlock(LightweightModule):
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
         if self.is_moe:
-            ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
+            ffn_out = self._moe_path(
+                ffn_norm_out,
+                return_intermediates=return_intermediates,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+            )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
@@ -451,16 +528,31 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_out)
 
         if return_kv_intermediates:
+            if return_indexer_indices:
+                return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        if return_indexer_indices:
+            return x, kv_cache, mla_indices
         return x, kv_cache
 
-    def _moe_path(self, ffn_norm_out: ttnn.Tensor, return_intermediates: bool = False) -> ttnn.Tensor:
+    def _moe_path(
+        self,
+        ffn_norm_out: ttnn.Tensor,
+        return_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+    ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
 
-        moe_out, _ = self.ffn(moe_input, return_intermediates=return_intermediates)
+        moe_out, _ = self.ffn(
+            moe_input,
+            return_intermediates=return_intermediates,
+            actual_isl=actual_isl,
+            padding_side=padding_side,
+        )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
         return moe_out

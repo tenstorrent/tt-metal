@@ -18,7 +18,7 @@ from models.tt_transformers.tt.common import Mode, get_prefill_rot_mat, get_rot_
 from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 
-from .utils import load_hf_mixtral_config
+from .utils import fuse_mixtral_experts, load_hf_mixtral_config
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
 
@@ -32,6 +32,8 @@ def convert2ref(state_dict):
         ("attention.wo.weight", "self_attn.o_proj.weight"),
         ("attention_norm.weight", "input_layernorm.weight"),
         ("ffn_norm.weight", "post_attention_layernorm.weight"),
+        # transformers 5.x renamed MixtralDecoderLayer.block_sparse_moe -> mlp
+        ("block_sparse_moe.gate.weight", "mlp.gate.weight"),
     ]
 
     out = {}
@@ -77,7 +79,12 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = MixtralDecoderLayer(hf_config, layer_idx=layer_idx)
-    reference_model.load_state_dict(convert2ref(partial_state_dict))
+    # transformers 5.x: experts are fused into mlp.experts.{gate_up_proj,down_proj}
+    reference_model.load_state_dict(
+        fuse_mixtral_experts(
+            convert2ref(partial_state_dict), hf_config.num_local_experts, "block_sparse_moe.experts", "mlp.experts"
+        )
+    )
     reference_rotary_emb = MixtralRotaryEmbedding(config=hf_config)
 
     # Initialize TT model
@@ -147,23 +154,30 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         positions = torch.LongTensor(range(max_seq_len))
         # Causal mask generated as in HF Mixtral model: https://github.com/huggingface/transformers/blob/a7f29523361b2cc12e51c1f5133d95f122f6f45c/src/transformers/models/mixtral/modeling_mixtral.py#L473
         mask_function = create_causal_mask if hf_config.sliding_window is None else create_sliding_window_causal_mask
+        # transformers 5.x create_causal_mask: input_embeds -> inputs_embeds, and cache_position
+        # was dropped in favour of position_ids.
         causal_mask = mask_function(
             config=hf_config,
-            input_embeds=pt_decode_input_bsh,
+            inputs_embeds=pt_decode_input_bsh,
             attention_mask=None,
-            cache_position=positions,
             past_key_values=None,
+            position_ids=positions.unsqueeze(0),
         )
 
         position_ids = positions.unsqueeze(0).expand(batch, -1)
         position_embeddings = reference_rotary_emb(pt_decode_input_bsh, position_ids)
 
-        ref_output_bsh, *_ = reference_model(
+        # transformers 5.x MixtralDecoderLayer.forward returns a single tensor (older versions
+        # returned a tuple). `ref_output_bsh, *_ =` would unpack the tensor along the batch dim,
+        # so assign directly and take element 0 only when a tuple/list is returned.
+        ref_output_bsh = reference_model(
             hidden_states=pt_decode_input_bsh,
             attention_mask=causal_mask,
             position_ids=position_ids,
             position_embeddings=position_embeddings,
         )
+        if isinstance(ref_output_bsh, (tuple, list)):
+            ref_output_bsh = ref_output_bsh[0]
 
         # Reference model
         passing, pcc_message = comp_pcc(ref_output_bsh, tt_out, pcc)

@@ -2,8 +2,8 @@ name: "(Tier 2) Models Unit Tests"
 
 on:
   schedule:
-    # Twice a day at 01:00 and 13:00 UTC — all models, all SKUs
-    - cron: "0 1,13 * * *"
+    # Once a day at 01:00 UTC — all models, all SKUs
+    - cron: "0 1 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -19,7 +19,7 @@ on:
           - qwen3-32b
           - qwen2.5-32b
           - qwen2.5-coder-32b
-          - qwen2.5-72b-vl
+          - qwen2.5-vl-72b
           - mistral-7b
           - gemma-3-4b
           - gemma-3-27b
@@ -87,7 +87,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
       model: ${{ steps.resolve.outputs.model }}

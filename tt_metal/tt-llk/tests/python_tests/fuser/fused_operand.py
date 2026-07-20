@@ -47,6 +47,7 @@ class Operand:
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
+    buf_desc_id: Optional[int] = None
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
@@ -168,11 +169,16 @@ class Operand:
         tile_elements = self.tile_shape.total_tile_size()
         tile_size = self.data_format.num_bytes_per_tile(tile_elements)
 
+        tile_dims = (self.tile_shape.total_row_dim(), self.tile_shape.total_col_dim())
+        num_faces = self.tile_shape.total_num_faces()
+
         buffer = (
             tilize_block(
                 self.raw_data,
                 dimensions=self.dimensions,
                 stimuli_format=self.data_format,
+                num_faces=num_faces,
+                tile_dimensions=tile_dims,
             ).flatten()
             if self.is_input()
             else torch.zeros(self.dimensions).flatten()
@@ -224,6 +230,7 @@ class OperandRegistry:
         dimensions: Tuple[int, int],
         data_format: DataFormat,
         const_value: Optional[float] = None,
+        tile_dims: Optional[Tuple[int, int]] = None,
     ) -> Operand:
         if name in self.operands:
             operand = self.operands[name]
@@ -238,12 +245,19 @@ class OperandRegistry:
 
             return operand
 
+        tile_shape = construct_tile_shape(
+            tile_dims
+            if tile_dims is not None
+            else (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        )
+
         operand = Operand(
             name=name,
             dimensions=dimensions,
             data_format=data_format,
             is_output=False,
             const_value=const_value,
+            tile_shape=tile_shape,
         )
         self.operands[name] = operand
         return operand
@@ -331,7 +345,20 @@ class OperandRegistry:
             tile_cnt = output.tile_count
             tile_elements = output.tile_shape.total_tile_size()
 
-            read_bytes_cnt = output_format.num_bytes_per_tile(tile_elements) * tile_cnt
+            # Tiles are stored densely in L1 (one num_bytes_per_tile(tile_elements)
+            # slot per tile). For full 32x32 tiles this equals the default stride
+            # unpack_res_tiles assumes, but for sub-32x32 tiles (e.g. 16x32) the dense
+            # stride is smaller. Passing it explicitly for sub-tiles keeps the 32x32
+            # code path byte-identical while making unpack_res_tiles stride correctly
+            # for tiny tiles (otherwise it strides at 32x32 and reads only the first
+            # half of the tiles).
+            tile_dense_bytes = output_format.num_bytes_per_tile(tile_elements)
+            is_full_tile = (
+                output.tile_shape.total_row_dim() == DEFAULT_TILE_R_DIM
+                and output.tile_shape.total_col_dim() == DEFAULT_TILE_C_DIM
+            )
+            tile_stride_bytes = None if is_full_tile else tile_dense_bytes
+            read_bytes_cnt = tile_dense_bytes * tile_cnt
             read_data = read_from_device(
                 location, output.l1_address, num_bytes=read_bytes_cnt
             )
@@ -343,6 +370,7 @@ class OperandRegistry:
                 sfpu=False,
                 num_faces=output.tile_shape.total_num_faces(),
                 face_r_dim=output.tile_shape.face_r_dim,
+                tile_stride_bytes=tile_stride_bytes,
             )
 
             torch_format = format_dict[output_format]
@@ -352,6 +380,12 @@ class OperandRegistry:
                 tilized_tensor,
                 stimuli_format=output_format,
                 dimensions=output_dimensions,
+                num_faces=output.tile_shape.total_num_faces(),
+                tile_dimensions=(
+                    output.tile_shape.total_row_dim(),
+                    output.tile_shape.total_col_dim(),
+                ),
+                face_r_dim=output.tile_shape.face_r_dim,
             )
 
             output._raw_data = raw_tensor

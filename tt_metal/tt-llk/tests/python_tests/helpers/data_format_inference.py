@@ -258,7 +258,11 @@ def infer_pack_in(
             if (
                 unpack_out == DataFormat.Int16
                 and is_fp32_dest_acc_en == DestAccumulation.Yes
+                and not unpacking_to_dest
             ):
+                # Int16 cannot reach a 32-bit Dest through the FPU datacopy:
+                # the 16-bit datum never lands in the 32-bit Dest. But unpack-to-Dest path can --
+                # UNPACR_DEST writes the 16-bit datum straight into the 32-bit Dest
                 raise ValueError(
                     f"If the input format is Int16, 32-bit dest is not supported and the packer input format must be Int16"
                 )
@@ -622,6 +626,16 @@ def data_formats(
             unpack_dst = input_format
             math_format = input_format
             pack_src_format = input_format
+            # Widening reductions (e.g. UInt16 reduce-sum) keep a narrow input but accumulate into a
+            # wider 32-bit value in a 32-bit dest. The kernel masks the garbage high bits on load (driven
+            # by the narrow math format) yet stores the full 32-bit result, so the packer must read the
+            # whole dest word: set pack_src to the 32-bit output format while leaving unpack/math narrow.
+            if (
+                is_fp32_dest_acc_en == DestAccumulation.Yes
+                and not input_format.is_32_bit()
+                and output_format.is_32_bit()
+            ):
+                pack_src_format = output_format
 
         # Even with inference disabled, UInt16 must ride the Int16 data path on Quasar: there is no
         # UInt16 HW encoding in the unpacker, the register files/dest, or the packer, so the whole

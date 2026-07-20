@@ -4,45 +4,56 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+import torch
 import ttnn.experimental
 
 import ttnn
+from models.tt_dit.parallel.config import DiTParallelConfig
 from models.tt_dit.utils import tensor
-
-if TYPE_CHECKING:
-    import torch
-
-    from models.tt_dit.parallel.config import DiTParallelConfig
 
 
 class CFGCombiner:
     """Classifier-free guidance combiner.
 
-    Operates either on a single device or on two devices using mesh sockets for communication.
-    Assumes that the unconditional prediction comes first - either in the first half of the batch
-    dimension (single-device case) or on the first device (multi-device case).
+    Operates either on a single device or on two devices. Assumes that the unconditional prediction
+    comes first - either in the first half of the batch dimension (single-device case) or on the
+    first device (multi-device case).
+
     """
 
-    def __init__(self, /, devices: tuple[ttnn.MeshDevice] | tuple[ttnn.MeshDevice, ttnn.MeshDevice]) -> None:
+    def __init__(
+        self,
+        devices: tuple[ttnn.MeshDevice] | tuple[ttnn.MeshDevice, ttnn.MeshDevice],
+        *,
+        via_host: bool = True,
+    ) -> None:
         match devices:
             case (_,):
-                self._inner = _CombinerSingle()
+                self._inner = _SingleCombiner()
             case (uncond_device, cond_device):
-                self._inner = _CombinerParallel(uncond_device, cond_device)
+                if via_host:
+                    self._inner = _HostCombiner(uncond_device, cond_device)
+                else:
+                    self._inner = _SocketCombiner(uncond_device, cond_device)
             case _:
                 msg = "devices must be a tuple of one or two MeshDevices"
                 raise ValueError(msg)
 
-    def combine(self, prediction: ttnn.Tensor, cfg_scale: float) -> ttnn.Tensor:
-        """Compute the CFG-combined noise prediction on one submesh device."""
-        return self._inner.combine(prediction, cfg_scale)
+    def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor, ...]:
+        """Compute the CFG-combined noise prediction on each submesh device."""
+        return self._inner.combine(predictions, cfg_scale)
 
 
-class _CombinerSingle:
-    def combine(self, prediction: ttnn.Tensor, cfg_scale: float) -> ttnn.Tensor:
+class _SingleCombiner:
+    def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor]:
+        if len(predictions) != 1:
+            msg = f"expected 1 prediction tensor for single-device combiner, got {len(predictions)}"
+            raise ValueError(msg)
+
+        prediction = predictions[0]
         n = prediction.shape[0]
 
         if n % 2 != 0:
@@ -52,33 +63,70 @@ class _CombinerSingle:
         split_pos = n // 2
         uncond = prediction[0:split_pos]
         cond = prediction[split_pos:]
-        return uncond + cfg_scale * (cond - uncond)
+        combined = ttnn.lerp(uncond, cond, cfg_scale)
+
+        return (combined,)
 
 
-class _CombinerParallel:
+class _HostCombiner:
+    def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice) -> None:
+        self._uncond_device = uncond_device
+        self._cond_device = cond_device
+
+    def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if len(predictions) != 2:
+            msg = f"expected 2 prediction tensors for host-based combiner, got {len(predictions)}"
+            raise ValueError(msg)
+
+        uncond, cond = predictions
+
+        received_uncond = uncond.cpu(blocking=False)
+        received_cond = cond.cpu(blocking=False)
+
+        ttnn.synchronize_device(self._uncond_device)
+        ttnn.synchronize_device(self._cond_device)
+
+        received_uncond = received_uncond.to(self._cond_device)
+        received_cond = received_cond.to(self._uncond_device)
+
+        combined0 = ttnn.lerp(uncond, received_cond, cfg_scale)
+        combined1 = ttnn.lerp(received_uncond, cond, cfg_scale)
+
+        return combined0, combined1
+
+
+class _SocketCombiner:
     def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice) -> None:
         self._devices = (uncond_device, cond_device)
         self._sockets = _create_sockets(uncond_device, cond_device)
-        self._recv_buffers: list[ttnn.Tensor | None] = [None, None]
+        self._recv_buffers: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
 
-    def combine(self, local_pred: ttnn.Tensor, cfg_scale: float) -> ttnn.Tensor:
-        idx = 0 if local_pred.device() == self._devices[0] else 1
+    def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if len(predictions) != 2:
+            msg = f"expected 2 prediction tensors for socket-based combiner, got {len(predictions)}"
+            raise ValueError(msg)
 
-        remote_pred = self._recv_buffers[idx]
-        if remote_pred is None:
-            remote_pred = ttnn.allocate_tensor_on_device(local_pred.spec, self._devices[idx])
-            self._recv_buffers[idx] = remote_pred
+        if self._recv_buffers is None:
+            self._recv_buffers = (
+                ttnn.allocate_tensor_on_device(predictions[0].spec, self._devices[0]),
+                ttnn.allocate_tensor_on_device(predictions[1].spec, self._devices[1]),
+            )
 
-        # call in different order on each device to avoid deadlock
-        if idx == 0:
-            ttnn.experimental.send_async(local_pred, self._sockets[0].tx)
-            ttnn.experimental.recv_async(remote_pred, self._sockets[1].rx)
-        else:
-            ttnn.experimental.recv_async(remote_pred, self._sockets[0].rx)
-            ttnn.experimental.send_async(local_pred, self._sockets[1].tx)
+        uncond, cond = predictions
+        received_cond, received_uncond = self._recv_buffers
 
-        uncond, cond = (local_pred, remote_pred) if idx == 0 else (remote_pred, local_pred)
-        return uncond + cfg_scale * (cond - uncond)
+        # on device 0: send uncond, receive cond
+        ttnn.experimental.send_async(uncond, self._sockets[0].tx)
+        ttnn.experimental.recv_async(received_cond, self._sockets[1].rx)
+
+        # on device 1: receive uncond, send cond
+        ttnn.experimental.recv_async(received_uncond, self._sockets[0].rx)
+        ttnn.experimental.send_async(cond, self._sockets[1].tx)
+
+        combined0 = ttnn.lerp(uncond, received_cond, cfg_scale)
+        combined1 = ttnn.lerp(received_uncond, cond, cfg_scale)
+
+        return combined0, combined1
 
 
 @dataclass

@@ -14,11 +14,17 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
+#endif
 #include <utility>
 #include <unordered_set>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#ifdef TT_METAL_USE_EMULE
+#include <thread>
+#endif
 
 namespace {
 
@@ -81,7 +87,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const MeshCoordinate& device_coord,
     const void* src,
     const std::optional<BufferRegion>& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (!mesh_device_->impl().is_local(device_coord)) {
@@ -104,7 +110,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
 
     auto payload =
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+        ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -120,7 +126,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
@@ -202,6 +208,11 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
+    // Emule note: the register/run split is bracketed by enqueue_mesh_workload around the whole
+    // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
+    // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
+    // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
+
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);
 
@@ -256,6 +267,27 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     auto& range_program_map = mesh_workload.get_programs();
 
+#ifdef TT_METAL_USE_EMULE
+    if (this->get_target_device_type() == tt::TargetDevice::Emule) {
+        // Co-schedule every program in this workload in one fiber run so cross-chip sender/receiver
+        // programs co-run in one scheduler generation and the teleport's fiber wake reaches the
+        // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
+        // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
+        tt::tt_metal::emule::begin_mesh_dispatch();
+        for (auto& [coord_range, program] : range_program_map) {
+            dispatch_program(coord_range, program, /*blocking=*/false);  // register only (defer)
+        }
+        tt::tt_metal::emule::run_mesh_dispatch();  // one concurrent run across all programs/chips
+        // run_until_idle completed every program synchronously, so all cores are idle now; keep the
+        // "previous workload cores" map empty (the emule invariant wait_for_cores_idle relies on).
+        {
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+            logical_cores_for_previous_workload_.clear();
+        }
+        return;
+    }
+#endif
+
     if (launch_thread_pool_) {
         // Dispatch programs in parallel
         for (auto& [coord_range, program] : range_program_map) {
@@ -285,19 +317,19 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
-    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
-    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
-    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, so we can call the non-locking version.
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
@@ -308,10 +340,10 @@ void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
 }
 
 void SDMeshCommandQueue::enqueue_write_dram_core_counter(
-    tt::stl::Span<const DeviceMemoryAddress> targets,
+    ttsl::Span<const DeviceMemoryAddress> targets,
     uint32_t value,
     bool /*blocking*/,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
@@ -338,7 +370,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
     }
 }
 
-void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
+void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
@@ -357,10 +389,14 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
     active_distributed_context_->barrier();
 }
 
-void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
+void SDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(
-    bool, uint32_t, const vector_aligned<uint32_t>&, const std::vector<std::pair<CoreRangeSet, uint32_t>>&) {}
+    bool,
+    uint32_t,
+    const vector_aligned<uint32_t>&,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>&,
+    ttsl::Span<const uint32_t>) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");

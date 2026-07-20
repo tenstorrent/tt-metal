@@ -3,17 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Learning rate and optimizer parameter schedulers."""
+
 import math
 import types
 from typing import Optional
 
-from ttml.common.config import SchedulerConfig
+from ttml.common.config import SpeedrunSchedulerConfig
 
 
 class SpeedrunScheduler:
     """Linear warmup -> optional hold -> linear decay; optional beta1 warmup."""
 
-    def __init__(self, cfg: SchedulerConfig):
+    def __init__(self, cfg: SpeedrunSchedulerConfig):
         self.cfg = cfg
 
     def lr_at(self, step: int) -> float:

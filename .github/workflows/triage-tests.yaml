@@ -9,7 +9,7 @@ on:
         type: boolean
         default: true
       blackhole:
-        description: "Run on Blackhole (bh_p150b_civ2_viommu_prio)"
+        description: "Run on Blackhole (bh_p150b_civ2_viommu)"
         required: false
         type: boolean
         default: true
@@ -29,7 +29,7 @@ on:
         type: boolean
         default: false
       run-hang-report-test:
-        description: "Run ONLY the hang report test (test-category unit). Default runs core triage tests (test-category smoke)."
+        description: "Run ONLY the hang report test (test-category unit). Default runs core triage tests (test-category merge_gate)."
         required: false
         type: boolean
         default: false
@@ -80,9 +80,9 @@ jobs:
       enabled-skus: >-
         ${{ format('{0}{1}',
           inputs.wormhole && 'wh_n150_civ2' || '',
-          inputs.blackhole && format('{0}bh_p150b_civ2_viommu_prio', inputs.wormhole && ',' || '') || '')
+          inputs.blackhole && format('{0}bh_p150b_civ2_viommu', inputs.wormhole && ',' || '') || '')
         }}
       enable-watcher: ${{ inputs.enable-watcher }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      test-category: ${{ inputs.run-hang-report-test && 'unit' || 'smoke' }}
+      test-category: ${{ inputs.run-hang-report-test && 'unit' || 'merge_gate' }}

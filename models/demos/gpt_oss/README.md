@@ -15,9 +15,6 @@ Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators
 ## Quick Start
 
 ```bash
-# Bump up transformers version
-pip install -r models/demos/gpt_oss/requirements.txt
-
 # Set model path using HF_MODEL environment variable
 export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b"
 

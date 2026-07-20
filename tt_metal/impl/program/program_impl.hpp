@@ -50,6 +50,7 @@ class EnqueueProgramCommand;
 class Kernel;
 
 namespace distributed {
+class MeshDevice;
 class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
@@ -63,7 +64,7 @@ namespace program_dispatch {
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     detail::ProgramImpl& program,
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache);
 }
@@ -220,11 +221,15 @@ public:
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
+    // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
+    // and patch the base address into the CRTA buffer
+    void allocate_scratchpads(const IDevice* device);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -244,7 +249,7 @@ public:
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
 
-    void generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
@@ -271,7 +276,7 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        tt::stl::Span<ProgramImpl*> programs);
+        ttsl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
@@ -294,6 +299,16 @@ public:
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
     std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
+
+    // A single DFB size override request, resolved to a DFB id. Overrides are applied as a batch
+    // so an alias group can be validated for agreement before any mutation.
+    struct DfbSizeOverride {
+        uint32_t dfb_id;
+        std::optional<uint32_t> entry_size;
+        std::optional<uint32_t> num_entries;
+    };
+
+    void apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
@@ -329,7 +344,7 @@ public:
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
 
-    void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
 
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
@@ -409,6 +424,13 @@ public:
     // Metal 2.0: Get all registered kernel names (for completeness validation)
     std::vector<std::string> get_registered_kernel_names() const;
 
+    // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
+    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    void reserve_runtime_arg_buffers();
+
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -420,6 +442,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -515,6 +538,12 @@ private:
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
 
+    // Scratchpads (Metal 2.0 only)
+    // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
+    // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
+    // is recomputed (due to a DFB size override at runtime).
+    bool scratchpads_allocated_{false};
+
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
@@ -560,7 +589,7 @@ private:
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence,
         ProgramImpl& program,
-        IDevice* device,
+        distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         bool use_prefetcher_cache);
 

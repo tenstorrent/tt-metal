@@ -27,6 +27,7 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/mla_q_rope.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -264,8 +265,8 @@ void py_module(nb::module_& m) {
     {
         auto py_mla = static_cast<nb::module_>(m.attr("mla"));
         py_mla.def(
-            "qkv_assemble_fw",
-            &ttml::ops::mla_qkv_assemble_fw,
+            "qkv_assemble",
+            &ttml::ops::mla_qkv_assemble,
             nb::arg("q_pre"),
             nb::arg("kv_up"),
             nb::arg("k_pe"),
@@ -326,6 +327,15 @@ void py_module(nb::module_& m) {
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
         py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
+        py_rope.def(
+            "mla_q_rope",
+            &ttml::ops::mla_q_rope,
+            nb::arg("q_full"),
+            nb::arg("rope_params"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            "MLA Q RoPE with autograd: fused metal mla_q_rope forward and backward (neg cos/sin on backward).\n"
+            "q_full: [B, n_heads, S, qk_nope_dim + qk_rope_dim] TILE bf16. Requires qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,
@@ -448,13 +458,19 @@ void py_module(nb::module_& m) {
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
+        // `seed_axes` (optional): the mesh axes across which the caller wants DISTINCT per-device
+        // noise -- i.e. the axes over which the logits/batch are sharded (data-distinct). Axes not
+        // listed are seeded identically (replicated). The CALLER owns this decision: only pass axes
+        // whose devices hold different data (dp / fsdp), and NEVER a replicated axis (tp).
+        //  seed_axes=None (default): every device draws the same noise (original single-seed behavior).
         py_sample.def(
             "sample_op",
             &ttml::ops::sample_op,
             nb::arg("logits"),
             nb::arg("temperature"),
             nb::arg("seed"),
-            nb::arg("logits_padding_mask") = nb::none());
+            nb::arg("logits_padding_mask") = nb::none(),
+            nb::arg("seed_axes") = nb::none());
     }
 
     {

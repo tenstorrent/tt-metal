@@ -50,7 +50,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             4 /* num_faces */,
             4 /* num_faces */);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -120,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
 
         // Initialize SDPA reduce using unified function
-        init_reduce<PoolType::MAX, DataFormat::Float16_b>(BLOCK_CT_DIM);
+        init_reduce<PoolType::MAX, DataFormat::Float16_b, is_fp32_dest_acc_en>(BLOCK_CT_DIM);
 
         PROFILER_SYNC();
     }
@@ -149,7 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Run the SFPU reduce SDPA calculation
                     // This is the core computation we want to measure
 
-                    calculate_reduce<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(1, block_height);
+                    calculate_reduce<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b, is_fp32_dest_acc_en>(1, block_height);
 
                     // Clear the valid flag for source A
                     TTI_CLEARDVALID(1, 0);
@@ -185,7 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     // Call the SFPU SDPA reduce function
                     const std::uint32_t block_height = BLOCK_RT_DIM;
-                    calculate_reduce<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(1, block_height);
+                    calculate_reduce<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b, is_fp32_dest_acc_en>(1, block_height);
 
                     _llk_math_eltwise_sfpu_done_();
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

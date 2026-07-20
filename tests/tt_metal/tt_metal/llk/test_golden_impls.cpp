@@ -23,7 +23,6 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
 
     int num_tile_rows = config.num_tiles_r_dim;
     int num_tile_cols = config.num_tiles_c_dim;
-
     // Number of uint32 words per face row: face_c_dim elements × datum_bytes / 4 bytes per uint32
     // BF16 (datum_bytes=2): 16*2/4 = 8  FP8 (datum_bytes=1): 16*1/4 = 4
     int num_c_dim = config.face_c_dim * static_cast<int>(config.datum_bytes) / 4;
@@ -82,14 +81,16 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
     // Half-face width in uint32 words: face_c_dim/2 elements × datum_bytes / 4 bytes per uint32
     // BF16: 16*2/4 = 8   FP8: 16*1/4 = 4
     const int half_face_w = config.face_c_dim * static_cast<int>(config.datum_bytes) / 4;
-    for (int x = 0; x < num_rows; x += 32) {
+    // Rows per tile-row: 32 for a full 32x32 tile (2 face-rows), 16 for a 16x32 tiny tile (1 face-row).
+    const int tile_r = config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
+    for (int x = 0; x < num_rows; x += tile_r) {
         for (int y = 0; y < num_cols; y += 2 * half_face_w) {
             int start = (x * num_cols) + y;
 
-            // Top faces
+            // Top faces (face_r_dim rows each, not a hardcoded 16, so shortened faces work)
             for (int j = 0; j < 2; j++) {
                 int start_ = start + (half_face_w * j);
-                for (int k = 0; k < 16; k++) {
+                for (int k = 0; k < config.face_r_dim; k++) {
                     for (int i = 0; i < half_face_w; i++) {
                         int idx = start_ + (num_cols * k) + i;
                         dst_vec.push_back(src_vec.at(idx));
@@ -99,10 +100,10 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
 
             if (config.num_faces > 2) {
                 // Bottom faces
-                start += 16 * num_cols;
+                start += config.face_r_dim * num_cols;
                 for (int j = 0; j < 2; j++) {
                     int start_ = start + (half_face_w * j);
-                    for (int k = 0; k < 16; k++) {
+                    for (int k = 0; k < config.face_r_dim; k++) {
                         for (int i = 0; i < half_face_w; i++) {
                             int idx = start_ + (num_cols * k) + i;
                             dst_vec.push_back(src_vec.at(idx));
@@ -116,15 +117,17 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
     return dst_vec;
 }
 
-// input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t>& src_vec, const std::vector<uint32_t>& shape) {
+// Templated on the element type: uint16_t holds BF16 bit-patterns,
+// uint32_t holds Float32 bit-patterns or Int32.
+template <typename T>
+std::vector<T> gold_transpose_wh(const std::vector<T>& src_vec, const std::vector<uint32_t>& shape) {
     vector<uint32_t> shapeT{shape[0], shape[1], shape[3], shape[2]};
     TensAddr addr(shape);
     TensAddr addrt(shapeT);
 
-    vector<uint16_t> transposed(src_vec.size());
+    vector<T> transposed(src_vec.size());
     for (int n = 0; n < shape[0]; n++) {
         for (int c = 0; c < shape[1]; c++) {
             for (int h = 0; h < shape[2]; h++) {
@@ -139,7 +142,12 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t>& src_vec, co
     }
 
     return transposed;
-};
+}
+
+template std::vector<uint16_t> gold_transpose_wh<uint16_t>(
+    const std::vector<uint16_t>& src_vec, const std::vector<uint32_t>& shape);
+template std::vector<uint32_t> gold_transpose_wh<uint32_t>(
+    const std::vector<uint32_t>& src_vec, const std::vector<uint32_t>& shape);
 
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
@@ -268,6 +276,65 @@ std::vector<uint32_t> gold_standard_tilize_w_elwadd(
         [&](const bfloat16& lhs, const bfloat16& rhs) { return (static_cast<float>(lhs) + static_cast<float>(rhs)); });
 
     return tt::test_utils::pack_vector<uint32_t, bfloat16>(result_vec);
+}
+
+std::vector<uint32_t> gold_standard_tilize_w_reduce_col_max(
+    const std::vector<uint32_t>& src0_vec, const std::vector<uint32_t>& src1_vec, const GoldenConfig& config) {
+    // Extract scaler from src1_vec (first bfloat16 element)
+    float scaler = 1.0f;
+    if (!src1_vec.empty()) {
+        std::vector<bfloat16> scaler_unpacked = tt::test_utils::unpack_vector<bfloat16, uint32_t>(src1_vec);
+        scaler = static_cast<float>(scaler_unpacked[0]);
+    }
+
+    // Tilize the row-major input
+    std::vector<uint32_t> tilized = gold_standard_tilize(src0_vec, config);
+    std::vector<bfloat16> tilized_unpacked = tt::test_utils::unpack_vector<bfloat16, uint32_t>(tilized);
+
+    const int num_tile_rows = config.num_tiles_r_dim;
+    const int num_tile_cols = config.num_tiles_c_dim;
+    const int face_r_dim = config.face_r_dim;
+    const int face_c_dim = config.face_c_dim;
+    const int num_faces_c = (config.num_faces >= 2) ? 2 : 1;
+    const int num_faces_r = (config.num_faces > 2) ? 2 : 1;
+    const int face_elems = face_r_dim * face_c_dim;
+    const int tile_c_dim = num_faces_c * face_c_dim;
+    const int tile_elems = config.num_faces * face_elems;
+
+    // Reduce col max per tile row: each tile is reduced independently (no accumulation across tile rows)
+    std::vector<bfloat16> result(num_tile_rows * num_tile_cols * tile_elems, bfloat16(0.0f));
+    std::vector<float> col_max(tile_c_dim, -std::numeric_limits<float>::max());
+
+    for (int tr = 0; tr < num_tile_rows; tr++) {
+        for (int tc = 0; tc < num_tile_cols; tc++) {
+            std::fill(col_max.begin(), col_max.end(), -std::numeric_limits<float>::max());
+
+            int tile_offset = (tr * num_tile_cols + tc) * tile_elems;
+            for (int fr = 0; fr < num_faces_r; fr++) {
+                for (int fc = 0; fc < num_faces_c; fc++) {
+                    int face_offset = tile_offset + (fr * num_faces_c + fc) * face_elems;
+                    int col_base = fc * face_c_dim;
+                    for (int r = 0; r < face_r_dim; r++) {
+                        for (int c = 0; c < face_c_dim; c++) {
+                            float val = static_cast<float>(tilized_unpacked[face_offset + r * face_c_dim + c]);
+                            col_max[col_base + c] = fmaxf(col_max[col_base + c], val);
+                        }
+                    }
+                }
+            }
+
+            int out_offset = (tr * num_tile_cols + tc) * tile_elems;
+            for (int fc = 0; fc < num_faces_c; fc++) {
+                int face_start = out_offset + fc * face_elems;
+                int col_base = fc * face_c_dim;
+                for (int c = 0; c < face_c_dim; c++) {
+                    result[face_start + c] = bfloat16(col_max[col_base + c] * scaler);
+                }
+            }
+        }
+    }
+
+    return tt::test_utils::pack_vector<uint32_t, bfloat16>(result);
 }
 
 std::vector<uint32_t> gold_standard_pack_rows(const std::vector<uint32_t>& src_vec, const PackRowsConfig& config) {

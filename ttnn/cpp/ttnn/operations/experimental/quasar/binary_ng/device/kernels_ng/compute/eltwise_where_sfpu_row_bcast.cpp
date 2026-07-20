@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,7 +23,7 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_out(cb_out);
 
 #if SRC_BCAST
     constexpr auto cb_bcast = cb_in0;
@@ -37,12 +38,12 @@ void kernel_main() {
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
-    CircularBuffer exp_cb_in0(cb_in0);
-    CircularBuffer exp_cb_in1(cb_in1);
-    CircularBuffer exp_cb_bcast(cb_bcast);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_left(cb_left);
-    CircularBuffer exp_cb_right(cb_right);
+    DataflowBuffer exp_cb_in0(cb_in0);
+    DataflowBuffer exp_cb_in1(cb_in1);
+    DataflowBuffer exp_cb_bcast(cb_bcast);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_cb_left(cb_left);
+    DataflowBuffer exp_cb_right(cb_right);
 
     unary_op_init_common(cb_in0, cb_out);
     BINARY_SFPU_INIT

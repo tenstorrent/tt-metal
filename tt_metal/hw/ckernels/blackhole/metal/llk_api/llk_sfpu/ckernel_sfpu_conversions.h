@@ -33,7 +33,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
 // This implements the "add 0x7fff + LSB" algorithm for correct tie-breaking
 sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     // Get the float32 bits as unsigned integer
-    sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);
+    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
 
     // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32)
     // This is needed for the tie-breaker: round to even
@@ -50,5 +50,5 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     bits = bits & 0xFFFF0000U;
 
     // Reinterpret back as float
-    return sfpi::reinterpret<sfpi::vFloat>(bits);
+    return sfpi::as<sfpi::vFloat>(bits);
 }

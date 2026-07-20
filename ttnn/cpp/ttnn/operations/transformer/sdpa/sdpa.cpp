@@ -43,7 +43,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -62,6 +63,9 @@ ttnn::Tensor scaled_dot_product_attention(
     // Pre-multiply the mask by 1/scale so the kernel's subsequent *scale
     // restores the original mask magnitude inside softmax. QK remains scaled
     // exactly once.
+    //
+    // Windowed mode synthesizes a {0, -inf} block-diagonal mask on-device from cu_window_seqlens;
+    // pre-scaling is unnecessary (0/-inf are scale-invariant), so attn_mask is left empty.
     std::optional<ttnn::Tensor> effective_mask = attn_mask;
     if (attn_mask.has_value()) {
         const float effective_scale =
@@ -87,7 +91,8 @@ ttnn::Tensor scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        cu_window_seqlens);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).

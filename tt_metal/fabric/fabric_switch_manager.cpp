@@ -16,7 +16,7 @@
 namespace tt::tt_fabric {
 
 FabricSwitchManager& FabricSwitchManager::instance() {
-    static tt::stl::Indestructible<FabricSwitchManager> inst;
+    static ttsl::Indestructible<FabricSwitchManager> inst;
     return inst.get();
 }
 

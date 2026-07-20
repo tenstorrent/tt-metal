@@ -45,7 +45,7 @@ jobs:
   # release-docs jobs use the parsed distro/version values to construct image tags.
   # This is different from workflows that just pass platform to build-artifact.yaml.
   parse-platform:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
@@ -113,7 +113,7 @@ jobs:
       enable-lto: false
 
   determine-test-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.select-skus.outputs.enabled-skus }}
     steps:
@@ -154,7 +154,7 @@ jobs:
   check-rtl-sim-status:
     needs: [build-artifact-tracy, determine-test-skus]
     if: ${{ github.ref == 'refs/heads/stable' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     continue-on-error: true
     steps:
       - name: Verify RTL Sim CI test check is green on stable HEAD
@@ -203,6 +203,7 @@ jobs:
         image: [release, release-models]
     needs:
       - build-artifact-release
+      - check-harbor
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
@@ -214,9 +215,10 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   resolve-docs-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       docs-version: ${{ steps.set-version.outputs.docs-version }}
     steps:

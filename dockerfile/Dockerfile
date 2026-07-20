@@ -243,15 +243,6 @@ COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt
 COPY /models/tt_dit/utils/vbench-requirements.txt ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/vbench-requirements.txt
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
-RUN umask 000 && \
-    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-    echo "Installing debugger for Ubuntu 22.04..." && \
-    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
-    echo "Debugger installation completed" && \
-    python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
-    fi
-
 #############################################################
 # CI Test image
 #############################################################

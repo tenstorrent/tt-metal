@@ -15,10 +15,14 @@ and one to OUTPUT_DIMS for output dimension computation.
 from typing import Annotated, ClassVar, List, Union
 
 from fuser.validator import (
+    SUPPORTED_TILE_SIZES,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
     OperationSchemaBase,
+    PackSchema,
     UnarySfpuMathSchema,
+    _has_transpose,
+    _tile_dims,
 )
 from helpers.llk_params import (
     AccToDest,
@@ -171,10 +175,62 @@ _reduce_params = (
     "Reduce requires both reduce_pool and reduce_dim",
 )
 
+_unsupported_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) not in SUPPORTED_TILE_SIZES,
+    "Unsupported src_a tile shape",
+)
+
+_eltwise_transpose_tile = (
+    lambda s, a, b: _has_transpose(s) and _tile_dims(a.tile_shape) != (32, 32),
+    "Only (32, 32) tiles are supported for eltwise with transpose",
+)
+
+_eltwise_bcast_32x16 = (
+    lambda s, a, b: s.broadcast_type in (BroadcastType.Column, BroadcastType.Row)
+    and _tile_dims(a.tile_shape) == (32, 16),
+    "32x16 tiles are not supported for eltwise with column/row broadcast",
+)
+
+_only_32x32_or_16x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) not in ((32, 32), (16, 32)),
+    "Only (32, 32) or (16, 32) tiles are supported for this operation",
+)
+
+_datacopy_only_32x32 = (
+    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32)
+    and (
+        _has_transpose(s)
+        or s.broadcast_type in (BroadcastType.Column, BroadcastType.Row)
+        or (
+            s.unpack_to_dest == UnpackToDest.Yes
+            and s.broadcast_type != BroadcastType.None_
+        )
+    ),
+    "Only (32, 32) tiles are supported for Datacopy with transpose, col/row broadcast, or unpack-to-dest with broadcast",
+)
+
+_matmul_in0_16x16 = (
+    lambda s, a, b: _tile_dims(a.tile_shape) == (16, 16),
+    "Matmul in0 tile shape (16, 16) is not supported",
+)
+
+_matmul_in1_tile = (
+    lambda s, a, b: _tile_dims(b.tile_shape) not in ((32, 32), (32, 16), (16, 32)),
+    "Matmul in1 tile shape must be (32, 32), (32, 16), or (16, 32)",
+)
+
+_matmul_inner_dims = (
+    lambda s, a, b: a.tile_shape.total_col_dim() != b.tile_shape.total_row_dim(),
+    "Matmul tile inner dimensions must match: in0 cols must equal in1 rows",
+)
+
 _eltwise_checks = [
     _dest_to_srca_needs_acc,
     _eltwise_unpacker_reuse,
     _eltwise_unpacker_default,
+    _unsupported_tile,
+    _eltwise_transpose_tile,
+    _eltwise_bcast_32x16,
 ]
 _eltwise_lofi_checks = [*_eltwise_checks, _lofi_only]
 
@@ -193,31 +249,62 @@ FPU_MAP = {
     ),
     "Datacopy": (
         lambda s: DatacopyFpu(),
-        [_no_reuse_dest, _datacopy_unpacker],
+        [_no_reuse_dest, _datacopy_unpacker, _unsupported_tile, _datacopy_only_32x32],
     ),
     "Matmul": (
         lambda s: MatmulFpu(),
-        [_no_reuse_dest, _matmul_dim_check, _forced_unpacker("MatmulUnpacker")],
+        [
+            _no_reuse_dest,
+            _matmul_dim_check,
+            _forced_unpacker("MatmulUnpacker"),
+            _matmul_in0_16x16,
+            _matmul_in1_tile,
+            _matmul_inner_dims,
+        ],
     ),
     "MatmulNoMop": (
         lambda s: MatmulNoMopFpu(),
-        [_no_reuse_dest, _matmul_dim_check, _forced_unpacker("MatmulUnpacker")],
+        [
+            _no_reuse_dest,
+            _matmul_dim_check,
+            _forced_unpacker("MatmulUnpacker"),
+            _matmul_in0_16x16,
+            _matmul_in1_tile,
+            _matmul_inner_dims,
+        ],
     ),
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
-        [_no_reuse_dest, _reduce_params, _forced_unpacker("ReduceUnpacker")],
+        [
+            _no_reuse_dest,
+            _reduce_params,
+            _forced_unpacker("ReduceUnpacker"),
+            _unsupported_tile,
+        ],
     ),
     "ReduceBlockMax": (
         lambda s: ReduceBlockMaxFpu(),
-        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker")],
+        [
+            _no_reuse_dest,
+            _forced_unpacker("ReduceBlockMaxUnpacker"),
+            _only_32x32_or_16x32_tile,
+        ],
     ),
     "ReduceBlockMaxRuntime": (
         lambda s: ReduceBlockMaxRuntimeFpu(),
-        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxRuntimeUnpacker")],
+        [
+            _no_reuse_dest,
+            _forced_unpacker("ReduceBlockMaxRuntimeUnpacker"),
+            _only_32x32_or_16x32_tile,
+        ],
     ),
     "SubBcastColCustom": (
         lambda s: SubBcastColCustomFpu(),
-        [_no_reuse_dest, _forced_unpacker("SubBcastColCustomUnpacker")],
+        [
+            _no_reuse_dest,
+            _forced_unpacker("SubBcastColCustomUnpacker"),
+            _only_32x32_or_16x32_tile,
+        ],
     ),
 }
 
@@ -310,6 +397,15 @@ MathSchema = Annotated[
 ]
 
 
-class OperationSchema(OperationSchemaBase):
+class WormholePackSchema(PackSchema):
     _packer_map: ClassVar = PACKER_MAP
+
+
+PackEntrySchema = Union[
+    WormholeUnarySfpuMathSchema, WormholeBinarySfpuMathSchema, WormholePackSchema
+]
+
+
+class OperationSchema(OperationSchemaBase):
     math: List[MathSchema] = Field(..., min_length=1)
+    pack: List[PackEntrySchema] = Field(..., min_length=1)

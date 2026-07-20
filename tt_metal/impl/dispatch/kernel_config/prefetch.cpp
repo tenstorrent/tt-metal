@@ -8,6 +8,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include <array>
 #include <map>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -32,6 +33,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -575,6 +577,20 @@ void PrefetchKernel::CreateKernel() {
 }
 
 void PrefetchKernel::ConfigureCore() {
+    TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
+    TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
+    dispatch_telemetry_types::PrefetchCoreTelemetry zero_prefetch_telemetry{};
+    if (static_config_.dispatch_telemetry_disabled.value()) {
+        zero_prefetch_telemetry.signature = dispatch_telemetry_types::INVALID_TELEMETRY_SIGNATURE;
+    }
+    detail::WriteToDeviceL1(
+        device_,
+        logical_core_,
+        static_config_.dispatch_telemetry_addr.value(),
+        std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(&zero_prefetch_telemetry), sizeof(zero_prefetch_telemetry)),
+        GetCoreType());
+
     // Only H-type prefetchers need L1 configuration
     if (static_config_.is_h_variant.value()) {
         // Initialize the FetchQ

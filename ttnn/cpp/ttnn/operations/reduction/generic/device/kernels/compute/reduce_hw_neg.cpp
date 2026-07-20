@@ -75,6 +75,10 @@ void kernel_main() {
                     copy_tile_init(cb_acc);
                     copy_tile(cb_acc, 0, reduce_dst_idx);
                 }
+                constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+                if constexpr (swap_operands) {
+                    reconfig_data_format(cb_scaler, cb_ineg);
+                }
                 reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, 0, 0, reduce_dst_idx);
                 reduce_uninit();

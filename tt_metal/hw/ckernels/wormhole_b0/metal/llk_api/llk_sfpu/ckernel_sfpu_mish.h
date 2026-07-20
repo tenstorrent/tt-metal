@@ -10,6 +10,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -52,8 +53,8 @@ inline void calculate_mish() {
             sfpi::vFloat numer = u * (u + 2.0f);
 
             // denominator = (1 + u)^2 + 1 = u^2 + 2u + 2
-            sfpi::vFloat one_plus_u = u + sfpi::vConst1;
-            sfpi::vFloat denom = one_plus_u * one_plus_u + sfpi::vConst1;
+            sfpi::vFloat one_plus_u = u + 1.0f;
+            sfpi::vFloat denom = one_plus_u * one_plus_u + 1.0f;
 
             sfpi::vFloat inv_denom;
             if constexpr (APPROXIMATION_MODE) {
@@ -78,6 +79,7 @@ inline void calculate_mish() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void mish_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // exp does not need an init
     recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }

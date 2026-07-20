@@ -15,7 +15,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
@@ -104,5 +104,10 @@ jobs:
             docker-job/pgm_bench.json
             docker-job/buffer_bench.json
           prefix: "perf_benchmarks_json_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

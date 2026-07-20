@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 #include "tensor_shape.h"
 
 #ifdef TRISC_MATH
@@ -55,22 +57,28 @@ namespace ckernel {
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType  | {SUM, AVG, MAX}                                | True     |
  * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
- * | Template   | enforce_fp32_accumulation | Enable accumulation of reduction in full FP32 precision (Requires DST_ACCUM_MODE==true) | bool      | {true, false}                                  | True     |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors (see above)                                                  | uint32_t  | 0 to 31                                        | True     |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb, icb_scaler, ocb, call_line);
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_init(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>()));
+    // REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
+    // Caller must call reconfig_data_format(icb_scaler, icb) before reduce_init for this path.
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+    if constexpr (swap_operands) {
+        state_configure(icb_scaler, icb, ocb, call_line);
+    } else {
+        state_configure(icb, icb_scaler, ocb, call_line);
+    }
 #else
-    UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
+    state_configure(icb, icb_scaler, ocb, call_line);
 #endif
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
 }
 
@@ -86,20 +94,18 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t 
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Template   | enforce_fp32_accumulation | Must match the template parameter used in reduce_init                                   | bool      | {true, false}                                  | True     |
- * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A (same as reduce_init). Required when enforce_fp32_accumulation=true | uint32_t  | 0 to 31 | Conditional |
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A (same as reduce_init)   | uint32_t  | 0 to 31                                        | False    |
  */
 // clang-format on
-template <bool enforce_fp32_accumulation = false>
-ALWI void reduce_uninit(uint32_t icb = 0) {
+ALWI void reduce_uninit(std::uint32_t icb = 0) {
 #ifndef ARCH_QUASAR
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reduce_uninit<enforce_fp32_accumulation>()));
+    MATH((llk_math_reduce_uninit()));
 #else
     // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
     // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
     // See _llk_math_reduce_init_ for more details
-    MATH((llk_math_reduce_uninit<enforce_fp32_accumulation>(icb)));
+    MATH((llk_math_reduce_uninit(icb)));
 #endif
 #endif
     PACK((llk_pack_reduce_mask_clear()));
@@ -132,7 +138,6 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType  | {SUM, AVG, MAX}                                | True     |
  * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
- * | Template   | enforce_fp32_accumulation | Enable accumulation of reduction in full FP32 precision (Requires DST_ACCUM_MODE==true) | bool      | {true, false}                                  | True     |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors (see above)                                                  | uint32_t  | 0 to 31                                        | True     |
  * | Function   | itile                     | The index of the tile within the first CB                                               | uint32_t  | Must be less than the size of the CB           | True     |
@@ -140,16 +145,58 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
-        icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
     MATH((llk_math_reduce(idst)));
     UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
 #endif
+}
+
+// clang-format off
+/**
+ * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
+ * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
+ * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
+ * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
+ * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
+ *
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
+ * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
+ * state to default.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name         | Description                                                      | Type      | Valid Range                                    | Required |
+ * |------------|--------------|------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type  | The type of reduce op - sum, average or maximum                  | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim   | The dimension of reduce op - row, column or both                 | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Function   | icb          | The identifier of the circular buffer (CB) containing operand A  | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler   | CB holding scaling factors (see reduce_init/reduce_tile)         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | start_itile  | The index of the first tile within the first CB                  | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | itile_scaler | The index of the tile within the scaling factor CB               | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | start_idst   | The index of the first tile in DST REG for the result            | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_block(
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    std::uint32_t start_itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        reduce_tile<reduce_type, reduce_dim>(icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+    }
 }
 
 // clang-format off
@@ -175,23 +222,22 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType  | {SUM, AVG, MAX}                                | True     |
  * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
- * | Template   | enforce_fp32_accumulation | Enable accumulation of reduction in full FP32 precision (Requires DST_ACCUM_MODE==true) | bool      | {true, false}                                  | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
 #ifndef ARCH_QUASAR
     ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
     const ckernel::TensorShape tensor_shape = {
         MAX_FACE_R_DIM,
         MAX_FACE_C_DIM,
-        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(1) : MAX_NUM_FACES_R_DIM,
-        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
-        idst, tensor_shape)));
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(1) : MAX_NUM_FACES_R_DIM,
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else
+    LLK_ASSERT(num_faces == 4, "non-default num_faces not supported on Quasar");
     MATH((llk_math_reduce(idst)));
 #endif
 }
@@ -204,17 +250,21 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|----------------------|------------------------------------------------|----------|
  * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType             | {SUM, AVG, MAX}                                | True     |
  * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim            | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
- * | Template   | enforce_fp32_accumulation | Enable accumulation of reduction in full FP32 precision (Requires DST_ACCUM_MODE==true) | bool                 | {true, false}                                  | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t             | Must be less than the acquired size of DST REG | True     |
  * | Function   | tensor_shape              | The shape of the tensor to reduce                                                       | ckernel::TensorShape | N/A                                            | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_tile_math(uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
-        idst, tensor_shape)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim &&
+            tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
+            tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim &&
+            tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
+        "non-default tensor_shape not supported on Quasar");
     MATH((llk_math_reduce(idst)));
 #endif
 }

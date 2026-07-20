@@ -249,6 +249,21 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
     };
 }
 
+// Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
+// Distinct from SCALE_DATUM_SIZE above: that switches on the full masked format and has no Tf32 case
+// (returns 1 for Tf32), whereas this keys on (fmt & 0x3) and returns 4 for Tf32 -- the behavior
+// register strides need. The two agree on every other format, so they are NOT interchangeable.
+constexpr static std::uint32_t datum_size_in_bytes(const std::uint32_t format)
+{
+    return (format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
+}
+
+// True if the format is Int8 or Int32 -- the formats that enable INT8 math (ALU_ACC_CTRL_INT8_math_enabled).
+constexpr static bool is_int8_or_int32_format(const std::uint32_t format)
+{
+    return (masked_data_format(format) == to_underlying(DataFormat::Int8)) || (format == to_underlying(DataFormat::Int32));
+}
+
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 
@@ -287,6 +302,37 @@ enum class BinaryOp : std::uint8_t
     GE            = 14,
     EQ            = 15,
     NE            = 16,
+    // Test-harness binary ops (functional coverage for metal llk_sfpu kernels that
+    // have no dedicated production BinaryOp). Appended at the end so existing values
+    // are unchanged.
+    MAX             = 17,
+    MIN             = 18,
+    FMOD            = 19,
+    REMAINDER       = 20,
+    BITWISE_AND     = 21,
+    BITWISE_OR      = 22,
+    BITWISE_XOR     = 23,
+    DIV_INT32       = 24,
+    DIV_INT32_FLOOR = 25,
+    GCD             = 26,
+    LCM             = 27,
+    RSUB_INT32      = 28,
+    MASK            = 29,
+    ATAN2           = 30,
+    MUL_INT32       = 31,
+    ISCLOSE         = 32,
+    LOGSIGMOID      = 33,
+    // Integer / format-typed binary SFPU kernels (functional coverage). Names match the
+    // corresponding SfpuType enumerators so the coverage guard maps them 1:1.
+    EQ_INT           = 34,
+    NE_INT           = 35,
+    MAX_INT32        = 36,
+    MIN_INT32        = 37,
+    MAX_UINT32       = 38,
+    MIN_UINT32       = 39,
+    REMAINDER_INT32  = 40,
+    REMAINDER_UINT32 = 41,
+    FMOD_INT32       = 42,
 };
 
 enum class PackMode : std::uint8_t

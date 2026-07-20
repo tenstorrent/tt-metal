@@ -23,16 +23,11 @@ on:
         type: boolean
         default: false
         description: "Re-run failed jobs (max 3)"
-      run-ttnn-unit-tests:
+      run-ttnn-sanity-tests:
         required: false
         type: boolean
         default: true
-        description: "Run TTNN unit tests"
-      run-profiler-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run profiler regression tests"
+        description: "Run TTNN sanity tests"
       run-t3000-apc-fast-tests:
         required: false
         type: boolean
@@ -47,12 +42,7 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Run TTSim tests (unit + integration)"
-      run-ttsim-integration-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run TTSim integration tests"
+        description: "Run TTSim sanity tests"
       enable-watcher:
         required: false
         type: boolean
@@ -123,16 +113,11 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
-      run-ttnn-unit-tests:
+      run-ttnn-sanity-tests:
         required: false
         default: true
         type: boolean
-        description: "Run TTNN unit tests"
-      run-profiler-tests:
-        required: false
-        default: true
-        type: boolean
-        description: "Run profiler regression tests"
+        description: "Run TTNN sanity tests"
       run-t3000-apc-fast-tests:
         required: false
         default: true
@@ -147,12 +132,7 @@ on:
         required: false
         default: true
         type: boolean
-        description: "Run TTSim tests (unit + integration)"
-      run-ttsim-integration-tests:
-        required: false
-        default: true
-        type: boolean
-        description: "Run TTSim integration tests"
+        description: "Run TTSim sanity tests"
       enable-watcher:
         required: false
         default: false
@@ -210,7 +190,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   resolve-artifacts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [build-artifact]
     if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
     outputs:
@@ -266,20 +246,16 @@ jobs:
   tests-to-run:
     needs: [resolve-artifacts]
     if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
-      ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
-      run-profiler-tests: ${{ steps.set-run-profiler-tests.outputs.should-run }}
+      ttnn-sanity-tests: ${{ steps.set-ttnn-sanity-tests.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
       ttsim-tests: ${{ steps.set-ttsim-tests.outputs.should-run }}
     steps:
-      - id: set-ttnn-unit-tests
+      - id: set-ttnn-sanity-tests
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttnn-unit-tests }}" >> "$GITHUB_OUTPUT"
-      - id: set-run-profiler-tests
-        run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-profiler-tests }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttnn-sanity-tests }}" >> "$GITHUB_OUTPUT"
       - id: set-t3000-apc-fast-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-t3000-apc-fast-tests }}" >> "$GITHUB_OUTPUT"
@@ -290,51 +266,39 @@ jobs:
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
 
-  # TTNN FD Unit tests
-  ttnn-unit-tests:
-    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
+  # TTNN sanity tests
+  ttnn-sanity-tests:
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
-    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
-    uses: ./.github/workflows/ttnn-post-commit.yaml
+    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && (needs.tests-to-run.outputs.ttnn-sanity-tests == 'true' || needs.tests-to-run.outputs.ttsim-tests == 'true') }}
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
-      enabled-skus: "wh_n300_civ2"
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-docker-image }}
+      # The enabled SKUs are composed from the two selectors: run-ttnn-sanity-tests enables the
+      # wh_n300_civ2 HW SKU; run-ttsim-tests enables the sim_* SKUs. sim_* SKUs run ttnn under the
+      # ttsim simulator on ubuntu-latest, which can't reach Harbor — so they use the canonical GHCR
+      # image from resolve-artifacts (not the Harbor-resolved resolve-docker-pull-refs ref).
+      enabled-skus: ${{ needs.tests-to-run.outputs.ttnn-sanity-tests == 'true' && (needs.tests-to-run.outputs.ttsim-tests == 'true' && 'wh_n300_civ2,sim_wormhole_b0,sim_blackhole' || 'wh_n300_civ2') || (needs.tests-to-run.outputs.ttsim-tests == 'true' && 'sim_wormhole_b0,sim_blackhole' || '') }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
-
-  profiler-tests:
-    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
-    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-tests == 'true'}}
-    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      # Sanity historically ran (wormhole_b0, N300) → wh_n300_civ2, post-commit only.
-      enabled-skus: wh_n300_civ2
-      test-selection: post-commit
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
+    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
-    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      enabled-skus: "wh_llmbox"
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      timeout: ${{ inputs.enable-watcher && 80 || 20 }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
       ref: ${{ inputs.ref || github.sha }}
 
   ops-sanity-tests:
@@ -352,18 +316,25 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  ttsim-tests:
-    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
+  ttsim-sanity-tests:
+    needs: [resolve-artifacts, tests-to-run]
     if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-tests == 'true' }}
-    strategy:
-      fail-fast: false
-    uses: ./.github/workflows/ttsim.yaml
+    uses: ./.github/workflows/ttsim-sanity-tests-impl.yaml
     secrets: inherit
     with:
       basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
-      test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
+      ref: ${{ inputs.ref || github.sha }}
+
+  runtime-sim-sanity-tests:
+    needs: [resolve-artifacts, tests-to-run]
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-tests == 'true' }}
+    uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
+    secrets: inherit
+    with:
+      # sim_* SKUs run on ubuntu-latest (no Harbor access): use the canonical GHCR image.
+      docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      run-ttsim-integration-tests: ${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}
-      run-metal-cpp-unit-tests: true
+      enabled-skus: "sim_wormhole_b0,sim_blackhole,sim_wormhole_b0_galaxy,sim_blackhole_galaxy"
+      ref: ${{ inputs.ref || github.sha }}

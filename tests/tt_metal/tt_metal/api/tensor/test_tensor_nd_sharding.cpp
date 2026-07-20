@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <tuple>
 
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
@@ -407,6 +408,18 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
             .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_shape_2d = Shape2D{32, 32},
+        },
+        // CONTIGUOUS_1D has no legacy equivalent: the same params convert to BLOCK_SHARDED under GRID_2D (above), so
+        // without an explicit guard this would silently fabricate a garbled legacy spec. It must instead stay
+        // ND_SHARDED with no 2D shard spec.
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .grid_size = CoreCoord{3, 4},
+            .shard_distribution_strategy = ShardDistributionStrategy::CONTIGUOUS_1D,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
+            .shard_shape_2d = std::nullopt,
         },
         NdToLegacyShardingParams{
             .shape = Shape({2, 2, 4}),
@@ -1205,9 +1218,7 @@ TEST_P(NDShardingTests, LoopbackTest) {
 
     size_t volume = params.shape.volume();
     std::vector<uint16_t> data(volume);
-    for (size_t i = 0; i < volume; i++) {
-        data[i] = static_cast<uint16_t>(i);
-    }
+    std::iota(data.begin(), data.end(), uint16_t{0});
 
     auto host_tensor = HostTensor::from_vector(data, tensor_spec);
     auto& cq = mesh_device_->mesh_command_queue();
@@ -1310,9 +1321,7 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
 
     size_t volume = tensor_shape.volume();
     std::vector<uint16_t> data(volume);
-    for (size_t i = 0; i < volume; i++) {
-        data[i] = static_cast<uint16_t>(i);
-    }
+    std::iota(data.begin(), data.end(), uint16_t{0});
 
     auto measure_to_device_time_ns = [&](const TensorSpec& tensor_spec) -> double {
         auto host_tensor = HostTensor::from_vector(data, tensor_spec);

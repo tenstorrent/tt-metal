@@ -3,13 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad_rm_sharded_height_only_program_factory.hpp"
+
+#include <filesystem>
+#include <map>
+#include <utility>
+#include <vector>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 using ttnn::operations::data_movement::float_to_uint16;
@@ -187,24 +196,33 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 }  // namespace
 
-ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
-    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
+ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::create_program_artifacts(
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
+    // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
+    const DFBSpecName CB_PAD{"cb_pad"};  // legacy c_1: pad-value stick — reader PRODUCER, writer CONSUMER
+
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    const KernelSpecName READER_KERNEL{"reader"};
+    const KernelSpecName WRITER_KERNEL{"writer"};
+
+    constexpr const char* READER_PATH =
+        "ttnn/cpp/ttnn/operations/experimental/quasar/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded.cpp";
+    constexpr const char* WRITER_PATH =
+        "ttnn/cpp/ttnn/operations/experimental/quasar/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded.cpp";
+
     const auto& a = tensor_args.input;
-    Tensor& output = tensor_return_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& input_tensor_start = operation_attributes.input_tensor_start;
 
     const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
-    [[maybe_unused]] uint32_t num_unpadded_sticks = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];
 
-    const auto& front_pad = operation_attributes.input_tensor_start;
-
-    log_debug(tt::LogOp, "H_padded: {}", H_padded);
-    log_debug(tt::LogOp, "front_pad: {}", front_pad);
+    const auto& front_pad = input_tensor_start;
 
     // stick sizes
     auto stick_size_unpadded = W * a.element_size();
@@ -214,9 +232,6 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     uint32_t zero_pad_stick_size = tt::tt_metal::find_max_divisor(stick_size_padded, 512);
     uint32_t num_zero_pad_sticks_read = stick_size_padded / zero_pad_stick_size;
 
-    log_debug(tt::LogOp, "zero_pad_stick_size: {}", zero_pad_stick_size);
-    log_debug(tt::LogOp, "num_zero_pad_sticks_read: {}", num_zero_pad_sticks_read);
-
     // TODO: add a general case, where we can pad on any dim.
     TT_FATAL(
         stick_size_unpadded == stick_size_padded,
@@ -225,26 +240,17 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    IDevice* device = a.device();
-
     // input shard spec
     auto shard_spec_unpadded = a.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
     bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
-    [[maybe_unused]] auto& all_cores_unpadded = shard_spec_unpadded.grid;
-    [[maybe_unused]] uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
     auto bbox_unpadded = shard_spec_unpadded.grid.bounding_box();
     CoreCoord grid_size_unpadded = {
         bbox_unpadded.end_coord.x - bbox_unpadded.start_coord.x + 1,
         bbox_unpadded.end_coord.y - bbox_unpadded.start_coord.y + 1};
     uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
     uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
-
-    log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
-    log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
-    log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
-    log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
     // output shard spec
     auto shard_spec_padded = output.shard_spec().value();
@@ -259,65 +265,10 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     uint32_t num_cores_x_padded = grid_size_padded.x;
     uint32_t num_cores_y_padded = grid_size_padded.y;
 
-    log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
-    log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
-    log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
-    log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-
-    Buffer* src_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-
-    ProgramDescriptor desc;
-
-    // Sharded input CB — globally allocated to the input buffer; framework patches
-    // the CB address on cache hits via cb.buffer.
-    uint32_t src0_cb_index = 0;
-    {
-        CBDescriptor cb_src0;
-        cb_src0.total_size = shard_height_unpadded * stick_size_unpadded;
-        cb_src0.core_ranges = total_cores;
-        cb_src0.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = stick_size_unpadded,
-        });
-        cb_src0.buffer = src_buffer;
-        desc.cbs.push_back(std::move(cb_src0));
-    }
-
-    // Sharded output CB — globally allocated to the output buffer.
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    {
-        CBDescriptor cb_output;
-        cb_output.total_size = shard_height_padded * stick_size_padded;
-        cb_output.core_ranges = total_cores;
-        cb_output.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = dst_cb_data_format,
-            .page_size = stick_size_padded,
-        });
-        cb_output.buffer = dst_buffer;
-        desc.cbs.push_back(std::move(cb_output));
-    }
+    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
-    uint32_t src1_cb_index = 1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = stick_size_padded,
-        .core_ranges = total_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src1_cb_index),
-            .data_format = cb_data_format,
-            .page_size = stick_size_padded,
-        }}},
-    });
-
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
@@ -327,39 +278,93 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
-    std::vector<uint32_t> reader_ct_args = {(std::uint32_t)stick_size_padded, (std::uint32_t)shard_height_padded};
+    // ------------------------------------------------------------------------
+    // DataflowBufferSpecs.
+    //   cb_pad (fresh L1): pad-value stick — produced by the reader, consumed by the writer
+    //                      (cross-kernel DFB; replaces the old writer self-loop).
+    // The input AND output shards are read/written in place via tensor::input / tensor::output
+    // TensorAccessors (no borrowed fake-CB DFBs), so cb_in0 and cb_out0 are both gone — see the note
+    // at cb_pad_spec below for why the cb_out0 co-write DFB was dropped.
+    // ------------------------------------------------------------------------
+    // cb_out0 (the borrowed output shard) was ADDRESS-ONLY: the reader writes the gathered real sticks
+    // and the writer writes the pad sticks to disjoint regions of the resident output shard — neither
+    // CONSUMES it. Modeling it as reader-PRODUCER / writer-CONSUMER was a fiction to satisfy the DFB
+    // validator (the "consumer" writer called get_write_ptr, never wait_front/pop). On the Quasar
+    // simulator that consumer-bound get_write_ptr yields a bad base, so the writer's pad-broadcast NoC
+    // reads target invalid L1 and never drain (NARW hang). Drop the DFB and read the output shard base
+    // from tensor::output in both kernels (Pattern 1, as in slice); the resident shard is written in
+    // place and readiness is the program barrier, not a FIFO. (dst_cb_data_format is now unused.)
+    (void)dst_cb_data_format;
+    DataflowBufferSpec cb_pad_spec{
+        .unique_id = CB_PAD,
+        .entry_size = static_cast<uint32_t>(stick_size_padded),
+        .num_entries = 1,
+        .data_format_metadata = cb_data_format,
+    };
 
-    std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)N + front_pad[-4],
-        (std::uint32_t)H + front_pad[-2],
-        (std::uint32_t)C + front_pad[-3],
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)N_padded,
-        (std::uint32_t)H_padded,
-        (std::uint32_t)C_padded,
-        (std::uint32_t)num_zero_pad_sticks_read,
-        (std::uint32_t)zero_pad_stick_size,
-        (std::uint32_t)not_pad_by_zero,
-        (std::uint32_t)packed_pad_value,
-        (std::uint32_t)row_major_min_bytes,
-        (std::uint32_t)(stick_size_padded / row_major_min_bytes)};
+    TensorParameter input_param{.unique_id = INPUT_TENSOR, .spec = a.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT_TENSOR, .spec = output.tensor_spec()};
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores_padded;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // ------------------------------------------------------------------------
+    // Reader KernelSpec: gathers the resident input sticks from neighbouring shards into cb_out0.
+    // The legacy variable-length arg tail (per-core noc coords + stick chunk lists, indexed at runtime)
+    // becomes runtime varargs; num_cores_read stays a named scalar RTA.
+    // ------------------------------------------------------------------------
+    KernelSpec reader_spec{
+        .unique_id = READER_KERNEL,
+        .source = std::filesystem::path{READER_PATH},
+        .dfb_bindings = {ProducerOf(CB_PAD, "cb_pad")},
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"},
+             TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"stick_size_bytes", static_cast<uint32_t>(stick_size_padded)},
+             {"num_sticks_padded", shard_height_padded},
+             {"num_zero_pad_sticks_read", num_zero_pad_sticks_read},
+             {"zero_pad_stick_size", zero_pad_stick_size},
+             {"not_pad_by_zero", static_cast<uint32_t>(not_pad_by_zero)},
+             {"packed_pad_value", packed_pad_value},
+             {"row_major_min_bytes", row_major_min_bytes},
+             {"num_sticks_padded_read", static_cast<uint32_t>(stick_size_padded / row_major_min_bytes)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_cores_read"}},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores_padded;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    // ------------------------------------------------------------------------
+    // Writer KernelSpec: fills the pad sticks of the output shard. start_dim_offset is read by constant
+    // indices ([1]/[2]/[3]), so it becomes three named scalar RTAs (like the RM-default factory).
+    // ------------------------------------------------------------------------
+    KernelSpec writer_spec{
+        .unique_id = WRITER_KERNEL,
+        .source = std::filesystem::path{WRITER_PATH},
+        .dfb_bindings = {ConsumerOf(CB_PAD, "cb_pad")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"N", static_cast<uint32_t>(N + front_pad[-4])},
+             {"H", static_cast<uint32_t>(H + front_pad[-2])},
+             {"C", static_cast<uint32_t>(C + front_pad[-3])},
+             {"stick_size_bytes", static_cast<uint32_t>(stick_size_padded)},
+             {"N_padded", N_padded},
+             {"H_padded", H_padded},
+             {"C_padded", C_padded}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_sticks_per_core",
+                  "start_id",
+                  "front_pad_n",
+                  "front_pad_c",
+                  "front_pad_h",
+                  "start_dim_h",
+                  "start_dim_c",
+                  "start_dim_n"}},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+    };
 
+    // ------------------------------------------------------------------------
+    // Per-core runtime args. The reader's vararg tail length varies per core, so it is padded to a
+    // uniform max (num_runtime_varargs) — the kernel reads only the valid prefix (driven by
+    // num_cores_read and the per-core chunk counts), so trailing zeros are never accessed.
+    // ------------------------------------------------------------------------
     auto all_runtime_args = get_pad_runtime_args_rm_sharded(
         a,
         output,
@@ -372,9 +377,15 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
         num_cores_x_unpadded,
         num_cores_y_unpadded);
 
-    // Sharded readers/writers consume only constant uint32_t per-core args; no
-    // BufferBinding is needed because the CBs themselves carry the buffer
-    // addresses (via cb.buffer).
+    uint32_t max_reader_varargs = 0;
+    for (uint32_t i = 0; i < num_cores_padded; i++) {
+        max_reader_varargs = std::max<uint32_t>(max_reader_varargs, all_runtime_args[i].first.size() - 1);
+    }
+    reader_spec.advanced_options.num_runtime_varargs = max_reader_varargs;
+
+    KernelRunArgs reader_run{.kernel = READER_KERNEL};
+    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
+
     for (uint32_t i = 0; i < num_cores_padded; i++) {
         CoreCoord core;
         if (row_major) {
@@ -384,24 +395,55 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
             core = {
                 bbox_padded.start_coord.x + i / num_cores_y_padded, bbox_padded.start_coord.y + i % num_cores_y_padded};
         }
-        KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.reserve(all_runtime_args[i].first.size());
-        for (uint32_t v : all_runtime_args[i].first) {
-            reader_rt_args.push_back(v);
-        }
-        KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.reserve(all_runtime_args[i].second.size());
-        for (uint32_t v : all_runtime_args[i].second) {
-            writer_rt_args.push_back(v);
-        }
-        reader_desc.emplace_runtime_args(core, reader_rt_args);
-        writer_desc.emplace_runtime_args(core, writer_rt_args);
+        const NodeCoord node = core;
+
+        const auto& reader_args = all_runtime_args[i].first;
+        const auto& writer_args = all_runtime_args[i].second;
+
+        reader_run.runtime_arg_values["num_cores_read"][node] = reader_args[0];
+        std::vector<uint32_t> reader_varargs(reader_args.begin() + 1, reader_args.end());
+        reader_varargs.resize(max_reader_varargs, 0);
+        reader_run.advanced_options.runtime_varargs[node] = std::move(reader_varargs);
+
+        // writer_args = {num_sticks_per_core, start_id, front_pad_n, front_pad_c, front_pad_h,
+        //                start_dim_offset[0..3]} (start_dim_offset is always 4 elements: {0,h,c,n}).
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_sticks_per_core", writer_args[0]},
+                {"start_id", writer_args[1]},
+                {"front_pad_n", writer_args[2]},
+                {"front_pad_c", writer_args[3]},
+                {"front_pad_h", writer_args[4]},
+                {"start_dim_h", writer_args[6]},
+                {"start_dim_c", writer_args[7]},
+                {"start_dim_n", writer_args[8]},
+            });
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    WorkUnitSpec wu{
+        .name = "pad_rm_sharded_height_only",
+        .kernels = {READER_KERNEL, WRITER_KERNEL},
+        .target_nodes = all_cores_padded,
+    };
 
-    return desc;
+    ProgramSpec spec{
+        .name = "pad_rm_sharded_height_only",
+        .kernels = {reader_spec, writer_spec},
+        .dataflow_buffers = {cb_pad_spec},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {wu},
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader_run, writer_run};
+    run_args.tensor_args = {
+        {INPUT_TENSOR, TensorArgument{std::cref(a.mesh_tensor())}},
+        {OUTPUT_TENSOR, TensorArgument{std::cref(output.mesh_tensor())}}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

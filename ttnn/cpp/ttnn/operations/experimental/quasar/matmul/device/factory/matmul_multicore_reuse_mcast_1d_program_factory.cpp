@@ -22,7 +22,17 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/shared_with_host/activation_type.hpp"
 
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 using namespace tt;
+using namespace tt::tt_metal::experimental;
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
@@ -1062,7 +1072,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -1789,6 +1800,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
+    // W-dim padding parameters for the last block in X (ported from tt-metal PR #48923). Without these,
+    // the receiver-writer emits full per_core_N-wide writes for the last X block even when N is not
+    // divisible by per_core_N, sending pages past the tensor's logical extent -> OOB writes past the L1
+    // allocation on the far banks (can manifest as a hang). The 2D factory already handles this.
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
@@ -1836,7 +1861,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 (std::uint32_t)0};
 
             if (bias_tensor.has_value()) {
-                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());
+                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());  // smuggled-rta-ok
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
             } else {
@@ -1865,28 +1890,22 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                     (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
 
-            if (output_idx_y == num_blocks_y - 1) {
-                // padding args (WRITER)
+            {
+                // padding args (WRITER): H-dim tail depends on output_idx_y == num_blocks_y - 1;
+                // W-dim tail depends on output_idx_x == num_blocks_x - 1. Independent (PR #48923).
+                bool last_y = (output_idx_y == num_blocks_y - 1);
+                bool last_x = (output_idx_x == num_blocks_x - 1);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
-                mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                mm_in1_receiver_writer_args.push_back(
+                    last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_subblock_of_last_block_h : out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_block_padded_block_tiles_h_skip : 0);
                 mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0);
-                mm_in1_receiver_writer_args.push_back(0);
-            } else {
-                // padding args (WRITER)
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(0);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0);
-                mm_in1_receiver_writer_args.push_back(0);
+                mm_in1_receiver_writer_args.push_back(
+                    last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_subblock_of_last_block_w : out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_subblock_tiles_addr_skip : 0);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_block_tiles_w_skip : 0);
             }
             if (!output_is_sharded) {
                 if (output_idx_y == num_blocks_y - 1) {
@@ -2900,7 +2919,10 @@ void override_program_parameters(
     }
 }
 
-static ProgramDescriptor create_program_mcast_in0_descriptor(
+// NOTE: This legacy ProgramDescriptor builder is retained for reference but is no longer called now
+// that the factory's create_descriptor entry has been ported to create_program_artifacts (Metal 2.0).
+// [[maybe_unused]] suppresses -Wunused-function until it is removed in a follow-up cleanup.
+[[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_descriptor(
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
@@ -3875,7 +3897,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -3922,7 +3945,9 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     return desc;
 }
 
-static ProgramDescriptor create_program_mcast_in1_descriptor(
+// See note on create_program_mcast_in0_descriptor: legacy builder, no longer called after the
+// create_program_artifacts port. [[maybe_unused]] suppresses -Wunused-function pending removal.
+[[maybe_unused]] static ProgramDescriptor create_program_mcast_in1_descriptor(
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
@@ -4605,6 +4630,20 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
+    // W-dim padding parameters for the last block in X (ported from tt-metal PR #48923). Without these,
+    // the receiver-writer emits full per_core_N-wide writes for the last X block even when N is not
+    // divisible by per_core_N, sending pages past the tensor's logical extent -> OOB writes past the L1
+    // allocation on the far banks (can manifest as a hang). The 2D factory already handles this.
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
@@ -4690,28 +4729,22 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                         (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
-            if (output_idx_y == num_blocks_y - 1) {
-                // padding args (WRITER)
+            {
+                // padding args (WRITER): H-dim tail depends on output_idx_y == num_blocks_y - 1;
+                // W-dim tail depends on output_idx_x == num_blocks_x - 1. Independent (PR #48923).
+                bool last_y = (output_idx_y == num_blocks_y - 1);
+                bool last_x = (output_idx_x == num_blocks_x - 1);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
-                mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                mm_in1_receiver_writer_args.push_back(
+                    last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_subblock_of_last_block_h : out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_block_padded_block_tiles_h_skip : 0u);
                 mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0u);
-                mm_in1_receiver_writer_args.push_back(0u);
-            } else {
-                // padding args (WRITER)
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(0u);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0u);
-                mm_in1_receiver_writer_args.push_back(0u);
+                mm_in1_receiver_writer_args.push_back(
+                    last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_subblock_of_last_block_w : out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_subblock_tiles_addr_skip : 0u);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_block_tiles_w_skip : 0u);
             }
             if (!output_is_sharded) {
                 if (output_idx_y == num_blocks_y - 1) {
@@ -5108,11 +5141,2191 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
         shared_variables, operation_attributes.global_cb, program, tensor_args, tensor_return_value);
 }
 
-ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// ===========================================================================================
+// Metal 2.0 (ProgramArtifacts) port of the resnet50 mcast_1d paths.
+//
+// These builders mirror reuse_mcast_1d_optimized_helpers::create_program_mcast_in{0,1}_descriptor
+// (the active ProgramDescriptor path) but emit a ProgramSpec + ProgramRunArgs. The kernel sources
+// point at the op-local _metal2 forks. global_cb (prefetch) and gather_in0 are NOT reachable here
+// (gather_in0 is TT_FATAL-rejected in the entry; global_cb never enters this factory for resnet50).
+//
+// Resource-name constants are RO_-prefixed to avoid anonymous-namespace duplicate-symbol collisions
+// under unity builds; the StrongType string *values* are the plain accessor names the kernels expect.
+// ===========================================================================================
+
+namespace m2 = tt::tt_metal::experimental;
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+// Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
+// processor & NOC; Gen2 (Quasar) uses the default config.
+m2::DataMovementHardwareConfig make_datamovement_hardware_config(
+    tt::ARCH arch, tt::tt_metal::DataMovementProcessor processor, tt::tt_metal::NOC noc) {
+    if (arch == tt::ARCH::QUASAR) {
+        return m2::DataMovementGen2Config{};
+    }
+    return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
+const m2::DFBSpecName RO_IN0_DFB{"cb_in0"};
+const m2::DFBSpecName RO_IN1_DFB{"cb_in1"};
+const m2::DFBSpecName RO_BIAS_DFB{"cb_bias"};
+const m2::DFBSpecName RO_OUT_DFB{"cb_out"};
+const m2::DFBSpecName RO_INTERM0_DFB{"cb_intermed0"};
+const m2::DFBSpecName RO_SPARSITY_DFB{"cb_sparsity"};
+// The in0 sender and in1 sender writer both reference dfb::cb_sparsity (inert scratch:
+// batchB == 0 for these non-sparse forks, so it is never actually filled/read), and they
+// run on overlapping cores. A single shared DFB self-looped on both kernels would put two
+// producers on the overlap cores (per-node census violation), so give each kernel its own
+// sparsity scratch DFB (each a single-kernel PRODUCER+CONSUMER self-loop).
+const m2::DFBSpecName RO_SPARSITY_IN1_DFB{"cb_sparsity_in1"};
+const m2::DFBSpecName RO_IN0_TRANSPOSE_DFB{"cb_in0_transposed"};
+
+const m2::TensorParamName RO_IN0_TENSOR{"in0"};
+const m2::TensorParamName RO_IN1_TENSOR{"in1"};
+const m2::TensorParamName RO_OUT_TENSOR{"out"};
+const m2::TensorParamName RO_BIAS_TENSOR{"bias"};
+const m2::TensorParamName RO_SPARSITY_TENSOR{"sparsity"};
+
+const m2::SemaphoreSpecName RO_IN0_SENDER_SEM{"in0_sender"};
+const m2::SemaphoreSpecName RO_IN0_RECEIVER_SEM{"in0_receiver"};
+const m2::SemaphoreSpecName RO_IN1_SENDER_SEM{"in1_sender"};
+const m2::SemaphoreSpecName RO_IN1_RECEIVER_SEM{"in1_receiver"};
+
+const m2::KernelSpecName RO_IN0_SENDER_KERNEL{"in0_sender"};
+const m2::KernelSpecName RO_IN0_NO_WORK_IN_RECV_KERNEL{"in0_no_work_in_recv"};
+const m2::KernelSpecName RO_IN0_NO_WORK_NOT_IN_RECV_KERNEL{"in0_no_work_not_in_recv"};
+const m2::KernelSpecName RO_IN0_RECEIVER_KERNEL{"in0_receiver"};
+const m2::KernelSpecName RO_IN1_SENDER_WRITER_KERNEL{"in1_sender_writer"};
+const m2::KernelSpecName RO_IN1_RECEIVER_WRITER_KERNEL{"in1_receiver_writer"};
+const m2::KernelSpecName RO_COMPUTE_KERNEL{"compute"};
+// Noop-pad kernels: placed on the multicast bounding-box cores that have no matmul work ("phantom"
+// cores on a ragged grid) so every core the in1/bias multicast rectangle touches is program-owned.
+const m2::KernelSpecName RO_NOOP_BRISC_KERNEL{"noop_brisc"};
+const m2::KernelSpecName RO_NOOP_NCRISC_KERNEL{"noop_ncrisc"};
+const m2::KernelSpecName RO_NOOP_COMPUTE_KERNEL{"noop_compute"};
+
+constexpr const char* IN0_SENDER_PADDING_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/"
+    "reader_bmm_tile_layout_in0_sender_padding_metal2.cpp";
+constexpr const char* IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/"
+    "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp";
+constexpr const char* IN0_RECEIVER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/"
+    "reader_bmm_tile_layout_in0_receiver_metal2.cpp";
+constexpr const char* IN1_SENDER_WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/"
+    "reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp";
+constexpr const char* IN1_RECEIVER_WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/"
+    "reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp";
+constexpr const char* COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/"
+    "bmm_large_block_zm_fused_bias_activation_metal2.cpp";
+
+// std::map<string,string> defines -> Metal 2.0 Defines (Table<string,string>).
+m2::KernelSpec::CompilerOptions::Defines to_m2_defines(const std::map<std::string, std::string>& m) {
+    m2::KernelSpec::CompilerOptions::Defines result;
+    for (const auto& [k, v] : m) {
+        result.insert({k, v});
+    }
+    return result;
+}
+
+// Build the compute KernelSpec (shared by in0 / in1 mcast). Mirrors reuse_optimized: per-group block
+// count is the compute "batch" CTA, in0_transpose handled via the IN0_TRANSPOSE_TILE_PATH define +
+// the self-loop transposed DFB bindings (NOT a CTA).
+m2::KernelSpec make_compute_kernel(
+    uint32_t in0_block_w,
+    uint32_t in0_num_subblocks,
+    uint32_t in0_block_num_tiles,
+    uint32_t in0_subblock_num_tiles,
+    uint32_t in1_num_subblocks,
+    uint32_t in1_block_num_tiles,
+    uint32_t in1_per_core_w,
+    uint32_t num_blocks,
+    uint32_t out_num_blocks_x,
+    uint32_t out_num_blocks_y,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_subblock_num_tiles,
+    uint32_t batch,
+    uint32_t out_block_tiles,
+    bool untilize_out,
+    bool in0_transpose_tile,
+    bool has_bias,
+    uint32_t bias_ntiles,
+    bool row_broadcast_bias,
+    const std::optional<UnaryWithParam>& fused_activation,
+    const std::map<std::string, std::string>& mm_kernel_defines,
+    const m2::ComputeHardwareConfig& compute_hw_config) {
+    std::vector<m2::DFBBinding> dfb_bindings = {
+        m2::DFBBinding{
+            .dfb_spec_name = RO_IN0_DFB, .accessor_name = "cb_in0", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        m2::DFBBinding{
+            .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        m2::DFBBinding{
+            .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        m2::DFBBinding{
+            .dfb_spec_name = RO_INTERM0_DFB,
+            .accessor_name = "cb_intermed0",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        m2::DFBBinding{
+            .dfb_spec_name = RO_INTERM0_DFB,
+            .accessor_name = "cb_intermed0",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER},
+    };
+    if (has_bias) {
+        dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = RO_BIAS_DFB, .accessor_name = "cb_bias", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+    if (in0_transpose_tile) {
+        // The compute kernel both produces (transposes into) and consumes the transposed in0 DFB.
+        dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = RO_IN0_TRANSPOSE_DFB,
+            .accessor_name = "cb_in0_transposed",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = RO_IN0_TRANSPOSE_DFB,
+            .accessor_name = "cb_in0_transposed",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+
+    m2::KernelSpec::CompileTimeArgs cta = {
+        {"in0_block_w", in0_block_w},
+        {"in0_num_subblocks", in0_num_subblocks},
+        {"in0_block_num_tiles", in0_block_num_tiles},
+        {"in0_subblock_num_tiles", in0_subblock_num_tiles},
+        {"in1_num_subblocks", in1_num_subblocks},
+        {"in1_block_num_tiles", in1_block_num_tiles},
+        {"in1_block_w", in1_per_core_w},
+        {"num_blocks_inner_dim", num_blocks},
+        {"num_blocks_w_dim", out_num_blocks_x},
+        {"num_blocks_h_dim", out_num_blocks_y},
+        {"out_subblock_h", out_subblock_h},
+        {"out_subblock_w", out_subblock_w},
+        {"out_subblock_num_tiles", out_subblock_num_tiles},
+        {"batch", batch},
+        {"out_block_num_tiles", out_block_tiles},
+        {"untilize_out", (uint32_t)untilize_out},
+        {"get_batch_from_reader", 0u},
+        {"bias_ntiles", bias_ntiles},
+    };
+    if (has_bias) {
+        cta.insert({"row_broadcast_bias", row_broadcast_bias ? 1u : 0u});
+    }
+    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+        using ttnn::operations::experimental::quasar::matmul::utilities::get_activation_params;
+        const auto params = get_activation_params(fused_activation.value());
+        cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
+        cta.insert({"activation_param0", params.param0});
+        cta.insert({"activation_param1", params.param1});
+        cta.insert({"activation_param2", params.param2});
+    }
+
+    return m2::KernelSpec{
+        .unique_id = RO_COMPUTE_KERNEL,
+        .source = std::filesystem::path(COMPUTE_KERNEL_PATH),
+        .compiler_options = {.defines = to_m2_defines(mm_kernel_defines)},
+        .dfb_bindings = std::move(dfb_bindings),
+        .compile_time_args = std::move(cta),
+        .hw_config = compute_hw_config,
+    };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// mcast_in0 (ProgramArtifacts). Mirrors create_program_mcast_in0_descriptor.
+// ---------------------------------------------------------------------------------------------------
+ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
+    const tt::tt_metal::Tensor& a,
+    tt_metal::IDevice* device,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode,
+    bool packer_l1_acc,
+    CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    uint32_t in0_B,
+    uint32_t in1_B,
+    uint32_t M,
+    uint32_t N,
+    uint32_t K,
+    bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    std::optional<UnaryWithParam> fused_activation,
+    const MeshTensor& in0_tensor,
+    const MeshTensor& in1_tensor,
+    ttsl::optional_reference<const MeshTensor> bias_tensor,
+    const MeshTensor& out_tensor,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
+    tt::DataFormat in0_data_format,
+    tt::DataFormat in1_data_format,
+    tt::DataFormat bias_data_format,
+    tt::DataFormat output_data_format,
+    bool in0_is_sharded,
+    bool in1_is_sharded,
+    bool bias_is_sharded,
+    bool output_is_sharded,
+    bool untilize_out,
+    bool row_broadcast_bias,
+    CoreCoord sub_device_start_core) {
+    using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
+
+    bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
+    bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+
+    // gather_in0 / fused-op are not reachable here (resnet50). Keep the fuse_op flag wired but false.
+    const bool fuse_op = false;
+
+    uint32_t num_blocks = K / in0_block_w;
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+
+    tt::DataFormat interm0_data_format = packer_l1_acc_en
+                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size =
+        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
+
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+
+    uint32_t in0_block_h = out_block_h;
+    uint32_t in1_block_w = out_block_w;
+    uint32_t in0_num_blocks_y = per_core_M / out_block_h;
+    uint32_t in1_num_blocks_x = per_core_N / out_block_w;
+    uint32_t out_num_blocks_x = in1_num_blocks_x;
+    uint32_t out_num_blocks_y = in0_num_blocks_y;
+
+    uint32_t in0_block_tiles = in0_block_h * in0_block_w;
+    uint32_t in0_CB_tiles = in0_block_tiles;
+    if (in0_B * num_blocks > 1) {
+        in0_CB_tiles *= operations::experimental::quasar::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
+    }
+
+    uint32_t in2_block_tiles = 0;
+    uint32_t in0_shard_width_in_tiles = 0;
+    uint32_t in0_shard_height_in_tiles = 0;
+    if (in0_is_sharded) {
+        in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
+        in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
+        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
+    }
+    [[maybe_unused]] uint32_t in2_CB_tiles = in2_block_tiles;
+
+    uint32_t in1_block_tiles = out_block_w * in0_block_w;
+    uint32_t in1_CB_tiles = in1_block_tiles;
+    if (in1_B * num_blocks > 1) {
+        in1_CB_tiles *= operations::experimental::quasar::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
+    }
+    if (in1_is_sharded) {
+        uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
+        in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
+    }
+
+    uint32_t out_block_tiles = out_block_h * out_block_w;
+    uint32_t out_shard_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles;
+    if (output_is_sharded) {
+        out_CB_tiles = out_shard_tiles;
+    }
+    uint32_t interm0_CB_tiles = out_block_tiles;
+
+    uint32_t in3_block_tiles = out_block_w;
+    uint32_t in3_CB_tiles = in3_block_tiles;
+
+    CoreCoord start_core = sub_device_start_core;
+    uint32_t start_core_x = start_core.x;
+    uint32_t start_core_y = start_core.y;
+    uint32_t num_cores_c = compute_with_storage_grid_size.x;
+
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core_x + compute_with_storage_grid_size.x - 1, start_core_y + compute_with_storage_grid_size.y - 1)));
+
+    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
+    uint32_t num_cores_with_work = num_blocks_total;
+
+    TT_FATAL(
+        num_blocks_y == 1,
+        "matmul_multicore_reuse_mcast_1d requires num_blocks_y == 1 (M <= per_core_M) for mcast_in0. "
+        "Got M={}, per_core_M={}, num_blocks_y={}.",
+        M,
+        per_core_M,
+        num_blocks_y);
+
+    uint32_t in0_sender_num_cores = in0_is_sharded ? a.shard_spec().value().grid.num_cores() : 1;
+    uint32_t num_cores = in0_is_sharded ? std::max(num_cores_with_work, in0_sender_num_cores) : num_cores_with_work;
+
+    constexpr bool row_major = true;
+    CoreRangeSet all_cores =
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
+
+    CoreRangeSet in0_mcast_sender_cores =
+        num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
+    CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
+
+    CoreRangeSet all_cores_with_work =
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
+    CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
+    uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();
+    uint32_t in0_mcast_receiver_num_dests = std::min(in0_mcast_receiver_num_cores, num_cores);
+
+    CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
+    CoreRangeSet in0_mcast_receivers;
+    std::vector<uint32_t> in0_mcast_noc_x;
+    std::vector<uint32_t> in0_mcast_noc_y;
+    if (in0_is_sharded) {
+        in0_mcast_cores_with_work_and_in_receiver_grid = all_cores_with_work;
+
+        if (in0_mcast_receiver_num_dests > num_cores_with_work) {
+            const uint32_t in0_mcast_cores_without_work_and_in_receiver_grid_num_cores =
+                in0_mcast_receiver_num_dests - num_cores_with_work;
+            uint32_t core_idx_x = num_cores_with_work % num_cores_c;
+            uint32_t core_idx_y = num_cores_with_work / num_cores_c;
+            CoreCoord nw_start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
+                nw_start_core,
+                in0_mcast_cores_without_work_and_in_receiver_grid_num_cores,
+                matmul_core_rect,
+                row_major);
+        }
+
+        if (in0_sender_num_cores > in0_mcast_receiver_num_dests) {
+            const uint32_t in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores =
+                in0_sender_num_cores - in0_mcast_receiver_num_dests;
+            uint32_t core_idx_x = in0_mcast_receiver_num_dests % num_cores_c;
+            uint32_t core_idx_y = in0_mcast_receiver_num_dests / num_cores_c;
+            CoreCoord nw_start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
+                nw_start_core,
+                in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores,
+                matmul_core_rect,
+                row_major);
+        }
+
+        in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
+        in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
+        for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
+            in0_mcast_noc_x.push_back(
+                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+        }
+        for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
+            in0_mcast_noc_y.push_back(
+                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+        }
+    } else {
+        in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
+        if (in0_mcast_receiver_num_cores > 1) {
+            auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                            : CoreCoord{start_core.x, start_core.y + 1};
+            in0_mcast_receivers = num_cores_to_corerangeset_in_subcoregrids(
+                receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
+        }
+    }
+
+    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
+    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
+    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+
+    uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
+    uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    const auto& a_shape_logical =
+        operations::experimental::quasar::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
+
+    const auto& a_padded_shape =
+        operations::experimental::quasar::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::experimental::quasar::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+    const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+    const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
+
+    const auto in1_tensor_stride_w = transpose_b ? K : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : N;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
+    const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
+    const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
+
+    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
+    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
+    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+
+    // ---- Defines ----
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    if (bias_tensor.has_value()) {
+        mm_kernel_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
+    }
+    if (fused_activation.has_value()) {
+        if (fused_activation.value().op_type == UnaryOpType::RELU) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+        } else {
+            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
+        }
+    }
+    if (packer_l1_acc_en) {
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (in1_transpose_tile) {
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
+    }
+    if (in0_transpose_tile) {
+        mm_kernel_defines["IN0_TRANSPOSE_TILE_PATH"] = "1";
+    }
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
+    if (in0_is_sharded) {
+        mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
+    }
+    if (in1_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+    if (bias_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["BIAS_SHARDED"] = "1";
+    }
+    if (output_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
+    }
+    if (in0_mcast_receiver_num_cores == 1) {
+        mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
+    }
+    mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+
+    // ---- Tensor parameters (replace buffer-address RTAs + TensorAccessorArgs) ----
+    // The sparsity TensorParameter is inert for resnet50 (batchB == 0; never read); it aliases the
+    // in0 spec so the kernels' tensor::sparsity binding resolves and is supplied in0 at runtime.
+    m2::Group<m2::TensorParameter> tensor_parameters = {
+        m2::TensorParameter{.unique_id = RO_IN0_TENSOR, .spec = in0_tensor.tensor_spec()},
+        m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()},
+        m2::TensorParameter{.unique_id = RO_OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+        m2::TensorParameter{.unique_id = RO_SPARSITY_TENSOR, .spec = in0_tensor.tensor_spec()},
+    };
+    if (bias_tensor.has_value()) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = RO_BIAS_TENSOR, .spec = bias_tensor->tensor_spec()});
+    }
+
+    // ---- Dataflow buffers ----
+    m2::Group<m2::DataflowBufferSpec> dataflow_buffers;
+    {
+        m2::DataflowBufferSpec in0_dfb{
+            .unique_id = RO_IN0_DFB,
+            .entry_size = in0_aligned_tile_size,
+            .num_entries = in0_CB_tiles,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        };
+        dataflow_buffers.push_back(std::move(in0_dfb));
+    }
+    // Sparsity scratch DFBs are a single-kernel DMA-landing self-loop (PRODUCER+CONSUMER on one DM
+    // kernel), rejected by the Metal 2.0 DM-kernel self-loop validator. This factory never enables
+    // sparsity (batchB hardcoded 0; the sparse path is a separate factory), so the sparsity DFBs/
+    // bindings and the kernels' SPARSITY-gated cb_sparsity usage are absent. When the sparse matmul
+    // is ported to Metal 2.0, flip sparsity_enabled, define SPARSITY on the senders, and replace the
+    // self-loop with a scratchpad/LocalTensorAccessor.
+    const bool sparsity_enabled = false;
+    if (sparsity_enabled) {
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_SPARSITY_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_SPARSITY_IN1_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
+    {
+        m2::DataflowBufferSpec in1_dfb{
+            .unique_id = RO_IN1_DFB,
+            .entry_size = in1_aligned_tile_size,
+            .num_entries = in1_CB_tiles,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = in1_tile,
+        };
+        if (in1_is_sharded) {
+            in1_dfb.borrowed_from = RO_IN1_TENSOR;
+        }
+        dataflow_buffers.push_back(std::move(in1_dfb));
+    }
+    // Block/height-sharded in0: the resident shard is read by L1 base address from a local
+    // TensorAccessor over the in0 tensor in the sender kernel (no borrowed self-loop CB, which
+    // Metal 2.0 forbids on DM kernels), so no DataflowBuffer is needed here.
+
+    // out / intermed0: separate or aliased (shared memory) — predicate matches the legacy CB-sharing.
+    const bool separate_out_interm = do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
+                                     (untilize_out && (in1_num_subblocks > 1));
+    {
+        m2::DataflowBufferSpec out_dfb{
+            .unique_id = RO_OUT_DFB,
+            .entry_size = output_single_tile_size,
+            .num_entries = out_CB_tiles,
+            .data_format_metadata = output_data_format,
+            .tile_format_metadata = output_tile,
+        };
+        if (output_is_sharded) {
+            out_dfb.borrowed_from = RO_OUT_TENSOR;
+        }
+        m2::DataflowBufferSpec interm0_dfb{
+            .unique_id = RO_INTERM0_DFB,
+            .entry_size = interm0_single_tile_size,
+            .num_entries = interm0_CB_tiles,
+            .data_format_metadata = interm0_data_format,
+            .tile_format_metadata = output_tile,
+        };
+        if (!separate_out_interm) {
+            out_dfb.advanced_options.alias_with = {RO_INTERM0_DFB};
+            interm0_dfb.advanced_options.alias_with = {RO_OUT_DFB};
+            if (output_is_sharded) {
+                interm0_dfb.borrowed_from = RO_OUT_TENSOR;
+            }
+        }
+        dataflow_buffers.push_back(std::move(out_dfb));
+        dataflow_buffers.push_back(std::move(interm0_dfb));
+    }
+    if (bias_tensor.has_value()) {
+        m2::DataflowBufferSpec bias_dfb{
+            .unique_id = RO_BIAS_DFB,
+            .entry_size = bias_single_tile_size,
+            .num_entries = in3_CB_tiles,
+            .data_format_metadata = bias_data_format,
+            .tile_format_metadata = bias_tile,
+        };
+        if (bias_is_sharded) {
+            bias_dfb.borrowed_from = RO_BIAS_TENSOR;
+        }
+        dataflow_buffers.push_back(std::move(bias_dfb));
+    }
+    if (in0_transpose_tile) {
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_IN0_TRANSPOSE_DFB,
+            .entry_size = in0_aligned_tile_size,
+            .num_entries = in0_CB_tiles,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
+
+    // ---- Semaphores (in0 sender / receiver + in1 sender / receiver). Default init; kernels set
+    // VALID/INVALID. The in1_sender_writer SKIP_MCASTs here but still binds the in1 semaphores. ----
+    m2::Group<m2::SemaphoreSpec> semaphores = {
+        m2::SemaphoreSpec{.unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN0_RECEIVER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN1_SENDER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores},
+    };
+
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
+        device->arch(),
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .math_approx_mode = math_approx_mode,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false});
+
+    // ---- in0 sender kernel CTAs (named) ----
+    auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
+                                   uint32_t core_in_in0_receiver_mcast_grid) -> m2::KernelSpec::CompileTimeArgs {
+        if (in0_is_sharded) {
+            return {
+                {"core_has_output_block_work", core_has_output_block_work},
+                {"core_in_in0_receiver_mcast_grid", core_in_in0_receiver_mcast_grid},
+                {"in0_block_num_tiles", in0_block_num_tiles},
+                {"in0_block_size_bytes", (uint32_t)(in0_block_num_tiles * in0_single_tile_size)},
+                {"in0_last_ktile_w", (uint32_t)in0_last_ktile_w},
+                {"in0_last_ktile_h", (uint32_t)in0_last_ktile_h},
+                {"num_blocks_inner_dim", num_blocks},
+                {"num_blocks_w_dim", out_num_blocks_x},
+                {"num_blocks_h_dim", out_num_blocks_y},
+                {"in0_mcast_num_dests", in0_mcast_receiver_num_dests},
+                {"in0_mcast_num_cores", in0_mcast_receiver_num_cores},
+                {"num_x", in0_mcast_sender_cores_grid.x},
+                {"num_y", in0_mcast_sender_cores_grid.y},
+                {"transpose_mcast", 0u},
+                {"shard_width_in_tiles", in0_shard_width_in_tiles},
+                {"shard_height_in_tiles", in0_shard_height_in_tiles},
+                {"in0_block_w", in0_block_w},
+                {"in0_block_h", in0_block_h},
+                {"batch", in0_B},
+                {"fuse_op", (uint32_t)(fuse_op)},
+            };
+        }
+        return {
+            {"in0_tensor_stride_w", (uint32_t)in0_tensor_stride_w},
+            {"in0_tensor_stride_h", (uint32_t)in0_tensor_stride_h},
+            {"in0_tensor_next_inner_dim_block_stride", (uint32_t)in0_tensor_next_block_stride},
+            {"in0_tensor_next_h_dim_block_stride", (uint32_t)in0_tensor_next_h_dim_block_stride},
+            {"in0_block_w", in0_block_w},
+            {"in0_block_h", in0_block_h},
+            {"in0_block_num_tiles", in0_block_num_tiles},
+            {"in0_last_ktile_w", (uint32_t)in0_last_ktile_w},
+            {"in0_last_ktile_h", (uint32_t)in0_last_ktile_h},
+            {"extract_shard_sub_blocks", 0u},
+            {"shard_width_in_tiles", 0u},
+            {"shard_height_in_tiles", 0u},
+            {"num_blocks_inner_dim", num_blocks},
+            {"num_blocks_w_dim", out_num_blocks_x},
+            {"num_blocks_h_dim", out_num_blocks_y},
+            {"in0_mcast_num_dests", num_cores - 1},
+            {"in0_mcast_num_cores", in0_mcast_receiver_num_cores - 1},
+            {"MtKt", M * K},
+            {"in0_B", in0_B},
+            {"in1_B", in1_B},
+            {"in0_reuse_in_CB", 0u},
+            {"batchB", 0u},
+            {"sparsity_pagesize", 0u},
+            {"bcast_A", 1u},
+            {"get_batch_from_reader", 0u},
+            {"fuse_op", (uint32_t)(fuse_op)},
+            {"num_batch_compute", 0u},
+        };
+    };
+
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    // [#47797] in1 reader/writer must run on in1_noc (NOC0), the opposite NOC from the in0 mcast
+    // (NOC1), exactly like legacy. Relying on the WRITER role hint instead lands it on NOC1 once in0
+    // is explicitly pinned, so in1's writes contend with the in0 mcast on NOC1 and never drain
+    // (npw_sent=0 -> hang at the final barrier).
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+
+    // in0 sender DFB / semaphore / tensor bindings (interleaved vs sharded).
+    auto in0_dfb_bindings = [&]() -> std::vector<m2::DFBBinding> {
+        std::vector<m2::DFBBinding> b = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN0_DFB, .accessor_name = "cb_in0", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        };
+        if (sparsity_enabled) {
+            // Sparsity scratch self-loop — gated off (kernels build without SPARSITY so they do
+            // not reference dfb::cb_sparsity).
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        // in0 sharded reads its resident shard via tensor::in0 in the sender kernel, so it needs no
+        // extra DFB bindings here (only cb_in0 above, the mcast staging buffer).
+        return b;
+    };
+
+    const char* in0_sender_source =
+        in0_is_sharded ? IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH : IN0_SENDER_PADDING_KERNEL_PATH;
+
+    // Named runtime args read by the in0 sender kernels (must match the per-core run-arg values set
+    // below and the kernel-side get_arg(args::...) reads). The sharded sender + both no-work variants
+    // take {sender_id, 4 mcast dest-noc coords}; the interleaved (padding) sender instead takes the in0
+    // tensor start tile id, the 4 dest-noc coords, last_block_h and sparsity_addr.
+    const m2::Group<std::string> in0_sender_rta_names =
+        in0_is_sharded ? m2::Group<std::string>{
+                             "sender_id",
+                             "in0_mcast_dest_noc_start_x",
+                             "in0_mcast_dest_noc_start_y",
+                             "in0_mcast_dest_noc_end_x",
+                             "in0_mcast_dest_noc_end_y",
+                         }
+                       : m2::Group<std::string>{
+                             "in0_tensor_start_tile_id",
+                             "in0_mcast_dest_noc_start_x",
+                             "in0_mcast_dest_noc_start_y",
+                             "in0_mcast_dest_noc_end_x",
+                             "in0_mcast_dest_noc_end_y",
+                             "last_block_h",
+                             "sparsity_addr",
+                         };
+    const m2::Group<std::string> in0_no_work_rta_names = {
+        "sender_id",
+        "in0_mcast_dest_noc_start_x",
+        "in0_mcast_dest_noc_start_y",
+        "in0_mcast_dest_noc_end_x",
+        "in0_mcast_dest_noc_end_y",
+    };
+
+    m2::Group<m2::KernelSpec> kernels;
+
+    // in0 sender (work cores in receiver grid).
+    kernels.push_back(m2::KernelSpec{
+        .unique_id = RO_IN0_SENDER_KERNEL,
+        .source = std::filesystem::path(in0_sender_source),
+        .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
+        .dfb_bindings = in0_dfb_bindings(),
+        .semaphore_bindings =
+            {
+                m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
+                m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+            },
+        .compile_time_args = make_in0_sender_cta(1, 1),
+        .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
+        // [#47797] Pin RISCV_1 + in0_noc instead of a plain READER role hint. The in0 block-sharded
+        // mcast dest rectangle is swapped for in0_noc (start>end on NOC1), so the multicast MUST
+        // issue on in0_noc; a READER hint resolves to NOC0, inverts the rectangle into a degenerate
+        // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
+        // Matches the working mcast_2d factory.
+        .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+            device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+    });
+
+    const bool has_no_work_in_recv =
+        in0_is_sharded && in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0;
+    const bool has_no_work_not_in_recv =
+        in0_is_sharded && in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0;
+    if (has_no_work_in_recv) {
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN0_NO_WORK_IN_RECV_KERNEL,
+            .source = std::filesystem::path(IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH),
+            .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
+            .dfb_bindings = in0_dfb_bindings(),
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
+                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+                },
+            .compile_time_args = make_in0_sender_cta(0, 1),
+            .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
+            // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+        });
+    }
+    if (has_no_work_not_in_recv) {
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN0_NO_WORK_NOT_IN_RECV_KERNEL,
+            .source = std::filesystem::path(IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH),
+            .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
+            .dfb_bindings = in0_dfb_bindings(),
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
+                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+                },
+            .compile_time_args = make_in0_sender_cta(0, 0),
+            .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
+            // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+        });
+    }
+
+    // in0 receiver (interleaved path only).
+    const bool has_in0_receiver = !in0_is_sharded && in0_mcast_receivers.num_cores() > 0;
+    if (has_in0_receiver) {
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN0_RECEIVER_KERNEL,
+            .source = std::filesystem::path(IN0_RECEIVER_KERNEL_PATH),
+            .dfb_bindings =
+                {
+                    m2::DFBBinding{
+                        .dfb_spec_name = RO_IN0_DFB,
+                        .accessor_name = "cb_in0",
+                        .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                },
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                },
+            .compile_time_args =
+                {
+                    {"in0_block_num_tiles", in0_block_num_tiles},
+                    {"num_blocks_inner_dim", num_blocks},
+                    {"num_blocks_w_dim", out_num_blocks_x},
+                    {"num_blocks_h_dim", out_num_blocks_y},
+                    {"batch", in0_B},
+                    {"get_batch_from_reader", 0u},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
+            // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
+            // sender_sem.up to the sender must use the same NOC as the mcast geometry).
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+        });
+    }
+
+    // in1 sender writer (SKIP_MCAST; on all_cores_with_work).
+    {
+        std::vector<m2::DFBBinding> b = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        };
+        if (sparsity_enabled) {
+            // Sparsity scratch self-loop — gated off (kernel builds without SPARSITY so it does
+            // not reference dfb::cb_sparsity).
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        std::vector<m2::TensorBinding> tb = {
+            m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
+            m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
+            m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+        };
+        if (bias_tensor.has_value()) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB,
+                .accessor_name = "cb_bias",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            tb.push_back(m2::TensorBinding{.tensor_parameter_name = RO_BIAS_TENSOR, .accessor_name = "bias"});
+        }
+        m2::KernelSpec::CompileTimeArgs cta = {
+            {"in1_tensor_stride_w", (uint32_t)in1_tensor_stride_w},
+            {"in1_tensor_stride_h", (uint32_t)in1_tensor_stride_h},
+            {"in1_tensor_next_block_stride", (uint32_t)in1_tensor_next_block_stride},
+            {"in1_tensor_next_w_dim_block_stride", (uint32_t)in1_tensor_next_w_dim_block_stride},
+            {"in1_block_w", in1_block_w},
+            {"in1_block_h", in0_block_w},
+            {"in1_block_num_tiles", in1_block_w * in0_block_w},
+            {"num_blocks_inner_dim", num_blocks},
+            {"num_blocks_w_dim", out_num_blocks_x},
+            {"num_blocks_h_dim", out_num_blocks_y},
+            {"in1_mcast_num_dests", 0u},
+            {"in1_mcast_num_cores", 0u},
+            {"KtNt", K * N},
+            {"batch", in0_B},
+            {"bcast_B", (uint32_t)bcast_batch},
+            {"batchB", 0u},
+            {"sparsity_pagesize", 0u},
+            {"out_tensor_stride_w", 1u},
+            {"out_tensor_stride_h", N},
+            {"out_tensor_next_subblock_stride_w", out_subblock_w},
+            {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
+            {"out_tensor_next_w_dim_block_stride", out_block_w},
+            {"out_tensor_next_h_dim_block_stride", out_block_h * N},
+            {"out_subblock_w", out_subblock_w},
+            {"out_subblock_h", out_subblock_h},
+            {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
+            {"MtNt", M * N},
+            {"in3_tensor_stride_w", bias_tensor.has_value() ? 1u : 0u},
+            {"fuse_op_all_gather", 0u},
+            {"fuse_op_reduce_scatter", 0u},
+        };
+        // Named RTAs. The legacy per-core padding-arg block is modeled as fixed named slots; last-col
+        // vs interior cores fill the same slot set (padded to the max). The !output_is_sharded tail
+        // adds last_num_blocks_w_dim. Bias RTA is present only with bias.
+        m2::Group<std::string> rta_names = {
+            "in1_tensor_start_tile_id",
+            "in1_mcast_dest_noc_start_x",
+            "in1_mcast_dest_noc_start_y",
+            "in1_mcast_dest_noc_end_x",
+            "in1_mcast_dest_noc_end_y",
+            "sparsity_addr",
+            "out_tensor_start_tile_id",
+            "last_block_w",
+            "out_num_nonzero_subblocks_h",
+            "out_last_subblock_h",
+            "padded_block_tiles_h_skip",
+            "out_num_nonzero_subblocks_w",
+            "out_last_num_nonzero_subblocks_w",
+            "out_last_subblock_w",
+            "padded_subblock_tiles_addr_skip",
+            "padded_block_tiles_w_skip",
+        };
+        if (bias_tensor.has_value()) {
+            rta_names.push_back("in3_tensor_start_tile_id");
+        }
+        if (!output_is_sharded) {
+            rta_names.push_back("last_num_blocks_w_dim");
+        }
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN1_SENDER_WRITER_KERNEL,
+            .source = std::filesystem::path(IN1_SENDER_WRITER_KERNEL_PATH),
+            .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_sender_writer_defines)},
+            .dfb_bindings = std::move(b),
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
+                },
+            .tensor_bindings = std::move(tb),
+            .compile_time_args = std::move(cta),
+            .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
+            // [#47797] Pin RISCV_0 + in1_noc (NOC0) instead of a plain WRITER role hint, so in1's
+            // reads/output-writes run on the opposite NOC from the in0 mcast (NOC1) — legacy parity.
+            // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
+            // (npw_sent=0), hanging the final barrier.
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+        });
+    }
+
+    // compute (on all_cores_with_work).
+    kernels.push_back(make_compute_kernel(
+        in0_block_w,
+        in0_num_subblocks,
+        in0_block_num_tiles,
+        in0_subblock_num_tiles,
+        in1_num_subblocks,
+        in1_block_num_tiles,
+        in1_per_core_w,
+        num_blocks,
+        out_num_blocks_x,
+        out_num_blocks_y,
+        out_subblock_h,
+        out_subblock_w,
+        out_subblock_num_tiles,
+        in0_B,
+        out_block_tiles,
+        untilize_out,
+        in0_transpose_tile,
+        bias_tensor.has_value(),
+        in1_per_core_w,
+        row_broadcast_bias,
+        fused_activation,
+        mm_kernel_defines,
+        compute_hw_config));
+
+    // ---- Work units ----
+    // WorkUnitSpec target_nodes must be DISJOINT, and each work unit must list ALL kernels that
+    // run on those cores (a kernel's placement is the union of the work units listing it). Cores
+    // that send in0 (or receive it) and also do matmul work therefore carry the in0 kernel together
+    // with in1_sender_writer + compute in a single work unit, rather than splitting them across an
+    // in0 work unit and a separate "wu_work" that would overlap.
+    m2::Group<m2::WorkUnitSpec> work_units;
+    work_units.push_back(m2::WorkUnitSpec{
+        .name = "wu_in0_sender_work",
+        .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+        .target_nodes = in0_mcast_cores_with_work_and_in_receiver_grid,
+    });
+    if (has_no_work_in_recv) {
+        work_units.push_back(m2::WorkUnitSpec{
+            .name = "wu_in0_no_work_in_recv",
+            .kernels = {RO_IN0_NO_WORK_IN_RECV_KERNEL},
+            .target_nodes = in0_mcast_cores_without_work_and_in_receiver_grid,
+        });
+    }
+    if (has_no_work_not_in_recv) {
+        work_units.push_back(m2::WorkUnitSpec{
+            .name = "wu_in0_no_work_not_in_recv",
+            .kernels = {RO_IN0_NO_WORK_NOT_IN_RECV_KERNEL},
+            .target_nodes = in0_mcast_cores_without_work_and_not_in_receiver_grid,
+        });
+    }
+    if (has_in0_receiver) {
+        // Non-sharded path: in0 receivers may or may not have matmul work. Partition them so each
+        // group lists exactly the kernels that run on it.
+        CoreRangeSet receivers_with_work = in0_mcast_receivers.intersection(all_cores_with_work);
+        CoreRangeSet receivers_without_work = in0_mcast_receivers.subtract(all_cores_with_work);
+        if (receivers_with_work.num_cores() > 0) {
+            work_units.push_back(m2::WorkUnitSpec{
+                .name = "wu_in0_receiver_work",
+                .kernels = {RO_IN0_RECEIVER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+                .target_nodes = receivers_with_work,
+            });
+        }
+        if (receivers_without_work.num_cores() > 0) {
+            work_units.push_back(m2::WorkUnitSpec{
+                .name = "wu_in0_receiver_no_work",
+                .kernels = {RO_IN0_RECEIVER_KERNEL},
+                .target_nodes = receivers_without_work,
+            });
+        }
+    }
+
+    // ---- Per-core runtime args ----
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
+    uint32_t in0_last_per_core_M = M < per_core_M ? M : per_core_M;
+    uint32_t in0_last_out_block_h =
+        in0_last_per_core_M % out_block_h == 0 ? out_block_h : in0_last_per_core_M % out_block_h;
+    uint32_t in0_last_block_num_nonzero_subblocks_h = ((in0_last_out_block_h - 1) / out_subblock_h) + 1;
+    uint32_t in0_last_subblock_of_last_block_h =
+        in0_last_out_block_h % out_subblock_h == 0 ? out_subblock_h : in0_last_out_block_h % out_subblock_h;
+    uint32_t in0_last_block_padded_block_tiles_h_skip =
+        (out_block_h / out_subblock_h - in0_last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
+
+    CoreCoord start_core_noc = top_left_core_physical;
+    CoreCoord end_core_noc = bottom_right_core_physical;
+    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        std::swap(start_core_noc, end_core_noc);
+    }
+
+    m2::ProgramRunArgs run_args;
+    m2::KernelRunArgs in0_sender_run_args{.kernel = RO_IN0_SENDER_KERNEL};
+    m2::KernelRunArgs in0_no_work_in_recv_run_args{.kernel = RO_IN0_NO_WORK_IN_RECV_KERNEL};
+    m2::KernelRunArgs in0_no_work_not_in_recv_run_args{.kernel = RO_IN0_NO_WORK_NOT_IN_RECV_KERNEL};
+    m2::KernelRunArgs in0_receiver_run_args{.kernel = RO_IN0_RECEIVER_KERNEL};
+    m2::KernelRunArgs in1_sender_writer_run_args{.kernel = RO_IN1_SENDER_WRITER_KERNEL};
+
+    // For the sharded sender kernels, the noc_x/noc_y arrays are runtime varargs.
+    const uint32_t in0_sharded_num_varargs =
+        in0_is_sharded ? (in0_mcast_sender_cores_grid.x + in0_mcast_sender_cores_grid.y) : 0;
+
+    const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& core = cores[i];
+        uint32_t output_idx_x = i % num_blocks_x;
+        uint32_t output_idx_y = i / num_blocks_x;
+
+        if (in0_is_sharded) {
+            m2::AdvancedKernelRunArgs::Varargs v;
+            v.reserve(in0_sharded_num_varargs);
+            for (auto x : in0_mcast_noc_x) {
+                v.push_back(x);
+            }
+            for (auto y : in0_mcast_noc_y) {
+                v.push_back(y);
+            }
+            m2::KernelRunArgs* in0_sharded_run_args = nullptr;
+            if (i < num_cores_with_work) {
+                in0_sharded_run_args = &in0_sender_run_args;
+            } else if (i < in0_mcast_receiver_num_dests) {
+                in0_sharded_run_args = &in0_no_work_in_recv_run_args;
+            } else {
+                in0_sharded_run_args = &in0_no_work_not_in_recv_run_args;
+            }
+            m2::AddRuntimeArgsForNode(
+                in0_sharded_run_args->runtime_arg_values,
+                core,
+                {
+                    {"sender_id", i},
+                    {"in0_mcast_dest_noc_start_x", (uint32_t)start_core_noc.x},
+                    {"in0_mcast_dest_noc_start_y", (uint32_t)start_core_noc.y},
+                    {"in0_mcast_dest_noc_end_x", (uint32_t)end_core_noc.x},
+                    {"in0_mcast_dest_noc_end_y", (uint32_t)end_core_noc.y},
+                });
+            in0_sharded_run_args->advanced_options.runtime_varargs.emplace(core, v);
+        } else if (core == start_core) {
+            m2::KernelRunArgs::RuntimeArgValues& in0_sender_rtas = in0_sender_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in0_sender_rtas,
+                core,
+                {
+                    {"in0_tensor_start_tile_id", (uint32_t)in0_tensor_start_tile_id_stride * output_idx_y},
+                    {"in0_mcast_dest_noc_start_x", (uint32_t)start_core_noc.x},
+                    {"in0_mcast_dest_noc_start_y", (uint32_t)start_core_noc.y},
+                    {"in0_mcast_dest_noc_end_x", (uint32_t)end_core_noc.x},
+                    {"in0_mcast_dest_noc_end_y", (uint32_t)end_core_noc.y},
+                    {"last_block_h", in0_last_out_block_h},
+                    {"sparsity_addr", 0u},
+                });
+        } else if (has_in0_receiver) {
+            m2::KernelRunArgs::RuntimeArgValues& in0_receiver_rtas = in0_receiver_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in0_receiver_rtas,
+                core,
+                {
+                    {"in0_mcast_sender_noc_x", (uint32_t)top_left_core_physical.x},
+                    {"in0_mcast_sender_noc_y", (uint32_t)top_left_core_physical.y},
+                });
+        }
+
+        if (i < num_cores_with_work) {
+            m2::KernelRunArgs::RuntimeArgValues& in1_sender_writer_rtas = in1_sender_writer_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in1_sender_writer_rtas,
+                core,
+                {
+                    {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * output_idx_x},
+                    {"in1_mcast_dest_noc_start_x", 0u},
+                    {"in1_mcast_dest_noc_start_y", 0u},
+                    {"in1_mcast_dest_noc_end_x", 0u},
+                    {"in1_mcast_dest_noc_end_y", 0u},
+                    {"sparsity_addr", 0u},
+                    {"out_tensor_start_tile_id",
+                     ((uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
+                });
+            if (output_idx_x == num_blocks_x - 1) {
+                m2::AddRuntimeArgsForNode(
+                    in1_sender_writer_rtas,
+                    core,
+                    {
+                        {"last_block_w", last_out_block_w},
+                        {"out_num_nonzero_subblocks_h", in0_last_block_num_nonzero_subblocks_h},
+                        {"out_last_subblock_h", in0_last_subblock_of_last_block_h},
+                        {"padded_block_tiles_h_skip", in0_last_block_padded_block_tiles_h_skip},
+                        {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                        {"out_last_num_nonzero_subblocks_w", last_block_num_nonzero_subblocks_w},
+                        {"out_last_subblock_w", last_subblock_of_last_block_w},
+                        {"padded_subblock_tiles_addr_skip", last_block_padded_subblock_tiles_addr_skip},
+                        {"padded_block_tiles_w_skip", last_block_padded_block_tiles_w_skip},
+                    });
+            } else {
+                m2::AddRuntimeArgsForNode(
+                    in1_sender_writer_rtas,
+                    core,
+                    {
+                        {"last_block_w", out_block_w},
+                        {"out_num_nonzero_subblocks_h", in0_last_block_num_nonzero_subblocks_h},
+                        {"out_last_subblock_h", in0_last_subblock_of_last_block_h},
+                        {"padded_block_tiles_h_skip", in0_last_block_padded_block_tiles_h_skip},
+                        {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                        {"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                        {"out_last_subblock_w", out_subblock_w},
+                        {"padded_subblock_tiles_addr_skip", 0u},
+                        {"padded_block_tiles_w_skip", 0u},
+                    });
+            }
+            if (bias_tensor.has_value()) {
+                in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] = (uint32_t)per_core_N * output_idx_x;
+            }
+            if (!output_is_sharded) {
+                in1_sender_writer_rtas["last_num_blocks_w_dim"][core] =
+                    output_idx_x == num_blocks_x - 1 ? last_out_num_blocks_w : out_num_blocks_x;
+            }
+        }
+    }
+
+    if (in0_is_sharded) {
+        // wire vararg counts onto the sharded sender kernels
+        for (auto& k : kernels) {
+            if (k.unique_id == RO_IN0_SENDER_KERNEL || k.unique_id == RO_IN0_NO_WORK_IN_RECV_KERNEL ||
+                k.unique_id == RO_IN0_NO_WORK_NOT_IN_RECV_KERNEL) {
+                k.advanced_options.num_runtime_varargs = in0_sharded_num_varargs;
+            }
+        }
+    }
+
+    run_args.kernel_run_args.push_back(std::move(in0_sender_run_args));
+    if (has_no_work_in_recv) {
+        run_args.kernel_run_args.push_back(std::move(in0_no_work_in_recv_run_args));
+    }
+    if (has_no_work_not_in_recv) {
+        run_args.kernel_run_args.push_back(std::move(in0_no_work_not_in_recv_run_args));
+    }
+    if (has_in0_receiver) {
+        run_args.kernel_run_args.push_back(std::move(in0_receiver_run_args));
+    }
+    run_args.kernel_run_args.push_back(std::move(in1_sender_writer_run_args));
+
+    run_args.tensor_args.emplace(RO_IN0_TENSOR, in0_tensor);
+    run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
+    run_args.tensor_args.emplace(RO_OUT_TENSOR, out_tensor);
+    run_args.tensor_args.emplace(RO_SPARSITY_TENSOR, in0_tensor);  // inert alias
+    if (bias_tensor.has_value()) {
+        run_args.tensor_args.emplace(RO_BIAS_TENSOR, *bias_tensor);
+    }
+
+    m2::ProgramSpec spec{
+        .name = "matmul_multicore_reuse_mcast_1d_in0",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// mcast_in1 (ProgramArtifacts). Mirrors create_program_mcast_in1_descriptor.
+// ---------------------------------------------------------------------------------------------------
+ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
+    const tt::tt_metal::Tensor& a,
+    tt_metal::IDevice* device,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode,
+    bool packer_l1_acc,
+    CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    uint32_t in0_B,
+    uint32_t in1_B,
+    uint32_t M,
+    uint32_t N,
+    uint32_t K,
+    bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    std::optional<UnaryWithParam> fused_activation,
+    const MeshTensor& in0_tensor,
+    const MeshTensor& in1_tensor,
+    ttsl::optional_reference<const MeshTensor> bias_tensor,
+    const MeshTensor& out_tensor,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
+    tt::DataFormat in0_data_format,
+    tt::DataFormat in1_data_format,
+    tt::DataFormat bias_data_format,
+    tt::DataFormat output_data_format,
+    bool in0_is_sharded,
+    bool output_is_sharded,
+    bool untilize_out,
+    bool row_broadcast_bias,
+    CoreCoord sub_device_start_core) {
+    bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
+    bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+
+    const bool fuse_op = false;
+
+    uint32_t num_blocks = K / in0_block_w;
+    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+
+    tt::DataFormat interm0_data_format = packer_l1_acc_en
+                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
+
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+
+    uint32_t in0_block_h = out_block_h;
+    uint32_t in1_block_w = out_block_w;
+    uint32_t in0_num_blocks_y = per_core_M / out_block_h;
+    uint32_t in1_num_blocks_x = per_core_N / out_block_w;
+    uint32_t out_num_blocks_x = in1_num_blocks_x;
+    uint32_t out_num_blocks_y = in0_num_blocks_y;
+
+    uint32_t in0_block_tiles = in0_block_h * in0_block_w;
+    uint32_t in0_CB_tiles = in0_block_tiles;
+    if (in0_B == 1 && in1_B > 1) {
+        in0_CB_tiles = per_core_M * num_blocks * in0_block_w;
+    } else if (in0_is_sharded) {
+        in0_CB_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
+    } else if (in0_B * num_blocks > 1) {
+        in0_CB_tiles = in0_CB_tiles * 2;
+    }
+
+    const auto& a_shape_logical =
+        operations::experimental::quasar::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
+
+    bool extract_shard_sub_blocks = false;
+    uint32_t in0_shard_height_in_tiles = 0;
+    uint32_t in0_shard_width_in_tiles = 0;
+    if (in0_is_sharded) {
+        in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
+        in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
+        if (in0_shard_width_in_tiles / in0_block_w > 1) {
+            extract_shard_sub_blocks = true;
+        }
+    }
+    [[maybe_unused]] uint32_t in2_CB_tiles = in0_block_tiles;
+
+    uint32_t in1_block_tiles = out_block_w * in0_block_w;
+    uint32_t in1_CB_tiles = in1_block_tiles;
+    if (in1_B * num_blocks > 1) {
+        in1_CB_tiles = in1_CB_tiles * 2;
+    }
+
+    uint32_t out_block_tiles = out_block_h * out_block_w;
+    uint32_t out_shard_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles;
+    if (output_is_sharded) {
+        out_CB_tiles = out_shard_tiles;
+    }
+    uint32_t interm0_CB_tiles = out_block_tiles;
+
+    uint32_t in3_block_tiles = out_block_w;
+    uint32_t in3_CB_tiles = in3_block_tiles;
+
+    CoreCoord start_core = sub_device_start_core;
+
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core.x + compute_with_storage_grid_size.x - 1, start_core.y + compute_with_storage_grid_size.y - 1)));
+
+    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
+    uint32_t num_cores = num_blocks_total;
+
+    constexpr bool row_major = true;
+    CoreRangeSet all_cores =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
+    CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
+    uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();
+
+    // Noop-pad set: cores inside the multicast bounding-box rectangle that are NOT real work cores.
+    // The in1/bias multicast and the receiver_sem VALID broadcast hit the whole rectangle, so on a
+    // ragged grid these "phantom" cores would receive stray writes into un-owned L1. We give them
+    // blank kernels that reserve the same in1/bias CBs (self-loop DFB bindings) + semaphores, so the
+    // writes land in program-owned buffers. Empty (and thus a no-op) whenever the grid is rectangular
+    // (bbox == all_cores) -- e.g. the Quasar 1x1 / 1x2 / 4x8 grids.
+    const CoreRangeSet noop_cores = CoreRangeSet(in1_mcast_receiver_cores_bounding_box).subtract(all_cores);
+
+    CoreRange in1_mcast_sender(start_core, start_core);
+    CoreRangeSet in1_mcast_receivers;
+    if (in1_mcast_receiver_num_cores > 1) {
+        auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                        : CoreCoord{start_core.x, start_core.y + 1};
+        in1_mcast_receivers = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+            receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
+    }
+
+    CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
+    CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
+    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+
+    const auto& a_padded_shape =
+        operations::experimental::quasar::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::experimental::quasar::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+    const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+    const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
+
+    const auto in1_tensor_stride_w = transpose_b ? K : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : N;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
+    const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
+    const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
+
+    const bool reuse_in0_in_CB = (in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
+                                 !fused_activation.has_value();
+
+    uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
+    uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
+    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
+    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+
+    // ---- Defines ----
+    std::map<std::string, std::string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_in0_sender_defines;
+    std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
+    if (bias_tensor.has_value()) {
+        mm_kernel_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
+    }
+    if (fused_activation.has_value()) {
+        if (fused_activation.value().op_type == UnaryOpType::RELU) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+        } else {
+            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
+        }
+    }
+    if (packer_l1_acc_en) {
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (in1_transpose_tile) {
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
+    }
+    if (in0_transpose_tile) {
+        mm_kernel_defines["IN0_TRANSPOSE_TILE_PATH"] = "1";
+    }
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
+    if (in0_is_sharded) {
+        mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
+    }
+    // Gate the kernel's dfb::cb_in0_sharded reference to exactly when the DFB is bound below
+    // (in0_is_sharded && extract_shard_sub_blocks). IN0_SHARDED alone is broader, so the kernel
+    // must key the token off this narrower define instead.
+    if (in0_is_sharded && extract_shard_sub_blocks) {
+        mm_kernel_in0_sender_defines["EXTRACT_SHARD_SUB_BLOCKS"] = "1";
+    }
+    if (output_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
+        mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
+    }
+    mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
+    if (in1_mcast_receiver_num_cores == 1) {
+        mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    }
+
+    // ---- Tensor parameters ----
+    // Sparsity TensorParameter is inert (batchB == 0); aliases the in0 spec so tensor::sparsity binds.
+    m2::Group<m2::TensorParameter> tensor_parameters = {
+        m2::TensorParameter{.unique_id = RO_IN0_TENSOR, .spec = in0_tensor.tensor_spec()},
+        m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()},
+        m2::TensorParameter{.unique_id = RO_OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+        m2::TensorParameter{.unique_id = RO_SPARSITY_TENSOR, .spec = in0_tensor.tensor_spec()},
+    };
+    if (bias_tensor.has_value()) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = RO_BIAS_TENSOR, .spec = bias_tensor->tensor_spec()});
+    }
+
+    // ---- Dataflow buffers ----
+    m2::Group<m2::DataflowBufferSpec> dataflow_buffers;
+    {
+        m2::DataflowBufferSpec in0_dfb{
+            .unique_id = RO_IN0_DFB,
+            .entry_size = in0_aligned_tile_size,
+            .num_entries = in0_CB_tiles,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        };
+        if (in0_is_sharded && !extract_shard_sub_blocks) {
+            in0_dfb.borrowed_from = RO_IN0_TENSOR;
+        }
+        dataflow_buffers.push_back(std::move(in0_dfb));
+    }
+    // Sparsity scratch DFBs are a single-kernel DMA-landing self-loop (PRODUCER+CONSUMER on one DM
+    // kernel), rejected by the Metal 2.0 DM-kernel self-loop validator. This factory never enables
+    // sparsity (batchB hardcoded 0; the sparse path is a separate factory), so the sparsity DFBs/
+    // bindings and the kernels' SPARSITY-gated cb_sparsity usage are absent. When the sparse matmul
+    // is ported to Metal 2.0, flip sparsity_enabled, define SPARSITY on the senders, and replace the
+    // self-loop with a scratchpad/LocalTensorAccessor.
+    const bool sparsity_enabled = false;
+    if (sparsity_enabled) {
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_SPARSITY_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_SPARSITY_IN1_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
+    // in0 sharded + extract_shard_sub_blocks: the resident shard is read by L1 base address from a
+    // local TensorAccessor over the in0 tensor in the sender kernel (no borrowed self-loop CB), so no
+    // DataflowBuffer is needed here.
+    {
+        m2::DataflowBufferSpec in1_dfb{
+            .unique_id = RO_IN1_DFB,
+            .entry_size = in1_aligned_tile_size,
+            .num_entries = in1_CB_tiles,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = in1_tile,
+        };
+        dataflow_buffers.push_back(std::move(in1_dfb));
+    }
+
+    const bool separate_out_interm = do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
+                                     (untilize_out && (in1_num_subblocks > 1));
+    {
+        m2::DataflowBufferSpec out_dfb{
+            .unique_id = RO_OUT_DFB,
+            .entry_size = output_single_tile_size,
+            .num_entries = out_CB_tiles,
+            .data_format_metadata = output_data_format,
+            .tile_format_metadata = output_tile,
+        };
+        if (output_is_sharded) {
+            out_dfb.borrowed_from = RO_OUT_TENSOR;
+        }
+        m2::DataflowBufferSpec interm0_dfb{
+            .unique_id = RO_INTERM0_DFB,
+            .entry_size = interm0_single_tile_size,
+            .num_entries = interm0_CB_tiles,
+            .data_format_metadata = interm0_data_format,
+            .tile_format_metadata = output_tile,
+        };
+        if (!separate_out_interm) {
+            out_dfb.advanced_options.alias_with = {RO_INTERM0_DFB};
+            interm0_dfb.advanced_options.alias_with = {RO_OUT_DFB};
+            if (output_is_sharded) {
+                interm0_dfb.borrowed_from = RO_OUT_TENSOR;
+            }
+        }
+        dataflow_buffers.push_back(std::move(out_dfb));
+        dataflow_buffers.push_back(std::move(interm0_dfb));
+    }
+    if (bias_tensor.has_value()) {
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_BIAS_DFB,
+            .entry_size = bias_single_tile_size,
+            .num_entries = in3_CB_tiles,
+            .data_format_metadata = bias_data_format,
+            .tile_format_metadata = bias_tile,
+        });
+    }
+    if (in0_transpose_tile) {
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_IN0_TRANSPOSE_DFB,
+            .entry_size = in0_aligned_tile_size,
+            .num_entries = in0_CB_tiles,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
+
+    // ---- Semaphores. in0_sender SKIP_MCASTs here but still binds in0 sender/receiver; in1 mcast uses
+    // in1 sender/receiver. The in1 sems span the multicast bounding box (== all_cores on a rectangular
+    // grid; includes the bbox-only noop-pad cores on a ragged grid) so the receiver_sem VALID
+    // broadcast lands in program-owned L1 on every core the multicast rectangle touches. ----
+    m2::Group<m2::SemaphoreSpec> semaphores = {
+        m2::SemaphoreSpec{.unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN0_RECEIVER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{
+            .unique_id = RO_IN1_SENDER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
+        m2::SemaphoreSpec{
+            .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
+    };
+
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
+        device->arch(),
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .math_approx_mode = math_approx_mode,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false});
+
+    // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
+    // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
+    // or the rectangle is inverted for the actual NOC and the multicast degenerates (delivering only
+    // to the corner cores -> receivers never get VALID -> hang). The legacy descriptor pins
+    // in1 writers to RISCV_0 + in1_noc; mirror that here instead of leaving the NOC to the role hint.
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    // in0 sender is pinned to RISCV_1 + in0_noc (below). Leaving it to a plain READER role hint resolves to
+    // NOC_0, which collides with the in1 sender/receiver writers (RISCV_0 + in1_noc == NOC_0 on WH): both
+    // become dedicated-NOC DM kernels on NOC_0 on the same core, which the program-spec validator rejects
+    // (noc_inserted) and which hangs the device. in0_noc (DRAM-write pref) is the opposite NOC of in1_noc
+    // (DRAM-read pref), so this gives them distinct NOCs. Mirrors the mcast_in0 factory / legacy descriptor.
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+
+    m2::Group<m2::KernelSpec> kernels;
+
+    // in0 sender (SKIP_MCAST; on all_cores). Uses the sender_padding fork.
+    {
+        std::vector<m2::DFBBinding> b = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN0_DFB, .accessor_name = "cb_in0", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        };
+        if (sparsity_enabled) {
+            // Sparsity scratch self-loop — gated off (kernels build without SPARSITY so they do
+            // not reference dfb::cb_sparsity).
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        // in0 sharded + extract reads its resident shard via tensor::in0 in the sender kernel, so it
+        // needs no extra DFB bindings here (only cb_in0 above, the mcast staging buffer).
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN0_SENDER_KERNEL,
+            .source = std::filesystem::path(IN0_SENDER_PADDING_KERNEL_PATH),
+            .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
+            .dfb_bindings = std::move(b),
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
+                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+                },
+            .compile_time_args =
+                {
+                    {"in0_tensor_stride_w", (uint32_t)in0_tensor_stride_w},
+                    {"in0_tensor_stride_h", (uint32_t)in0_tensor_stride_h},
+                    {"in0_tensor_next_inner_dim_block_stride", (uint32_t)in0_tensor_next_block_stride},
+                    {"in0_tensor_next_h_dim_block_stride", (uint32_t)in0_tensor_next_h_dim_block_stride},
+                    {"in0_block_w", in0_block_w},
+                    {"in0_block_h", in0_block_h},
+                    {"in0_block_num_tiles", in0_block_w * in0_block_h},
+                    {"in0_last_ktile_w", (uint32_t)in0_last_ktile_w},
+                    {"in0_last_ktile_h", (uint32_t)in0_last_ktile_h},
+                    {"extract_shard_sub_blocks", (uint32_t)extract_shard_sub_blocks},
+                    {"shard_width_in_tiles", in0_shard_width_in_tiles},
+                    {"shard_height_in_tiles", in0_shard_height_in_tiles},
+                    {"num_blocks_inner_dim", num_blocks},
+                    {"num_blocks_w_dim", out_num_blocks_x},
+                    {"num_blocks_h_dim", out_num_blocks_y},
+                    {"in0_mcast_num_dests", 0u},
+                    {"in0_mcast_num_cores", 0u},
+                    {"MtKt", M * K},
+                    {"in0_B", in0_B},
+                    {"in1_B", in1_B},
+                    {"in0_reuse_in_CB", (uint32_t)reuse_in0_in_CB},
+                    {"batchB", 0u},
+                    {"sparsity_pagesize", 0u},
+                    {"bcast_A", 1u},
+                    {"get_batch_from_reader", 0u},
+                    {"fuse_op", (uint32_t)(fuse_op)},
+                    {"num_batch_compute", 0u},
+                },
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {
+                         "in0_tensor_start_tile_id",
+                         "in0_mcast_dest_noc_start_x",
+                         "in0_mcast_dest_noc_start_y",
+                         "in0_mcast_dest_noc_end_x",
+                         "in0_mcast_dest_noc_end_y",
+                         "last_block_h",
+                         "sparsity_addr",
+                     }},
+            // Pin RISCV_1 + in0_noc (not a plain READER hint -> NOC_0) so this does not collide with the
+            // in1 sender writer on NOC_0. See the in0_noc comment above.
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+        });
+    }
+
+    // in1 sender writer (on the single in1 sender core).
+    {
+        std::vector<m2::DFBBinding> b = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        };
+        if (sparsity_enabled) {
+            // Sparsity scratch self-loop — gated off (kernel builds without SPARSITY so it does
+            // not reference dfb::cb_sparsity).
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        std::vector<m2::TensorBinding> tb = {
+            m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
+            m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
+            m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+        };
+        if (bias_tensor.has_value()) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB,
+                .accessor_name = "cb_bias",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            tb.push_back(m2::TensorBinding{.tensor_parameter_name = RO_BIAS_TENSOR, .accessor_name = "bias"});
+        }
+        m2::KernelSpec::CompileTimeArgs cta = {
+            {"in1_tensor_stride_w", (uint32_t)in1_tensor_stride_w},
+            {"in1_tensor_stride_h", (uint32_t)in1_tensor_stride_h},
+            {"in1_tensor_next_block_stride", (uint32_t)in1_tensor_next_block_stride},
+            {"in1_tensor_next_w_dim_block_stride", (uint32_t)in1_tensor_next_w_dim_block_stride},
+            {"in1_block_w", in1_block_w},
+            {"in1_block_h", in0_block_w},
+            {"in1_block_num_tiles", in1_block_w * in0_block_w},
+            {"num_blocks_inner_dim", num_blocks},
+            {"num_blocks_w_dim", out_num_blocks_x},
+            {"num_blocks_h_dim", out_num_blocks_y},
+            {"in1_mcast_num_dests", num_cores - 1},
+            {"in1_mcast_num_cores", in1_mcast_receiver_num_cores - 1},
+            {"KtNt", K * N},
+            {"batch", reuse_in0_in_CB ? in1_B : in0_B},
+            {"bcast_B", (uint32_t)bcast_batch},
+            {"batchB", 0u},
+            {"sparsity_pagesize", 0u},
+            {"out_tensor_stride_w", 1u},
+            {"out_tensor_stride_h", N},
+            {"out_tensor_next_subblock_stride_w", out_subblock_w},
+            {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
+            {"out_tensor_next_w_dim_block_stride", out_block_w},
+            {"out_tensor_next_h_dim_block_stride", out_block_h * N},
+            {"out_subblock_w", out_subblock_w},
+            {"out_subblock_h", out_subblock_h},
+            {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
+            {"MtNt", M * N},
+            {"in3_tensor_stride_w", bias_tensor.has_value() ? 1u : 0u},
+            {"fuse_op_all_gather", 0u},
+            {"fuse_op_reduce_scatter", 0u},
+        };
+        m2::Group<std::string> rta_names = {
+            "in1_tensor_start_tile_id",
+            "in1_mcast_dest_noc_start_x",
+            "in1_mcast_dest_noc_start_y",
+            "in1_mcast_dest_noc_end_x",
+            "in1_mcast_dest_noc_end_y",
+            "sparsity_addr",
+            "out_tensor_start_tile_id",
+            "last_block_w",
+            "out_num_nonzero_subblocks_h",
+            "out_last_subblock_h",
+            "padded_block_tiles_h_skip",
+            "out_num_nonzero_subblocks_w",
+            "out_last_num_nonzero_subblocks_w",
+            "out_last_subblock_w",
+            "padded_subblock_tiles_addr_skip",
+            "padded_block_tiles_w_skip",
+        };
+        if (bias_tensor.has_value()) {
+            rta_names.push_back("in3_tensor_start_tile_id");
+        }
+        if (!output_is_sharded) {
+            rta_names.push_back("last_num_blocks_w_dim");
+        }
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN1_SENDER_WRITER_KERNEL,
+            .source = std::filesystem::path(IN1_SENDER_WRITER_KERNEL_PATH),
+            .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_sender_writer_defines)},
+            .dfb_bindings = std::move(b),
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
+                },
+            .tensor_bindings = std::move(tb),
+            .compile_time_args = std::move(cta),
+            .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
+            // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
+            // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+        });
+    }
+
+    // in1 receiver writer (on receivers).
+    const bool has_in1_receiver = in1_mcast_receivers.num_cores() > 0;
+    if (has_in1_receiver) {
+        std::vector<m2::DFBBinding> b = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        };
+        if (bias_tensor.has_value()) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB,
+                .accessor_name = "cb_bias",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        }
+        m2::KernelSpec::CompileTimeArgs cta = {
+            {"in1_block_num_tiles", in1_block_w * in0_block_w},
+            {"num_blocks_inner_dim", num_blocks},
+            {"num_blocks_w_dim", out_num_blocks_x},
+            {"num_blocks_h_dim", out_num_blocks_y},
+            {"batch", reuse_in0_in_CB ? in1_B : in0_B},
+            {"out_tensor_stride_w", 1u},
+            {"out_tensor_stride_h", N},
+            {"out_tensor_next_subblock_stride_w", out_subblock_w},
+            {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
+            {"out_tensor_next_w_dim_block_stride", out_block_w},
+            {"out_tensor_next_h_dim_block_stride", out_block_h * N},
+            {"out_subblock_w", out_subblock_w},
+            {"out_subblock_h", out_subblock_h},
+            {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
+            {"MtNt", M * N},
+            {"in3_block_w", bias_tensor.has_value() ? in1_block_w : 0u},
+            {"fuse_op_reduce_scatter", 0u},
+        };
+        // The kernel reads last_num_blocks_h_dim/last_num_blocks_w_dim only under
+        // #ifndef OUT_SHARDED, and the run-args below add them only when !output_is_sharded.
+        // The schema must match (output_is_sharded == output.is_sharded(), true for
+        // height/width/block sharded) or the per-node named-RTA count check fails.
+        m2::Group<std::string> in1_recv_rta_names = {
+            "in1_mcast_sender_noc_x",
+            "in1_mcast_sender_noc_y",
+            "out_tensor_start_tile_id",
+            "out_num_nonzero_subblocks_h",
+            "out_last_num_nonzero_subblocks_h",
+            "out_last_subblock_h",
+            "padded_block_tiles_h_skip",
+            "out_num_nonzero_subblocks_w",
+            "out_last_num_nonzero_subblocks_w",
+            "out_last_subblock_w",
+            "padded_subblock_tiles_addr_skip",
+            "padded_block_tiles_w_skip",
+        };
+        if (!output_is_sharded) {
+            in1_recv_rta_names.push_back("last_num_blocks_h_dim");
+            in1_recv_rta_names.push_back("last_num_blocks_w_dim");
+        }
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN1_RECEIVER_WRITER_KERNEL,
+            .source = std::filesystem::path(IN1_RECEIVER_WRITER_KERNEL_PATH),
+            .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_receiver_writer_defines)},
+            .dfb_bindings = std::move(b),
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
+                },
+            .compile_time_args = std::move(cta),
+            .runtime_arg_schema = {.runtime_arg_names = std::move(in1_recv_rta_names)},
+            // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
+            // the sender's multicast geometry.
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+        });
+    }
+
+    // compute (on all_cores).
+    kernels.push_back(make_compute_kernel(
+        in0_block_w,
+        in0_num_subblocks,
+        in0_block_num_tiles,
+        in0_subblock_num_tiles,
+        in1_num_subblocks,
+        in1_block_num_tiles,
+        in1_per_core_w,
+        num_blocks,
+        out_num_blocks_x,
+        out_num_blocks_y,
+        out_subblock_h,
+        out_subblock_w,
+        out_subblock_num_tiles,
+        reuse_in0_in_CB ? in1_B : in0_B,
+        out_block_tiles,
+        untilize_out,
+        in0_transpose_tile,
+        bias_tensor.has_value(),
+        in1_per_core_w,
+        row_broadcast_bias,
+        fused_activation,
+        mm_kernel_defines,
+        compute_hw_config));
+
+    // ---- Work units ----
+    m2::Group<m2::WorkUnitSpec> work_units;
+    work_units.push_back(m2::WorkUnitSpec{
+        .name = "wu_sender",
+        .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+        .target_nodes = CoreRangeSet(in1_mcast_sender),
+    });
+    if (has_in1_receiver) {
+        work_units.push_back(m2::WorkUnitSpec{
+            .name = "wu_receiver",
+            .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_RECEIVER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+            .target_nodes = in1_mcast_receivers,
+        });
+    }
+
+    // ---- Noop-pad the multicast bounding box (ragged-grid hardening; no-op when rectangular) ----
+    // Blank kernels on the phantom cores (bbox - work cores) that RESERVE the in1/bias CBs via inert
+    // self-loop DFB bindings, so the in1/bias multicast writes land in program-owned L1. They run on
+    // all three programmable RISCs (BNT) so the cores complete normally. They do NOT bump the in1
+    // sender semaphore, so in1_mcast_num_dests (real receivers) is unchanged.
+    if (noop_cores.num_cores() > 0) {
+        // Reserve in1/bias CBs on the phantom cores via inert self-loop DFB bindings. The bindings
+        // must match the kind of each DFB role program-wide (program_spec.cpp:1134): the real in1/bias
+        // PRODUCER is the DM writer and the CONSUMER is compute, so split the self-loop accordingly --
+        // PRODUCER on the DM noop kernel, CONSUMER on the compute noop kernel.
+        std::vector<m2::DFBBinding> noop_dm_dfb = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        };
+        std::vector<m2::DFBBinding> noop_compute_dfb = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        };
+        if (bias_tensor.has_value()) {
+            noop_dm_dfb.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB,
+                .accessor_name = "cb_bias",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            noop_compute_dfb.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB,
+                .accessor_name = "cb_bias",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_NOOP_BRISC_KERNEL,
+            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            .dfb_bindings = std::move(noop_dm_dfb),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+        });
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_NOOP_NCRISC_KERNEL,
+            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            // RISCV_1 + in0_noc (not in1_noc): the BRISC noop above is RISCV_0 + in1_noc (== NOC_0 on WH), so
+            // pinning both to in1_noc puts two dedicated-NOC DM kernels on NOC_0 on the same noop core, which
+            // the program-spec validator rejects (noc_inserted). in0_noc is the opposite NOC -> distinct.
+            // Mirrors the worker-core split (in0 reader on in0_noc, in1 writer on in1_noc).
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+        });
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_NOOP_COMPUTE_KERNEL,
+            .source = std::filesystem::path("tt_metal/kernels/compute/blank.cpp"),
+            .dfb_bindings = std::move(noop_compute_dfb),
+            .hw_config = compute_hw_config,
+        });
+        work_units.push_back(m2::WorkUnitSpec{
+            .name = "wu_noop",
+            .kernels = {RO_NOOP_BRISC_KERNEL, RO_NOOP_NCRISC_KERNEL, RO_NOOP_COMPUTE_KERNEL},
+            .target_nodes = noop_cores,
+        });
+    }
+
+    // ---- Per-core runtime args ----
+    uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
+    uint32_t last_out_num_blocks_h = ((last_per_core_M - 1) / out_block_h) + 1;
+    uint32_t last_block_num_nonzero_subblocks_h = ((last_out_block_h - 1) / out_subblock_h) + 1;
+    uint32_t last_subblock_of_last_block_h =
+        last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
+    uint32_t last_block_padded_block_tiles_h_skip =
+        (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
+
+    // W-dim padding parameters for the last block in X (ported from tt-metal PR #48923). Without these,
+    // the receiver-writer emits full per_core_N-wide writes for the last X block when N % per_core_N != 0,
+    // -> OOB writes past the tensor extent on the far banks (can hang). The 2D factory already handles this.
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
+    CoreCoord start_core_noc = bottom_right_core_physical;
+    CoreCoord end_core_noc = top_left_core_physical;
+    // in1_noc is defined above (hoisted before kernel creation so the in1 writers pin the same NOC).
+    if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+        std::swap(start_core_noc, end_core_noc);
+    }
+
+    m2::ProgramRunArgs run_args;
+    m2::KernelRunArgs in0_sender_run_args{.kernel = RO_IN0_SENDER_KERNEL};
+    m2::KernelRunArgs in1_sender_writer_run_args{.kernel = RO_IN1_SENDER_WRITER_KERNEL};
+    m2::KernelRunArgs in1_receiver_writer_run_args{.kernel = RO_IN1_RECEIVER_WRITER_KERNEL};
+
+    const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& core = cores[i];
+        uint32_t output_idx_x = i / num_blocks_y;
+        uint32_t output_idx_y = i % num_blocks_y;
+
+        if (core == start_core) {
+            m2::KernelRunArgs::RuntimeArgValues& in1_sender_writer_rtas = in1_sender_writer_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in1_sender_writer_rtas,
+                core,
+                {
+                    {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * output_idx_x},
+                    {"in1_mcast_dest_noc_start_x", (uint32_t)start_core_noc.x},
+                    {"in1_mcast_dest_noc_start_y", (uint32_t)start_core_noc.y},
+                    {"in1_mcast_dest_noc_end_x", (uint32_t)end_core_noc.x},
+                    {"in1_mcast_dest_noc_end_y", (uint32_t)end_core_noc.y},
+                    {"sparsity_addr", 0u},
+                    {"out_tensor_start_tile_id",
+                     ((uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
+                    {"last_block_w", out_block_w},
+                    {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
+                    {"out_last_subblock_h", out_subblock_h},
+                    {"padded_block_tiles_h_skip", 0u},
+                    {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                    {"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                    {"out_last_subblock_w", out_subblock_w},
+                    {"padded_subblock_tiles_addr_skip", 0u},
+                    {"padded_block_tiles_w_skip", 0u},
+                });
+            if (bias_tensor.has_value()) {
+                in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] = (uint32_t)per_core_N * output_idx_x;
+            }
+            if (!output_is_sharded) {
+                in1_sender_writer_rtas["last_num_blocks_w_dim"][core] = out_num_blocks_x;
+            }
+        } else if (has_in1_receiver) {
+            m2::KernelRunArgs::RuntimeArgValues& in1_receiver_writer_rtas =
+                in1_receiver_writer_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in1_receiver_writer_rtas,
+                core,
+                {
+                    {"in1_mcast_sender_noc_x", (uint32_t)top_left_core_physical.x},
+                    {"in1_mcast_sender_noc_y", (uint32_t)top_left_core_physical.y},
+                    {"out_tensor_start_tile_id",
+                     ((uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
+                });
+            {
+                // H-dim tail depends on output_idx_y == num_blocks_y - 1; W-dim tail depends on
+                // output_idx_x == num_blocks_x - 1. Independent (PR #48923).
+                bool last_y = (output_idx_y == num_blocks_y - 1);
+                bool last_x = (output_idx_x == num_blocks_x - 1);
+                m2::AddRuntimeArgsForNode(
+                    in1_receiver_writer_rtas,
+                    core,
+                    {
+                        {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
+                        {"out_last_num_nonzero_subblocks_h",
+                         last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h},
+                        {"out_last_subblock_h", last_y ? last_subblock_of_last_block_h : out_subblock_h},
+                        {"padded_block_tiles_h_skip", last_y ? last_block_padded_block_tiles_h_skip : 0u},
+                        {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                        {"out_last_num_nonzero_subblocks_w",
+                         last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w},
+                        {"out_last_subblock_w", last_x ? last_subblock_of_last_block_w : out_subblock_w},
+                        {"padded_subblock_tiles_addr_skip", last_x ? last_block_padded_subblock_tiles_addr_skip : 0u},
+                        {"padded_block_tiles_w_skip", last_x ? last_block_padded_block_tiles_w_skip : 0u},
+                    });
+            }
+            if (!output_is_sharded) {
+                m2::AddRuntimeArgsForNode(
+                    in1_receiver_writer_rtas,
+                    core,
+                    {
+                        {"last_num_blocks_h_dim",
+                         output_idx_y == num_blocks_y - 1 ? last_out_num_blocks_h : out_num_blocks_y},
+                        {"last_num_blocks_w_dim", out_num_blocks_x},
+                    });
+            }
+        }
+
+        m2::KernelRunArgs::RuntimeArgValues& in0_sender_rtas = in0_sender_run_args.runtime_arg_values;
+        m2::AddRuntimeArgsForNode(
+            in0_sender_rtas,
+            core,
+            {
+                {"in0_tensor_start_tile_id", (uint32_t)in0_tensor_start_tile_id_stride * output_idx_y},
+                {"in0_mcast_dest_noc_start_x", 0u},
+                {"in0_mcast_dest_noc_start_y", 0u},
+                {"in0_mcast_dest_noc_end_x", 0u},
+                {"in0_mcast_dest_noc_end_y", 0u},
+                {"last_block_h", per_core_M},
+                {"sparsity_addr", 0u},
+            });
+    }
+
+    run_args.kernel_run_args.push_back(std::move(in0_sender_run_args));
+    run_args.kernel_run_args.push_back(std::move(in1_sender_writer_run_args));
+    if (has_in1_receiver) {
+        run_args.kernel_run_args.push_back(std::move(in1_receiver_writer_run_args));
+    }
+
+    run_args.tensor_args.emplace(RO_IN0_TENSOR, in0_tensor);
+    run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
+    run_args.tensor_args.emplace(RO_OUT_TENSOR, out_tensor);
+    run_args.tensor_args.emplace(RO_SPARSITY_TENSOR, in0_tensor);  // inert alias
+    if (bias_tensor.has_value()) {
+        run_args.tensor_args.emplace(RO_BIAS_TENSOR, *bias_tensor);
+    }
+
+    m2::ProgramSpec spec{
+        .name = "matmul_multicore_reuse_mcast_1d_in1",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts(
     const ttnn::prim::qsr::MatmulParams& operation_attributes,
     const ttnn::prim::qsr::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     using namespace tt;
     using namespace operations::experimental::quasar::matmul::utilities;
 
@@ -5142,7 +7355,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     auto mcast_in0 = program_config.mcast_in0;
     auto gather_in0 = program_config.gather_in0;
 
-    TT_FATAL(!gather_in0, "create_descriptor does not support gather_in0 mode");
+    TT_FATAL(!gather_in0, "create_program_artifacts does not support gather_in0 mode");
 
     TT_FATAL(
         operation_attributes.compute_kernel_config.has_value(),
@@ -5177,6 +7390,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    (void)dst_full_sync_en;
 
     const auto in0_B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
     const auto in1_B = fuse_batch ? 1 : get_batch_size(b_shape_padded);
@@ -5184,14 +7398,11 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
-    // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
-    // multicast targets a single bounding-box rectangle and the per-core index math assumes a
-    // contiguous row-major rectangle of width `grid_size.x`.
     if (!program_config.allowed_worker_cores.has_value()) {
         log_warning(
             tt::LogOp,
-            "MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor: program_config.allowed_worker_cores not "
-            "populated; auto-populating from compute_with_storage_grid_size. Callers that bypass "
+            "MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts: program_config.allowed_worker_cores "
+            "not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass "
             "ttnn::prim::qsr::matmul() should invoke "
             "ttnn::operations::experimental::quasar::matmul::normalize_program_config() on the "
             "program config first. This will become a hard error in a future release.");
@@ -5203,8 +7414,6 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     }
     auto grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
 
-    // When a sub-device is present use its bounding-box start; otherwise fall
-    // back to allowed_worker_cores start so non-(0,0) placements work correctly.
     CoreCoord sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
     if (operation_attributes.sub_device_id.has_value()) {
         auto sd_worker_cores = device->worker_cores(
@@ -5227,10 +7436,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
         sub_device_start_core = bbox.start_coord;
     }
 
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
-
     if (mcast_in0) {
-        return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0_descriptor(
+        return CMAKE_UNIQUE_NAMESPACE::create_program_mcast_in0_artifacts(
             a,
             device,
             math_fidelity,
@@ -5272,11 +7479,10 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             bias.has_value() ? bias->memory_config().is_sharded() : false,
             output.memory_config().is_sharded(),
             untilize_out,
-            fused_op_signaler,
             fused_matmul_bias_row_broadcastable(bias),
             sub_device_start_core);
     }
-    return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_descriptor(
+    return CMAKE_UNIQUE_NAMESPACE::create_program_mcast_in1_artifacts(
         a,
         device,
         math_fidelity,

@@ -182,7 +182,7 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
         mul_binary_tile_init();
         mul_binary_tile(reg_acc, reg_scaler, reg_acc);
     } else {
-        reconfig_data_format(cb_sum, cb_scaler);
+        reconfig_data_format(cb_scaler, cb_sum);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, cb_inv_rms);
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, 0, 0, reg_acc);
         reduce_uninit();
@@ -214,7 +214,7 @@ void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
         row_reduce_sum_to_reg(cb_sum, reg_acc);
     } else {
         cb_wait_front(cb_one, onetile);
-        reconfig_data_format(cb_sum, cb_one);
+        reconfig_data_format(cb_one, cb_sum);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, cb_scalar);
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, 0, 0, reg_acc);
         reduce_uninit();

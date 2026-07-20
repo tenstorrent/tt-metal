@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
@@ -14,15 +14,15 @@ void kernel_main() {
 
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
     Noc noc;
-    CircularBuffer dst_cb(dst_cb_id);
+    DataflowBuffer dst_dfb(dst_cb_id);
 
     const uint32_t tile_size = get_tile_size(dst_cb_id);
     uint32_t local_l1_write_addr = output_buffer_address;
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        dst_cb.wait_front(1);
+        dst_dfb.wait_front(1);
         noc.async_write(
-            dst_cb,
+            dst_dfb,
             UnicastEndpoint{},
             tile_size,
             {.offset_bytes = 0},
@@ -31,7 +31,7 @@ void kernel_main() {
              .addr = local_l1_write_addr});
         noc.async_write_barrier();
 
-        dst_cb.pop_front(1);
+        dst_dfb.pop_front(1);
         local_l1_write_addr += tile_size;
     }
 }

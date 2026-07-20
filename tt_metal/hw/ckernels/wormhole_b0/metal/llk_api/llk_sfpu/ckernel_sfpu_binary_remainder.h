@@ -37,12 +37,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vFloat scale = sfpi::setman(b_f, 0);
 
     // First Newton-Raphson iteration: inv_b_f = inv_b_f * (2 - inv_b_f * b_f)
-    sfpi::vFloat t = inv_b_f * neg_b_f + sfpi::vConst1;
-    scale = sfpi::reinterpret<sfpi::vFloat>((254 << 23) - sfpi::reinterpret<sfpi::vInt>(scale));
+    sfpi::vFloat t = inv_b_f * neg_b_f + 1.0f;
+    scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
     // Second Newton-Raphson iteration (interleaved with abs(a) computation)
-    sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
+    sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
     sfpi::vMag a = sfpi::abs(a_signed);
     inv_b_f = e * inv_b_f + inv_b_f;
 
@@ -116,7 +116,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     return r;
 }
 
-// Remainder = a - floor(a / b) * b
+// Signed (int32) remainder = a - floor(a / b) * b
 sfpi_inline void calculate_remainder_int32_body(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -141,6 +141,50 @@ sfpi_inline void calculate_remainder_int32_body(
         v_elseif(a_signed < 0 && b_signed < 0) { r = -r; }
         v_endif;
     }
+    v_endif;
+
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
+}
+
+// Unsigned (uint32) remainder. compute_unsigned_remainder_int32() is exact only when both
+// operands are in [0, 2^31) (abs() is a no-op there), so we range-reduce into that regime:
+// * b <  2^31: halve a to clear the problematic top bit. With t = a >> 1 (logical) and
+//              a = 2*t + (a & 1), a % b = (2*(t % b) + (a & 1)) % b. t < 2^31 for every uint32 a,
+//              so the single helper call always sees operands in [0, 2^31).
+// * b >= 2^31: a < 2^32 <= 2*b, so a is already in [0, 2b) and needs no helper (a % b = a or a - b).
+// Both regimes yield a value x in [0, 2b), reduced by one conditional subtract: x % b =
+// (x >=u b) ? x - b : x. The SFPU integer compare only tests sign(x - b), which equals the true
+// unsigned x >=u b except when b >= 2^31 and x < 2^31; a second predicate corrects those lanes
+// (there x < b, so the remainder is x).
+sfpi_inline void calculate_remainder_uint32_body(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // Size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+
+    // Load raw 32-bit patterns (interpreted as unsigned)
+    sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+
+    // Call the helper unconditionally (nesting it inside predication crashes the SFPI rvtt_live
+    // pass). t = (uint32)a >> 1 is always < 2^31, so the helper sees valid [0, 2^31) operands; rt
+    // is only used on the b < 2^31 lanes, but every lane pays the call.
+    sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
+    sfpi::vInt rt = compute_unsigned_remainder_int32(t, b);
+
+    // Reload a from DEST instead of keeping it live across the helper
+    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+
+    // b < 2^31 uses x = 2*rt + (a & 1); b >= 2^31 keeps x = a
+    v_if(b >= 0) { a = rt + rt + (a & 1); }
+    v_endif;
+
+    // x % b = (x >=u b) ? x - b : x, valid for both regimes since x in [0, 2b)
+    sfpi::vInt r = a;
+    v_if(sfpi::vUInt(a) >= sfpi::vUInt(b)) { r = a - b; }
+    v_endif;
+    // The above compare only tests sign(x - b), matching x >=u b except when b >= 2^31 and x < 2^31
+    // Then x < b, remainder = x
+    v_if(b < 0 && a >= 0) { r = a; }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
@@ -206,6 +250,15 @@ inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_i
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_remainder_uint32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        calculate_remainder_uint32_body(dst_index_in0, dst_index_in1, dst_index_out);
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_remainder(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
@@ -224,6 +277,12 @@ inline void calculate_sfpu_binary_remainder(
 
 template <bool APPROXIMATION_MODE>
 inline void remainder_int32_init() {
+    div_floor_init<APPROXIMATION_MODE>();
+}
+
+template <bool APPROXIMATION_MODE>
+inline void remainder_uint32_init() {
+    // Shares the int32 setup: the unsigned path reuses compute_unsigned_remainder_int32().
     div_floor_init<APPROXIMATION_MODE>();
 }
 

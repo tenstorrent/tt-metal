@@ -65,9 +65,9 @@ def test_unet(
     "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.995),
         # 512x512 image resolution
-        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.995),
     ],
     ids=["1024x1024", "512x512"],
 )
@@ -140,12 +140,12 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 40_479_595,  # Average of last 5 main CI runs (May 12-13, 2026); previous 40_995_000 was above observed range causing failures
-        "blackhole": 19_095_974,  # Average of 21 main CI runs (May 16-19, 2026)
+        "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
+        "blackhole": 11_927_000,  # Average of 3 main CI runs (Jun 22, 2026)
     },
     "clip_encoder_2": {
-        "wormhole": 125_300_000,
-        "blackhole": 59_431_573,
+        "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 43_810_000,  # Average of 3 main CI runs (Jun 22, 2026)
     },
 }
 

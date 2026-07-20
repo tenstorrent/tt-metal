@@ -7,19 +7,27 @@
 
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
     TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
@@ -59,16 +67,28 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
     return logical_core_ranges;
 }
 
+// Metal 2.0 resource names (ProgramSpec scope).
+const m2::KernelSpecName READER{"reader"};
+const m2::KernelSpecName WRITER{"writer"};
+const m2::DFBSpecName SCRATCH{"scratch"};
+const m2::SemaphoreSpecName SEM{"sem"};
+const m2::TensorParamName INPUT{"input"};
+const m2::TensorParamName OUTPUT{"output"};
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_program_artifacts(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
+    const auto& input_mt = input.mesh_tensor();
+    const auto& output_mt = output.mesh_tensor();
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
@@ -86,52 +106,140 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-
-    ProgramDescriptor desc;
-
-    // CB is being used as temp L1 buffer to copy src data into before writing to dst
-    const uint32_t cb_index = 0;
+    // Scratch CB is a temp L1 buffer to copy src data into before writing to dst.
     const uint32_t aligned_page_size = round_up_to_mul32(page_size);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = size_per_l1_bank,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = cb_data_format,
-            .page_size = aligned_page_size,
-        }}},
+
+    //
+    // -------- Build the ProgramSpec --------
+    //
+
+    m2::ProgramSpec spec;
+    spec.name = "move_overlap";
+
+    // Scratch DFB: L1-allocated staging FIFO. The reader both fills it (src -> CB) and
+    // drains it (CB -> dst), so it is bound as a self-loop (PRODUCER + CONSUMER) on the
+    // one reader kernel. num_entries * entry_size reproduces the legacy total_size.
+    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = SCRATCH,
+        .entry_size = aligned_page_size,
+        .num_entries = size_per_l1_bank / aligned_page_size,
+        .data_format_metadata = cb_data_format,
     });
 
     // Semaphore used by the controller core to coordinate multicast.
-    const uint32_t semaphore_id = 0;
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_cores,
-        .initial_value = 0,
+    spec.semaphores.push_back(m2::SemaphoreSpec{
+        .unique_id = SEM,
+        .target_nodes = all_cores,
     });
 
-    std::vector<uint32_t> compile_time_args = {cb_index};
+    // Tensor parameters (src / dst). Their base addresses reach the kernel through the
+    // typed binding channel (refreshed on cache hit), replacing the legacy Buffer* RTAs
+    // and TensorAccessorArgs CTAs.
+    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+
+    const std::filesystem::path kernel_path =
+        tilized ? "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
+                  "move_interleaved_with_overlap.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
+                  "move_stick_layout_interleaved_with_overlap.cpp";
+    const std::filesystem::path writer_kernel_path =
+        tilized ? "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
+                  "move_interleaved_with_overlap_writer.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
+                  "move_stick_layout_interleaved_with_overlap_writer.cpp";
+
+    m2::KernelSpec reader{
+        .unique_id = READER,
+        .source = kernel_path,
+        .dfb_bindings =
+            {
+                // Producer side of the cross-kernel scratch DFB (the writer kernel is the consumer);
+                // splitting producer/consumer across two kernels avoids a forbidden DM self-loop.
+                m2::DFBBinding{
+                    .dfb_spec_name = SCRATCH,
+                    .accessor_name = "scratch",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .semaphore_bindings =
+            {
+                m2::SemaphoreBinding{.semaphore_spec_name = SEM, .accessor_name = "sem"},
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    // Named CTA: the stick-layout kernel needs the (unaligned) page size at compile time.
     if (!tilized) {
-        compile_time_args.push_back(page_size);
+        reader.compile_time_args = {{"page_size", page_size}};
     }
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
-    const std::string kernel_path = tilized
-                                        ? "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
-                                          "move_interleaved_with_overlap.cpp"
-                                        : "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
-                                          "move_stick_layout_interleaved_with_overlap.cpp";
+    // Named RTA schema (per-node values supplied below). One named arg per legacy
+    // positional slot; the legacy src/dst-address (slots 0,1) and semaphore-id (slot 4)
+    // slots are gone — those are now bindings.
+    m2::Group<std::string> rta_names = {
+        "start_id",      "num_pages",           "controller_noc_x",    "controller_noc_y",  "control_value",
+        "is_controller", "range_0_start_noc_x", "range_0_start_noc_y", "range_0_end_noc_x", "range_0_end_noc_y",
+        "range_0_size",  "range_1_start_noc_x", "range_1_start_noc_y", "range_1_end_noc_x", "range_1_end_noc_y",
+        "range_1_size",  "range_2_start_noc_x", "range_2_start_noc_y", "range_2_end_noc_x", "range_2_end_noc_y",
+        "range_2_size",  "do_third_multicast",
+    };
+    if (!tilized) {
+        rta_names.push_back("aligned_page_size");
+    }
+    reader.runtime_arg_schema.runtime_arg_names = std::move(rta_names);
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kernel_path;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(compile_time_args);
-    reader_desc.config = DataMovementConfigDescriptor{};
+    spec.kernels.push_back(reader);
+
+    // Consumer side of the cross-kernel scratch DFB: drains CB -> dst. Runs on the WRITER processor
+    // (the opposite RISC from the reader) on the same cores, sharing the scratch L1 buffer SPSC. Its
+    // wait_front(scratch) cannot unblock until the reader's post-handshake push_back, so dst writes
+    // only begin once every core has read src (the overlap-safety invariant).
+    m2::KernelSpec writer{
+        .unique_id = WRITER,
+        .source = writer_kernel_path,
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = SCRATCH,
+                    .accessor_name = "scratch",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    // The stick-layout writer needs the (unaligned) page size at compile time, like its reader.
+    if (!tilized) {
+        writer.compile_time_args = {{"page_size", page_size}};
+    }
+
+    // Writer RTAs are the subset the drain phase needs (no sem/multicast coordination).
+    {
+        m2::Group<std::string> writer_rta_names = {"start_id", "num_pages"};
+        if (!tilized) {
+            writer_rta_names.push_back("aligned_page_size");
+        }
+        writer.runtime_arg_schema.runtime_arg_names = std::move(writer_rta_names);
+    }
+
+    spec.kernels.push_back(writer);
+
+    spec.work_units.push_back(m2::WorkUnitSpec{
+        .name = "wu",
+        .kernels = {READER, WRITER},
+        .target_nodes = all_cores,
+    });
+
+    //
+    // -------- Build the ProgramRunArgs --------
+    //
 
     const CoreCoord logical_controller = CoreCoord{0, 0};
     const CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
@@ -150,6 +258,14 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     const CoreRange range_1_noc = noc_multicast_regions[1];
     const bool do_third_multicast = (noc_multicast_regions.size() == 3);
 
+    m2::ProgramRunArgs run_args;
+    m2::KernelRunArgs reader_run_args;
+    reader_run_args.kernel = READER;
+    m2::KernelRunArgs writer_run_args;
+    writer_run_args.kernel = WRITER;
+
+    m2::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+    m2::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;
@@ -162,45 +278,62 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         }
 
         const bool is_controller = (i == 0);
-        // Buffer* entries register BufferBindings for src/dst addresses (positions 0/1);
-        // the framework patches them on cache hits without rebuilding the descriptor.
-        KernelDescriptor::RTArgList runtime_args;
-        runtime_args.reserve(tilized ? 25 : 26);
-        runtime_args.push_back(src_buffer);
-        runtime_args.push_back(dst_buffer);
-        runtime_args.push_back(pages_handled_per_core);
-        runtime_args.push_back(num_pages_per_core);
-        runtime_args.push_back(semaphore_id);
-        runtime_args.push_back(static_cast<uint32_t>(noc_controller.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_controller.y));
-        runtime_args.push_back(num_cores - 1);  // control_value
-        runtime_args.push_back(static_cast<uint32_t>(is_controller));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[0].size()));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[1].size()));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions.back().size()));
-        runtime_args.push_back(static_cast<uint32_t>(do_third_multicast));
+
+        m2::AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"start_id", pages_handled_per_core},
+                {"num_pages", num_pages_per_core},
+                {"control_value", num_cores - 1},
+                {"controller_noc_x", static_cast<uint32_t>(noc_controller.x)},
+                {"controller_noc_y", static_cast<uint32_t>(noc_controller.y)},
+                {"is_controller", static_cast<uint32_t>(is_controller)},
+                {"range_0_start_noc_x", static_cast<uint32_t>(range_0_noc.start_coord.x)},
+                {"range_0_start_noc_y", static_cast<uint32_t>(range_0_noc.start_coord.y)},
+                {"range_0_end_noc_x", static_cast<uint32_t>(range_0_noc.end_coord.x)},
+                {"range_0_end_noc_y", static_cast<uint32_t>(range_0_noc.end_coord.y)},
+                {"range_0_size", static_cast<uint32_t>(logical_multicast_regions[0].size())},
+                {"range_1_start_noc_x", static_cast<uint32_t>(range_1_noc.start_coord.x)},
+                {"range_1_start_noc_y", static_cast<uint32_t>(range_1_noc.start_coord.y)},
+                {"range_1_end_noc_x", static_cast<uint32_t>(range_1_noc.end_coord.x)},
+                {"range_1_end_noc_y", static_cast<uint32_t>(range_1_noc.end_coord.y)},
+                {"range_1_size", static_cast<uint32_t>(logical_multicast_regions[1].size())},
+                {"range_2_start_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x)},
+                {"range_2_start_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y)},
+                {"range_2_end_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x)},
+                {"range_2_end_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y)},
+                {"range_2_size", static_cast<uint32_t>(logical_multicast_regions.back().size())},
+                {"do_third_multicast", static_cast<uint32_t>(do_third_multicast)},
+            });
         if (!tilized) {
-            runtime_args.push_back(aligned_page_size);
+            reader_rtas["aligned_page_size"][core] = aligned_page_size;
         }
-        reader_desc.emplace_runtime_args(core, runtime_args);
+
+        m2::AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_id", pages_handled_per_core},
+                {"num_pages", num_pages_per_core},
+            });
+        if (!tilized) {
+            writer_rtas["aligned_page_size"][core] = aligned_page_size;
+        }
+
         pages_handled_per_core += num_pages_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
 
-    return desc;
+    run_args.tensor_args.emplace(INPUT, input_mt);
+    run_args.tensor_args.emplace(OUTPUT, output_mt);
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim::qsr

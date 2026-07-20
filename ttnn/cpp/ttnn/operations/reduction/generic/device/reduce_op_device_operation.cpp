@@ -79,16 +79,16 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(operation_attributes.output_mem_config.memory_layout()));
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
-        // INT32 MIN/MAX is supported via the SFPU reduce path (format deduced from input CB in
-        // compute_kernel_lib::reduce and reduce_{h,w}_neg; MIN uses the dedicated reduce_{h,w}_neg kernels).
-        const bool is_int32_max_reduce =
-            tensor_args.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+        // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from input CB in
+        // compute_kernel_lib::reduce; MIN uses the dedicated reduce_{h,w}_neg kernels). MIN is lowered
+        // to MAX + negate on the host, so only MAX and SUM appear here. See common.hpp.
+        const bool is_int32_sfpu_reduce = use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
                 tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
-                is_int32_max_reduce,
+                is_int32_sfpu_reduce,
             "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
-            "(INT32 is supported for MAX/MIN) - got {}.",
+            "(INT32 is supported for MAX/MIN/SUM) - got {}.",
             tensor_args.dtype());
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
@@ -207,29 +207,6 @@ ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
-ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<ReduceDeviceOperation>(
-        operation_attributes.math_op,
-        operation_attributes.dim,
-        operation_attributes.scaler,
-        operation_attributes.output_mem_config,
-        operation_attributes.output_dtype,
-        operation_attributes.compute_kernel_config,
-        operation_attributes.sub_core_grids,
-        operation_attributes.negate,
-        operation_attributes.post_mul_scaler,
-        operation_attributes.row_major_w_dense_path,
-        operation_attributes.row_major_h_dense_path,
-        program_factory.index(),
-        tensor_args.dtype(),
-        tensor_args.memory_config(),
-        tensor_args.padded_shape(),
-        tensor_args.tensor_spec().tile());
-}
-
 ttnn::Tensor reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
@@ -242,7 +219,8 @@ ttnn::Tensor reduce(
     bool negate,
     float post_mul_scaler,
     bool row_major_w_dense_path,
-    bool row_major_h_dense_path) {
+    bool row_major_h_dense_path,
+    bool use_sfpu_reduce) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -255,7 +233,8 @@ ttnn::Tensor reduce(
             negate,
             post_mul_scaler,
             row_major_w_dense_path,
-            row_major_h_dense_path},
+            row_major_h_dense_path,
+            use_sfpu_reduce},
         input_tensor);
 }
 

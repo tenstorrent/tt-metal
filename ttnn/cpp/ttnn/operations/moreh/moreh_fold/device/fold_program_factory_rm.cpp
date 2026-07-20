@@ -169,35 +169,32 @@ ProgramDescriptor MorehFoldOperation::create_descriptor(
         uint32_t aligned = (src_is_dram ? (input_cb_page_size % dram_alignment == 0) : 1);
         aligned = aligned && !is_blackhole;
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input.buffer()->address(),
-                N,
-                C,
-                H,
-                W,
-                kernel_size_h,
-                kernel_size_w,
-                stride_h,
-                stride_w,
-                padding_h,
-                padding_w,
-                dilation_h,
-                dilation_w,
-                LH,
-                LW,
-                input_cb_page_size,
-                dram_aligned_input_cb_page_size,
-                aligned_output_cb_page_size,
-                start_id,
-                num_units_per_core,
-                aligned});
+            {input.buffer(),
+             N,
+             C,
+             H,
+             W,
+             kernel_size_h,
+             kernel_size_w,
+             stride_h,
+             stride_w,
+             padding_h,
+             padding_w,
+             dilation_h,
+             dilation_w,
+             LH,
+             LW,
+             input_cb_page_size,
+             dram_aligned_input_cb_page_size,
+             aligned_output_cb_page_size,
+             start_id,
+             num_units_per_core,
+             aligned});
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output.buffer()->address(), aligned_output_cb_page_size, start_id, num_units_per_core});
+        writer_desc.emplace_runtime_args(
+            core, {output.buffer(), aligned_output_cb_page_size, start_id, num_units_per_core});
 
         start_id += num_units_per_core;
     }

@@ -14,9 +14,22 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "tensix_types.h"
+#include "tensor_shape.h"
 
 namespace ckernel::trisc
 {
+// Fixed hardware thread ids, matching the DEST section register layout (SEC0..SEC3) and the
+// -DCOMPILE_FOR_TRISC=<n> the build assigns per thread. Use these when a call must address a specific
+// thread's slot rather than the compile-time thread it runs on -- e.g. the unpack-to-dest path, where
+// the unpack thread programs the UNP_DEST producer slot (Unpack) regardless of what it is compiled as.
+enum class TriscID : std::uint8_t
+{
+    Unpack = 0,
+    Math   = 1,
+    Pack   = 2,
+    Sfpu   = 3, // isolate-SFPU
+};
+
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
@@ -48,7 +61,6 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
-
 // Points to the config space
 std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
 // Points to the buffer table
@@ -262,11 +274,21 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    constexpr static std::uint32_t MATH_PACK = 1; // math <-> pack sync on dest register
+    // The math thread is always the middleman, for regular unpack and for unpack_to_dest.
+    // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
+    // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
+    // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
+    // SFPU/FPU work slots in between the UNPACK_MATH get and the MATH_PACK post.
+    //
+    // Keep pairwise naming with producer_consumer direction:
+    // - MATH_PACK = math->pack
+    // - UNPACK_MATH = unpack->math
+    constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
-        return (1 << sem_index);
+        return (1u << sem_index);
     }
 };
 
@@ -280,7 +302,7 @@ inline void t6_semaphore_post(const std::uint8_t index)
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
-    TTI_SEMPOST(0, semaphore::t6_sem(index));
+    TT_SEMPOST(0, semaphore::t6_sem(index));
 }
 
 // Tensix thread semaphore get optionally stalled
@@ -293,7 +315,7 @@ inline void t6_semaphore_get(const std::uint8_t index)
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
-    TTI_SEMGET(0, semaphore::t6_sem(index));
+    TT_SEMGET(0, semaphore::t6_sem(index));
 }
 
 /**
@@ -309,13 +331,17 @@ inline void _set_packer_dest_registers_()
     static_assert(DST == ckernel::DstSync::SyncHalf || DST == ckernel::DstSync::SyncFull);
     std::uint32_t dest_buffer_base_offset = (DST == ckernel::DstSync::SyncFull) ? 0 : _get_dest_buffer_base_();
 
+    // Masked write of just SRC_ADDR_OFFSET. On PACKER1 this cfg word (ADDR32 65) also holds the
+    // INSTRN_LOOP_COUNT/COUNT auto-loop bits programmed by _llk_pack_srcs_config_ (llk_srcs.h); a
+    // full-word write would zero them (per-tile in SyncHalf, once the SrcS->Packer1 path is wired).
+    // PACKER0's word has no such siblings today, but keep it masked for symmetry.
     if constexpr (PACK_SEL == p_pacr::PACK0)
     {
-        cfg[THCON_PACKER0_REG0_SRC_ADDR_OFFSET_ADDR32] = dest_buffer_base_offset;
+        cfg_rmw(THCON_PACKER0_REG0_SRC_ADDR_OFFSET_RMW, dest_buffer_base_offset);
     }
     else
     {
-        cfg[THCON_PACKER1_REG0_SRC_ADDR_OFFSET_ADDR32] = dest_buffer_base_offset;
+        cfg_rmw(THCON_PACKER1_REG0_SRC_ADDR_OFFSET_RMW, dest_buffer_base_offset);
     }
 }
 
@@ -355,6 +381,50 @@ inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
 {
     return (input1 >= input2) ? input1 : input2;
+}
+
+/**
+ * @brief helper function used to compute z-dim for buf_desc from TensorShape.
+ * Compares two values, then computes the square of the smaller value.
+ *
+ * @param input1/input2: values to be compared, then squared
+ */
+inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t input2)
+{
+    return (input1 < input2) ? input1 * input1 : input2 * input2;
+}
+
+/**
+ * @brief Creates a tdma_descriptor_t structure from TensorShape and other needed parameters
+ * Currently supported buffer descriptor dimensions are:
+ * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
+ *
+ * @param tensor_shape: Tile/face dimensions and shape of input tensor
+ * @param base_l1_16B: base address of the buffer in L1
+ * @param data_format: L1 data encoding format
+ * @param buf_desc_id: buffer descriptor table ID
+ * @param reg_data_format: Register data encoding format
+ */
+inline tdma_descriptor_t construct_tdma_desc(
+    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
+{
+    buffer_descriptor_u buf_desc = {0};
+    buf_desc.f.x_dim             = tensor_shape.face_c_dim;
+    buf_desc.f.y_dim             = tensor_shape.face_r_dim;
+    if (tensor_shape.num_faces_r_dim == tensor_shape.num_faces_c_dim)
+    {
+        buf_desc.f.z_dim = tensor_shape.total_num_faces();
+    }
+    else
+    {
+        buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
+    }
+    buf_desc.f.l1_addr_16B = base_l1_16B;
+    buf_desc.f.format      = static_cast<std::uint8_t>(data_format);
+
+    tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
+
+    return tdma_desc;
 }
 
 } // namespace ckernel::trisc

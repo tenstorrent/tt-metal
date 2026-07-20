@@ -25,25 +25,18 @@ constexpr auto to_underlying(T t) noexcept
     return static_cast<std::underlying_type_t<T>>(t);
 }
 
+enum Srcs
+{
+    SrcA = 0,
+    SrcB = 1,
+    SrcC = 2
+};
+
 enum register_space_e
 {
     TDMA_REGS     = 0x0,
     LOCAL_REGS    = 0x1,
     ADDR_COUNTERS = 0x2
-};
-
-// This struct contains all the information needed to specify a tile
-//  shape, for a default 32x32 tile these are the values:
-//  num_faces = 4;
-//  face_r_dim = 16;
-//  face_c_dim = 16;
-//  narrow_tile = 0;
-struct TileShape
-{
-    std::uint32_t num_faces;
-    std::uint32_t face_r_dim;
-    std::uint32_t face_c_dim;
-    bool narrow_tile;
 };
 
 // TODO: AM; rename enum values, issue #1275

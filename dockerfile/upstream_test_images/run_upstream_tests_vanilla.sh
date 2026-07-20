@@ -176,10 +176,14 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+    # llama3 70b test disabled due to hang, see: https://github.com/tenstorrent/tt-metal/issues/46704
+    # FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
+
+    CI=true pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
@@ -257,6 +261,11 @@ test_suite_bh_6u_torus_xyz_health_check_tests() {
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 }
 
+test_suite_bh_6u_deployment_tests() {
+    echo "[upstream-tests] running BH GLX upstream deployment tests"
+    ./build/test/tt_metal/unit_tests_deployment
+}
+
 # Define test suite mappings for different hardware topologies
 declare -A hw_topology_test_suites
 
@@ -300,6 +309,9 @@ test_suite_wh_6u_metal_unit_tests"
 
 hw_topology_test_suites["blackhole_ttnn_stress_tests"]="
 test_suite_bh_ttnn_stress_tests"
+
+hw_topology_test_suites["blackhole_glx_deployment_tests"]="
+test_suite_bh_6u_deployment_tests"
 
 hw_topology_test_suites["blackhole_glx"]="
 test_suite_bh_6u_metal_unit_tests

@@ -6,6 +6,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -50,9 +51,9 @@ inline void calculate_cube_root() {
             y = y * (c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0);
 
             sfpi::vFloat d = x * (y * y);
-            c = d * y + sfpi::vConstNeg1;
+            c = d * y + -1.0f;
             sfpi::vFloat negative_third = sfpi::addexp(negative_third_256, 8);
-            sfpi::vFloat t = c * negative_third + sfpi::vConst1;
+            sfpi::vFloat t = c * negative_third + 1.0f;
             d = sfpi::copysgn(d, a);
             y = d * (t * t);
         } else {
@@ -70,6 +71,7 @@ inline void calculate_cube_root() {
 
 template <bool APPROXIMATION_MODE>
 inline void cube_root_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 0x1.c09806p0f;
     sfpi::vConstFloatPrgm1 = -0x1.403e6cp0f;
     sfpi::vConstFloatPrgm2 = 0x1.04cdb2p-1f;

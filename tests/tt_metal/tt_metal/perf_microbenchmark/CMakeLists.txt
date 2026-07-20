@@ -25,6 +25,10 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     if(${TEST_SRC} STREQUAL "dispatch/benchmark_rw_buffer.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
+    if(${TEST_SRC} STREQUAL "routing/benchmark_fabric_mux_v2_throughput.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+        target_sources(${TEST_TARGET} PRIVATE routing/fabric_mux_v2_benchmark_program.cpp)
+    endif()
     if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
@@ -39,7 +43,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
         target_sources(
             ${TEST_TARGET}
             PRIVATE
-                ${PROJECT_SOURCE_DIR}/tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp
+                ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
         )
     endif()
 

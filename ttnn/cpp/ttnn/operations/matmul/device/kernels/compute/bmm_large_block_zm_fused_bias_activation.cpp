@@ -8,7 +8,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
@@ -54,7 +54,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(block_size);
@@ -72,7 +72,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(last_block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(last_block_size);
@@ -282,7 +282,7 @@ void kernel_main() {
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
-                        transpose_wh_init_short(in0_transpose_cb_id);
+                        transpose_init(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -429,7 +429,7 @@ void kernel_main() {
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }
-                    // never reload when with bias, bias uses interm buffer
+                    // never reload when with bias, bias uses intermediate buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
@@ -488,7 +488,17 @@ void kernel_main() {
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+#ifdef BIAS_FULL_BLOCK
+                            // The bias CB holds a full [M, N] tile block. m_tile is this output tile's
+                            // row within that block; bias_tile_idx is the position of the matching bias
+                            // tile in the CB (row m_tile, column in1_index_subblock_offset). Only
+                            // matmul_multicore_reuse_optimized loads the full block; other callers load a
+                            // single bias row and use the N-only index below.
+                            const uint32_t m_tile = in0_subblock * out_subblock_h + j;
+                            uint32_t bias_tile_idx = m_tile * in1_block_w + in1_index_subblock_offset;
+#else
                             uint32_t bias_tile_idx = in1_index_subblock_offset;
+#endif
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
                                 const uint32_t safe_bias_tile_idx =
                                     (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
@@ -577,4 +587,13 @@ void kernel_main() {
             }
         }
     }
+#ifdef FUSE_BIAS
+    // For num_blocks_w_dim == 1 the reader pushes bias once and the kernel holds it resident,
+    // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
+    // last use, so the CB is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
+    // balances each re-pushed bias block.)
+    if constexpr (num_blocks_w_dim == 1) {
+        bias_cb.pop_front(bias_ntiles);
+    }
+#endif
 }

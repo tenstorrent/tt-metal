@@ -56,9 +56,6 @@ struct ReduceDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 ttnn::Tensor reduce(
@@ -73,6 +70,7 @@ ttnn::Tensor reduce(
     bool negate = false,
     float post_mul_scaler = 1.0f,
     bool row_major_w_dense_path = false,
-    bool row_major_h_dense_path = false);
+    bool row_major_h_dense_path = false,
+    bool use_sfpu_reduce = false);
 
 }  // namespace ttnn::prim

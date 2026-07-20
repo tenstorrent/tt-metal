@@ -5,9 +5,10 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
@@ -53,7 +54,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(block_size);
@@ -71,7 +72,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(last_block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(last_block_size);
@@ -106,8 +107,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -182,7 +183,7 @@ void kernel_main() {
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
     constexpr uint32_t in0_cb_id = in0_transpose_tile ? get_named_compile_time_arg_val("cb_in0_transposed")
-                                                      : get_named_compile_time_arg_val("cb_in0");
+                                                    : get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t mm_partials_cb_id = get_named_compile_time_arg_val("cb_intermed0");
@@ -208,6 +209,8 @@ void kernel_main() {
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
     CircularBuffer mm_out_cb(mm_out_cb_id);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -240,8 +243,7 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -281,20 +283,15 @@ void kernel_main() {
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
-                        transpose_wh_init_short(in0_transpose_cb_id);
+                        transpose_init(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
-                        mm_block_init_short_with_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_transpose_cb_id,
-                            in1_transpose_tile,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
@@ -433,7 +430,7 @@ void kernel_main() {
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }
-                    // never reload when with bias, bias uses interm buffer
+                    // never reload when with bias, bias uses intermediate buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
@@ -575,10 +572,19 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
                     // reconfigure init for matmul
-                    mm_block_init_short(
+                    matmul_block_init(
                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
             }
         }
     }
+#ifdef FUSE_BIAS
+    // For num_blocks_w_dim == 1 the reader pushes bias once and the kernel holds it resident,
+    // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
+    // last use, so the CB is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
+    // balances each re-pushed bias block.)
+    if constexpr (num_blocks_w_dim == 1) {
+        bias_cb.pop_front(bias_ntiles);
+    }
+#endif
 }

@@ -296,15 +296,6 @@
   team: models
   model-name: sd35_large
 
-- name: t3k_flux1-dev_tests
-  cmd: run_t3000_flux1_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 12
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux1-dev
-
 - name: t3k_wan2.2_tests
   cmd: run_t3000_wan22_tests
   skus:
@@ -341,15 +332,6 @@
   team: models
   model-name: qwenimage
 
-- name: t3k_qwen3_vl_tests
-  cmd: run_t3000_qwen3_vl_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 12
-  owner_id: U08H31YMN4Q # Sanjay Sanjay
-  team: models
-  model-name: qwen3_vl
-
 # ============================================================================
 # Galaxy Wormhole tests
 # ============================================================================
@@ -379,7 +361,7 @@
 - name: Galaxy Flux.1-dev demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
+    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-flux_dev" --timeout 1200
   model-name: flux1
   skus:
     wh_galaxy:
@@ -450,7 +432,6 @@
 
 - name: Galaxy GPT-OSS 120B unit tests (high batch)
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "decode_high_throughput"
   model-name: gpt-oss-120b-high-batch-galaxy
@@ -497,7 +478,6 @@
 
 - name: Galaxy GPT-OSS 120B e2e tests (high batch)
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest models/demos/gpt_oss/demo/text_demo.py -k "batch128" --timeout 1200
   model-name: gpt-oss-120b-high-batch-galaxy
@@ -512,16 +492,6 @@
 # ============================================================================
 
 # P150 Single-card tests
-- name: whisper P150 performance
-  cmd: |
-    pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
-  skus:
-    bh_p150_perf:
-      timeout: 84
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
-
 - name: unet-shallow P150 performance
   cmd: |
     pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"

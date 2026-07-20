@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from dataclasses import dataclass
 
+import pytest
 import torch
 
 import ttnn
-
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
 
@@ -540,11 +539,10 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     assert_output_accuracy(golden_output, output_ttnn)
 
 
-def test_layer_norm_inputs_requires_input_tensor():
+def test_layer_norm_inputs_requires_input_tensor(expect_error):
     """``LayerNormInputs()`` without an input tensor must raise."""
-    import pytest
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "."):
         ttnn.LayerNormInputs()
 
 

@@ -33,12 +33,6 @@ struct DropoutDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Kept (not attribute_names): the hash coarsens the input to its VOLUME, since dropout is
-    // elementwise (program depends on tile count, not shape). attribute_names can't express that —
-    // it only controls the attrs struct, while the input shape is hashed from tensor_args. The seed
-    // it excludes is re-applied via get_dynamic_runtime_args below.
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     // seed is excluded from the program hash (so calls differing only in seed cache-hit); it is
     // DYNAMIC and re-applied to the cached program on every dispatch (per-device offset applied when
     // use_per_device_seed). Must mirror the compute-kernel seed runtime arg in the factory.

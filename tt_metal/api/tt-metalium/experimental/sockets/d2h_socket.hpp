@@ -17,6 +17,7 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketDescriptor;
 struct HDSocketConnectorState;
 
 /**
@@ -130,6 +131,22 @@ public:
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
     /**
+     * @brief Attaches to an existing D2HSocket from an in-memory descriptor.
+     *
+     * Used by D2HStreamService::connect to attach every per-coord socket from
+     * the embedded service descriptor without a separate file read per socket.
+     */
+    static std::unique_ptr<D2HSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
+
+    /**
+     * @brief Populates an HDSocketDescriptor from the owner-side socket state.
+     *
+     * Used by D2HStreamService::export_descriptor to embed socket descriptors
+     * inline in the service descriptor.
+     */
+    HDSocketDescriptor populate_descriptor() const;
+
+    /**
      * @brief Exports a descriptor file for cross-process socket attachment.
      *
      * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
@@ -200,11 +217,12 @@ public:
      * without blocking. Useful for poll-based readers that need to check
      * a shutdown flag between iterations.
      *
-     * @return true if at least one page can be read immediately.
+     * @param num_bytes_to_check Optional number of bytes to check. If not provided, the default page size is used.
+     * @return true if at least the requested number of bytes can be read immediately.
      *
      * @throws TT_FATAL if page_size has not been set.
      */
-    bool has_data();
+    bool has_data(std::optional<uint32_t> num_bytes_to_check = std::nullopt);
 
     /**
      * @brief Reads data pages from the socket FIFO.
@@ -344,6 +362,8 @@ private:
     bool using_hugepage_ = false;
     uint32_t* hugepage_data_host_ptr_ = nullptr;
     volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
+
+    std::optional<DeviceAddr> svc_config_l1_addr_;
 };
 
 }  // namespace tt::tt_metal::distributed

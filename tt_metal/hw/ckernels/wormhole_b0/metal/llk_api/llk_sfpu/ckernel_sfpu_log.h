@@ -34,6 +34,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
@@ -42,19 +43,19 @@ namespace sfpu {
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     sfpi::vFloat three_quarters = 0.75f;
-    sfpi::vInt e = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(three_quarters);
+    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
 
     if constexpr (!FAST_APPROX) {
         // normalise a (-0.0 and subnormals become +0.0)
-        a = a * sfpi::vConst1 + sfpi::vConst0;
+        a = a * 1.0f + 0.0f;
     }
 
-    e = sfpi::reinterpret<sfpi::vInt>(sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(e), 0));
-    sfpi::vFloat m = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - e);
+    e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
+    sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
     sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
 
     // m in [0.75, 1.5). Compute log1p(m - 1) for m - 1 in [-0.25, 0.5).
-    m -= sfpi::vConst1;
+    m -= 1.0f;
 
     v_if(a >= 0.0f) {
         sfpi::vFloat r;
@@ -93,17 +94,17 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         a = sfpi::addexp(a, -1);
 
         r = r * s + m;
-        e_float = sfpi::copysgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
+        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
         result = e_float * sfpi::vConstFloatPrgm0 + r;
 
         if constexpr (HAS_BASE_SCALING) {
-            result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+            result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         }
 
         // For zero, result is negative before this multiply, so result * +inf
         // gives -inf. For +inf, result is positive, so result * +inf gives
         // +inf. NaNs either skip the main block or propagate here.
-        v_if(sfpi::exexp(a, sfpi::ExponentMode::NoDebias) - 255 >= 0) { result *= a; }
+        v_if(sfpi::exexp(a, sfpi::ExponentMode::Biased) - 255 >= 0) { result *= a; }
         v_endif;
     }
     v_endif;
@@ -132,6 +133,7 @@ inline void calculate_log(uint log_base_scale_factor) {
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
     const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
     // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into

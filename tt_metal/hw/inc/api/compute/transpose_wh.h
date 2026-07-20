@@ -4,32 +4,40 @@
 
 #pragma once
 
-#include "api/compute/common.h"
-#include "api/compute/sentinel/compute_kernel_sentinel.h"
-#ifdef TRISC_MATH
-#include "llk_math_common_api.h"
-#include "llk_math_unary_datacopy_api.h"
-#ifndef ARCH_QUASAR
-#include "llk_math_transpose_dest_api.h"
-#endif
-#endif
-#ifdef TRISC_UNPACK
-#include "llk_unpack_common_api.h"
-#include "llk_unpack_A_api.h"
-#endif
+//
+// DEPRECATED HEADER.
+//
+// The transpose compute API has been renamed to drop the `_wh` suffix and to follow the
+// compute_kernel_hw_startup() + <op>_init() programming model. The canonical API now lives in
+// "api/compute/transpose.h" (transpose_init / transpose_tile).
+//
+// Everything below is a thin [[deprecated]] compatibility shim that forwards to the new API. This
+// whole file is scheduled for removal (see .github/deprecations.json); migrate to transpose.h:
+//   transpose_wh_init(icb, ocb)  ->  compute_kernel_hw_startup(icb, ocb); transpose_init(icb);
+//   transpose_wh_init_short(icb) ->  transpose_init(icb);
+//   transpose_wh_tile(...)       ->  transpose_tile(...);
+//
+
+#include "api/compute/transpose.h"
+#include "llk_assert.h"
 
 namespace ckernel {
 
 // clang-format off
 /**
- * Paired Init function for transpose_wh. For general information on init functions refer to any_init.
+ * @deprecated Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then
+ * transpose_init(icb) before transpose_tile(). See "api/compute/transpose.h".
  *
- * | Argument       | Description                                                 | Type     | Valid Range | Required |
- * |----------------|-------------------------------------------------------------|----------|-------------|----------|
- * | icb            | The identifier of the circular buffer (CB) containing input | uint32_t | 0 to 31     | True     |
+ * Performs the full (long) init for transpose_wh: one-time hardware configuration of the
+ * unpacker/math/packer plus the transpose-specific reconfiguration. Body kept verbatim for
+ * backwards compatibility.
  */
 // clang-format on
-ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+[[deprecated(
+    "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then transpose_init(icb). See "
+    "api/compute/transpose.h.")]] ALWI void
+transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
@@ -66,9 +74,16 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
-    const bool enable_unpack_to_dest =
-        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
+    // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559) and no int-FPU 8-bit integer
+    // reconstruct path; reject formats that would otherwise silently take the wrong path. UInt32 is
+    // treated as unpack-to-dest on WH/BH and Int8/UInt8 (low nibble 0xE) need the int-FPU path.
+    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    LLK_ASSERT(
+        !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
+    LLK_ASSERT(!is_8bit_int, "8-bit integer transpose not supported on Quasar");
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
@@ -94,102 +109,19 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
 }
 
 /**
- * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose_wh to be executed
- * correctly.
+ * @deprecated Use transpose_init(icb). See "api/compute/transpose.h".
  */
-ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb, call_line);
-#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    const std::uint32_t src_format = get_operand_src_format(icb);
-    const std::uint32_t dst_format = get_operand_dst_format(icb);
-
-#ifndef ARCH_QUASAR
-    // Low-nibble compare intentionally matches both signed Int8 (14) and unsigned UInt8
-    // (30 -> low nibble 0xE): both 8-bit integer formats need the int-FPU (ELWADD) A2D
-    // reconstruct path.
-    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
-    if (enable_unpack_to_dest) {
-        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-            true, false, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-        MATH((llk_math_transpose_dest_init<false, true>()));
-    } else if (is_8bit_int) {
-        // 8-bit integer (Int8/UInt8) transpose needs the int-FPU (ELWADD) A2D reconstruct path,
-        // selected here via is_int_fpu_en. Ideally the LLK layer would infer this path from the
-        // data format instead of selecting it here in the Compute API layer.
-        // TODO: #46832.
-        UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<
-              DataCopyType::A2D,
-              DST_ACCUM_MODE,
-              BroadcastType::NONE,
-              true /*is_int_fpu_en*/>(icb)));
-    } else {
-        UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-    }
-#else
-    const bool enable_unpack_to_dest =
-        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
-    UNPACK((llk_unpack_A_init<
-            BroadcastType::NONE,
-            false /*acc_to_dest*/,
-            EltwiseBinaryReuseDestType::NONE,
-            false /*unpack_to_dest*/>(true /*transpose_of_faces*/, true /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
-#endif
-
-#endif
+[[deprecated("Use transpose_init(icb). See api/compute/transpose.h.")]] ALWI void transpose_wh_init_short(
+    uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    transpose_init(icb, call_line);
 }
 
-// clang-format off
 /**
- * Performs a 32x32 transpose operation *B[w,h] = A[h,w]* on a tile in the CB
- * at a given index and writes the result to the DST register at index
- * dst_tile_index. The DST register buffer must be in acquired state via
- * *acquire_dst* call.
- *
- * This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
- * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in_cb_id       | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
- * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
- * | dst_tile_index | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * @deprecated Use transpose_tile(icb, itile, idst). See "api/compute/transpose.h".
  */
-// clang-format on
-ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
-#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    const std::uint32_t dst_format = get_operand_dst_format(icb);
-
-#ifndef ARCH_QUASAR
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
-    if (enable_unpack_to_dest) {
-        UNPACK(
-            (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
-        UNPACK((llk_unpack_set_srcb_dummy_valid()));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst, icb)));
-        MATH((llk_math_transpose_dest<false, true>(idst)));
-    } else {
-        UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
-    }
-#else
-    const bool enable_unpack_to_dest =
-        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false /*acc_to_dest*/>(icb, itile)));
-    MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
-#endif
-#endif
+[[deprecated("Use transpose_tile(icb, itile, idst). See api/compute/transpose.h.")]] ALWI void transpose_wh_tile(
+    uint32_t icb, uint32_t itile, uint32_t idst) {
+    transpose_tile(icb, itile, idst);
 }
 
 }  // namespace ckernel

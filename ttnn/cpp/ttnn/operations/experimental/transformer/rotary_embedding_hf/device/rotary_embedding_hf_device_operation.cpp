@@ -143,20 +143,6 @@ tt::tt_metal::Tensor RotaryEmbeddingHfDeviceOperation::create_output_tensors(
         compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-tt::stl::hash::hash_t RotaryEmbeddingHfDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(args, tensor_args);
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingHfDeviceOperation>(
-        args.is_decode_mode,
-        args.output_mem_config,
-        args.compute_kernel_config,
-        program_factory.index(),
-        tensor_args.input_tensor,
-        tensor_args.cos_cache,
-        tensor_args.sin_cache);
-    return hash;
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

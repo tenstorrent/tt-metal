@@ -33,7 +33,7 @@ jobs:
       platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
       enable-lto: false
   create-image-tag-name:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       image-tag-name: ${{ steps.set-tag-name.outputs.image-tag-name }}
     steps:
@@ -50,6 +50,7 @@ jobs:
       packages: write
       contents: read
     needs:
+      - check-harbor
       - build-artifact
       - create-image-tag-name
     secrets: inherit
@@ -59,3 +60,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       platform: ${{ inputs.platform }}
       image: ${{ matrix.image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}

@@ -30,6 +30,10 @@ struct DispatchParams {
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_dispatch = false;
     uint32_t num_untilizers_per_sender = 2;
+    // Whether an optional padding_config input is present. Kept as an explicit attribute so the
+    // padding-aware (HAS_PADDING_CONFIG) and full-range programs are guaranteed to hash to distinct
+    // program-cache entries.
+    bool has_padding_config = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -45,7 +49,8 @@ struct DispatchParams {
         "worker_core_range_set",
         "use_l1_small_for_semaphores",
         "use_fp8_dispatch",
-        "num_untilizers_per_sender");
+        "num_untilizers_per_sender",
+        "has_padding_config");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -62,16 +67,21 @@ struct DispatchParams {
             worker_core_range_set,
             use_l1_small_for_semaphores,
             use_fp8_dispatch,
-            num_untilizers_per_sender);
+            num_untilizers_per_sender,
+            has_padding_config);
     };
 };
 
 struct DispatchInputs {
     Tensor input_tensor;
-    Tensor weights_tensor;
     Tensor indices_tensor;
     Tensor expert_offsets_tensor;
     Tensor expert_dispatch_table_tensor;
+    // Optional per-device [local_real_tokens, pad_side] config (uint32/int32, ROW_MAJOR, last dim 2).
+    // When present, the dispatch kernels read it on device and bound their token loop to the real
+    // (unpadded) tokens. Its presence is reflected via DispatchParams::has_padding_config so the
+    // padding-aware and full-range programs are cached separately.
+    std::optional<Tensor> padding_config = std::nullopt;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

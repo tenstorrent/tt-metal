@@ -9,11 +9,12 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/reduce.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
@@ -60,7 +61,8 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols, bool first_call) {
+void add_block_bcast_rows_inplace(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols, bool first_call) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
@@ -260,7 +262,7 @@ void mask_and_topk() {
     CircularBuffer output_ind_cb(output_ind_cb_index);
 
     if (first_call) {
-        transpose_wh_init(input_cb_index, input_transposed_cb_index);
+        transpose_init(input_cb_index);
     }
 
     // The expert mask is the same for all rows, so wait for all Wt tiles once before the loop.
@@ -296,15 +298,15 @@ void mask_and_topk() {
             tile_regs_acquire();
             masked_input_cb.wait_front(2);
             reconfig_data_format_srca(masked_input_cb_index);
-            transpose_wh_init_short(masked_input_cb_index);
-            transpose_wh_tile(masked_input_cb_index, 0, 0);
-            transpose_wh_tile(masked_input_cb_index, 1, 1);
+            transpose_init(masked_input_cb_index);
+            transpose_tile(masked_input_cb_index, 0, 0);
+            transpose_tile(masked_input_cb_index, 1, 1);
             masked_input_cb.pop_front(2);
 
             reconfig_data_format_srca(index_cb_index);
-            transpose_wh_init_short(index_cb_index);
-            transpose_wh_tile(index_cb_index, 0, 2);
-            transpose_wh_tile(index_cb_index, 1, 3);
+            transpose_init(index_cb_index);
+            transpose_tile(index_cb_index, 0, 2);
+            transpose_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
             ckernel::topk_local_sort(0, (int)ascending, logk - 1);
@@ -385,12 +387,12 @@ void mask_and_topk() {
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
-        transpose_wh_init_short(input_transposed_cb_index);
+        transpose_init(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         input_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            transpose_wh_tile(input_transposed_cb_index, i, 0);
+            transpose_tile(input_transposed_cb_index, i, 0);
             tile_regs_commit();
 
             values_cb.reserve_back(1);
@@ -406,12 +408,12 @@ void mask_and_topk() {
 
         // transpose index tiles and pack into output buffer
         reconfig_data_format_srca(index_transposed_cb_index);
-        transpose_wh_init_short(index_transposed_cb_index);
+        transpose_init(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         index_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            transpose_wh_tile(index_transposed_cb_index, i, 0);
+            transpose_tile(index_transposed_cb_index, i, 0);
             tile_regs_commit();
 
             output_ind_cb.reserve_back(1);
@@ -453,6 +455,8 @@ void kernel_main() {
     constexpr uint32_t masked_input_cb_index = get_compile_time_arg_val(18);
 
     constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
+
+    compute_kernel_hw_startup(input_cb_index, input_transposed_cb_index);
 
     // Apply expert_mask to each input tile pair and run top-k on the masked values.
     mask_and_topk<

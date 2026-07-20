@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/kernel/dataflow/cb_fill_helpers.hpp"
 
 void kernel_main() {
     const auto input_addr = get_arg_val<uint32_t>(0);
@@ -23,12 +21,6 @@ void kernel_main() {
     constexpr auto dram_input_addrg_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-
-    uint32_t scaler = 0;
-    const float one_f = 1.0f;
-    std::memcpy(&scaler, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
-    fill_cb_with_value(cb_id_in1, scaler);
 
     Noc noc;
     CircularBuffer cb_in0(tt::CBIndex::c_0);
