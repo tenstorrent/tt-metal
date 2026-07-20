@@ -79,7 +79,7 @@ def _require_diffusers_ltx_vae():
 
 
 def _diffusers_resnet_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Remap diffusers LTX-2 resnet keys to the TT/ltx_core layout."""
+    """Remap diffusers LTX-2 resnet keys to the TT/Lightricks layout."""
     out = dict(state)
     if "conv_shortcut.weight" in out:
         out["conv_shortcut.conv.weight"] = out.pop("conv_shortcut.weight")
@@ -113,7 +113,7 @@ def _run_diffusers_downsample(block: nn.Module, x: torch.Tensor, *, causal: bool
 
 
 class _PerChannelStatistics(nn.Module):
-    """Minimal per-channel latent stats (ltx_core key names for TT weight load)."""
+    """Minimal per-channel latent stats (Lightricks key names for TT weight load)."""
 
     def __init__(self, latent_channels: int) -> None:
         super().__init__()
@@ -177,7 +177,7 @@ def _unpatchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 
 def _patchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 1) -> torch.Tensor:
     """Space-to-depth patchify (exact inverse of ``_unpatchify``): folds a
     ``(p_t, p_hw, p_hw)`` patch into channels with order ``(c, p_t, p_width, p_height)``.
-    Mirrors the ltx_core/TT encoder patchify so both references agree.
+    Mirrors the Lightricks/TT encoder patchify so both references agree.
     """
     batch_size, num_channels, num_frames, height, width = x.shape
     p = patch_size_hw
@@ -189,7 +189,7 @@ def _patchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 1)
 
 
 class _TorchLTXVideoDecoder(nn.Module):
-    """Block-list LTX decoder built from diffusers VAE primitives (matches TT/ltx_core layout)."""
+    """Block-list LTX decoder built from diffusers VAE primitives (matches TT/Lightricks layout)."""
 
     def __init__(
         self,
@@ -818,7 +818,7 @@ def test_ltx_video_decoder_2k(
 # Encoder parity (LTXVideoEncoder vs a diffusers-primitives reference encoder)
 # ---------------------------------------------------------------------------
 def _diffusers_encoder_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Remap diffusers LTX-2 encoder keys (incl. nested resnets) to the TT/ltx_core layout."""
+    """Remap diffusers LTX-2 encoder keys (incl. nested resnets) to the TT/Lightricks layout."""
     out: dict[str, torch.Tensor] = {}
     for key, value in state.items():
         if key.endswith("conv_shortcut.weight"):
@@ -831,7 +831,7 @@ def _diffusers_encoder_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, 
 
 
 class _TorchLTXVideoEncoder(nn.Module):
-    """Block-list LTX encoder built from diffusers VAE primitives (matches TT/ltx_core layout).
+    """Block-list LTX encoder built from diffusers VAE primitives (matches TT/Lightricks layout).
 
     Mirrors the reference ``VideoEncoder`` encode path: patchify -> conv_in -> down_blocks
     (``res_x`` mid blocks + ``compress_*_res`` space-to-depth downsamplers) -> PixelNorm + SiLU

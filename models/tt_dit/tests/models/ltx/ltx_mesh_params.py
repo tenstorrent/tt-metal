@@ -253,3 +253,100 @@ LTX_VAE_DECODER_MULTI_ONLY_MESH_PARAMS = [
 LTX_VAE_ENCODER_PROD_MESH_PARAMS = [
     _4x8h0w1nl2_line_vae,
 ]
+
+# ---------------------------------------------------------------------------
+# Audio mesh params — (mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
+#                       dynamic_load, device_params, topology, is_fsdp)
+# Audio tests create a submesh from mesh_device using mesh_shape, hence the
+# duplicate shape field.
+# ---------------------------------------------------------------------------
+_line_audio = {**_line, "l1_small_size": 32768}
+_ring_audio = {**_ring, "l1_small_size": 32768}
+_ring_trace_audio = {**_ring_audio, "trace_region_size": 300_000_000}
+
+LTX_AUDIO_MESH_PARAMS_FULL = [
+    pytest.param(
+        (2, 2),
+        (2, 2),
+        0,
+        1,
+        2,
+        False,
+        _line_audio,
+        ttnn.Topology.Linear,
+        True,
+        id="2x2sp0tp1nl2_line_is_fsdp1",
+    ),
+    pytest.param(
+        (2, 4),
+        (2, 4),
+        0,
+        1,
+        1,
+        True,
+        _line_audio,
+        ttnn.Topology.Linear,
+        True,
+        id="2x4sp0tp1nl1_line_is_fsdp1",
+    ),
+    pytest.param(
+        (2, 4),
+        (2, 4),
+        1,
+        0,
+        2,
+        True,
+        _line_audio,
+        ttnn.Topology.Linear,
+        False,
+        id="2x4sp1tp0nl2_line_is_fsdp0",
+    ),
+    pytest.param(
+        (4, 8),
+        (4, 8),
+        1,
+        0,
+        4,
+        False,
+        _ring_audio,
+        ttnn.Topology.Ring,
+        True,
+        id="4x8sp1tp0nl4_ring_is_fsdp1",
+    ),
+    pytest.param(
+        (4, 8),
+        (4, 8),
+        1,
+        0,
+        2,
+        False,
+        _line_audio,
+        ttnn.Topology.Linear,
+        False,
+        id="4x8sp1tp0nl2_line_is_fsdp0",
+    ),
+    pytest.param(
+        (4, 8),
+        (4, 8),
+        1,
+        0,
+        2,
+        False,
+        _ring_trace_audio,
+        ttnn.Topology.Ring,
+        False,
+        id="4x8sp1tp0nl2_ring_is_fsdp0",
+    ),
+    pytest.param(
+        (4, 32),
+        (4, 32),
+        1,
+        0,
+        2,
+        False,
+        _ring_audio,
+        ttnn.Topology.Ring,
+        False,
+        id="4x32sp1tp0nl2_ring_is_fsdp0",
+    ),
+]

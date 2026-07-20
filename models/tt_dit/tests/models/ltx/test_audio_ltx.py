@@ -38,54 +38,12 @@ from models.tt_dit.parallel.config import AudioTCParallelConfig, DiTParallelConf
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
 from models.tt_dit.utils.video import Audio
 
+from .ltx_mesh_params import LTX_AUDIO_MESH_PARAMS_FULL
+
 _WARM_ITERS = 3
-
-
-# ---------------------------------------------------------------------------
-# Mesh / device params (mirrors test_pipeline_ltx_distilled.py)
-# ---------------------------------------------------------------------------
-def _with_audio_dev_l1(base: dict) -> dict:
-    return {**base, "l1_small_size": 32768}
-
-
-_line_params = _with_audio_dev_l1(line_params_req_exact_devices)
-_ring_params = _with_audio_dev_l1(ring_params_req_exact_devices)
-_ring_trace_params = {**_ring_params, "trace_region_size": 300_000_000}
-
-_AUDIO_FAST_AV_MESH_PARAMS_FULL = [
-    pytest.param(
-        (2, 2), (2, 2), 0, 1, 2, False, _line_params, ttnn.Topology.Linear, True, id="2x2sp0tp1nl2_line_is_fsdp1"
-    ),
-    pytest.param(
-        (2, 4), (2, 4), 0, 1, 1, True, _line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1nl1_line_is_fsdp1"
-    ),
-    pytest.param(
-        (2, 4), (2, 4), 1, 0, 2, True, _line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0nl2_line_is_fsdp0"
-    ),
-    pytest.param(
-        (4, 8), (4, 8), 1, 0, 4, False, _ring_params, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1"
-    ),
-    pytest.param(
-        (4, 8), (4, 8), 1, 0, 2, False, _line_params, ttnn.Topology.Linear, False, id="4x8sp1tp0nl2_line_is_fsdp0"
-    ),
-    pytest.param(
-        (4, 8), (4, 8), 1, 0, 2, False, _ring_trace_params, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-    ),
-    pytest.param(
-        (4, 32), (4, 32), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False, id="4x32sp1tp0nl2_ring_is_fsdp0"
-    ),
-]
-
-
-def _audio_mesh_params():
-    full = os.environ.get("LTX_AUDIO_FULL_MATRIX", "0").lower() in ("1", "true", "yes")
-    return _AUDIO_FAST_AV_MESH_PARAMS_FULL if full else _AUDIO_FAST_AV_MESH_PARAMS_FULL[1:3]
-
-
-_AUDIO_FAST_AV_MESH_PARAMS = _audio_mesh_params()
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +142,7 @@ def _psnr(ref: torch.Tensor, test: torch.Tensor) -> float:
         "topology",
         "is_fsdp",
     ),
-    _AUDIO_FAST_AV_MESH_PARAMS,
+    LTX_AUDIO_MESH_PARAMS_FULL,
     indirect=["mesh_device", "device_params"],
 )
 def test_audio_decode_perf(
@@ -204,6 +162,7 @@ def test_audio_decode_perf(
     if ckpt is None:
         pytest.skip("checkpoint not found (set LTX_CHECKPOINT)")
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     _ = (dynamic_load, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -253,7 +212,7 @@ def test_audio_decode_perf(
         "topology",
         "is_fsdp",
     ),
-    _AUDIO_FAST_AV_MESH_PARAMS,
+    LTX_AUDIO_MESH_PARAMS_FULL,
     indirect=["mesh_device", "device_params"],
 )
 def test_audio_decode_e2e_psnr(
@@ -273,6 +232,7 @@ def test_audio_decode_e2e_psnr(
     if ckpt is None:
         pytest.skip("distilled checkpoint not found (set LTX_CHECKPOINT)")
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     _ = (dynamic_load, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -403,7 +363,7 @@ def _require_diffusers():
 
 
 def _diffusers_vocoder_state_to_tt(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Invert diffusers LTX-2.3 vocoder key names to the TT/ltx_core layout."""
+    """Invert diffusers LTX-2.3 vocoder key names to the TT/Lightricks layout."""
     out: dict[str, torch.Tensor] = {}
     for key, value in state_dict.items():
         new_key = (
@@ -451,7 +411,7 @@ def _decode_latent_ref(
     stats_std: torch.Tensor,
     stats_mean: torch.Tensor,
 ) -> torch.Tensor:
-    """Match ltx_core MelDecoder / TT denormalize + decoder forward."""
+    """Match the Lightricks MelDecoder / TT denormalize + decoder forward."""
     b, channels, _t, mel_bins = latent.shape
     patched = einops.rearrange(latent, "b c t f -> b t (c f)")
     std = stats_std.to(dtype=patched.dtype, device=patched.device)
@@ -583,7 +543,7 @@ def _build_torch_stage_c(seed: int = 42):
 def _build_torch_stage_c_real(checkpoint_name: str):
     """diffusers ``LTX2VocoderWithBWE`` with the *real* checkpoint weights — the torch oracle
     for the vocoder+BWE. The checkpoint uses the original BigVGAN key names; invert the
-    diffusers→ltx_core rename (see ``_diffusers_vocoder_state_to_tt``) to load them."""
+    diffusers→TT rename (see ``_diffusers_vocoder_state_to_tt``) to load them."""
     from safetensors import safe_open
 
     full = _build_torch_stage_c(seed=0)  # correct architecture; weights overwritten below
@@ -757,7 +717,7 @@ def _build_tt_stage_c(
         "topology",
         "is_fsdp",
     ),
-    _AUDIO_FAST_AV_MESH_PARAMS,
+    LTX_AUDIO_MESH_PARAMS_FULL,
     indirect=["mesh_device", "device_params"],
 )
 def test_stage_a_audio_decoder(
@@ -772,6 +732,7 @@ def test_stage_a_audio_decoder(
 ):
     AutoencoderKLLTX2Audio, _, _ = _require_diffusers()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     _ = (sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -824,7 +785,7 @@ def test_stage_a_audio_decoder(
         "topology",
         "is_fsdp",
     ),
-    _AUDIO_FAST_AV_MESH_PARAMS,
+    LTX_AUDIO_MESH_PARAMS_FULL,
     indirect=["mesh_device", "device_params"],
 )
 def test_stage_b_vocoder(
@@ -837,6 +798,7 @@ def test_stage_b_vocoder(
     topology: ttnn.Topology,
     is_fsdp: bool,
 ):
+    skip_if_unsupported_num_links(mesh_device, num_links)
     _ = (sp_axis, tp_axis, dynamic_load, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -875,7 +837,7 @@ def test_stage_b_vocoder(
         "topology",
         "is_fsdp",
     ),
-    _AUDIO_FAST_AV_MESH_PARAMS,
+    LTX_AUDIO_MESH_PARAMS_FULL,
     indirect=["mesh_device", "device_params"],
 )
 def test_stage_c_vocoder_with_bwe(
@@ -888,6 +850,7 @@ def test_stage_c_vocoder_with_bwe(
     topology: ttnn.Topology,
     is_fsdp: bool,
 ):
+    skip_if_unsupported_num_links(mesh_device, num_links)
     _ = (sp_axis, tp_axis, dynamic_load, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -967,7 +930,14 @@ def _window_error_rows(ref: torch.Tensor, tt: torch.Tensor, *, sr: int, win_s: f
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
+    [
+        {
+            "l1_small_size": 32768,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 300000000,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -1082,7 +1052,14 @@ def _flush_forward_after(module, mesh_device):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 300_000_000}],
+    [
+        {
+            "l1_small_size": 32768,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 300_000_000,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)

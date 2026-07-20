@@ -390,7 +390,7 @@ _AV_ATTN_HEAD_DIM = {
 
 
 def _convert_lightricks_av_to_diffusers(state: dict, *, num_heads: int) -> dict:
-    """Raw Lightricks/ltx_core AV state_dict → diffusers LTX2VideoTransformer3DModel (AV) names."""
+    """Raw Lightricks AV state_dict → diffusers LTX2VideoTransformer3DModel (AV) names."""
     rename_top = {
         "patchify_proj.": "proj_in.",
         "adaln_single.": "time_embed.",
@@ -458,7 +458,7 @@ def _make_diffusers_av_model(num_layers: int = 1):
         rope_double_precision=False,
         use_prompt_embeddings=False,
         rope_type="interleaved",
-        # =1 matches ltx_core's av_ca_timestep_scale_multiplier (a2v/v2a gate adaln sees raw sigma).
+        # =1 matches Lightricks' av_ca_timestep_scale_multiplier (a2v/v2a gate adaln sees raw sigma).
         cross_attn_timestep_scale_multiplier=1,
     )
 
