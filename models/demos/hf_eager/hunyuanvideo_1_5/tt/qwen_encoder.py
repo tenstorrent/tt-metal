@@ -9,6 +9,7 @@ returns exactly that layer via `hidden_layers_to_skip=2` (validated PCC ~0.995).
 """
 from __future__ import annotations
 
+import os
 import types
 
 import ttnn
@@ -128,6 +129,15 @@ class TTQwenTextEncoderAdapter:
             tt_ids, attention_mask=tt_mask, pos_embeds=(tt_cos, tt_sin), hidden_layers_to_skip=_HIDDEN_LAYERS_TO_SKIP
         )
         emb = ttnn.to_torch(ttnn.get_device_tensors(hs[-1])[0]).to(self.__dict__["_real"].dtype)
+        # Zero the PADDING-token embeds (WAN's strategy, models/tt_dit/pipelines/wan).
+        # The tt Qwen port reproduces the ~valid tokens well (PCC 0.9998) but its
+        # PADDING embeds are garbage (PCC ~0.66, rel-L2 ~0.94). The DiT's fused joint
+        # SDPA can't mask padding, and _trim_to_valid trims a mixed-length CFG batch
+        # to the LONGEST row -- so a shorter row's (e.g. uncond) garbage padding leaks
+        # into attention and, amplified by CFG, blurs the video. Zeroing padding makes
+        # those leaked tokens neutral instead of garbage. Off via HY_QWEN_ZERO_PAD=0.
+        if mask is not None and os.environ.get("HY_QWEN_ZERO_PAD", "1") == "1":
+            emb = emb * mask[..., : emb.shape[1]].unsqueeze(-1).to(emb.dtype)
         # _get_mllm_prompt_embeds reads only hidden_states[-3]; return a 3-list so [-3]==emb.
         return types.SimpleNamespace(hidden_states=[emb, emb, emb])
 
