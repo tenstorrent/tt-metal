@@ -11,7 +11,7 @@ Metal 2.0 port targets **Gen1** — and a Gen1 port may lean on constructs that 
 WH/BH yet unsupported on Quasar. This audit finds them, ahead of the **Quasar uplift** step.
 
 **When to run:** *after* an op is ported to Metal 2.0 (WH/BH), as the gate for uplifting it to
-Quasar. This is distinct from the pre-port feasibility audit ([`metal2.md`](metal2.md)), which
+Quasar. This is distinct from the pre-port feasibility audit ([`metal2_audit.md`](metal2_audit.md)), which
 decides whether the WH/BH Metal 2.0 port can proceed at all.
 
 **Why the split exists.** Under the CB→DFB Gen1-parity plan, a `DataflowBuffer` has full
