@@ -718,16 +718,20 @@ int main(int argc, char** argv) {
     // the drain. The hot-path callback is a bulk vector-append (a memcpy of the whole batch) -- no formatting,
     // no I/O -- so it never back-pressures the X280 (like the sink). Pre-reserved so no realloc mid-run. A
     // SINGLE consumer owns the buffer (no lock). The CSV formatting + file write happen post-run (see below).
-    std::vector<Batch> csv_batches;  // own the popped batch buffers by MOVE (O(1), zero-copy) -- no per-record work
+    // Append records into ONE pre-reserved contiguous buffer. Counterintuitively this beats moving whole
+    // batch buffers: the popped batch is FREED after the copy so the allocator recycles it for the flusher's
+    // next batch (bounded churn), whereas retaining batch buffers forces the flushers -- on the critical drain
+    // path -- to malloc fresh each time (more pressure -> more stalls). Reserved up front so no realloc mid-run.
+    std::vector<Rec> csv_recs;
     if (do_csv) {
-        csv_batches.reserve(8192);  // batch-slot pointers; plenty for a full-grid run (~hundreds of batches)
+        csv_recs.reserve((size_t)NL * ((size_t)nmarkers + 16) * 2);  // kernel markers + slack (FW/stall/2 words)
     }
     auto csv_consumer = [&]() {
         Batch b;
         uint64_t cnt = 0;
         while (mq.pop(b)) {
+            csv_recs.insert(csv_recs.end(), b.begin(), b.end());  // copy into the pre-reserved buffer; batch freed
             cnt += b.size();
-            csv_batches.push_back(std::move(b));  // steal the buffer; nothing copied on the hot path
         }
         consumed.fetch_add(cnt);
     };
@@ -997,26 +1001,24 @@ int main(int argc, char** argv) {
                 buf.reserve(1u << 20);
                 char line[96];
                 size_t total = 0;
-                for (const auto& batch : csv_batches) {
-                    for (const auto& r : batch) {
-                        int n = std::snprintf(
-                            line,
-                            sizeof(line),
-                            "%u,%u,%u,%u,0x%x,%llu,0x%x\n",
-                            r.lane,
-                            r.lane / (uint32_t)NRISC,
-                            r.lane % (uint32_t)NRISC,
-                            r.type,
-                            r.zone,
-                            (unsigned long long)r.ts,
-                            r.prog);
-                        buf.append(line, (size_t)n);
-                        if (buf.size() >= (1u << 20)) {
-                            std::fwrite(buf.data(), 1, buf.size(), f);
-                            buf.clear();
-                        }
-                        total++;
+                for (const auto& r : csv_recs) {
+                    int n = std::snprintf(
+                        line,
+                        sizeof(line),
+                        "%u,%u,%u,%u,0x%x,%llu,0x%x\n",
+                        r.lane,
+                        r.lane / (uint32_t)NRISC,
+                        r.lane % (uint32_t)NRISC,
+                        r.type,
+                        r.zone,
+                        (unsigned long long)r.ts,
+                        r.prog);
+                    buf.append(line, (size_t)n);
+                    if (buf.size() >= (1u << 20)) {
+                        std::fwrite(buf.data(), 1, buf.size(), f);
+                        buf.clear();
                     }
+                    total++;
                 }
                 if (!buf.empty()) {
                     std::fwrite(buf.data(), 1, buf.size(), f);
