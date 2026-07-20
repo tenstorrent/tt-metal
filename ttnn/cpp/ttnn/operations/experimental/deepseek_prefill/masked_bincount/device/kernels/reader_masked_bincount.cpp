@@ -201,7 +201,7 @@ void kernel_main() {
             // before its write-request lands, and gather_sem.up() is an MMIO/NoC store that can race ahead
             // of the L1 stores (WormholeB0/.../MemoryOrdering.md; NoC/Ordering.md: an MMIO write can race
             // ahead of an L1 write). load_blocking the last accumulated word (blocking load + memory
-            // clobber) to drain the tree-add stores first. See issue #50154 (finding #16).
+            // clobber) to drain the tree-add stores first.
             (void)ckernel::load_blocking(local_hist + (n_routed_experts - 1));
             // Bump parent's gather_sem (a real semaphore id resolved on each core).
             gather_sem.up(noc, parent_noc_x, parent_noc_y, 1);
