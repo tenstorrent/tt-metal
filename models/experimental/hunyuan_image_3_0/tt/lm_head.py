@@ -15,7 +15,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-from .matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
+from .matmul_utils import TILE_SIZE, small_m_split_n_linear, to_interleaved_if_sharded
 
 
 class HunyuanTtLMHead(LightweightModule):
@@ -24,6 +24,16 @@ class HunyuanTtLMHead(LightweightModule):
     Mirrors the Linear-weight convention used across this port (e.g.
     `HunyuanTtLightProjector`): the checkpoint stores `lm_head.weight` as [V, H]
     (out, in); `ttnn.linear` wants [in, out], so we transpose at load.
+
+    Tensor-parallel vocab: on a multi-device mesh the huge [H, V] weight (~545 MB
+    BFP8 at V=133120) was previously *replicated*, so every device redundantly
+    streamed the whole matrix and computed identical logits — the D2H read then
+    concatenated the replicas and discarded all but one. Instead we shard V across
+    the mesh (each device holds [H, V/num_devices]) and concat the vocab slices on
+    the host read (see ``vocab_parallel``). The hidden input is already fully
+    replicated after the backbone's SP exit-gather, so this needs no on-device
+    collective — it is embarrassingly parallel and cuts the per-device DRAM read
+    (the op's bottleneck — it runs at ~60% DRAM BW) by ``num_devices``x.
     """
 
     def __init__(self, device, state_dict: dict, *, key: str = "lm_head.weight", weight_dtype=ttnn.bfloat8_b):
@@ -31,12 +41,26 @@ class HunyuanTtLMHead(LightweightModule):
         self.device = device
         w = state_dict[key].transpose(0, 1).contiguous()  # [H, V]
         self.vocab_size = w.shape[1]
+
+        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+        # Shard the vocab (dim 1 of [H, V]) across the mesh when it divides evenly
+        # into tile-aligned per-device slices; otherwise fall back to replication.
+        self.vocab_parallel = (
+            num_devices > 1 and self.vocab_size % num_devices == 0 and (self.vocab_size // num_devices) % TILE_SIZE == 0
+        )
+        if self.vocab_parallel:
+            mesh_mapper = ttnn.ShardTensorToMesh(device, dim=1)
+        elif num_devices > 1:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        else:
+            mesh_mapper = None
         self.weight = ttnn.from_torch(
             w,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -64,10 +88,13 @@ class HunyuanTtLMHead(LightweightModule):
             B, S, H = hidden.shape
             x = ttnn.slice(hidden, [0, S - 1, 0], [B, S, H])
             sliced = True
-        # Vocab projection (huge N=133120). l1_sharded_linear's small-M width-sharded
-        # (split-N) path is the measured-optimal decode schedule (Mt<=2, 2.4-4.9x vs
-        # auto — see tests/perf/test_lmhead_sweep.py); wider M falls back internally.
-        logits = l1_sharded_linear(
+        # Vocab projection (huge N, per device = V/num_devices when vocab-parallel).
+        # small_m_split_n_linear pads M→32 and splits N across the widest core grid
+        # (decode_mm, ~104 cores on BH) so the weight streams from more DRAM readers
+        # in parallel — this op is DRAM-bandwidth-bound (see tests/perf/
+        # test_lmhead_sweep.py). At last_token_only the M is a single tile (Mt=1), the
+        # only shape decode_mm tolerates at this N without a CB/kernel-arg overflow.
+        logits = small_m_split_n_linear(
             x,
             self.weight,
             dtype=ttnn.bfloat16,
