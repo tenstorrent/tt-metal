@@ -102,8 +102,23 @@ void invalidate_trisc_instruction_cache() {
 
 void deassert_trisc() {
     // Temporary workaround due to race vs. host deasserting TRISC reset.
+    // Workaround includes both the assert_trisc_reset() and the DPRINT workaround.
     // https://github.com/tenstorrent/tt-metal/issues/48064
     assert_trisc_reset();
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+    // Host may have released TRISCs early; a TRISC can hold the shared compute DPRINT lock
+    // (or leave wpos/rpos mid-print) when we assert reset. Clear that state while TRISCs are
+    // held so the next boot cannot hang in acquire_lock / wait_for_space before writing DONE.
+    {
+        auto* trisc_print = GET_MAILBOX_ADDRESS_DEV(dprint_buf.buffer_triscs);
+        trisc_print->aux.lock = 0;
+        uint32_t wpos = trisc_print->aux.wpos;
+        if (wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC && wpos != DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+            trisc_print->aux.wpos = 0;
+            trisc_print->aux.rpos = 0;
+        }
+    }
+#endif
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
