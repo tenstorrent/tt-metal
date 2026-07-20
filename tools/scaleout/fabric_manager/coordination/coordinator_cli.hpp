@@ -15,6 +15,9 @@
 //                            controller, then run the normal fabric bring-up.
 //   * selftest             - spin N in-process agents through the coordinator to verify
 //                            the rendezvous logic locally (no hardware, CI-friendly).
+//   * discover-psd         - no-MPI multi-process bring-up check: run physical-system
+//                            discovery over the controller (TCP) against a per-agent mock
+//                            cluster descriptor and assert the merged global PSD converges.
 //
 // This whole unit is compiled only when FABRIC_MANAGER_WITH_SERVICE_COORDINATOR is
 // defined (CMake option), giving compile-time backend selection with runtime (--role)
@@ -32,6 +35,7 @@ enum class Role : uint8_t {
     Controller,
     Agent,
     SelfTest,
+    DiscoverPsd,
 };
 
 // Parses --role (default Standalone). Errors on an unknown value.
@@ -47,5 +51,9 @@ int run_selftest(const std::vector<std::string>& args);
 // tt_metal coordinator factory, so it is injected when the control plane is constructed.
 // Call BEFORE triggering fabric bring-up.
 void register_agent_coordinator(const std::vector<std::string>& args);
+
+// Runs the no-MPI multi-process global-PSD bring-up check for one agent. Returns process exit
+// code (0 == the merged global PSD converged to the expected host count).
+int run_discovery_psd(const std::vector<std::string>& args);
 
 }  // namespace tt::scaleout_tools::fabric_manager

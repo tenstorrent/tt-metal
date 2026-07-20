@@ -4,10 +4,12 @@
 
 #include "tools/scaleout/fabric_manager/coordination/coordinator_cli.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -15,7 +17,11 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/system_coordinator.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <umd/device/cluster_descriptor.hpp>
 
+#include "tt_metal/fabric/physical_system_discovery.hpp"
+#include "tt_metal/llrt/tt_target_device.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/fabric_manager/coordination/controller.hpp"
 #include "tools/scaleout/fabric_manager/coordination/in_process_transport.hpp"
@@ -67,6 +73,32 @@ std::pair<std::string, uint16_t> parse_endpoint(const std::string& endpoint) {
     return {host, port};
 }
 
+// Builds an agent's no-MPI ServiceCoordinator from the shared agent CLI args:
+//   --world-index I --world-size N --controller HOST:PORT [--mesh-membership meshid:index/count,...]
+// If --mesh-membership is omitted, a default single-mesh (mesh 0) membership mirroring the world
+// identity is synthesized so mesh-scoped collectives work out of the box for the common case.
+// Connects to the controller (which must already be listening) before returning.
+std::shared_ptr<ServiceCoordinator> build_agent_coordinator(const std::vector<std::string>& args) {
+    AgentIdentity identity;
+    identity.world_index = require_int_option(args, "--world-index");
+    identity.world_size = require_int_option(args, "--world-size");
+    if (test_args::has_command_option(args, "--mesh-membership")) {
+        parse_mesh_membership(test_args::get_command_option(args, "--mesh-membership"), identity);
+    } else {
+        identity.mesh_membership[0] = MeshMembership{identity.world_index, identity.world_size};
+    }
+
+    TT_FATAL(test_args::has_command_option(args, "--controller"), "agent role requires --controller <host:port>");
+    auto [host, port] = parse_endpoint(test_args::get_command_option(args, "--controller"));
+
+    auto transport = std::make_shared<TcpTransport>(host, port);
+    auto coordinator = std::make_shared<ServiceCoordinator>(std::move(identity), std::move(transport));
+    std::cout << "[fabric-manager agent] connected to controller " << host << ":" << port
+              << " (world_index=" << coordinator->local_index(Scope::world())
+              << ", world_size=" << coordinator->participant_count(Scope::world()) << ")" << std::endl;
+    return coordinator;
+}
+
 }  // namespace
 
 Role parse_role(const std::vector<std::string>& args) {
@@ -86,7 +118,11 @@ Role parse_role(const std::vector<std::string>& args) {
     if (role == "selftest") {
         return Role::SelfTest;
     }
-    TT_FATAL(false, "Unknown --role '{}'. Expected one of: standalone, controller, agent, selftest", role);
+    if (role == "discover-psd") {
+        return Role::DiscoverPsd;
+    }
+    TT_FATAL(
+        false, "Unknown --role '{}'. Expected one of: standalone, controller, agent, selftest, discover-psd", role);
     return Role::Standalone;
 }
 
@@ -202,16 +238,6 @@ int run_selftest(const std::vector<std::string>& args) {
 }
 
 void register_agent_coordinator(const std::vector<std::string>& args) {
-    AgentIdentity identity;
-    identity.world_index = require_int_option(args, "--world-index");
-    identity.world_size = require_int_option(args, "--world-size");
-    if (test_args::has_command_option(args, "--mesh-membership")) {
-        parse_mesh_membership(test_args::get_command_option(args, "--mesh-membership"), identity);
-    }
-
-    TT_FATAL(test_args::has_command_option(args, "--controller"), "--role agent requires --controller <host:port>");
-    auto [host, port] = parse_endpoint(test_args::get_command_option(args, "--controller"));
-
     // Optionally propagate this agent's mesh binding to the control plane, which reads it from env.
     if (test_args::has_command_option(args, "--mesh-id")) {
         setenv("TT_MESH_ID", test_args::get_command_option(args, "--mesh-id").c_str(), 1);
@@ -222,14 +248,66 @@ void register_agent_coordinator(const std::vector<std::string>& args) {
 
     // Connect now (controller must already be up) and cache the coordinator; the factory
     // hands the same instance to the control plane when it is constructed.
-    auto transport = std::make_shared<TcpTransport>(host, port);
-    auto coordinator = std::make_shared<ServiceCoordinator>(std::move(identity), std::move(transport));
-    std::cout << "[fabric-manager agent] connected to controller " << host << ":" << port
-              << " (world_index=" << coordinator->local_index(Scope::world())
-              << ", world_size=" << coordinator->participant_count(Scope::world()) << ")" << std::endl;
-
+    auto coordinator = build_agent_coordinator(args);
     tt::tt_fabric::coordination::set_system_coordinator_factory(
         [coordinator]() -> std::shared_ptr<tt::tt_fabric::coordination::SystemCoordinator> { return coordinator; });
+}
+
+int run_discovery_psd(const std::vector<std::string>& args) {
+    // Multi-process, no-MPI bring-up check for the coordinator-routed global-PSD path: each agent
+    // loads its own mock cluster descriptor, then runs physical_system_discovery with the
+    // ServiceCoordinator so the gather -> merge -> scatter goes through the controller (over TCP)
+    // instead of MPI. Every agent must end up with the same merged global PSD (all N hosts).
+    TT_FATAL(
+        test_args::has_command_option(args, "--mock-cluster-desc"),
+        "discover-psd role requires --mock-cluster-desc <path to a mock cluster descriptor yaml>");
+    const std::string mock_desc_path = test_args::get_command_option(args, "--mock-cluster-desc");
+    setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH", mock_desc_path.c_str(), 1);
+
+    auto coordinator = build_agent_coordinator(args);
+    const int world_index = coordinator->local_index(Scope::world());
+    const int world_size = coordinator->participant_count(Scope::world());
+
+    auto cluster_desc = tt::umd::ClusterDescriptor::create_from_yaml(mock_desc_path);
+    TT_FATAL(cluster_desc != nullptr, "Failed to load mock cluster descriptor from '{}'", mock_desc_path);
+
+    // distributed_context is unused on the coordinator path (see run_physical_system_discovery);
+    // pass an empty handle to prove no DistributedContext/MPI is required for a no-MPI agent.
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> no_context;
+    auto psd = tt::tt_metal::run_physical_system_discovery(
+        *cluster_desc,
+        no_context,
+        tt::TargetDevice::Mock,
+        /*run_global_discovery=*/true,
+        /*run_live_discovery=*/false,
+        coordinator);
+
+    auto hostnames = psd.get_all_hostnames();
+    std::sort(hostnames.begin(), hostnames.end());
+    const auto& host_to_rank = psd.get_host_to_rank_map();
+
+    // Emit a canonical, machine-checkable fingerprint so the driver can assert every agent
+    // converged on the identical global view.
+    std::ostringstream fp;
+    fp << "hosts=" << hostnames.size() << " [";
+    for (std::size_t i = 0; i < hostnames.size(); ++i) {
+        if (i != 0) {
+            fp << ",";
+        }
+        auto it = host_to_rank.find(hostnames[i]);
+        fp << hostnames[i] << ":" << (it != host_to_rank.end() ? it->second : -1);
+    }
+    fp << "]";
+
+    const bool ok = static_cast<int>(hostnames.size()) == world_size;
+    std::cout << "[fabric-manager discover-psd] agent " << world_index << "/" << world_size << " "
+              << (ok ? "PSD_OK" : "PSD_FAIL") << " " << fp.str() << std::endl;
+    if (!ok) {
+        std::cerr << "[fabric-manager discover-psd] agent " << world_index << " expected " << world_size
+                  << " hosts in merged PSD but saw " << hostnames.size() << std::endl;
+        return 1;
+    }
+    return 0;
 }
 
 }  // namespace tt::scaleout_tools::fabric_manager
