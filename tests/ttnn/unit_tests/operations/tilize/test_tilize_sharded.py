@@ -21,7 +21,6 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from ttnn.operations.tilize import tilize
 
 
@@ -170,35 +169,31 @@ def test_tilize_multishard_same_spec_nd(device, shape, shard_shape, grid_end):
 
 
 # ---------------------------------------------------------------------------
-# Clean-refusal contract for the cases STILL deferred (Refinement 2c).
-# These MUST refuse (not hang, not produce wrong output).
+# Refinement 2c: cases the 2b contract used to refuse now work via the general
+# cross-core TensorAccessor path (single-core sharded, WIDTH crossover).
 # ---------------------------------------------------------------------------
-def test_sharded_single_core_excluded(device, expect_error):
-    """Sharding is inherently multi-core -> single-core+sharded is an ExcludedCell."""
-    mc = _legacy_mc(_HEIGHT, _crs(((0, 0), (3, 0))), (128, 64), _ROW)
+def test_single_core_crossover_identity(device):
+    """Single-core interleaved->sharded crossover: the general path reads all
+    rows and scatters tiles to the shard banks from one compute core."""
+    x = torch.rand([1, 1, 512, 64], dtype=torch.bfloat16)
+    out_mc = _legacy_mc(_HEIGHT, _crs(((0, 0), (3, 0))), (128, 64), _ROW)
     t = ttnn.from_torch(
-        torch.randn([1, 1, 512, 64]).bfloat16(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=mc,
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    with expect_error(ExcludedCell, "."):
-        tilize(t, memory_config=mc, use_multicore=False)
+    res = ttnn.to_torch(tilize(t, memory_config=out_mc, use_multicore=False))
+    assert torch.equal(x, res)
 
 
-def test_width_crossover_refused(device, expect_error):
-    """WIDTH crossover needs column-chunked reads (Refinement 2c)."""
+def test_width_crossover_identity(device):
+    """WIDTH crossover (column-chunked, non-contiguous tile<->page mapping) now
+    works via the general path — the accessor resolves each tile's shard bank."""
+    x = torch.rand([1, 1, 64, 512], dtype=torch.bfloat16)
     out_mc = _legacy_mc(_WIDTH, _crs(((0, 0), (3, 0))), (64, 128), _ROW)
     t = ttnn.from_torch(
-        torch.randn([1, 1, 64, 512]).bfloat16(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    with expect_error(UnsupportedAxisValue, "."):
-        tilize(t, memory_config=out_mc)
+    res = ttnn.to_torch(tilize(t, memory_config=out_mc))
+    assert torch.equal(x, res)
 
 
 def test_padded_multishard_same_spec_identity(device):

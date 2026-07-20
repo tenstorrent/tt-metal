@@ -118,6 +118,22 @@ def _num_shards(tensor_shape, mem_config):
     return n
 
 
+def _pd_same_shard_spec(in_mc, out_mc):
+    """True iff input and output describe the same PHYSICAL shard placement
+    (buffer_type, folded shard shape, orientation, grid) — invariant to the
+    nd<->legacy normalization ttnn applies. Mirrors tilize._same_shard_spec."""
+
+    def props(mc):
+        if mc.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
+            spec = mc.nd_shard_spec
+        else:
+            spec = mc.shard_spec
+        sh, sw, grid = _shard_dims(mc)
+        return (mc.buffer_type, (sh, sw), spec.orientation, grid)
+
+    return props(in_mc) == props(out_mc)
+
+
 def _physical_num_blocks(tensor_shape, mem_config, shard_h):
     """Tile-rows in the PHYSICAL per-core bank (uniform across cores).
 
@@ -382,21 +398,144 @@ def _create_crossover_from_sharded(
     )
 
 
+# ---------------------------------------------------------------------------
+# General cross-core sharded / crossover path (native default-factory model)
+# ---------------------------------------------------------------------------
+# Handles every sharded case that is NOT same-spec zero-copy: interleaved<->nd/
+# WIDTH/BLOCK crossover, cross-spec resharding (nd->nd different spec), and
+# nd->legacy. There is NO cross-core semaphore/multicast — work is split across
+# the compute grid by OUTPUT tile-rows, and each compute core (a) reads the
+# full-width RM sticks for its tile-rows from the input via TensorAccessor
+# (resolving to DRAM or remote L1 shard banks), (b) tilizes, (c) writes its Wt
+# output tiles per tile-row via TensorAccessor to the output (DRAM or remote L1
+# shard banks). The accessors' logical page ordering (input: row*npr+chunk;
+# output: tile-row-major page = tr*Wt + tc) is what makes any-to-any placement
+# work with zero DRAM staging. Reuses tilize_compute.cpp + tilize_writer.cpp.
+def _create_general_program_descriptor(
+    input_tensor: ttnn.Tensor,
+    output_tensor: ttnn.Tensor,
+    use_multicore: bool,
+) -> ttnn.ProgramDescriptor:
+    device = input_tensor.device()
+    in_dtype = input_tensor.dtype
+    out_dtype = output_tensor.dtype
+    elem_size = input_tensor.element_size()
+    in_tile_size = ttnn.tile_size(in_dtype)
+    out_tile_size = ttnn.tile_size(out_dtype)
+
+    shape = list(input_tensor.shape)
+    w = shape[-1]
+    folded_h = 1
+    for d in shape[:-1]:
+        folded_h *= d
+    wt = w // TILE_W
+    nt_h = folded_h // TILE_H
+    row_bytes = w * elem_size
+
+    # Input read geometry: interleaved => one full-width page per row; sharded =>
+    # ceil(W / shard_width) width-chunk pages per row (last chunk padded).
+    in_mc = input_tensor.memory_config()
+    if in_mc.is_sharded():
+        _, in_shard_w, _ = _shard_dims(in_mc)
+        npr = -(-w // in_shard_w)  # ceil
+        chunk_bytes = in_shard_w * elem_size
+    else:
+        npr = 1
+        chunk_bytes = row_bytes
+
+    # Work split across the compute grid by output tile-rows (independent work —
+    # each core reads its own input rows and writes its own output tiles).
+    if use_multicore:
+        grid = device.compute_with_storage_grid_size()
+        num_cores = min(nt_h, grid.x * grid.y)
+    else:
+        grid = ttnn.CoreCoord(1, 1)
+        num_cores = 1
+    cores = _row_wise_cores(grid, num_cores)
+    assignment = _assign_tile_rows(nt_h, num_cores)
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+    # Streaming CBs, double-buffered, bounded by Wt (small for the sharded golden
+    # shapes; wide-W HEIGHT crossover chunking is a perf follow-up, Refinement 2d).
+    cb_rm_in_desc = ttnn.CBDescriptor(
+        total_size=2 * wt * in_tile_size,
+        core_ranges=core_ranges,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=CB_RM_IN, data_format=in_dtype, page_size=in_tile_size)
+        ],
+    )
+    cb_tiled_out_desc = ttnn.CBDescriptor(
+        total_size=2 * wt * out_tile_size,
+        core_ranges=core_ranges,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=CB_TILED_OUT, data_format=out_dtype, page_size=out_tile_size)
+        ],
+    )
+
+    in_addr = input_tensor.buffer_address()
+    out_addr = output_tensor.buffer_address()
+
+    reader_ct_args = [wt, row_bytes, chunk_bytes, npr]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    writer_ct_args = [out_tile_size, wt, wt, 1]  # Wt, Wt_chunk=Wt, num_chunks=1
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    is_fp32_in, compute_config = _fp32_compute_config(in_dtype, out_dtype)
+    compute_ct_args = [wt, 1, is_fp32_in]
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    compute_rt_args = ttnn.RuntimeArgs()
+    for core, (start_tile_row, count) in zip(cores, assignment):
+        reader_rt_args[core.x][core.y] = [in_addr, start_tile_row * TILE_H, count * TILE_H]
+        writer_rt_args[core.x][core.y] = [out_addr, start_tile_row, count]
+        compute_rt_args[core.x][core.y] = [count]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "tilize_reader_general.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct_args,
+        runtime_args=compute_rt_args,
+        config=compute_config,
+    )
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    return ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=[],
+        cbs=[cb_rm_in_desc, cb_tiled_out_desc],
+    )
+
+
 def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     use_multicore: bool,
 ) -> ttnn.ProgramDescriptor:
-    in_sharded = input_tensor.memory_config().is_sharded()
-    out_sharded = output_tensor.memory_config().is_sharded()
-    # Same-spec sharded I/O -> zero-copy compute-only path (now multi-shard).
-    if in_sharded and out_sharded:
+    in_mc = input_tensor.memory_config()
+    out_mc = output_tensor.memory_config()
+    in_sharded = in_mc.is_sharded()
+    out_sharded = out_mc.is_sharded()
+    # Same-spec sharded I/O + multicore -> zero-copy compute-only path (fastest:
+    # both CBs aliased onto resident L1 shards, no NoC).
+    if in_sharded and out_sharded and use_multicore and _pd_same_shard_spec(in_mc, out_mc):
         return _create_sharded_program_descriptor(input_tensor, output_tensor)
-    # Interleaved <-> sharded crossover (split reader / split writer).
-    if out_sharded and not in_sharded:
-        return _create_crossover_to_sharded(input_tensor, output_tensor)
-    if in_sharded and not out_sharded:
-        return _create_crossover_from_sharded(input_tensor, output_tensor)
+    # Any other sharded case (crossover either direction, cross-spec both-sharded,
+    # nd->legacy, single-core sharded) -> general cross-core path via TensorAccessor.
+    if in_sharded or out_sharded:
+        return _create_general_program_descriptor(input_tensor, output_tensor, use_multicore)
 
     device = input_tensor.device()
 

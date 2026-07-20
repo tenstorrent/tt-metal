@@ -120,16 +120,16 @@ _INT_DTYPES = (ttnn.uint32, ttnn.uint16, ttnn.int32)
 _FLOAT_IN_DTYPES = (ttnn.bfloat16, ttnn.float32)  # bf8b is not an RM input
 _FLOAT_OUT_DTYPES = (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b)
 
-EXCLUSIONS = (
-    [{"dtype": i, "output_dtype": f} for i in _INT_DTYPES for f in _FLOAT_OUT_DTYPES]
-    + [{"dtype": f, "output_dtype": i} for f in _FLOAT_IN_DTYPES for i in _INT_DTYPES]
-    # Sharding is inherently multi-core: each core owns and tilizes its own shard.
-    # Single-core + sharded is structurally impossible for this op.
-    + [
-        {"use_multicore": False, "shard_api": "legacy_2d"},
-        {"use_multicore": False, "shard_api": "nd"},
-    ]
-)
+EXCLUSIONS = [{"dtype": i, "output_dtype": f} for i in _INT_DTYPES for f in _FLOAT_OUT_DTYPES] + [
+    {"dtype": f, "output_dtype": i} for f in _FLOAT_IN_DTYPES for i in _INT_DTYPES
+]
+# NOTE (Refinement 2c): the former single-core+sharded EXCLUSIONS were dropped.
+# Same-spec zero-copy still requires multicore (it runs one kernel per shard
+# core), but the general cross-core path (crossover / cross-spec) reads and
+# writes shards via TensorAccessor and runs correctly on a single compute core —
+# test_tilize_nd_sharded exercises interleaved->nd with use_multicore=False. No
+# registry INPUTS cell is single-core sharded, so this does not widen the
+# responsible set or risk XPASS drift.
 
 
 PROPERTIES = {
@@ -275,56 +275,46 @@ def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
 
-    # 3. Sharded sub-case gating (Refinement 2 / 2b).
+    # 3. Sharded sub-case gating (Refinement 2 / 2b / 2c).
     if in_mc.is_sharded() and out_mc.is_sharded():
-        # --- both sharded: same-spec zero-copy (now multi-shard-capable) ---
         if in_mc.buffer_type != ttnn.BufferType.L1 or out_mc.buffer_type != ttnn.BufferType.L1:
             raise UnsupportedAxisValue("tilize: sharded path requires L1 buffers")
-        if not _same_shard_spec(in_mc, out_mc):
-            raise UnsupportedAxisValue(
-                "tilize: sharded path requires identical input/output shard spec "
-                "(cross-spec resharding is Refinement 2c)"
-            )
-        shard_h, shard_w = _folded_shard_shape(in_mc)
-        if shard_h % TILE != 0 or shard_w % TILE != 0:
-            raise UnsupportedAxisValue(f"tilize: sharded shard dims must be tile-aligned, got ({shard_h}, {shard_w})")
-        # Same-spec zero-copy handles multi-shard-per-core AND cliff/padded banks
-        # (Refinement 2c): each core tilizes its whole PHYSICAL bank — every shard
-        # slot it owns, ceil(n_shards/n_cores) slots uniform, padded cliff slots
-        # included — straight into the same-spec output bank. Identity holds
-        # because in/out share the slot layout, so a padded slot round-trips to
-        # the same padded slot and to_torch strips it on readback. No even-split
-        # or no-padding constraint needed here.
+        if _same_shard_spec(in_mc, out_mc):
+            # --- same-spec zero-copy (multi-shard + cliff/padded capable) ---
+            # Each core tilizes its whole PHYSICAL bank (ceil(n_shards/n_cores)
+            # slots, padded cliff slots included) straight into the same-spec
+            # output bank; identity holds because in/out share the slot layout.
+            shard_h, shard_w = _folded_shard_shape(in_mc)
+            if shard_h % TILE != 0 or shard_w % TILE != 0:
+                raise UnsupportedAxisValue(
+                    f"tilize: sharded shard dims must be tile-aligned, got ({shard_h}, {shard_w})"
+                )
+        else:
+            # --- cross-spec resharding (Refinement 2c general cross-core path) ---
+            # Input shard on one core, output shard on another; each compute core
+            # reads its output tile-rows' RM sticks and writes its output tiles
+            # via TensorAccessor (resolves to remote L1 banks). Requires a
+            # tile-aligned output shard so each tile maps to one bank slot.
+            osh, osw = _folded_shard_shape(out_mc)
+            if osh % TILE != 0 or osw % TILE != 0:
+                raise UnsupportedAxisValue(
+                    f"tilize: cross-spec output shard dims must be tile-aligned, got ({osh}, {osw})"
+                )
     elif in_mc.is_sharded() or out_mc.is_sharded():
-        # --- interleaved <-> sharded crossover (Refinement 2b) ---
-        # Supported: legacy HEIGHT_SHARDED, ROW_MAJOR, L1, tile-aligned,
-        # one-shard-per-core. In that case each shard maps to a CONTIGUOUS global
-        # tile-row range, so the split reader/writer reuse the interleaved kernels
-        # with a per-core row/tile offset. WIDTH/BLOCK (column-chunked mapping),
-        # nd, and multi-shard crossover are deferred to Refinement 2c.
+        # --- interleaved <-> sharded crossover (Refinement 2c general path) ---
+        # Any scheme (HEIGHT/WIDTH/BLOCK/nd), either direction, single- or
+        # multi-core: the compute grid reads full-width RM sticks from the input
+        # and writes tiles to the output via TensorAccessor. The sharded side
+        # must be L1; a sharded output must be tile-aligned per folded shard.
         sharded_mc = in_mc if in_mc.is_sharded() else out_mc
-        if _shard_api_of(in_mc, out_mc) == "nd":
-            raise UnsupportedAxisValue("tilize: nd interleaved<->sharded crossover is Refinement 2c")
-        if sharded_mc.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            raise UnsupportedAxisValue(
-                "tilize: only HEIGHT_SHARDED interleaved<->sharded crossover is supported "
-                "(WIDTH/BLOCK crossover is Refinement 2c)"
-            )
         if sharded_mc.buffer_type != ttnn.BufferType.L1:
             raise UnsupportedAxisValue("tilize: sharded side of a crossover must be L1")
-        spec = _shard_spec_of(sharded_mc)
-        if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
-            raise UnsupportedAxisValue("tilize: crossover requires ROW_MAJOR shard orientation (Refinement 2c)")
-        shard_h, shard_w = _folded_shard_shape(sharded_mc)
-        if shard_h % TILE != 0 or shard_w % TILE != 0:
-            raise UnsupportedAxisValue(f"tilize: crossover shard dims must be tile-aligned, got ({shard_h}, {shard_w})")
-        n_shards = _num_shards(shape, sharded_mc)
-        n_cores = spec.grid.num_cores()
-        if n_shards != n_cores or _has_padding(shape, sharded_mc):
-            raise UnsupportedAxisValue(
-                f"tilize: crossover requires one full shard per core "
-                f"(got {n_shards} shards over {n_cores} cores; multi-shard crossover is Refinement 2c)"
-            )
+        if out_mc.is_sharded():
+            osh, osw = _folded_shard_shape(out_mc)
+            if osh % TILE != 0 or osw % TILE != 0:
+                raise UnsupportedAxisValue(
+                    f"tilize: crossover output shard dims must be tile-aligned, got ({osh}, {osw})"
+                )
 
 
 # ---------------------------------------------------------------------------
