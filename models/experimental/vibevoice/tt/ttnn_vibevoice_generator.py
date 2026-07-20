@@ -397,6 +397,14 @@ class TTVibeVoiceGenerator:
         # clean (it exonerates the graph ops), but slower (no replay).  Used to isolate the bug above.
         self._sf_nocapture = os.environ.get("VV_TRACE_NOCAPTURE", "0") == "1"
         self._sf_nocap_started = False
+        # Long-form energy stabilizer (VV_AUDIO_LIMIT=<R>, default 0=off): the bf16 AR feedback lets the
+        # positive diffusion condition drift while the negative stays anchored; CFG amplifies the growing
+        # divergence, so the acoustic-decode gain (== audio loudness) runs away into over-drive/clipping
+        # once the (prefill-sized) stability window is exceeded.  When set, each EMITTED audio frame is
+        # soft-limited to RMS <= R and peak <= VV_AUDIO_PEAK (see _emit_limit); the token/latent
+        # trajectory is untouched, so content is preserved and only the audible energy is bounded.
+        self._audio_limit_T = float(os.environ.get("VV_AUDIO_LIMIT", "0"))  # per-frame RMS ceiling
+        self._AUDIO_PEAK = float(os.environ.get("VV_AUDIO_PEAK", "0.95"))  # per-frame peak ceiling (anti-clip)
 
     _SF_WARMUP = 2
 
@@ -1016,6 +1024,24 @@ class TTVibeVoiceGenerator:
         fused = ttnn.add(acoustic_embed, semantic_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return fused, audio_chunk
 
+    def _emit_limit(self, audio_1d: torch.Tensor) -> torch.Tensor:
+        """Long-form energy stabilizer (VV_AUDIO_LIMIT=<R>, default 0=off): soft-limit ONE emitted
+        audio frame so RMS <= R (healthy loudness) AND peak <= VV_AUDIO_PEAK (no clipping), via a
+        single per-frame gain = min(1, R/rms, P/peak).  Applied to the EMITTED audio ONLY — the
+        semantic-encode feedback runs on the un-limited frame, so the token/latent trajectory is
+        byte-identical to the un-limited render (content preserved); only the audio the listener hears
+        is bounded.  (Limiting the feedback instead starves the LM and collapses the content early.)
+        Frames already inside the band get gain 1 and pass through untouched, so natural loud/quiet
+        dynamics are preserved; only the bf16-drift over-drive/clipping is pulled back."""
+        rms = float(audio_1d.pow(2).mean().sqrt())
+        peak = float(audio_1d.abs().max())
+        gain = min(
+            1.0,
+            self._audio_limit_T / rms if rms > 1e-9 else 1.0,
+            self._AUDIO_PEAK / peak if peak > 1e-9 else 1.0,
+        )
+        return audio_1d * gain if gain < 1.0 else audio_1d
+
     def _reset_neg_cache(self, kv_cache_neg: KVCache):
         """Negative prefill: single speech_start token."""
         if self._ref_lm is not None:
@@ -1272,6 +1298,8 @@ class TTVibeVoiceGenerator:
                     loopbreaker.update(_frame_audio)  # detect on the raw (unclamped) audio
                     if loopbreaker.clamp_now():
                         _frame_audio = _frame_audio.clamp(-1.0, 1.0)
+                if self._audio_limit_T > 0.0:
+                    _frame_audio = self._emit_limit(_frame_audio)  # emit-only energy stabilizer
                 _emit_audio(_frame_audio)
                 if self._sf_cap_split:
                     # Split-capture folds the constrained argmax into the trace → LOCAL index.
@@ -1330,6 +1358,8 @@ class TTVibeVoiceGenerator:
                         loopbreaker.update(_chunk)  # detect on the raw (unclamped) audio
                         if loopbreaker.clamp_now():
                             _chunk = _chunk.clamp(-1.0, 1.0)
+                    if self._audio_limit_T > 0.0:
+                        _chunk = self._emit_limit(_chunk)  # emit-only energy stabilizer
                     _emit_audio(_chunk)
                 chunk_samples = _chunk.numel()
                 _vv_debug(
