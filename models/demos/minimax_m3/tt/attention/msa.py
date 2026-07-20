@@ -109,6 +109,8 @@ def msa_indexer_sparse(
     device,
     return_block_ids=False,
     cluster_axis=None,
+    block_cyclic_sp_axis=None,
+    block_cyclic_chunk_local=None,
 ):
     """The MSA op chain over a FULL-context (already-gathered) K/V; index_q/q may stay SP-sharded.
 
@@ -118,6 +120,11 @@ def msa_indexer_sparse(
       mesh coordinate along that axis -> chunk_start = chunk_start_idx + rank*Sq (Sq = q's S/sp rows),
       so q/index_q stay SP-sharded. None -> uniform chunk_start_idx (single-device / gathered query).
       (Replaces the old host-built per-device chunk_offset tile; mesh-coord approach, #47939.)
+    block_cyclic_sp_axis / block_cyclic_chunk_local (set together): the AllGather'd K/V/index_k are
+      still in block-cyclic ("slab") SP order; the indexer (K reader) and sparse_sdpa_msa (K reader /
+      V writer) remap each natural block-id to its physical block IN-KERNEL (#49490/#48772), so the
+      caller no longer untilize->transpose->tilize them to natural order on the host. None -> the
+      tensors are already natural (single-chunk / pre-reordered).
     -> out  [1, Hq, Sq, head_dim]
     """
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
@@ -130,6 +137,8 @@ def msa_indexer_sparse(
         block_size=block_size,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
         cluster_axis=cluster_axis,
+        block_cyclic_sp_axis=block_cyclic_sp_axis,
+        block_cyclic_chunk_local=block_cyclic_chunk_local,
     )
 
     # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
@@ -148,6 +157,8 @@ def msa_indexer_sparse(
         block_size=block_size,
         chunk_start_idx=chunk_start_idx,
         cluster_axis=cluster_axis,
+        block_cyclic_sp_axis=block_cyclic_sp_axis,
+        block_cyclic_chunk_local=block_cyclic_chunk_local,
     )
 
     # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
@@ -204,23 +215,6 @@ def msa_sp_attention_nocache(
     )
 
 
-def _blockcyclic_to_natural(t, sp, n_chunks, chunk_local):
-    """Reorder an AllGathered block-cyclic context [1, H, T, hd] to natural token order.
-
-    ``update_padded_kv_cache`` stores chip r's slice as ``[chunk0_r, chunk1_r, ...]`` (chunk_local tokens
-    each), so AllGather over the SP axis yields chip-major order — index ``(chip, chunk, c)``. Natural
-    order is ``(chunk, chip, c)``. At chunk-aligned offsets that is exactly a transpose of the (chip, chunk)
-    axes: reshape T -> [sp, n_chunks, chunk_local*hd], swap dims, reshape back. (Row-major for the middle
-    transpose; the indexer/sparse re-tilize.)
-    """
-    H, T, hd = t.shape[1], t.shape[2], t.shape[3]
-    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
-    t = ttnn.reshape(t, [H, sp, n_chunks, chunk_local * hd])
-    t = ttnn.transpose(t, 1, 2)  # (chip, chunk) -> (chunk, chip)
-    t = ttnn.reshape(t, [1, H, T, hd])
-    return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
-
-
 def msa_sp_attention(
     q,
     k_acc,
@@ -253,29 +247,33 @@ def msa_sp_attention(
         cached_len          valid prefix length BEFORE the current chunk (= (n_chunks-1)*chunk_local*sp).
         n_chunks            total chunks now in the cache (incl. current); chunk_local = tokens/chip/chunk.
 
-    AllGather K/V/index_k across SP -> full block-cyclic context -> reorder to NATURAL token order (so the
-    indexer's block-pool + causal offset see true positions) -> indexer (per-device chunk_offset) ->
-    sparse_sdpa. Returns the current chunk's SP-sharded attention out [1, Hq_local, s_local, hd].
+    AllGather K/V/index_k across SP -> full block-cyclic context -> indexer + sparse_sdpa_msa, which
+    read the block-cyclic ("slab") layout IN-KERNEL (block_cyclic_* args) so the indexer's block-pool +
+    causal offset see true positions without a host reorder. Returns the current chunk's SP-sharded
+    attention out [1, Hq_local, s_local, hd].
     """
     sp_axis = mesh_config.sp_axis
     device = ccl_manager.mesh_device
-    sp = device.shape[sp_axis]
 
-    # AllGather this slot's SP-sharded block-cyclic context across the SP rows, then reorder to natural
-    # token order so the indexer's block-pool + causal offset see true positions. (Input is already
-    # de-slabbed + slot-sliced by prefill.py; a slab-aware in-kernel cache read would later avoid this.)
-    def gather_natural(t):
+    # AllGather this slot's SP-sharded block-cyclic context across the SP rows. The gathered K/V/index_k
+    # stay in block-cyclic ("slab") order: the indexer (K reader) and sparse_sdpa_msa (K reader / V writer)
+    # remap each natural block-id to its physical block IN-KERNEL via block_cyclic_* below (#49490/#48772),
+    # so the host no longer untilize->transpose->tilize them to natural token order (was ~1.5 ms/MSA layer).
+    # (Input is de-slabbed + slot-sliced by prefill.py.)
+    def gather(t):
         t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
         full_bc = mesh_config.allgather(t, ccl_manager, axis=sp_axis, dim=2)
         if full_bc.dtype != ttnn.bfloat16:
             full_bc = ttnn.typecast(full_bc, ttnn.bfloat16)
-        return _blockcyclic_to_natural(full_bc, sp, n_chunks, chunk_local)
+        return full_bc
 
-    k_full = gather_natural(k_acc)
-    v_full = gather_natural(v_acc)
-    index_k_full = gather_natural(index_k_acc)
+    k_full = gather(k_acc)
+    v_full = gather(v_acc)
+    index_k_full = gather(index_k_acc)
     # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
     # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
+    # block_cyclic_sp_axis/chunk_local: the gathered context is still block-cyclic across the SP rows, so
+    # the ops read it in that layout in-kernel (chunk_local == q's s_local rows, satisfying the op guard).
     return msa_indexer_sparse(
         index_q,
         index_k_full,
@@ -289,4 +287,6 @@ def msa_sp_attention(
         topk_blocks=topk_blocks,
         device=device,
         cluster_axis=sp_axis,
+        block_cyclic_sp_axis=sp_axis,
+        block_cyclic_chunk_local=chunk_local,
     )
