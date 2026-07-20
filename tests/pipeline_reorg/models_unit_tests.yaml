@@ -768,9 +768,6 @@
     wh_n300:
       timeout: 36
       tier: 2
-    bh_p150b_civ2:
-      timeout: 25
-      tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
@@ -823,7 +820,7 @@
       timeout: 20
       tier: 2
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
