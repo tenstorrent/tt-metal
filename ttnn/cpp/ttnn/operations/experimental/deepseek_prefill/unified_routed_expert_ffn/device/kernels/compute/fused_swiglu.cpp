@@ -99,7 +99,10 @@ template <
     uint32_t out_subblock_num_tiles,
     uint32_t out_block_num_tiles,
     bool apply_silu_on_final,
-    uint32_t d_per_core_N = 0>
+    uint32_t d_per_core_N = 0,
+    // K-tiles to reduce in the LAST block. Defaults to the full width (no-op);
+    // the down phase passes the real count so it skips tail padding tiles.
+    uint32_t last_block_w = in0_block_w>
 FORCE_INLINE void matmul_phase(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -141,6 +144,12 @@ FORCE_INLINE void matmul_phase(
         in0_cb.wait_front(in0_block_num_tiles);
         in1_cb.wait_front(in1_block_num_tiles);
 
+        // Reduce over only the real K-tiles in the last block (skips tail
+        // padding whose activated is zero); full width otherwise. kt_dim passed
+        // to matmul_block stays in0_block_w — it is the in0 row stride (the
+        // block is still physically in0_block_w wide), not the step count.
+        const uint32_t k_steps = (block + 1 == num_blocks) ? last_block_w : in0_block_w;
+
         int in0_index_subblock_offset = 0;
         {
             DeviceZoneScopedN("DOWN-MATMUL");
@@ -152,7 +161,7 @@ FORCE_INLINE void matmul_phase(
                     uint32_t dst_index = 0;
                     uint32_t in0_index = in0_index_subblock_offset;
                     uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                    for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
                         matmul_block(
                             in0_cb_id,
                             in1_cb_id,
@@ -322,21 +331,21 @@ FORCE_INLINE void matmul_phase_fused_gu(
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
             DeviceZoneScopedN("TILIZE");  // TEMP profiling: in-kernel row-major tilize cost
-            // Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
-            // (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
-            // off so the tilize packs OVERWRITE x_cb rather than accumulate; the
-            // shared tilize helper (same one conv_bmm_tilize.cpp uses) then
-            // reconfigures unpack SrcA + pack format, drives the per-strip
-            // wait/reserve/tilize/push/pop over the in0_block_num_tiles /
-            // in0_block_w tile-rows, and restores init on exit. The helper left
-            // SrcA pointing at the bf16 row-major input, so restore it to the
-            // gate/up weight format before resuming the matmul (SrcB still holds
-            // x_cb_id — the BH tilize path never touches it); then restore the
-            // partials packer + L1_ACC state for this block.
-            constexpr uint32_t n_strips = in0_block_num_tiles / in0_block_w;
+                                          // Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
+                                          // (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
+                                          // off so the tilize packs OVERWRITE x_cb rather than accumulate; the
+                                          // shared tilize helper (same one conv_bmm_tilize.cpp uses) then
+                                          // reconfigures unpack SrcA + pack format, drives the per-strip
+                                          // wait/reserve/tilize/push/pop over the in0_block_num_tiles /
+                                          // in0_block_w tile-rows, and restores init on exit. The helper left
+                                          // SrcA pointing at the bf16 row-major input, so restore it to the
+                                          // gate/up weight format before resuming the matmul (SrcB still holds
+                                          // x_cb_id — the BH tilize path never touches it); then restore the
+                                          // partials packer + L1_ACC state for this block.
 #ifdef PACKER_L1_ACC
             PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
+            constexpr uint32_t n_strips = in0_block_num_tiles / in0_block_w;
             compute_kernel_lib::tilize<
                 in0_block_w,
                 x_rm_cb_id,
@@ -695,6 +704,17 @@ void kernel_main() {
     // x_is_row_major: tilize cb_x_rm -> cb_in0_x before the gate/up matmul.
     // 0 => x already TILE in cb_in0_x.
     constexpr uint32_t x_is_row_major = get_compile_time_arg_val(33);
+    // Real (unpadded) down-K tiles. Valid K-tiles in the LAST down block =
+    // real_K minus the full leading blocks. When down-K is padded
+    // (K_down_tiles_padded > real), the tail tiles are all-zero activated, so
+    // the down matmul can skip them. Falls back to the full block width when
+    // the padding isn't confined to a single tail block, keeping correctness
+    // for any dims (the reader still zero-fills those tiles).
+    constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t d_last_block_w = (d_K_down_tiles > (d_num_blocks - 1) * d_in0_block_w &&
+                                         d_K_down_tiles - (d_num_blocks - 1) * d_in0_block_w <= d_in0_block_w)
+                                            ? d_K_down_tiles - (d_num_blocks - 1) * d_in0_block_w
+                                            : d_in0_block_w;
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -854,6 +874,7 @@ void kernel_main() {
             d_out_subblock_num_tiles,
             d_out_block_num_tiles,
             /*apply_silu_on_final=*/false,
-            /*d_per_core_N=*/d_in1_per_core_w>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out, cb_down_bias);
+            /*d_per_core_N=*/d_in1_per_core_w,
+            /*last_block_w=*/d_last_block_w>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out, cb_down_bias);
     }  // end chunk loop
 }
