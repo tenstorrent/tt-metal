@@ -192,6 +192,28 @@ def _same_shard_spec(in_mc, out_mc):
     return _shard_props(in_mc) == _shard_props(out_mc)
 
 
+def _has_padding(tensor_shape, mc):
+    """True iff the shard shape does NOT tile the tensor exactly on every dim
+    (i.e. some shard is partially filled — a cliff/padded shard). The multi-shard
+    same-spec zero-copy path requires full shards so a core's bank is a clean
+    contiguous stack of whole shards; padded/cliff cases are deferred to 2c."""
+    if mc.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
+        shard = list(mc.nd_shard_spec.shard_shape)
+    else:
+        shard = list(mc.shard_spec.shape)
+    ts = list(tensor_shape)
+    if len(shard) < len(ts):
+        h = 1
+        for d in ts[:-1]:
+            h *= d
+        ts = [h, ts[-1]]
+    k = min(len(shard), len(ts))
+    for t, s in zip(ts[-k:], shard[-k:]):
+        if t % s != 0:
+            return True
+    return False
+
+
 def _num_shards(tensor_shape, mc):
     """Number of shards the tensor is divided into (product of per-dim ceil
     divisions). Rank-aligns the shard shape to the tensor from the right;
@@ -253,37 +275,64 @@ def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
 
-    # 3. Sharded sub-case gating (Refinement 2). The implemented sharded path is
-    #    same-spec, zero-copy: both sides L1-sharded on the IDENTICAL shard spec.
-    #    Cross-spec resharding and interleaved<->sharded crossovers are not yet
-    #    wired (Refinement 2b) — refuse them cleanly (never hang).
-    if in_mc.is_sharded() or out_mc.is_sharded():
-        if not (in_mc.is_sharded() and out_mc.is_sharded()):
-            raise UnsupportedAxisValue(
-                "tilize: sharded path requires BOTH input and output sharded "
-                "(interleaved<->sharded crossover not yet supported)"
-            )
+    # 3. Sharded sub-case gating (Refinement 2 / 2b).
+    if in_mc.is_sharded() and out_mc.is_sharded():
+        # --- both sharded: same-spec zero-copy (now multi-shard-capable) ---
         if in_mc.buffer_type != ttnn.BufferType.L1 or out_mc.buffer_type != ttnn.BufferType.L1:
             raise UnsupportedAxisValue("tilize: sharded path requires L1 buffers")
         if not _same_shard_spec(in_mc, out_mc):
             raise UnsupportedAxisValue(
                 "tilize: sharded path requires identical input/output shard spec "
-                "(cross-spec resharding not yet supported)"
+                "(cross-spec resharding is Refinement 2c)"
             )
         shard_h, shard_w = _folded_shard_shape(in_mc)
         if shard_h % TILE != 0 or shard_w % TILE != 0:
             raise UnsupportedAxisValue(f"tilize: sharded shard dims must be tile-aligned, got ({shard_h}, {shard_w})")
-        # The zero-copy path tilizes exactly ONE resident shard per core. Configs
-        # where a core owns multiple shards (num_shards > num_cores) or where cores
-        # sit idle (num_shards < num_cores) are not yet wired (Refinement 2b) —
-        # refuse cleanly rather than under-process the buffer (which corrupts output
-        # and can hang the precompile real-alloc path).
+        # Multi-shard-per-core (Refinement 2b): a core may own k = n_shards/n_cores
+        # contiguous FULL shards, tilized as one k*shard_h x shard_w bank. This
+        # requires an EVEN split (n_shards % n_cores == 0) and NO padded/cliff
+        # shards (every dim tiled exactly). Cliff cores (uneven split or partial
+        # shards) redistribute a shard's data and are deferred to Refinement 2c.
         n_shards = _num_shards(shape, in_mc)
         n_cores = _shard_spec_of(in_mc).grid.num_cores()
-        if n_shards != n_cores:
+        if n_shards % n_cores != 0:
             raise UnsupportedAxisValue(
-                f"tilize: sharded path requires one shard per core "
-                f"(got {n_shards} shards over {n_cores} cores; multi-shard-per-core is Refinement 2b)"
+                f"tilize: sharded path requires an even shard/core split "
+                f"(got {n_shards} shards over {n_cores} cores; cliff cores are Refinement 2c)"
+            )
+        if _has_padding(shape, in_mc):
+            raise UnsupportedAxisValue(
+                "tilize: sharded path requires full (non-padded) shards " "(padded/cliff shards are Refinement 2c)"
+            )
+    elif in_mc.is_sharded() or out_mc.is_sharded():
+        # --- interleaved <-> sharded crossover (Refinement 2b) ---
+        # Supported: legacy HEIGHT_SHARDED, ROW_MAJOR, L1, tile-aligned,
+        # one-shard-per-core. In that case each shard maps to a CONTIGUOUS global
+        # tile-row range, so the split reader/writer reuse the interleaved kernels
+        # with a per-core row/tile offset. WIDTH/BLOCK (column-chunked mapping),
+        # nd, and multi-shard crossover are deferred to Refinement 2c.
+        sharded_mc = in_mc if in_mc.is_sharded() else out_mc
+        if _shard_api_of(in_mc, out_mc) == "nd":
+            raise UnsupportedAxisValue("tilize: nd interleaved<->sharded crossover is Refinement 2c")
+        if sharded_mc.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            raise UnsupportedAxisValue(
+                "tilize: only HEIGHT_SHARDED interleaved<->sharded crossover is supported "
+                "(WIDTH/BLOCK crossover is Refinement 2c)"
+            )
+        if sharded_mc.buffer_type != ttnn.BufferType.L1:
+            raise UnsupportedAxisValue("tilize: sharded side of a crossover must be L1")
+        spec = _shard_spec_of(sharded_mc)
+        if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+            raise UnsupportedAxisValue("tilize: crossover requires ROW_MAJOR shard orientation (Refinement 2c)")
+        shard_h, shard_w = _folded_shard_shape(sharded_mc)
+        if shard_h % TILE != 0 or shard_w % TILE != 0:
+            raise UnsupportedAxisValue(f"tilize: crossover shard dims must be tile-aligned, got ({shard_h}, {shard_w})")
+        n_shards = _num_shards(shape, sharded_mc)
+        n_cores = spec.grid.num_cores()
+        if n_shards != n_cores or _has_padding(shape, sharded_mc):
+            raise UnsupportedAxisValue(
+                f"tilize: crossover requires one full shard per core "
+                f"(got {n_shards} shards over {n_cores} cores; multi-shard crossover is Refinement 2c)"
             )
 
 
