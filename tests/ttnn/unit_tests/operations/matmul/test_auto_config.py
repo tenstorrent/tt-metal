@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 
@@ -222,6 +224,11 @@ def _measured_default_and_winner(result):
     return default, winner, ok
 
 
+@pytest.mark.skipif(
+    os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1" or bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="Measured auto-config tuning needs fast-dispatch hardware: it is invalid in slow dispatch and "
+    "exceeds the op timeout / is unrunnable on the functional simulator. Runs on fast-dispatch hardware CI.",
+)
 @pytest.mark.parametrize("dname, dtype, pcc", _DTYPES, ids=lambda p: p if isinstance(p, str) else "")
 @pytest.mark.parametrize("label, K, N", _MODEL_SHAPES)
 @pytest.mark.parametrize("M", _M_VALUES)
