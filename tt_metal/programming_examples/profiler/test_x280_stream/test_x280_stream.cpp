@@ -58,6 +58,7 @@ static uint64_t harthb(int h) { return 0x08011040ULL + 0x100 + (uint64_t)h * 8; 
 
 static constexpr uint64_t WIN_STRIDE = 0x200000ULL;
 static constexpr int NRISC = 5;
+static constexpr uint32_t RING_CAP = 512;  // worker L1 ring depth (words) -- MUST match profstream.c/producer
 
 template <typename T>
 static void pack(std::vector<uint8_t>& buf, size_t off, T val) {
@@ -626,13 +627,46 @@ int main(int argc, char** argv) {
     for (auto& cap : caps) {
         cap_words += cap.size();
         uint32_t cur_lane = 0xFFFFFFFF;
-        for (size_t p = 0; p + 1 < cap.size(); p += 2) {
-            uint32_t w0 = cap[p], w1 = cap[p + 1];
-            if (pp_is_src(w0)) {
+        size_t p = 0, sz = cap.size();
+        while (p + 1 < sz) {
+            uint32_t w0 = cap[p];
+            if (pp_is_bulkcore(w0)) {
+                // RAW-BULK frame: [hdr 2][NRISC meta][pad?][rawn RAW]. Split per-risc using the meta, taking
+                // only the valid [head_mod, head_mod+run) circular slice of each ring block (ignore over-read).
+                uint32_t core = pp_bulkcore_core(w0);
+                uint32_t rawn = cap[p + 1];
+                uint32_t prefix = 2u + (uint32_t)NRISC;
+                if (prefix & 1u) {
+                    prefix++;
+                }
+                if (p + prefix + rawn > sz) {
+                    break;  // truncated (shouldn't happen)
+                }
+                const uint32_t* meta = &cap[p + 2];
+                const uint32_t* raw = &cap[p + prefix];
+                for (uint32_t r = 0; r < (uint32_t)NRISC; r++) {
+                    uint32_t head_mod = pp_bulk_head(meta[r]), run = pp_bulk_run(meta[r]);
+                    uint32_t lane = core * (uint32_t)NRISC + r;
+                    if (run == 0 || lane >= NL) {
+                        continue;
+                    }
+                    const uint32_t* ring = raw + (size_t)r * RING_CAP;
+                    uint32_t first = (head_mod + run > RING_CAP) ? (RING_CAP - head_mod) : run;  // wrap split
+                    accum[lane].insert(accum[lane].end(), ring + head_mod, ring + head_mod + first);
+                    if (first < run) {
+                        accum[lane].insert(accum[lane].end(), ring, ring + (run - first));
+                    }
+                }
+                p += prefix + rawn;
+            } else if (pp_is_src(w0)) {
                 cur_lane = pp_src_lane(w0);
-            } else if (cur_lane < NL) {
-                accum[cur_lane].push_back(w0);
-                accum[cur_lane].push_back(w1);
+                p += 2;
+            } else {
+                if (cur_lane < NL) {
+                    accum[cur_lane].push_back(w0);
+                    accum[cur_lane].push_back(cap[p + 1]);
+                }
+                p += 2;
             }
         }
     }

@@ -38,6 +38,16 @@
  * low27 = lane_id (core*NRISC + risc); payload32 = lane_id (redundant/self-check). */
 #define PP_STICKY_SRC 7u
 
+/* BULK_CORE: raw-bulk frame for the whole core, emitted by the reader when it does ONE bulk NoC read of all
+ * 5 rings (reclaims the single-read NoC amortization). The host splits it into the 5 lanes. Frame layout in
+ * the stream (all 32-bit words):
+ *   [0] word0 = pp_bulkcore_w0(core_id)   [1] word1 = raw_words (= NRISC*RING_CAP)
+ *   [2..2+NRISC-1] per-risc meta: pp_bulk_meta(head_mod, run)   [pad to even]
+ *   [prefix..prefix+raw_words) = NRISC contiguous RING_CAP-word ring blocks (ring r @ +r*RING_CAP), RAW
+ * Host: for risc r, lane=core*NRISC+r, extract the circular [head_mod, head_mod+run) words of ring r (RAW
+ * over-read past tail is present but the host takes only `run`), then decode as that lane's packet stream. */
+#define PP_BULK_CORE 5u
+
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
 #define PP_TYPE_MASK 0x1Fu       /* 5 bits */
@@ -72,6 +82,15 @@ static inline int pp_is_src(uint32_t w0) { return pp_type(w0) == PP_STICKY_SRC; 
 static inline uint32_t pp_src_w0(uint32_t lane_id) { return pp_word0(PP_STICKY_SRC, lane_id); }
 static inline uint32_t pp_src_w1(uint32_t lane_id) { return lane_id; }
 static inline uint32_t pp_src_lane(uint32_t w0) { return pp_low27(w0); }
+
+/* ----- BULK_CORE frame (raw-bulk) ----- */
+static inline uint32_t pp_bulkcore_w0(uint32_t core) { return pp_word0(PP_BULK_CORE, core); }
+static inline int pp_is_bulkcore(uint32_t w0) { return pp_type(w0) == PP_BULK_CORE; }
+static inline uint32_t pp_bulkcore_core(uint32_t w0) { return pp_low27(w0); }
+/* per-risc meta word: head_mod (ring start slot) in hi16, run (valid word count) in lo16 */
+static inline uint32_t pp_bulk_meta(uint32_t head_mod, uint32_t run) { return (head_mod << 16) | (run & 0xFFFFu); }
+static inline uint32_t pp_bulk_head(uint32_t m) { return (m >> 16) & 0xFFFFu; }
+static inline uint32_t pp_bulk_run(uint32_t m) { return m & 0xFFFFu; }
 
 /* reconstruct the 59-bit device timestamp from a marker's 32-bit low + the lane's sticky 27-bit high. */
 static inline uint64_t pp_full_ts(uint32_t timer_hi, uint32_t timer_low) {

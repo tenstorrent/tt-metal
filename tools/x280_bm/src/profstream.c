@@ -75,6 +75,7 @@
 #define NRISC 5
 #define RING_CAP 512u                /* worker L1 ring depth, words */
 #define ADAPT_THRESH (4u * RING_CAP) /* adaptive: bulk-read a core once >= 4 rings' worth of data pending */
+#define PP_BULK_CORE 5u              /* raw-bulk core frame type (MUST match prof_packet.h) */
 #define WRITE_WIN_BASE 200u
 
 static inline uint64_t rdcycle(void) {
@@ -206,61 +207,71 @@ static void reader_run(
             }
             if (do_bulk) {
                 nbulk++;
-                /* LOSSLESS bulk: frame all 5 RISCs of this core as one unit but with proper per-risc STICKY +
-                 * only the VALID [head,tail) words -- identical output to per-risc mode, so the host demuxes
-                 * unchanged. The win is BATCHING: ONE flow-control wait + ONE fence + ONE PROD publish for the
-                 * whole core (vs 5 in per-risc mode), plus the tails already read in one NoC transaction. Bulk
-                 * only fires when the core is mostly full, so the fixed per-core cost is amortized over ~2550
-                 * words. Wait once for the worst-case output (5 stickies + 5 full rings). */
-                uint32_t need = NRISC * (2u + RING_CAP);
+                /* RAW-BULK: ONE streaming NoC read of the whole core (5 contiguous rings = 2560 words) --
+                 * reclaims the single-read amortization the per-risc framing lost. Emit a BULK_CORE frame:
+                 * [header 2w][NRISC meta words: head_mod|run][pad to even][2560 RAW words]. The host splits it
+                 * per-risc using the meta (takes only `run` valid words per ring, ignores the over-read past
+                 * tail). Lossless (host takes exactly the valid range). One fence + one PROD publish/core. */
+                uint32_t rawn = NRISC * RING_CAP; /* 2560 -- whole core, raw */
+                uint32_t total_run = 0;
+                for (uint32_t r = 0; r < NRISC; r++) {
+                    total_run += (uint32_t)(tails[r] - heads[c * NRISC + r]);
+                }
+                if (total_run == 0) {
+                    polls += NRISC;
+                    continue; /* nothing to drain (bulkcore forced on an empty core) */
+                }
+                uint32_t prefix = 2u + NRISC;
+                if (prefix & 1u) {
+                    prefix++; /* pad to even so the stream stays 2-word aligned */
+                }
+                uint32_t need = prefix + rawn;
                 uint64_t tw = rdcycle();
                 while ((uint32_t)(stage_words - (prod - r32(CONS(hartid)))) < need) {
                     cpu_pause();
                 }
                 t_wait += rdcycle() - tw;
                 uint64_t tc = rdcycle();
-                uint32_t any = 0;
+                /* header */
+                w32(sbase + (uint64_t)(prod & swm) * 4, (PP_BULK_CORE << 27) | (uint32_t)(c & 0x7FFFFFFu));
+                w32(sbase + (uint64_t)((prod + 1) & swm) * 4, rawn);
+                prod += 2;
+                /* per-risc meta: head_mod (hi16) | run (lo16) */
                 for (uint32_t r = 0; r < NRISC; r++) {
-                    uint64_t L = c * NRISC + r;
-                    uint32_t head = heads[L], tail = tails[r];
-                    uint32_t run = tail - head; /* valid words for this risc */
-                    if (run == 0) {
-                        continue; /* skip empty risc -- still lossless */
+                    uint32_t head = heads[c * NRISC + r], tail = tails[r];
+                    uint32_t run = tail - head;
+                    w32(sbase + (uint64_t)(prod & swm) * 4, ((head % RING_CAP) << 16) | (run & 0xFFFFu));
+                    prod += 1;
+                }
+                if ((2u + NRISC) & 1u) {
+                    w32(sbase + (uint64_t)(prod & swm) * 4, 0); /* pad word */
+                    prod += 1;
+                }
+                /* ONE streaming bulk read: 5 contiguous rings (2560 words) NoC -> SPSC (split at SPSC wrap) */
+                uint64_t src = rbufs;
+                uint32_t di = prod, leftw = rawn;
+                while (leftw) {
+                    uint32_t sslot = di & swm;
+                    uint32_t chunk = leftw;
+                    if (chunk > stage_words - sslot) {
+                        chunk = stage_words - sslot;
                     }
-                    any = 1;
-                    uint64_t lut = SRCLUT_BASE + L * 8;
-                    w32(sbase + (uint64_t)(prod & swm) * 4, r32(lut));
-                    w32(sbase + (uint64_t)((prod + 1) & swm) * 4, r32(lut + 4));
-                    prod += 2;
-                    uint64_t wl1 = rbufs + (uint64_t)r * 2048; /* NoC addr of ring r */
-                    uint32_t si = head, di = prod, leftw = run;
-                    while (leftw) {
-                        uint32_t wslot = si % RING_CAP;
-                        uint32_t sslot = di & swm;
-                        uint32_t chunk = leftw;
-                        if (chunk > RING_CAP - wslot) {
-                            chunk = RING_CAP - wslot;
-                        }
-                        if (chunk > stage_words - sslot) {
-                            chunk = stage_words - sslot;
-                        }
-                        copy_words(sbase + (uint64_t)sslot * 4, wl1 + (uint64_t)wslot * 4, chunk);
-                        si += chunk;
-                        di += chunk;
-                        leftw -= chunk;
-                    }
-                    prod += run;
-                    total += run;
-                    heads[L] = tail;
-                    w32(cbase + r * 4, tail); /* advance head -> producer unblocks */
+                    copy_words(sbase + (uint64_t)sslot * 4, src, chunk);
+                    src += (uint64_t)chunk * 4;
+                    di += chunk;
+                    leftw -= chunk;
+                }
+                prod += rawn;
+                total += rawn;
+                for (uint32_t r = 0; r < NRISC; r++) {
+                    heads[c * NRISC + r] = tails[r];
+                    w32(cbase + r * 4, tails[r]); /* advance heads -> producers unblock */
                 }
                 t_copy += rdcycle() - tc;
-                if (any) {
-                    fence_();                /* ring data + stickies visible before PROD advances */
-                    w32(PROD(hartid), prod); /* ONE publish for the whole core */
-                    pending = 1;
-                    visits++;
-                }
+                fence_();                /* frame + raw visible before PROD advances */
+                w32(PROD(hartid), prod); /* ONE publish for the whole core */
+                pending = 1;
+                visits++;
                 polls += NRISC;
                 continue;
             }
