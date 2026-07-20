@@ -522,4 +522,11 @@ template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp2_b>(ttsl::S
 template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(ttsl::Span<const uint8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp8_b>(ttsl::Span<const uint8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
 
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp2>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp4>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp8>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp2_b>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp8_b>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+
 // clang-format on
