@@ -20,6 +20,8 @@ Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward
 """
 
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
@@ -210,11 +212,24 @@ class TtMiniMaxMoE(LightweightModule):
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
-        dispatched_buffer_tiled = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
-            ttnn.TILE_LAYOUT,
-            dtype=self.routed_expert.activations_dtype,
-        )
+        _dispatched_rm = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
+        if os.getenv("REGION_TILIZE") == "1":
+            # Region-aware tilize: skips the worst-case dispatch padding (mostly empty) and uses a
+            # pipelined DRAM writer. Pass routing counts/offsets so the kernel bounds work by the
+            # filled prefix; experts_per_chip drives the per-chip valid_rows.
+            dispatched_buffer_tiled = ttnn.experimental.deepseek_prefill.dispatch_tilize(
+                _dispatched_rm,
+                tt_expert_region_offsets,
+                tt_expert_token_counts,
+                output_dtype=self.routed_expert.activations_dtype,
+                experts_per_chip=self.experts_per_chip,
+            )
+        else:
+            dispatched_buffer_tiled = ttnn.to_layout(
+                _dispatched_rm,
+                ttnn.TILE_LAYOUT,
+                dtype=self.routed_expert.activations_dtype,
+            )
         ttnn.deallocate(dispatched_buffer)
 
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
