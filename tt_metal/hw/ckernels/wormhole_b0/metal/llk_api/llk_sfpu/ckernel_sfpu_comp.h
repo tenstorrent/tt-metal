@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -68,77 +69,85 @@ inline void not_equal_zero_init() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
-    // Pure-SFPI comparison-to-zero. We reason about the fp32 bit pattern instead of
-    // relying on HW float compares: magnitude = bits & 0x7FFFFFFF collapses +0/-0 to 0,
-    // the sign is the raw integer sign of the word, and NaN is exactly the set of words
-    // whose magnitude exceeds +inf (0x7F800000). This reproduces the TTI version's NaN
-    // handling (NaN maps to 0 for every mode except nez) without any SETCC on floats.
-    constexpr int FP32_MAG = 0x7FFFFFFF;
-    constexpr int FP32_INF = 0x7F800000;
+    // Kept as hand-tuned TTI: the equivalent pure-SFPI form (bitwise magnitude + v_if
+    // predication) measured ~1.5-2.1x slower in MATH_ISOLATE on Wormhole, because this
+    // sequence gets abs in one SFPSETSGN, rejects NaN with a single SFPIADD, and stores
+    // LCONST_0/1 directly under SFPSETCC instead of materialising 0/1 in a register.
+    constexpr std::uint32_t V = p_sfpu::LREG0;
+    constexpr std::uint32_t ABS_V = p_sfpu::LREG2;
+    constexpr std::uint32_t INF = p_sfpu::LREG5;
+    constexpr std::uint32_t BFLOAT16_INF = 0x7f80;
 
+    if constexpr (
+        COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero ||
+        COMP_MODE == SfpuType::greater_than_zero || COMP_MODE == SfpuType::less_than_equal_zero) {
+        TTI_SFPLOADI(INF, sfpi::SFPLOADI_MOD0_FLOATB, BFLOAT16_INF);
+    }
+
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
-        vInt bits = sfpi::as<sfpi::vInt>(val);
-        vInt mag = bits & FP32_MAG;
+        TTI_SFPLOAD(V, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_SFPSETSGN(0, V, ABS_V, 1);
 
+        // eqz: default 0, set 1 where |v| == 0 (handles ±0; NaN has |v|!=0 → stays 0)
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            // |v| == 0 (±0 → 1; NaN has |v| != 0 → 0)
-            vFloat r = 0.0f;
-            v_if(mag == 0) { r = 1.0f; }
-            v_endif;
-            dst_reg[0] = r;
-        } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-            // |v| != 0 (±0 → 0; NaN → 1)
-            vFloat r = 1.0f;
-            v_if(mag == 0) { r = 0.0f; }
-            v_endif;
-            dst_reg[0] = r;
-        } else if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-            // set 1 for strictly-negative values (sign set, |v| != 0), then clear NaN
-            vFloat r = 0.0f;
-            v_if(bits < 0) {
-                v_if(mag != 0) { r = 1.0f; }
-                v_endif;
-            }
-            v_endif;
-            v_if(mag > FP32_INF) { r = 0.0f; }
-            v_endif;
-            dst_reg[0] = r;
-        } else if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            // set 1 for strictly-positive values (sign clear, |v| != 0), then clear NaN
-            vFloat r = 0.0f;
-            v_if(bits >= 0) {
-                v_if(mag != 0) { r = 1.0f; }
-                v_endif;
-            }
-            v_endif;
-            v_if(mag > FP32_INF) { r = 0.0f; }
-            v_endif;
-            dst_reg[0] = r;
-        } else if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            // default 1; clear for strictly-negative values and for NaN
-            vFloat r = 1.0f;
-            v_if(bits < 0) {
-                v_if(mag != 0) { r = 0.0f; }
-                v_endif;
-            }
-            v_endif;
-            v_if(mag > FP32_INF) { r = 0.0f; }
-            v_endif;
-            dst_reg[0] = r;
-        } else if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            // default 1; clear for strictly-positive values and for NaN
-            vFloat r = 1.0f;
-            v_if(bits >= 0) {
-                v_if(mag != 0) { r = 0.0f; }
-                v_endif;
-            }
-            v_endif;
-            v_if(mag > FP32_INF) { r = 0.0f; }
-            v_endif;
-            dst_reg[0] = r;
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
         }
-        dst_reg++;
+
+        // nez: default 1, set 0 where |v| == 0 (handles ±0; NaN has |v|!=0 → stays 1)
+        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
+        }
+
+        // ltz: default 0; chain: (v < 0) AND (|v| != 0) AND (|v| <= inf) → 1; NaN: |NaN| > inf → rejected
+        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
+        }
+
+        // gtz: default 0; chain: (v >= 0) AND (|v| != 0) AND (|v| <= inf) → 1; NaN: |NaN| > inf → rejected
+        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
+        }
+
+        // gez: default 1; chain1: (v<0) AND (|v|!=0) → 0 (negatives excl. -0); chain2: |v|>inf → 0 (NaN)
+        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
+            TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
+        }
+
+        // lez: default 1; chain1: (v>=0) AND (|v|!=0) → 0 (positives excl. +0); chain2: |v|>inf → 0 (NaN)
+        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            TTI_SFPSETCC(0, ABS_V, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
+            TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
+        }
     }
 }
 
@@ -200,6 +209,7 @@ inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
     // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::LO16 path.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
@@ -222,6 +232,7 @@ inline void calculate_eqz_uint32() {
     // UInt32 values occupy the full dest word; DataLayout::U32 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT32). eqz/nez are representation-agnostic
     // (only a compare against the all-zero word), so a plain unsigned compare works.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
         vUInt r = 0;
@@ -234,6 +245,7 @@ inline void calculate_eqz_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
         vUInt r = 1;
