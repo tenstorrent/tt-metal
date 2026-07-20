@@ -942,6 +942,27 @@ bulk floods it (end-to-end 215 < the steady per-risc split's 666). NEXT = publis
 sink keeps up. Commits: f29bc7c2279 bulkcore, 0b857b93f82 dualrelay+runtime-SPSC, 40234d9ad48 adaptive,
 8acee90bf63 lossless framing.
 
+**HOST-SINK FIXED (Gap 1) — SENT in host sysmem + spin-poll + bigger ring (2026-07-19).** Two changes took
+end-to-end from 215 MB/s to the reader ceiling:
+1. **SENT pointer in host sysmem** (each ring gets a 64 B trailer; relay/drainer publishes SENT through the
+   SAME posted PCIe window as the data, ordered after it). Host polls its own RAM (`read_sysmem` ~µs) instead
+   of reading the pointer from device LIM (`drv.read_block` ~18 µs/poll — the wall). HACKED stays in LIM
+   (host→device write is posted/fast). Also replaced the consumer's 200 µs sleep-on-empty with a SPIN +
+   time-based exit (the sleep let the relay spin on hostfull while the host slept). → 162M→34M wall, ~1.0 GB/s.
+2. **Default host ring 32 KB → 256 KB.** After (1), the residual ~15 % drag (reader spsc-wait, relay
+   hostfull~25k) was the SMALL RING: the relay stalled on hostfull waiting for HACKED acks (ack-latency
+   ping-pong), NOT host-consumer throughput — the relay's raw push (4.5 cyc/word ×2 ≈ 1.78 GB/s) already
+   exceeds the readers. A 256 KB ring absorbs bursts + decouples the relay from ack latency (fits 4 rings in
+   the 2 MB window). Commits 4b9b55e392c, d73f4ef3e21.
+
+**BW NOW (lossless `--adaptive --dualrelay`, 256 KB ring, 8000 mk): ~1.26 GB/s aggregate end-to-end == the
+reader→relay ceiling.** reader 83 % copy, spsc-wait 0; relay ~72 % busy, hostfull 0; host consumer ~30 % busy
+on real work. **The push-to-host now OUTPACES the readers with headroom — the READER is the bottleneck** now
+(limited by its own per-risc framing/poll overhead, not the host). So further speedups are reader-side:
+reduce framing overhead, or reclaim the 0.6 GB/s via core-sticky + host-side split (now viable — the host can
+absorb the extra raw bytes). Still TODO (Gap 2, for CPU efficiency + real-time, not BW): direct hugepage
+pointer (kills the read_sysmem ~1 µs/call spin) + flusher→MPMC→consumer restructure.
+
 **Direct drain (`--direct`, NONCE bit 8).** ONE hart reads worker-L1 over NoC (coherent) and
 writes the single host ring DIRECTLY, injecting sticky-src inline — no LIM SPSC, no cross-hart
 handoff, no relay. UNCONDITIONALLY LOSSLESS: 550/550 lanes, 0 seq gaps at every rate (proddelay
