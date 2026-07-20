@@ -34,6 +34,21 @@
 namespace ttnn::operations::experimental::regime_a_matmul::plan {
 
 // ------------------------------------------------------------------------------------------------
+// Shared constants (SINGLE SOURCE OF TRUTH)
+// ------------------------------------------------------------------------------------------------
+// Hardware / layout constants shared by the pure planner (this header), the device auto-selector +
+// weight-memory-config helper (regime_a_matmul_config.cpp), and the program factory
+// (regime_a_matmul_program_factory.cpp) — the latter two reach these via the `plan::` alias. Keep values
+// EXACTLY as-is: tile-byte sizes feed compile-time kernel args and the L1 budget / bank count / core-count
+// window drive config feasibility, so any change here changes codegen or picker behaviour.
+constexpr uint32_t kTileBytesBf16 = 2048u;          // bf16 tile bytes
+constexpr uint32_t kTileBytesFp32 = 4096u;          // fp32 tile bytes
+constexpr uint32_t kNumBanks = 8u;                  // Regime-A fixes the in1 DRAM width-shard to 8 banks (== G)
+constexpr uint32_t kL1BudgetBytes = 1440u * 1024u;  // BH usable L1 per core
+constexpr uint32_t kMinCores = 16u;                 // auto-picker feasibility: core-count window [kMin, kMax]
+constexpr uint32_t kMaxCores = 104u;
+
+// ------------------------------------------------------------------------------------------------
 // Inputs
 // ------------------------------------------------------------------------------------------------
 
@@ -74,11 +89,11 @@ struct PlanInputs {
     std::set<PlanXY> holes;
 
     // L1 budget per core (bytes). BH usable ~1440 KB.
-    uint32_t l1_budget_bytes{1440u * 1024u};
+    uint32_t l1_budget_bytes{kL1BudgetBytes};
 
     // Tile byte sizes.
-    uint32_t tb{2048};  // bf16 tile
-    uint32_t tf{4096};  // fp32 tile
+    uint32_t tb{kTileBytesBf16};  // bf16 tile
+    uint32_t tf{kTileBytesFp32};  // fp32 tile
 
     // in0 ring / reduction chain ordering: false = bank order [0..7]; true = nearest-neighbour
     // Hamiltonian over physical coords (matches --chain nn). v1 defaults to bank order.

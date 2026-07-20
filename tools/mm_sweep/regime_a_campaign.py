@@ -375,9 +375,6 @@ def select():
 # ---------------------------------------------------------------- Stage 4: causal ablations
 # (name, diag mask) for the production-kernel diagnostics. Masks per regime_a_matmul_config.hpp.
 ABLATE = [
-    ("skip_in1_read", 1),
-    ("skip_in0_read", 2),
-    ("skip_in0_fwd", 4),
     ("no_reduce", 8),
     ("full_in0_wait", 1024),  # DIAG_FULL_IN0_WAIT (default = progressive)
     ("old_barrier_drain", 2048),  # DIAG_BARRIER_DRAIN (default = pipelined)

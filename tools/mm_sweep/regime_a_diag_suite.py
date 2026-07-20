@@ -21,15 +21,11 @@ BIN = f"{ROOT}/build_Release/test/ttnn/unit_tests_ttnn"
 FREQ = 1.35e9
 PEAK512 = 512e9
 
-# (name, mask). LOCAL_FEED (16) is intentionally not implemented yet (see MT8_FINDINGS).
+# (name, mask). The skip-in0/in1-read/forward ablations (bits 0/1/2) were removed after the delivery study
+# concluded the ring is optimal; only the still-used no-reduce ablation (bit 3) remains alongside full (0).
 ABLATIONS = [
     ("full", 0),
-    ("skipin1", 1),
-    ("skipin0", 2),
-    ("skipfwd", 4),
     ("noreduce", 8),
-    ("skipin0+in1", 3),
-    ("skipin0+in1+noreduce", 11),
 ]
 PRIMARY = [(256, 2048, 1024), (256, 6144, 768), (256, 6144, 2304), (256, 6144, 4608)]
 
@@ -133,10 +129,11 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                             g[od + "_maxringtot"] = int(vals[2])
             if "group" in g:
                 ringcost.append(g)
-    # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
-    # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
+    # mask 0 (public path) and the correctness-preserving diagnostics (full-wait / barrier-drain / ring-order /
+    # placement / in1 A/B) are correctness-checked by the gtest -> require the PASS; the pure ablations (e.g.
+    # no-reduce) produce garbage and are NOT checked. Must match the gtest's constant-input check set.
     _in1preserve = (1 << 22) | (1 << 25)  # in1-delivery A/B diagnostics (correctness-preserving)
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576, 2097152) or (
+    checked = mask in (0, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 2097152) or (
         mask != 0 and (mask & ~_in1preserve) == 0
     )
     return {
@@ -254,11 +251,7 @@ def mscale():
     # grows with M. Two series: small-N (2048,1024) and wide-N (6144,4608).
     key = [
         ("full", 0),
-        ("skipin1", 1),
-        ("skipfwd", 4),
         ("noreduce", 8),
-        ("skipin0+in1", 3),
-        ("skipin0+in1+noreduce", 11),
     ]
     series = {
         "smallN": [(M, 2048, 1024) for M in (32, 64, 128, 256)],
@@ -298,127 +291,6 @@ def mscale():
                 )
                 json.dump(out, open(f"{HERE}/regime_a_diag_mscale.json", "w"), indent=2)
     print("MSCALE DONE", flush=True)
-
-
-def scatter():
-    # Benchmark the DIAG_IN0_SCATTER variant (mask 32) vs ring (mask 0) at each shape's winner config.
-    # Targets = narrow-N (must show >=8-10% stable end-to-end to justify porting); controls = wide-N (must
-    # NOT materially regress). Both masks are correctness-checked (PCC) by the gtest.
-    groups = {"target": [(256, 2048, 1024), (256, 6144, 768)], "control": [(256, 6144, 2304), (256, 6144, 4608)]}
-    out = []
-    for grp, shapes in groups.items():
-        for M, K, N in shapes:
-            cfgs = pick_configs(M, K, N)
-            winner = next((c for c, labels in cfgs.items() if "winner" in labels), None)
-            if winner is None:
-                print(f"[scatter] {M}x{K}x{N}: no winner cfg (sweep missing); skipping", flush=True)
-                continue
-            res = {}
-            for name, mask in (("ring", 0), ("scatter", 32)):
-                runs = [run_one(M, K, N, winner, mask) for _ in range(3)]
-                oks = [x for x in runs if x.get("ok") and x["wall_us"]]
-                walls = [x["wall_us"] for x in oks]
-                res[name] = {
-                    "walls": walls,
-                    "med": statistics.median(walls) if walls else None,
-                    "min": min(walls) if walls else None,
-                    "n_ok": len(oks),
-                    "pcc": [x.get("max_rel_err") for x in runs],
-                }
-            rm, sm = res["ring"]["med"], res["scatter"]["med"]
-            delta = (sm / rm - 1) * 100 if (rm and sm) else None  # negative = scatter faster
-            rec = {
-                "group": grp,
-                "M": M,
-                "K": K,
-                "N": N,
-                "cfg": list(winner),
-                "ideal_us": ideal_us(M, K, N),
-                "ring": res["ring"],
-                "scatter": res["scatter"],
-                "scatter_vs_ring_pct": delta,
-            }
-            out.append(rec)
-            print(
-                f"[scatter/{grp}] {M}x{K}x{N} cfg={winner} ring={rm if rm is None else round(rm,1)}us "
-                f"scatter={sm if sm is None else round(sm,1)}us "
-                f"delta={delta if delta is None else round(delta,1)}% "
-                f"ring_all={[round(w,1) for w in res['ring']['walls']]} "
-                f"scat_all={[round(w,1) for w in res['scatter']['walls']]}",
-                flush=True,
-            )
-            json.dump(out, open(f"{HERE}/regime_a_scatter_bench.json", "w"), indent=2)
-    print("SCATTER DONE", flush=True)
-
-
-def _bytes(M, K, N):
-    Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
-    return {"in0": Mt * Kt * 2048, "in1": Kt * Nt * 2048, "out": Mt * Nt * 2048}
-
-
-# in0-delivery variants: (name, mask, in0 DRAM replication factor R). Replicated rings read in0 R times.
-VARIANTS = [("ring", 0, 1), ("repl2", 64, 2), ("xchg", 256, 1), ("xchgrr", 512, 1)]
-
-
-def variants():
-    # Compare all correct in0-delivery variants vs the ring at each shape's winner config, per the protocol:
-    # retain every relaunch, per-RISC spans, PCC; report logical eff-BW (logical/time) AND delivered eff-BW
-    # (actual DRAM bytes incl. R x in0 replication / time). Gate: target >=8% faster, control regress <=3%.
-    groups = {"target": [(256, 2048, 1024), (256, 6144, 768)], "control": [(256, 6144, 2304), (256, 6144, 4608)]}
-    out = []
-    for grp, shapes in groups.items():
-        for M, K, N in shapes:
-            cfgs = pick_configs(M, K, N)
-            winner = next((c for c, labels in cfgs.items() if "winner" in labels), None)
-            if winner is None:
-                print(f"[variants] {M}x{K}x{N}: no winner cfg (sweep missing); skipping", flush=True)
-                continue
-            b = _bytes(M, K, N)
-            logical = b["in0"] + b["in1"] + b["out"]
-            per = {}
-            for name, mask, R in VARIANTS:
-                runs = [run_one(M, K, N, winner, mask) for _ in range(3)]
-                oks = [x for x in runs if x.get("ok") and x["wall_us"]]
-                walls = sorted(x["wall_us"] for x in oks)
-                med = statistics.median(walls) if walls else None
-                delivered = R * b["in0"] + b["in1"] + b["out"]
-                per[name] = {
-                    "mask": mask,
-                    "repl": R,
-                    "walls": walls,
-                    "med_us": med,
-                    "min_us": (walls[0] if walls else None),
-                    "n_ok": len(oks),
-                    "pcc": [x.get("max_rel_err") for x in runs],
-                    "risc": (oks[0]["risc"] if oks else None),
-                    "logical_gbps": (logical / (med / 1e6) / 1e9 if med else None),
-                    "delivered_gbps": (delivered / (med / 1e6) / 1e9 if med else None),
-                    "delivered_bytes": delivered,
-                }
-            rm = per["ring"]["med_us"]
-            for name, _, _ in VARIANTS:
-                m = per[name]["med_us"]
-                per[name]["vs_ring_pct"] = ((m / rm - 1) * 100) if (rm and m) else None
-            out.append(
-                {
-                    "group": grp,
-                    "M": M,
-                    "K": K,
-                    "N": N,
-                    "cfg": list(winner),
-                    "ideal_us": ideal_us(M, K, N),
-                    "logical_bytes": logical,
-                    "variants": per,
-                }
-            )
-            summ = " ".join(
-                f"{n}={per[n]['med_us'] if per[n]['med_us'] is None else round(per[n]['med_us'],1)}"
-                f"({'' if per[n]['vs_ring_pct'] is None else ('%+d' % round(per[n]['vs_ring_pct']))}%)"
-                for n, _, _ in VARIANTS
-            )
-            print(f"[variants/{grp}] {M}x{K}x{N} cfg={winner} ideal={ideal_us(M,K,N):.1f}  {summ}", flush=True)
-            json.dump(out, open(f"{HERE}/regime_a_variants_bench.json", "w"), indent=2)
-    print("VARIANTS DONE", flush=True)
 
 
 def _cfg_for(M, K, N, explicit):
@@ -913,8 +785,6 @@ if __name__ == "__main__":
         "smoke": smoke,
         "matrix": matrix,
         "mscale": mscale,
-        "scatter": scatter,
-        "variants": variants,
         "progressive": progressive,
         "pipelined": pipelined,
         "ringorder": ringorder,

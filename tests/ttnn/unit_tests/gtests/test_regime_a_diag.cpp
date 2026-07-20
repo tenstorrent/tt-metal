@@ -105,16 +105,14 @@ TEST_F(RegimeADiagFixture, Run) {
     // Warmup / compile (run 0, dropped by the profiler parser).
     Tensor out = ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
 
-    // Constant-input sanity for the public path (mask 0) + the correct in0-delivery variants (32=scatter,
-    // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
-    // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
-    // in1-delivery diagnostics (fwd flush-order A/B 1<<22, coalesced-read A/B 1<<25) are correctness-
-    // preserving; verify any combination (a fwd-order/source-lifetime bug would deliver stale in1 ->
-    // output != K, caught here).
+    // Constant-input sanity for the public path (mask 0) + the correctness-PRESERVING diagnostics
+    // (full-wait 1024, barrier-drain 2048, ring-order 4096/16384/65536/262144, placement 524288/2097152, and
+    // the in1 fwd flush-order A/B 1<<22 + coalesced-read A/B 1<<25): out must equal K. Pure ablations produce
+    // garbage and are NOT checked. (max_rel_err, NOT PCC — the real pairing check is the random-operand PCC
+    // test below.) A fwd-order/source-lifetime bug would deliver stale in1 -> output != K, caught here.
     constexpr uint32_t kIn1Preserve = (1u << 22) | (1u << 25);
-    if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
-        mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 || mask == 524288 ||
-        mask == 1048576 || mask == 2097152 || (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
+    if (mask == 0 || mask == 1024 || mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 ||
+        mask == 524288 || mask == 2097152 || (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -133,12 +131,12 @@ TEST_F(RegimeADiagFixture, Run) {
     fmt::print("DIAGDONE mask={}\n", mask);
 }
 
-// Real correctness test for the in0-delivery VARIANTS. Constant-1.0 inputs (the perf harness above) cannot
-// catch a wrong in0/in1 pairing, a repeated/omitted K shard, or many shard permutations, because every
-// product is 1 and the K-sum is K regardless. Here we use RANDOM bf16 operands and compare each variant to
-// a CPU f32 golden (computed from the same bf16-rounded inputs, so only accumulation order/rounding differ)
-// via PCC. Each mask is run twice: fresh (compile) then cached-program. A mispairing/repeat/omit shifts the
-// per-element sums and collapses PCC well below the 0.99 bar.
+// Random-operand PCC correctness for the DEFAULT public path (mask 0) and the full-slice-startup-wait A/B
+// baseline (DIAG_FULL_IN0_WAIT, 1024). Constant-1.0 inputs (the perf harness above) cannot catch a wrong
+// in0/in1 pairing or a repeated/omitted K shard, because every product is 1 and the K-sum is K regardless.
+// Here we use RANDOM bf16 operands and compare to a CPU f32 golden (from the same bf16-rounded inputs, so
+// only accumulation order/rounding differ) via PCC. Each mask is run twice: fresh (compile) then
+// cached-program. A mispairing/repeat/omit shifts the per-element sums and collapses PCC below the 0.99 bar.
 TEST_F(RegimeADiagFixture, Correctness) {
     const uint32_t M = 256, K = 2048, N = 1024;
     const uint32_t Ns = 1, Pk = 4, Sm = 2, kb = 2, nsb = 2;  // exercises ring + split-K reduction + M-split
@@ -182,9 +180,9 @@ TEST_F(RegimeADiagFixture, Correctness) {
     (void)Kt;
     (void)Nt;
 
-    // ring(0) + the correct in0-delivery variants + the full-wait A/B baseline (1024); each fresh then cached
-    // (2nd invocation = cached program). All run the DEFAULT progressive-cumulative-wait compute except 1024.
-    for (uint32_t mask : {0u, 32u, 64u, 128u, 256u, 512u, 1024u}) {
+    // default progressive path (0) + the full-wait A/B baseline (1024); each fresh then cached (2nd
+    // invocation = cached program). Both run the DEFAULT ring transport; only the CB0 wait placement differs.
+    for (uint32_t mask : {0u, 1024u}) {
         for (int pass = 0; pass < 2; ++pass) {  // pass 0 = fresh/compile, pass 1 = cached-program replay
             Tensor out =
                 ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);

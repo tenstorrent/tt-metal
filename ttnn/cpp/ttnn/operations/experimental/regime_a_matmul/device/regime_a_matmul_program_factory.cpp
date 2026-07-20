@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/device.hpp>  // get_worker_noc_hop_distance (physical ring-order diag)
 
 #include "regime_a_matmul_config.hpp"
+#include "regime_a_matmul_diag.hpp"  // internal-only RegimeADiag enum (not reachable from the public header)
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -36,8 +37,9 @@ constexpr const char* kWriterKernel =
 constexpr const char* kComputeKernel =
     "ttnn/cpp/ttnn/operations/experimental/regime_a_matmul/device/kernels/compute.cpp";
 
-constexpr uint32_t kTileBytesBf16 = 2048u;
-constexpr uint32_t kTileBytesFp32 = 4096u;
+// Tile-byte sizes are defined once in regime_a_matmul_plan.hpp (single source of truth), reached via `plan::`.
+using plan::kTileBytesBf16;
+using plan::kTileBytesFp32;
 
 // Largest divisor of v that is <= cap (always >= 1).
 uint32_t largest_div(uint32_t v, uint32_t cap) {
@@ -111,20 +113,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     std::map<std::string, std::string> rdefs;  // in1 reader
     std::map<std::string, std::string> wdefs;  // in0 ring/reduce writer
     std::map<std::string, std::string> ddefs;  // compute (added to cdefs below)
-    if (diag & RegimeADiag::DIAG_SKIP_IN1_READ) {
-        rdefs["DIAG_SKIP_IN1_READ"] = "1";
-    }
     if (diag & RegimeADiag::DIAG_FWD_FLUSH_FIRST) {
         rdefs["DIAG_FWD_FLUSH_FIRST"] = "1";  // A/B baseline: OLD per-block flush-before-signal in1 forward
     }
     if (diag & RegimeADiag::DIAG_NO_COALESCE) {
         rdefs["DIAG_NO_COALESCE"] = "1";  // A/B baseline: OLD K_block per-row in1 reads (no coalescing)
-    }
-    if (diag & RegimeADiag::DIAG_SKIP_IN0_READ) {
-        wdefs["DIAG_SKIP_IN0_READ"] = "1";
-    }
-    if (diag & RegimeADiag::DIAG_SKIP_IN0_FORWARD) {
-        wdefs["DIAG_SKIP_IN0_FORWARD"] = "1";
     }
     if (diag & RegimeADiag::DIAG_NO_REDUCE) {
         wdefs["DIAG_NO_REDUCE"] = "1";
@@ -437,26 +430,8 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             }
         }
     }
-    if (diag & RegimeADiag::DIAG_LOCAL_FEED) {
-        rdefs["DIAG_LOCAL_FEED"] = "1";
-        wdefs["DIAG_LOCAL_FEED"] = "1";
-        ddefs["DIAG_LOCAL_FEED"] = "1";
-    }
     if (diag & RegimeADiag::DIAG_FULL_IN0_WAIT) {
         ddefs["DIAG_FULL_IN0_WAIT"] = "1";  // A/B baseline: old full-slice startup barrier (compute-only)
-    }
-    const bool scatter = (diag & RegimeADiag::DIAG_IN0_SCATTER) != 0u;
-    if (scatter) {
-        wdefs["DIAG_IN0_SCATTER"] = "1";  // writer phase-1 uses direct scatter; needs the G-1 ahead peers (below)
-    }
-    // Replicated shorter ring: IN0_REPL (2 or 4) goes to BOTH the writer (seed reads + R-bundle rotation) and
-    // the in1 reader (matching shard order). No runtime-arg change (nearest-neighbor forward reuses fwd_next).
-    if (diag & RegimeADiag::DIAG_IN0_REPL2) {
-        wdefs["IN0_REPL"] = "2";
-        rdefs["IN0_REPL"] = "2";
-    } else if (diag & RegimeADiag::DIAG_IN0_REPL4) {
-        wdefs["IN0_REPL"] = "4";
-        rdefs["IN0_REPL"] = "4";
     }
 
     // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
@@ -536,18 +511,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         in1valid_sem = CreateSemaphore(program, all_cores, 0u);
         in1ready_sem = CreateSemaphore(program, all_cores, 0u);
     }
-    // DIAG_IN0_XCHG: G-1 per-slot readiness semaphores so the writer pushes each in0 slot the moment its
-    // direct-exchange write lands (incremental overlap), rather than one ring counter. Created only for the
-    // xchg program so the public path's semaphore layout is unchanged.
-    const bool xchg = (diag & RegimeADiag::DIAG_IN0_XCHG) != 0u;
-    const bool xchgrr = (diag & RegimeADiag::DIAG_IN0_XCHGRR) != 0u;
-    std::vector<uint32_t> xchg_slotsem;
-    if (xchg || xchgrr) {  // both direct-exchange schedules use G-1 per-slot readiness semaphores
-        for (uint32_t d = 1; d < geo.G; ++d) {
-            xchg_slotsem.push_back(CreateSemaphore(program, all_cores, 0u));
-        }
-        wdefs[xchg ? "DIAG_IN0_XCHG" : "DIAG_IN0_XCHGRR"] = "1";
-    }
 
     // ---- Kernels ----
     // in1 reader == consumer. compile args (in1_reader.cpp order). No TensorAccessorArgs.
@@ -560,8 +523,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         geo.N_bpc,               // 5 N_bpc
         geo.in1_shard_stride_n,  // 6 in1_shard_stride_n (physical per-bank width)
         in1valid_sem,            // 7
-        in1ready_sem,            // 8
-        0u};                     // 9 in1_mcast (0 for v1: unicast forward)
+        in1ready_sem};           // 8
 
     auto mk = [&](const char* src,
                   const CoreRangeSet& g,
@@ -706,28 +668,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             cp.valid_k,              // 14 valid K tiles (rest of capacity zero)
             cp.valid_m,              // 15 valid M tiles (rest zero / not written)
             cp.valid_n};             // 16 valid N tiles (rest zero / not written)
-        // DIAG_IN0_SCATTER (test-only variant): append the G-1 ring peers AHEAD of this core (args 17..),
-        // in d-ahead order (ring_next^1..ring_next^{G-1}). Core scatters its own shard to peer d's cb0 slot
-        // d; each peer receives from the core d-behind, reproducing the ring's cb0 layout. Appended only for
-        // the scatter program (distinct hash), so the public path's arg layout is unchanged.
-        if (scatter || xchg || xchgrr) {
-            // XCHG/XCHGRR: prepend the G-1 per-slot semaphore IDs (args 17..17+G-2). Then (scatter/xchg/
-            // xchgrr) the G-1 ahead peers in d-ahead order (ring_next^1..). Core writes its own shard to peer
-            // d's slot d and signals that peer's slot-d sem. Appended only for these programs; public-path
-            // arg layout unchanged.
-            if (xchg || xchgrr) {
-                for (uint32_t d = 1; d < geo.G; ++d) {
-                    wa.push_back(xchg_slotsem[d - 1]);
-                }
-            }
-            uint32_t cur = i;
-            for (uint32_t d = 1; d < geo.G; ++d) {
-                cur = P.cores[cur].ring_next_idx;
-                auto pc = phys(cur);
-                wa.push_back(pc.x);
-                wa.push_back(pc.y);
-            }
-        }
         // Fused-epilogue / output-split writer args (index 17+). Never combined with the diag ablations above
         // (those only run via the internal diag entry, which passes no fusion). Order MUST match the writer
         // kernel's fidx reads: bias, then residual/gate/broadcast, then chunk count/width/addresses.

@@ -462,12 +462,6 @@ void kernel_main() {
     cb_wait_front(in0_cb, K_num_blocks * in0_block_num_tiles);
 #endif
 #endif
-#ifdef IN1_RESIDENT
-    // Overlapped deep-K (M-shard): in0 arrives per M-block (shard) incrementally (overlapping the ring), while
-    // in1 [Kt_local, N_own] = N_blocks_per_core blocks is held RESIDENT and REUSED across all M-blocks. Wait it
-    // ONCE (K_num_blocks==1 deep-K), address block n via in1_base, pop once at the end.
-    cb_wait_front(in1_cb, N_blocks_per_core * in1_block_num_tiles);
-#endif
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
@@ -510,9 +504,7 @@ void kernel_main() {
                 }
 #endif
 #endif
-#ifndef IN1_RESIDENT
                 cb_wait_front(in1_cb, in1_block_num_tiles);
-#endif
 
                 matmul_blocks(
                     in0_cb,
@@ -527,11 +519,6 @@ void kernel_main() {
 #ifdef IN0_KSLICE_RESIDENT
                     ,
                     k_block * in0_block_num_tiles  // block-major offset into the resident k-slice
-#endif
-#ifdef IN1_RESIDENT
-                    ,
-                    0u,                                 // in0_base
-                    n_block_iter * in1_block_num_tiles  // in1_base: resident block n (deep-K, K_num_blocks==1)
 #endif
                 );
 
@@ -550,9 +537,7 @@ void kernel_main() {
                     cb_pop_front(in0_cb, in0_block_num_tiles);
                 }
 #endif
-#ifndef IN1_RESIDENT
                 cb_pop_front(in1_cb, in1_block_num_tiles);
-#endif
                 reuse_in0_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
@@ -655,8 +640,5 @@ void kernel_main() {
     }
 #ifdef IN0_KSLICE_RESIDENT
     cb_pop_front(in0_cb, K_num_blocks * in0_block_num_tiles);
-#endif
-#ifdef IN1_RESIDENT
-    cb_pop_front(in1_cb, N_blocks_per_core * in1_block_num_tiles);
 #endif
 }

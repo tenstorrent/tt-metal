@@ -22,17 +22,20 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-// Regime-A fixes the in1 DRAM shard to 8 banks (matches plan::Geometry::G).
-constexpr uint32_t kNumBanks = 8u;
+// Shared hardware/layout constants (bank count, L1 budget, tile bytes, core-count window) live in
+// regime_a_matmul_plan.hpp — the SINGLE source of truth — and are reached here via the `plan::` alias.
+using plan::kL1BudgetBytes;
+using plan::kNumBanks;
+using plan::kTileBytesBf16;
+using plan::kTileBytesFp32;
 
 inline uint32_t cdiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline uint32_t rup(uint32_t x, uint32_t y) { return cdiv(x, y) * y; }
 
-// ---- Auto-selector (ported from tools/mm_sweep/picker_{table,v2}.py) ----
-// v2 cost-model params (grid-search best on the 3262-config oracle: geomean 96.8%).
+// ---- Auto-selector (ported from tools/mm_sweep/picker_{table,cost-model}.py) ----
+// Cost-model params (grid-search best on the 3262-config oracle: geomean 96.8%).
 constexpr uint32_t kCsat = 24, kAcap = 6, kKbcap = 2;
 constexpr double kKk = 0.5, kAa = 2.0, kOvl = 1.0, kStart = 0.0, kWst = 0.5;
-constexpr uint32_t kL1Budget = 1440u * 1024u, kTB = 2048u;
 // v3 M-split fallback (trained on the Mt<=8 campaign, tools/mm_sweep/picker_v3.py): the deployed Sm=1
 // ranking is the ANCHOR; an Sm>1 candidate is chosen only for NARROW-N shapes (Nband<=kNbandMax, where
 // N-split cannot supply parallelism) when its reduction-aware cost beats the anchor's by kMSplitMargin.
@@ -40,7 +43,7 @@ constexpr uint32_t kL1Budget = 1440u * 1024u, kTB = 2048u;
 constexpr double kRk = 0.8, kMSplitMargin = 0.03;
 constexpr uint32_t kNbandMax = 2u;
 
-// Lightweight geometry + feasibility (mirrors picker_v2.plan()). Returns false if infeasible.
+// Lightweight geometry + feasibility (mirrors the picker cost-model plan()). Returns false if infeasible.
 struct PickGeo {
     uint32_t cores, Ktl, Mblk, Nown, Nbpc;
     double wasteK, wasteN;
@@ -60,29 +63,30 @@ bool pick_plan(
     if (!plan::nt_width_shard_feasible(Nt)) {
         return false;
     }
-    g.cores = 8u * Pk * Ns * Sm;
-    if (g.cores < 16u || g.cores > 104u) {
+    g.cores = kNumBanks * Pk * Ns * Sm;
+    if (g.cores < plan::kMinCores || g.cores > plan::kMaxCores) {
         return false;
     }
-    g.Ktl = rup(cdiv(Kt, Pk), kb * 8u);
+    g.Ktl = rup(cdiv(Kt, Pk), kb * kNumBanks);
     g.wasteK = static_cast<double>(Pk * g.Ktl) / Kt - 1.0;
     if (g.wasteK > 0.20) {
         return false;
     }
     g.Mblk = cdiv(Mt, Sm);
-    const uint32_t Nband = cdiv(Nt, 8u);
+    const uint32_t Nband = cdiv(Nt, kNumBanks);
     g.Nown = cdiv(Nband, Ns);
     if (nsb > g.Nown) {
         return false;
     }
     g.Nbpc = cdiv(g.Nown, nsb);
-    g.wasteN = static_cast<double>(8u * Ns * g.Nbpc * nsb) / Nt - 1.0;
+    g.wasteN = static_cast<double>(kNumBanks * Ns * g.Nbpc * nsb) / Nt - 1.0;
     if (g.wasteN > 0.20) {
         return false;
     }
-    const uint32_t cb0 = g.Ktl * g.Mblk * kTB, cb1 = 4u * kb * nsb * kTB, cb2 = 2u * g.Mblk * nsb * kTB,
-                   cb3 = g.Mblk * nsb * 4096u, cb7 = 2u * g.Mblk * nsb * kTB;
-    return (cb0 + cb1 + cb2 + cb3 + cb7) <= kL1Budget;
+    const uint32_t cb0 = g.Ktl * g.Mblk * kTileBytesBf16, cb1 = 4u * kb * nsb * kTileBytesBf16,
+                   cb2 = 2u * g.Mblk * nsb * kTileBytesBf16, cb3 = g.Mblk * nsb * kTileBytesFp32,
+                   cb7 = 2u * g.Mblk * nsb * kTileBytesBf16;
+    return (cb0 + cb1 + cb2 + cb3 + cb7) <= kL1BudgetBytes;
 }
 
 double pick_cost(uint32_t Kt, uint32_t Nt, uint32_t kb, uint32_t nsb, const PickGeo& g) {
@@ -168,7 +172,7 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
     RegimeAMatmulConfig anchor{};
     double anchor_cost = std::numeric_limits<double>::infinity();
     PickGeo anchor_g{};
-    const uint32_t Nband = cdiv(Nt, 8u);
+    const uint32_t Nband = cdiv(Nt, kNumBanks);
     for (uint32_t Pk = 1; Pk <= 12u; ++Pk) {
         for (uint32_t Ns = 1; Ns <= 6u; ++Ns) {
             const uint32_t Nown = cdiv(Nband, Ns);
@@ -283,9 +287,9 @@ plan::PlanResult make_and_build_plan(
     in.opt1 = opt1;
     in.holes = {};  // v1: no explicit grid holes; find_near just walks to the next free logical core.
     // BH usable L1 ~1440 KB; matches the validated prototype/sweep budget used by the picker.
-    in.l1_budget_bytes = 1440u * 1024u;
-    in.tb = 2048u;  // bf16 tile bytes
-    in.tf = 4096u;  // fp32 tile bytes
+    in.l1_budget_bytes = kL1BudgetBytes;
+    in.tb = kTileBytesBf16;  // bf16 tile bytes
+    in.tf = kTileBytesFp32;  // fp32 tile bytes
     in.nn_chain = false;
 
     return plan::build_plan(in);

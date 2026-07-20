@@ -30,7 +30,6 @@ void kernel_main() {
     constexpr uint32_t in1_shard_stride_n = get_compile_time_arg_val(6);  // physical per-bank shard width (tiles)
     constexpr uint32_t in1valid_sem = get_compile_time_arg_val(7);        // M-split: reader -> slaves "delivered"
     constexpr uint32_t in1ready_sem = get_compile_time_arg_val(8);        // M-split: slaves -> reader "slot free"
-    constexpr uint32_t in1_mcast = get_compile_time_arg_val(9);           // M-split forward: 1 = mcast, 0 = unicasts
 
     const uint32_t in1_addr = get_arg_val<uint32_t>(0);
     const uint32_t bank_id = get_arg_val<uint32_t>(1);
@@ -89,34 +88,26 @@ void kernel_main() {
             return;
         }
         noc_semaphore_wait_min(in1ready, (mbc + 1) * mpeers);
-        if constexpr (in1_mcast) {
-            uint32_t x0 = get_arg_val<uint32_t>(9), y0 = get_arg_val<uint32_t>(10), x1 = get_arg_val<uint32_t>(11),
-                     y1 = get_arg_val<uint32_t>(12);
-            noc_async_write_multicast(w1, get_noc_multicast_addr(x0, y0, x1, y1, w1), in1_blk_bytes, mpeers);
-            noc_async_writes_flushed();
-            noc_semaphore_inc_multicast(get_noc_multicast_addr(x0, y0, x1, y1, in1valid_addr), 1, mpeers);
-        } else {
-            for (uint32_t s = 0; s < mpeers; ++s) {
-                uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
-                noc_async_write(w1, get_noc_addr(sx, sy, w1), in1_blk_bytes);
-            }
-#ifdef DIAG_FWD_FLUSH_FIRST
-            noc_async_writes_flushed();  // A/B baseline: OLD flush-before-signal
-#endif
-            for (uint32_t s = 0; s < mpeers; ++s) {
-                uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
-                noc_semaphore_inc(get_noc_addr(sx, sy, in1valid_addr), 1);
-            }
-#ifndef DIAG_FWD_FLUSH_FIRST
-            // DEFAULT: signal EARLY, then flush PER-BLOCK. The early valid-inc releases the slave without
-            // waiting on the reader's flush (same-NoC write-before-inc keeps the destination from observing
-            // validity before the payload lands); the per-block flush that follows is REQUIRED for SOURCE
-            // lifetime -- it guarantees the async write has departed this CB slot before the slot is pushed,
-            // wrapped, and overwritten by a later block (an exit-only barrier would be too late). The flush is
-            // merely moved off the slave-release critical path, NOT removed. DIAG_FWD_FLUSH_FIRST = old order.
-            noc_async_writes_flushed();
-#endif
+        for (uint32_t s = 0; s < mpeers; ++s) {
+            uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
+            noc_async_write(w1, get_noc_addr(sx, sy, w1), in1_blk_bytes);
         }
+#ifdef DIAG_FWD_FLUSH_FIRST
+        noc_async_writes_flushed();  // A/B baseline: OLD flush-before-signal
+#endif
+        for (uint32_t s = 0; s < mpeers; ++s) {
+            uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
+            noc_semaphore_inc(get_noc_addr(sx, sy, in1valid_addr), 1);
+        }
+#ifndef DIAG_FWD_FLUSH_FIRST
+        // DEFAULT: signal EARLY, then flush PER-BLOCK. The early valid-inc releases the slave without
+        // waiting on the reader's flush (same-NoC write-before-inc keeps the destination from observing
+        // validity before the payload lands); the per-block flush that follows is REQUIRED for SOURCE
+        // lifetime -- it guarantees the async write has departed this CB slot before the slot is pushed,
+        // wrapped, and overwritten by a later block (an exit-only barrier would be too late). The flush is
+        // merely moved off the slave-release critical path, NOT removed. DIAG_FWD_FLUSH_FIRST = old order.
+        noc_async_writes_flushed();
+#endif
         ++mbc;
     };
 
@@ -131,24 +122,11 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t vcols =
             (ncol_base < valid_n) ? (((valid_n - ncol_base) < N_block) ? (valid_n - ncol_base) : N_block) : 0u;
         for (uint32_t step = 0; step < G; ++step) {
-            // Shard read order MUST match the in0 cb0 order. Baseline ring: block `step` = shard (rp-step).
-            // Replicated shorter ring (IN0_REPL=R): block b=r*R+i = shard (rp - r - i*(G/R)), the order the
-            // writer fills cb0, so the in0/in1 pairing (hence compute) is unchanged.
-#ifdef IN0_REPL
-            constexpr uint32_t R = IN0_REPL;
-            constexpr uint32_t stride = G / R;
-            [[maybe_unused]] const uint32_t s = (ring_pos + 2u * G - (step / R) - (step % R) * stride) % G;
-#else
-            [[maybe_unused]] const uint32_t s = (ring_pos + G - step) % G;
-#endif
+            // Shard read order MUST match the in0 cb0 order. Ring: block `step` = shard (rp-step).
+            const uint32_t s = (ring_pos + G - step) % G;
             for (uint32_t wb = 0; wb < W; ++wb) {
-                [[maybe_unused]] const uint32_t kblk = s * W + wb;
+                const uint32_t kblk = s * W + wb;
                 cb_reserve_back(in1_cb, in1_blk);
-                // DIAG_SKIP_IN1_READ: suppress the in1 DRAM reads, the read barrier, and the K-tail zero-fill
-                // (diagnostic tail init). CB reserve/push, M-split forwarding, and the ready/valid semaphores
-                // are PRESERVED so downstream back-pressure and M-split delivery are unchanged; the delivered
-                // in1 data is intentionally garbage (output correctness is not checked in diagnostic modes).
-#ifndef DIAG_SKIP_IN1_READ
                 uint32_t w1 = get_write_ptr(in1_cb);
                 if (vcols > 0u) {
 #ifndef DIAG_NO_COALESCE
@@ -187,7 +165,6 @@ void kernel_main() {
                     }
                 }
                 // vcols == 0 (whole subblock is pad N): no reads; block is garbage, output not written.
-#endif
                 mfwd(get_write_ptr(in1_cb));  // forward the fixed-size block
                 cb_push_back(in1_cb, in1_blk);
             }

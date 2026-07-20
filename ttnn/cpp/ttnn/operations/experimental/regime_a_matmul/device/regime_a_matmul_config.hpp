@@ -26,108 +26,17 @@ struct RegimeAMatmulConfig {
     uint32_t n_subblock_tiles{0};  // nsb: N-subblock width (tiles). 0 => full N_own.
 };
 
-// Test-only diagnostic ablation bitmask (default 0 = the normal public path). NEVER exposed through the
-// Python / nanobind API; set only via the internal ttnn::prim::regime_a_matmul_diag entry point. It lives
-// in RegimeAMatmulParams::diag_mask so it participates in the program-cache hash — a diagnostic program can
-// never alias (or be aliased by) a normal one. Each bit maps to a DIAG_* kernel #define; mask 0 adds NO
-// defines and the compile is byte-identical to the public path. Ablations are non-additive critical-path
-// counterfactuals (see MT8_FINDINGS.md), not correctness modes — output is intentionally unchecked.
-enum RegimeADiag : uint32_t {
-    DIAG_SKIP_IN1_READ = 1u << 0,     // in1_reader: suppress in1 DRAM reads/barrier/tail-init; keep CB+M-split+sems
-    DIAG_SKIP_IN0_READ = 1u << 1,     // writer: suppress step-0 in0 DRAM read/barrier; keep ptr adv/CB/ring/reduce/out
-    DIAG_SKIP_IN0_FORWARD = 1u << 2,  // writer: suppress ring payload write; still signal next core (no deadlock)
-    DIAG_NO_REDUCE = 1u << 3,         // force bottom-band copy path everywhere; bypass reduce credits/recv/fwd
-    DIAG_LOCAL_FEED = 1u << 4,        // (reserved) purely local CB feed: no DRAM/ring/fwd/M-split/reduce
-    // NOTE: the bits below are CORRECT algorithmic VARIANTS (produce the right output), not ablations.
-    DIAG_IN0_SCATTER = 1u << 5,  // writer: in0 all-gather via 1 direct-scatter round instead of G-1 serial
-                                 // ring rotations. Identical cb0 layout (slot d = shard rp-d), so compute +
-                                 // the in1 rotated read are unchanged; removes the serial-hop critical path.
-    // Replicated shorter ring: each core reads R seed shards (stride G/R) and rotates the R-shard bundle
-    // for G/R rounds (nearest-neighbor, incremental per-round push preserved). Cuts the forwarding
-    // dependency depth from G-1 to G/R-1, trading R x in0 DRAM reads. cb0 slot (r*R+i) = shard (rp-r-i*G/R);
-    // the in1 reader uses the SAME formula so compute is unchanged. Factory maps these to IN0_REPL=2/4.
-    DIAG_IN0_REPL2 = 1u << 6,   // R=2: 2 seeds, 4 rounds, 6 forwarded shard-equiv (vs 7), depth 3
-    DIAG_IN0_REPL4 = 1u << 7,   // R=4: 4 seeds, 2 rounds, 4 forwarded shard-equiv, depth 1
-    DIAG_IN0_XCHG = 1u << 8,    // eager incremental direct exchange: per peer, write-then-signal (NoC
-                                // ordering, NO flush) so each slot is exposed as its own write lands; push
-                                // received slots in compute order. Ring cb0 layout -> in1/compute unchanged.
-    DIAG_IN0_XCHGRR = 1u << 9,  // round-robin direct exchange: round d, write to the d-ahead peer + signal,
-                                // wait own slot d, push it, advance. 1 transfer/core/round (less burst
-                                // congestion than eager's G-1 at once) while keeping incremental push.
-    // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
-    // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
-    // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only
-    // define; identical config/tensors/transport/reduction, only the CB0 wait placement differs.
-    DIAG_FULL_IN0_WAIT = 1u << 10,
-    // Phase-2 (writer) drain discipline. DEFAULT (this bit CLEAR) = PIPELINED: reuse a source CB slot once its
-    // payload has DEPARTED L1 (noc_async_writes_flushed), signal the reduction receiver with ordered
-    // payload->semaphore ops (same peer + NoC, like the in0 ring), and defer completion to ONE final
-    // write+atomic barrier before kernel return — so the split-K reduction chain and DRAM output pipeline
-    // across bands / N-sub-blocks instead of stalling on a per-block completion barrier. This bit restores the
-    // OLD per-block noc_async_write_barrier (wait remote completion before popping each CB2/CB7 slot), kept as
-    // an A/B diagnostic. Identical config/tensors/compute/ring/reduction — only per-block write sync differs.
-    // (bits 1<<12 .. 1<<14 are free — were grouped-K, removed; recover from 56b37f5d5e6/7b3f93ddaa5 +
-    // a5b7986b18f/3593ecd4083. See tools/mm_sweep/GROUPED_K_REPORT.md.)
-    DIAG_BARRIER_DRAIN = 1u << 11,
-    // Physical-topology-aware in0 ring ordering (host-side; overrides ring_pos/next/prev in the factory, no
-    // kernel change). DEFAULT (neither bit) = OPT: exhaustive 7! cycle search per ring group minimizing max
-    // edge cost then total hops over the group's WRITER-NoC authoritative hop distance
-    // (get_worker_noc_hop_distance; both orientations covered). These bits select A/B diagnostics: BANK = the
-    // old bank order [0..7] (previous production baseline); GREEDY = greedy nearest-neighbour. Ring ordering
-    // only differs; placement/work/reduction unchanged; output bit-identical for any permutation.
-    // (bit 1<<14 is free — was grouped-K; see GROUPED_K_REPORT.md.)
-    DIAG_RING_BANK = 1u << 12,
-    // A/B diagnostics selecting the shared-permutation OBJECTIVE for the ring OPT (all score exhaustively over
-    // the 7! cycles, aggregating across the Sm physical mm-rings of a (kk,nn) group). The DEFAULT (no ring
-    // bit) is PARETO. Lexicographic tuples to MINIMIZE (aggmax = worst edge over rings; aggtot = summed hops
-    // over all rings):
-    //   OPT_MM0      : (ring0.max, ring0.total)                 — score mm==0 only (old objective / reference)
-    //   RING_MAXEDGE : (aggmax, aggtot)                         — regressed the synthetic Sm=4 case
-    //   RING_TOTAL   : (aggtot, aggmax)                         — regressed the common Sm=1 case
-    //   [default]    : PARETO = min aggmax s.t. aggtot <= MM0's aggtot, then aggtot. Route-dominates MM0 by
-    //                  construction (never worse total), so it cannot stably regress vs MM0; keeps the Sm=2
-    //                  win and stays within noise of MM0 on Sm=1. Chosen after the two-run objective A/B.
-    // These retained as the decision A/B set; the dominated `greedy` (heuristic) and `maxring` objectives were
-    // removed after the decision (recover from the implementation commit; see GROUPED-K-style note in the
-    // report). Bits 1<<13, 1<<15, 1<<17 are now free. All cache-hashed; none exposed via the public API.
-    DIAG_RING_OPT_MM0 = 1u << 14,
-    DIAG_RING_TOTAL = 1u << 16,
-    DIAG_RING_MAXEDGE = 1u << 18,
-    // M-split (Sm>1) worker-PLACEMENT (host-side factory override of cp.coord only; logical core indices + all
-    // ownership + the reader->i+s / slave->i-mm factory arg math are UNCHANGED; the PARETO ring order is
-    // recomputed on the new coords). DEFAULT (no PLACE bit) = IN1_NEAR: place every mm==0 DRAM reader first
-    // (so slaves can't displace later readers from bank-adjacent cores), then place each slave at the free
-    // worker minimizing the directed reader->slave hop on the group's in1-reader NoC. Chosen by the two-run
-    // placement A/B (production Sm=2 primary -6.3/-7.2%; all Sm>1 shapes faster; Sm=1 no-op). Diagnostics:
-    //   DIAG_PLACE_CURRENT       : the planner's original reader-then-slaves logical-Manhattan spiral (baseline)
-    //   DIAG_PLACE_READERS_FIRST : readers-first but bank-spiral slaves (inconsistent; +1.2% on one shape)
-    // No effect at Sm==1. All cache-hashed; none exposed via the public API.
-    DIAG_PLACE_READERS_FIRST = 1u << 19,
-    DIAG_PLACE_CURRENT = 1u << 21,
-
-    // in1-delivery optimization (M-split follow-up + optimization #5). ADOPTED as production defaults after a
-    // gated A/B on the Mt<=8 campaign winners: forward-signal-first (per-block flush moved AFTER the valid
-    // signal, releasing the slave without waiting on the reader's flush) is a consistent +1.0..+2.3% on Sm>1
-    // shapes, and coalesced contiguous-block reads are +0.5..+3.8% (both vs the old order), zero-regression on
-    // controls (wide-N / deep-K / bandwidth-bound) and PCC-exact (20/20 random-operand + 10x relaunch stress
-    // all max_rel_err=0, watcher-clean). The DEFAULT path (mask 0) does BOTH; these two bits select the OLD
-    // behaviour as the A/B baseline. (in1 CB depth 2/8 was also tested and REJECTED -- neutral-to-slightly-
-    // negative, so depth 4 stands; that diagnostic was removed after the experiment.) All cache-hashed; none
-    // exposed via the public API.
-    DIAG_FWD_FLUSH_FIRST = 1u << 22,  // A/B baseline: OLD write->flush->signal in1 forward. Default = write->
-                                      // signal->flush: the per-block flush is RETAINED (moved after the signal)
-                                      // so the async write departs this CB slot before it is reused (source
-                                      // lifetime); it is merely off the slave-release critical path.
-    DIAG_NO_COALESCE = 1u << 25,      // A/B baseline: OLD K_block per-row in1 reads (default now issues one
-                                      // coalesced read per physically-contiguous block; falls back per-row).
-};
+// RegimeADiag (the test-only diagnostic ablation bitmask) is INTERNAL-ONLY and deliberately NOT declared here
+// — this header is reachable from the public op header (regime_a_matmul.hpp) and the nanobind TU, so the enum
+// lives in the internal-only device/regime_a_matmul_diag.hpp, included only by the program factory. The
+// diag_mask field in RegimeAMatmulParams is a plain uint32_t, so nothing here needs the enum.
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
 
 // Auto-select a (Pk, Ns, Sm, kb, nsb) config for a shape given in TILE counts. Ported from the
-// validated FLUX/LTX picker (tools/mm_sweep/picker_table.py oracle + picker_v2.py cost-model
-// fallback): a lookup table for the 20 production shapes, else enumerate feasible candidates (Sm=1)
-// and pick the min-cost one. Used when the caller passes config=None.
+// validated FLUX/LTX picker (tools/mm_sweep/picker_table.py oracle + cost-model fallback): a lookup
+// table for the production shapes, else enumerate feasible candidates and pick the min-cost one
+// (Sm=1 anchor + narrow-N M-split hysteresis). Used when the caller passes config=None.
 RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt);
 
 // Device adapter: read (Mt, Kt, Nt) from the tensors, fetch the compute grid + bank-adjacent worker
