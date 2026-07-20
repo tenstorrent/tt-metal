@@ -89,64 +89,65 @@
       });
       if (descP) descP.classList.add("tt-api-description");
 
-      /* 3 – field-list (Keyword Arguments + Returns) */
-      var fieldList = dd.querySelector("dl.field-list");
-      if (fieldList) {
-        /* Keyword Arguments */
-        var kwDt = fieldList.querySelector("dt.field-odd");
-        var kwDd = fieldList.querySelector("dd.field-odd");
-        if (kwDt && kwDd) {
-          var kwSection = makeSection("Keyword Arguments");
-          var kwList = document.createElement("div");
-          kwList.className = "tt-api-param-list";
-          kwDd.querySelectorAll("li").forEach(function (li) {
-            var p = li.querySelector("p");
-            if (!p) return;
-            var strong = p.querySelector("strong");
-            var ems = p.querySelectorAll("em");
-            var name = strong ? strong.textContent.trim() : "";
-            var typeText = Array.from(ems)
-              .map(function (e) { return e.textContent.trim(); })
-              .filter(function (t) { return t && t !== ","; })
-              .join(", ")
-              .replace(/,\s*,/g, ",");
-            var fullText = p.textContent;
-            var dash = fullText.indexOf("–"); /* en-dash – */
-            var desc = dash !== -1 ? fullText.slice(dash + 1).trim() : "";
-            /* Also try hyphen-minus fallback */
-            if (!desc) {
-              dash = fullText.indexOf(" - ");
-              desc = dash !== -1 ? fullText.slice(dash + 3).trim() : "";
-            }
-            kwList.appendChild(makeParamRow(name, typeText, desc));
-          });
-          kwSection.appendChild(kwList);
-          fieldList.parentNode.insertBefore(kwSection, fieldList);
-        }
+      /* 3 – field-list (Parameters / Keyword Arguments / Returns / Raises / …)
+       *
+       * A Sphinx field list is a flat sequence of <dt>label</dt><dd>value</dd>
+       * pairs. The field-odd / field-even classes are only row parity — NOT the
+       * field's meaning — so we must read each field's real label from its <dt>
+       * and transform every pair, otherwise fields get mislabeled and later
+       * ones (e.g. Returns, Raises) are silently dropped. */
+      Array.from(dd.querySelectorAll("dl.field-list")).forEach(function (fieldList) {
+        Array.from(fieldList.querySelectorAll(":scope > dt")).forEach(function (dtEl) {
+          /* Pair each <dt> with its following <dd>. */
+          var ddEl = dtEl.nextElementSibling;
+          while (ddEl && ddEl.tagName.toLowerCase() !== "dd") {
+            ddEl = ddEl.nextElementSibling;
+          }
+          if (!ddEl) return;
 
-        /* Returns */
-        var retDt = fieldList.querySelector("dt.field-even");
-        var retDd = fieldList.querySelector("dd.field-even");
-        if (retDt && retDd) {
-          var retSection = makeSection("Returns");
-          var retList = document.createElement("div");
-          retList.className = "tt-api-param-list";
-          var retFull = retDd.textContent.trim();
-          var retDash = retFull.indexOf("–");
-          var retName = retDash !== -1 ? retFull.slice(0, retDash).trim() : retFull;
-          var retDesc = retDash !== -1 ? retFull.slice(retDash + 1).trim() : "";
-          retList.appendChild(makeParamRow(retName, "", retDesc));
-          retSection.appendChild(retList);
-          fieldList.parentNode.insertBefore(retSection, fieldList);
-        }
+          var label = dtEl.textContent.replace(/[:\s]+$/, "").trim();
+          var section = makeSection(label);
+          var list = document.createElement("div");
+          list.className = "tt-api-param-list";
 
-        /* Completely remove the field-list from DOM (not just hide) */
+          var items = ddEl.querySelectorAll("li");
+          if (items.length) {
+            /* List-style field (Parameters, Keyword Arguments): one row per item. */
+            items.forEach(function (li) {
+              var p = li.querySelector("p") || li;
+              var strong = p.querySelector("strong");
+              var ems = p.querySelectorAll("em");
+              var name = strong ? strong.textContent.trim() : "";
+              var typeText = Array.from(ems)
+                .map(function (e) { return e.textContent.trim(); })
+                .filter(function (t) { return t && t !== ","; })
+                .join(", ")
+                .replace(/,\s*,/g, ",");
+              var fullText = p.textContent;
+              var dash = fullText.indexOf("–"); /* en-dash – */
+              var desc = dash !== -1 ? fullText.slice(dash + 1).trim() : "";
+              /* Also try hyphen-minus fallback */
+              if (!desc) {
+                dash = fullText.indexOf(" - ");
+                desc = dash !== -1 ? fullText.slice(dash + 3).trim() : "";
+              }
+              list.appendChild(makeParamRow(name, typeText, desc));
+            });
+          } else {
+            /* Scalar field (Returns, Return type, Raises): a single value. */
+            var full = ddEl.textContent.trim();
+            var d = full.indexOf("–");
+            var nm = d !== -1 ? full.slice(0, d).trim() : full;
+            var ds = d !== -1 ? full.slice(d + 1).trim() : "";
+            list.appendChild(makeParamRow(nm, "", ds));
+          }
+
+          section.appendChild(list);
+          fieldList.parentNode.insertBefore(section, fieldList);
+        });
+
+        /* Replace the raw field-list with the transformed sections. */
         fieldList.parentNode.removeChild(fieldList);
-      }
-
-      /* Also remove any leftover field-list dl children */
-      dd.querySelectorAll("dl.field-list").forEach(function (fl) {
-        fl.parentNode.removeChild(fl);
       });
     });
   }
@@ -281,7 +282,9 @@
         btn.addEventListener("click", function () {
           var tds = highlight.querySelectorAll("td.tt-codeline");
           var clean = Array.from(tds).map(function (td) {
-            return td.textContent.replace(/^>>>\s?/, "");
+            /* Strip either doctest prompt (>>> or ... continuation) so copied
+             * multi-line examples paste as runnable Python. */
+            return td.textContent.replace(/^(>>>|\.\.\.)\s?/, "");
           }).join("\n").trim();
           navigator.clipboard && navigator.clipboard.writeText(clean);
           btn.innerHTML = iconDone;
