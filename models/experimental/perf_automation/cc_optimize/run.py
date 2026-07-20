@@ -1433,8 +1433,38 @@ def _emit_summary(
             residual = json.loads(_rr[0].read_text())
     except Exception:  # noqa: BLE001
         pass
+    render_kernel = kernel_log
+    if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
+        _cum = str(kernel_log) + ".cumulative"
+
+        def _load_list(_p):
+            try:
+                _v = json.loads(Path(_p).read_text())
+                return _v if isinstance(_v, list) else []
+            except Exception:
+                return []
+
+        _seen, _merged = set(), []
+        for _a in _load_list(_cum) + _load_list(kernel_log):
+            if not isinstance(_a, dict):
+                continue
+            _k = (
+                _a.get("op_signature") or _a.get("op_code") or "",
+                _a.get("kernel_kind") or "",
+                (_a.get("note") or "")[:200],
+                bool(_a.get("wedged")),
+            )
+            if _k in _seen:
+                continue
+            _seen.add(_k)
+            _merged.append(_a)
+        try:
+            Path(_cum).write_text(json.dumps(_merged))
+            render_kernel = _cum
+        except Exception:
+            render_kernel = kernel_log
     text = mod.render_summary(
-        kernel_log,
+        render_kernel,
         _baseline_ms(),
         model=model_name,
         task=task,

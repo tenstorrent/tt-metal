@@ -290,6 +290,34 @@ def _read_baseline_profile():
     return None
 
 
+def _merge_cumulative(cum_path, attempts) -> list:
+    try:
+        prior = json.loads(cum_path.read_text())
+        if not isinstance(prior, list):
+            prior = []
+    except Exception:  # noqa: BLE001
+        prior = []
+    seen, out = set(), []
+    for a in list(prior) + list(attempts or []):
+        if not isinstance(a, dict):
+            continue
+        key = (
+            a.get("op_signature") or a.get("op_code") or "",
+            a.get("kernel_kind") or "",
+            (a.get("note") or "")[:200],
+            bool(a.get("wedged")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(a)
+    try:
+        cum_path.write_text(json.dumps(out))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def _rebuild_optimize_report(model_root=None) -> None:
     import time as _t
 
@@ -297,11 +325,18 @@ def _rebuild_optimize_report(model_root=None) -> None:
     if not attempts:
         return
     root = model_root if model_root is not None else _MODEL_ROOT
+    render_path = _KERNEL_LOG_PATH
+    n_attempts = len(attempts)
+    if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
+        cum_path = Path(str(_KERNEL_LOG_PATH) + ".cumulative")
+        merged = _merge_cumulative(cum_path, attempts)
+        render_path = cum_path
+        n_attempts = len(merged)
     try:
         mod = _summary_mod()
         perf_test = (_MANIFEST.get("perf_test_resolved") or {}).get("path") or ""
         text = mod.render_summary(
-            _KERNEL_LOG_PATH,
+            render_path,
             _report_baseline_ms(),
             model=Path(root).name,
             task=os.environ.get("PERF_MCP_TASK", "main"),
@@ -310,7 +345,7 @@ def _rebuild_optimize_report(model_root=None) -> None:
             baseline_profile=_read_baseline_profile(),
         )
         when = (
-            f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {len(attempts)} lever attempt(s) so far — "
+            f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {n_attempts} lever attempt(s) so far — "
             "each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed."
         )
         _key = os.environ.get("PERF_MCP_REPORT_KEY", "optimize")
