@@ -12,7 +12,19 @@ python models/experimental/ace_step_v1_5/perf/export_testing_ace_md.py
 
 ## Configuration
 
-**Mention the demo command:**
+> **Note:** The tables below are a historical Guitar / 15–60 s matrix (turbo 8 / base-sft 50).
+> For **client RTF comparison vs A100 / RTX 3090**, re-run with upstream-style inputs:
+>
+> ```bash
+> python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+>   --mesh-device BH_QB --upstream-benchmark \
+>   --lm_variant acestep-5Hz-lm-1.7B \
+>   --out /tmp/upstream_rtf_compare.wav
+> ```
+>
+> That forces **170.64 s**, **60 steps**, **guidance 15**, **Euler**, **`acestep-v15-base`**.
+
+**Historical demo command (Guitar matrix):**
 
 ```bash
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py   --variant acestep-v15-base   --lm_variant acestep-5Hz-lm-4B   --mesh-device BH_QB --prompt "Guitar "   --infer_steps 50 --guidance_scale 7 --duration_sec 60      --out /tmp/base_60_4.wav

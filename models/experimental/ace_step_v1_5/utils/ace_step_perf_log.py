@@ -10,7 +10,9 @@ Enable module-level timing with either:
 - ``ACE_STEP_DEMO_PERF_LOG=0`` (or ``ACE_STEP_PERF_LOG=0``) to disable, or
 - ``ACE_STEP_DEMO_PERF_LOG=1`` to force on explicitly.
 
-Prints per-module wall times, KEY METRICS (LM / DiT / **VAE decode**), and ``RTF_per_step``.
+Prints per-module wall times, KEY METRICS (LM / DiT / **VAE decode**), and upstream-style
+``RTF`` (``audio_duration / wall``, higher = faster; same as
+https://github.com/ace-step/ACE-Step#hardware-performance).
 
 Logs go to stdout (``[ace_step_v1_5][perf]``) and loguru at INFO.
 """
@@ -230,7 +232,7 @@ class AceStepPerfRecorder:
                 f"[ace_step_v1_5][perf]   {'  Phase-B (DiT+VAE)':40s} {total_ms:10.2f} ms",
                 flush=True,
             )
-        _emit_rtf_per_step(wall_ms=effective_wall_ms, params=self.params)
+        _emit_rtf_metrics(wall_ms=effective_wall_ms, params=self.params)
         module_timings = [pair for pair in self.timings_ms if pair[0] != label]
         module_timings = ace_step_merge_handoff_module_timings(module_timings, handoff_perf)
         summary_params = dict(self.params)
@@ -368,13 +370,215 @@ def ace_step_merge_handoff_module_timings(
     return sorted(merged.items(), key=lambda kv: kv[0])
 
 
+def ace_step_rtf(
+    *,
+    wall_s: float,
+    duration_sec: float,
+) -> Optional[float]:
+    """Upstream ACE-Step RTF: ``audio_duration / wall`` (higher = faster).
+
+    Matches https://github.com/ace-step/ACE-Step hardware-performance: e.g. 27.27× means
+    60 s of audio in ``60 / 27.27 ≈ 2.2`` s wall time.
+    """
+    if float(wall_s) <= 0.0 or float(duration_sec) <= 0.0:
+        return None
+    return float(duration_sec) / float(wall_s)
+
+
+# Upstream ACE-Step README "Hardware Performance" table
+# (https://github.com/ace-step/ACE-Step#%EF%B8%8F-hardware-performance).
+# Single GPU, batch size 1. RTF = audio_duration / wall.
+_UPSTREAM_RTF_REFERENCE: Tuple[Dict[str, Any], ...] = (
+    {
+        "device": "NVIDIA A100",
+        "rtf_27": 27.27,
+        "time_1min_27_s": 2.20,
+        "rtf_60": 12.27,
+        "time_1min_60_s": 4.89,
+    },
+    {
+        "device": "NVIDIA RTX 3090",
+        "rtf_27": 12.76,
+        "time_1min_27_s": 4.70,
+        "rtf_60": 6.48,
+        "time_1min_60_s": 9.26,
+    },
+)
+
+# Fair-comparison protocol matching upstream hardware-performance style inputs
+# (duration / steps / CFG / Euler). Use ``--upstream-benchmark`` in the demo.
+UPSTREAM_HARDWARE_BENCHMARK: Dict[str, Any] = {
+    "duration_sec": 170.64,
+    "infer_steps": 60,
+    "guidance_scale": 15.0,
+    "sampler_mode": "euler",
+    "variant": "acestep-v15-base",
+    "prompt": ("electronic music with a strong beat, warm pads, clear melody, " "high quality studio production"),
+}
+
+
+def ace_step_matches_upstream_hardware_benchmark(params: Optional[Dict[str, Any]]) -> bool:
+    """True when this run uses the upstream hardware-performance style inputs."""
+    if not params:
+        return False
+    try:
+        duration = float(params.get("duration_sec"))
+        steps = int(params.get("infer_steps"))
+        gs = float(params.get("guidance_scale"))
+    except (TypeError, ValueError):
+        return False
+    sampler = str(params.get("sampler_mode") or "euler").lower()
+    return (
+        abs(duration - float(UPSTREAM_HARDWARE_BENCHMARK["duration_sec"])) < 0.05
+        and steps == int(UPSTREAM_HARDWARE_BENCHMARK["infer_steps"])
+        and abs(gs - float(UPSTREAM_HARDWARE_BENCHMARK["guidance_scale"])) < 0.05
+        and sampler == "euler"
+    )
+
+
+def ace_step_time_to_render_1min_s(rtf: float) -> Optional[float]:
+    """Wall seconds to synthesize 60 s of audio at the given upstream-style RTF."""
+    if float(rtf) <= 0.0:
+        return None
+    return 60.0 / float(rtf)
+
+
+def emit_upstream_rtf_reference(
+    *,
+    our_rtf: Optional[float] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Print A100 / RTX 3090 upstream RTF rows next to this run for direct comparison."""
+    if not ace_step_perf_logging_enabled():
+        return
+
+    infer_steps = None
+    duration_sec = None
+    if params:
+        if params.get("infer_steps") is not None:
+            try:
+                infer_steps = int(params["infer_steps"])
+            except (TypeError, ValueError):
+                infer_steps = None
+        if params.get("duration_sec") is not None:
+            try:
+                duration_sec = float(params["duration_sec"])
+            except (TypeError, ValueError):
+                duration_sec = None
+
+    bar = "=" * 88
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    print(
+        "[ace_step_v1_5][perf] RTF COMPARISON vs upstream ACE-Step (A100 / RTX 3090)",
+        flush=True,
+    )
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    print(
+        "[ace_step_v1_5][perf]   Source: https://github.com/ace-step/ACE-Step#hardware-performance",
+        flush=True,
+    )
+    print(
+        "[ace_step_v1_5][perf]   Upstream protocol: single GPU, batch=1; "
+        "RTF = audio_duration / wall (higher = faster).",
+        flush=True,
+    )
+    matched = ace_step_matches_upstream_hardware_benchmark(params)
+    if matched:
+        print(
+            "[ace_step_v1_5][perf]   This run: MATCHES upstream-style inputs "
+            f"(duration={UPSTREAM_HARDWARE_BENCHMARK['duration_sec']}s, "
+            f"steps={UPSTREAM_HARDWARE_BENCHMARK['infer_steps']}, "
+            f"guidance={UPSTREAM_HARDWARE_BENCHMARK['guidance_scale']}, "
+            f"sampler={UPSTREAM_HARDWARE_BENCHMARK['sampler_mode']}).",
+            flush=True,
+        )
+    elif duration_sec is not None or infer_steps is not None:
+        bits = []
+        if duration_sec is not None:
+            bits.append(f"duration={duration_sec:g}s")
+        if infer_steps is not None:
+            bits.append(f"infer_steps={infer_steps}")
+        if params and params.get("guidance_scale") is not None:
+            bits.append(f"guidance_scale={params['guidance_scale']}")
+        if params and params.get("sampler_mode") is not None:
+            bits.append(f"sampler={params['sampler_mode']}")
+        print(
+            f"[ace_step_v1_5][perf]   This run: {', '.join(bits)} "
+            "(not upstream hardware-performance inputs; "
+            "use --upstream-benchmark for a fairer comparison).",
+            flush=True,
+        )
+    print(
+        f"[ace_step_v1_5][perf]   {'Device / config':<36s} {'RTF':>10s}  {'Time for 1 min audio':>20s}",
+        flush=True,
+    )
+    print(
+        f"[ace_step_v1_5][perf]   {'─' * 36} {'─' * 10}  {'─' * 20}",
+        flush=True,
+    )
+    for row in _UPSTREAM_RTF_REFERENCE:
+        label_27 = f"{row['device']} (27 steps)"
+        label_60 = f"{row['device']} (60 steps)"
+        print(
+            f"[ace_step_v1_5][perf]   {label_27:<36s} " f"{row['rtf_27']:9.2f}×  {row['time_1min_27_s']:19.2f} s",
+            flush=True,
+        )
+        print(
+            f"[ace_step_v1_5][perf]   {label_60:<36s} " f"{row['rtf_60']:9.2f}×  {row['time_1min_60_s']:19.2f} s",
+            flush=True,
+        )
+
+    if our_rtf is not None:
+        t_1min = ace_step_time_to_render_1min_s(float(our_rtf))
+        steps_lbl = f"{infer_steps} steps" if infer_steps is not None else "this run"
+        label = f"This run TTNN ({steps_lbl})"
+        t_1min_str = f"{t_1min:19.2f} s" if t_1min is not None else f"{'n/a':>20s}"
+        print(
+            f"[ace_step_v1_5][perf]   {'─' * 36} {'─' * 10}  {'─' * 20}",
+            flush=True,
+        )
+        print(
+            f"[ace_step_v1_5][perf]   {label:<36s} {float(our_rtf):9.2f}×  {t_1min_str}",
+            flush=True,
+        )
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    logger.info(
+        "ACE-Step RTF comparison: this_run={} | A100@27/60={}/{} | RTX3090@27/60={}/{}",
+        f"{our_rtf:.2f}×" if our_rtf is not None else "n/a",
+        27.27,
+        12.27,
+        12.76,
+        6.48,
+    )
+
+
+def ace_step_rtf_from_params(
+    *,
+    wall_ms: float,
+    params: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    if not params:
+        return None
+    duration_sec = params.get("duration_sec")
+    if duration_sec is None:
+        return None
+    try:
+        return ace_step_rtf(wall_s=float(wall_ms) / 1000.0, duration_sec=float(duration_sec))
+    except (TypeError, ValueError):
+        return None
+
+
 def ace_step_rtf_per_step(
     *,
     wall_s: float,
     duration_sec: float,
     infer_steps: int,
 ) -> Optional[float]:
-    """Real-time factor per diffusion step: wall / (audio_duration × infer_steps)."""
+    """Legacy diagnostic: ``wall / (audio_duration × infer_steps)``.
+
+    **Not** the upstream ACE-Step RTF. Prefer :func:`ace_step_rtf`
+    (``audio_duration / wall``, higher = faster).
+    """
     denom = float(duration_sec) * float(infer_steps)
     if denom <= 0.0 or wall_s < 0.0:
         return None
@@ -402,24 +606,29 @@ def ace_step_rtf_per_step_from_params(
         return None
 
 
-def _emit_rtf_per_step(*, wall_ms: float, params: Optional[Dict[str, Any]] = None) -> None:
-    rtf = ace_step_rtf_per_step_from_params(wall_ms=wall_ms, params=params)
-    if rtf is None:
-        return
-    duration_sec = float(params["duration_sec"])  # type: ignore[index]
-    infer_steps = int(params["infer_steps"])  # type: ignore[index]
-    print(
-        f"[ace_step_v1_5][perf]   {'RTF_per_step':40s} {rtf:10.6f}  "
-        f"(wall / ({duration_sec:g}s × {infer_steps} steps))",
-        flush=True,
-    )
-    logger.info(
-        "ACE-Step RTF_per_step: {:.6f} (wall {:.2f}s / ({}s × {} steps))",
-        rtf,
-        float(wall_ms) / 1000.0,
-        duration_sec,
-        infer_steps,
-    )
+def _emit_rtf_metrics(*, wall_ms: float, params: Optional[Dict[str, Any]] = None) -> None:
+    """Print upstream RTF (``audio_duration / wall``) when params allow."""
+    duration_sec = None
+    if params and params.get("duration_sec") is not None:
+        try:
+            duration_sec = float(params["duration_sec"])
+        except (TypeError, ValueError):
+            duration_sec = None
+
+    rtf = ace_step_rtf_from_params(wall_ms=wall_ms, params=params)
+    if rtf is not None and duration_sec is not None:
+        wall_s = float(wall_ms) / 1000.0
+        print(
+            f"[ace_step_v1_5][perf]   {'RTF':40s} {rtf:10.2f}×  "
+            f"(audio {duration_sec:g}s / wall {wall_s:.2f}s; higher = faster)",
+            flush=True,
+        )
+        logger.info(
+            "ACE-Step RTF: {:.2f}× (audio {:.3g}s / wall {:.2f}s)",
+            rtf,
+            duration_sec,
+            wall_s,
+        )
 
 
 def ace_step_extract_key_metrics(
@@ -455,6 +664,9 @@ def ace_step_extract_key_metrics(
         "dit_total_time_s": dit_ms / 1000.0,
         "vae_decode_time_s": vae_ms / 1000.0,
     }
+    rtf = ace_step_rtf_from_params(wall_ms=wall_ms, params=params)
+    if rtf is not None:
+        metrics["rtf"] = rtf
 
     if params:
         num_tokens = params.get("lm_num_tokens")
@@ -505,6 +717,18 @@ def emit_key_metrics(
         ("VAE Decode Time", f"{metrics['vae_decode_time_s']:.2f} s", "Decode latents to audio waveform"),
     ]
 
+    rtf = metrics.get("rtf")
+    if rtf is not None:
+        rows.append(
+            (
+                "RTF",
+                f"{rtf:.2f}×",
+                "audio_duration / wall (upstream ACE-Step; higher = faster)",
+            )
+        )
+    elif params and params.get("duration_sec") is not None:
+        rows.append(("RTF", "n/a", "Need wall > 0 and duration_sec > 0"))
+
     tps = metrics.get("tokens_per_sec")
     if show_tokens_per_sec:
         if tps is not None:
@@ -519,8 +743,10 @@ def emit_key_metrics(
     print(f"[ace_step_v1_5][perf] {bar}", flush=True)
 
     log_extra = ""
+    if rtf is not None:
+        log_extra += f" RTF={rtf:.2f}×"
     if tps is not None:
-        log_extra = f" tokens_per_sec={tps:.1f}"
+        log_extra += f" tokens_per_sec={tps:.1f}"
     logger.info(
         "ACE-Step key metrics: wall={:.2f}s LM={:.2f}s DiT={:.2f}s VAE={:.2f}s{}",
         metrics["wall_time_s"],
@@ -529,6 +755,7 @@ def emit_key_metrics(
         metrics["vae_decode_time_s"],
         log_extra,
     )
+    emit_upstream_rtf_reference(our_rtf=rtf if isinstance(rtf, (int, float)) else None, params=params)
 
 
 def emit_benchmark_wall_breakdown(
@@ -641,23 +868,23 @@ def emit_benchmark_wall_breakdown(
         f"[ace_step_v1_5][perf]   {'Wall Time (total)':<34s} {wall_s:10.2f}  {'100.0':>11s}%",
         flush=True,
     )
-    rtf = ace_step_rtf_per_step_from_params(wall_ms=wall_ms, params=params)
-    if rtf is not None:
-        duration_sec = float(params["duration_sec"])  # type: ignore[index]
-        infer_steps = int(params["infer_steps"])  # type: ignore[index]
+    rtf = ace_step_rtf_from_params(wall_ms=wall_ms, params=params)
+    if rtf is not None and params is not None:
+        duration_sec = float(params["duration_sec"])
         print(
-            f"[ace_step_v1_5][perf]   {'RTF_per_step':<34s} {rtf:10.6f}  "
-            f"(wall / ({duration_sec:g}s × {infer_steps} steps))",
+            f"[ace_step_v1_5][perf]   {'RTF':<34s} {rtf:10.2f}×  "
+            f"(audio {duration_sec:g}s / wall {wall_s:.2f}s; higher = faster)",
             flush=True,
         )
     print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    rtf_log = f" RTF={rtf:.2f}×" if rtf is not None else ""
     logger.info(
         "ACE-Step benchmark wall: {:.2f}s (LLM {:.2f}s DiT {:.2f}s VAE {:.2f}s){}",
         wall_s,
         llm_ms / 1000.0,
         dit_ms / 1000.0,
         vae_ms / 1000.0,
-        f" RTF_per_step={rtf:.6f}" if rtf is not None else "",
+        rtf_log,
     )
 
 
@@ -709,7 +936,7 @@ def emit_session_summary(state: SessionPerfState, *, params: Optional[Dict[str, 
                 f"[ace_step_v1_5][perf] steady-state (last timed pass '{last.label}'): " f"{last.total_ms:.2f} ms",
                 flush=True,
             )
-            _emit_rtf_per_step(wall_ms=last.total_ms, params=params)
+            _emit_rtf_metrics(wall_ms=last.total_ms, params=params)
             emit_key_metrics(
                 last.modules_ms,
                 wall_ms=last.total_ms,

@@ -757,7 +757,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="ACE-Step v1.5: HF preprocessing + TTNN DiT + TTNN or PyTorch VAE decode.",
     )
-    ap.add_argument("--prompt", type=str, required=True, help="Caption / text prompt.")
+    ap.add_argument("--prompt", type=str, default=None, help="Caption / text prompt.")
+    ap.add_argument(
+        "--upstream-benchmark",
+        action="store_true",
+        help=(
+            "Fair RTF comparison preset matching upstream ACE-Step hardware-performance style "
+            "inputs: duration=170.64s, infer_steps=60, guidance_scale=15, sampler=euler, "
+            "variant=acestep-v15-base. Overrides duration/steps/guidance/variant. "
+            "If --prompt is omitted, uses the preset prompt. See README 'Upstream RTF comparison'."
+        ),
+    )
     ap.add_argument(
         "--variant",
         type=str,
@@ -884,6 +894,27 @@ def main() -> None:
     ap.add_argument("--ace-step-dit-handoff", type=str, default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
     dit_handoff_mode = args.ace_step_dit_handoff is not None
+
+    if bool(getattr(args, "upstream_benchmark", False)):
+        from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import UPSTREAM_HARDWARE_BENCHMARK
+
+        ub = UPSTREAM_HARDWARE_BENCHMARK
+        prev_variant = str(args.variant)
+        args.duration_sec = float(ub["duration_sec"])
+        args.infer_steps = int(ub["infer_steps"])
+        args.guidance_scale = float(ub["guidance_scale"])
+        args.variant = str(ub["variant"])
+        if not args.prompt:
+            args.prompt = str(ub["prompt"])
+        print(
+            "[ace_step_v1_5] --upstream-benchmark: "
+            f"duration_sec={args.duration_sec:g}, infer_steps={args.infer_steps}, "
+            f"guidance_scale={args.guidance_scale:g}, sampler=euler, variant={args.variant}"
+            + (f" (was {prev_variant})" if prev_variant != args.variant else ""),
+            flush=True,
+        )
+    elif not args.prompt:
+        ap.error("--prompt is required (or pass --upstream-benchmark for the preset prompt)")
 
     from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import configure_acestep_logging
 
@@ -1120,6 +1151,8 @@ def main() -> None:
             "duration_sec": float(args.duration_sec),
             "infer_steps": int(infer_steps),
             "guidance_scale": float(gs),
+            "sampler_mode": "euler",
+            "upstream_benchmark": bool(getattr(args, "upstream_benchmark", False)),
             "use_adg": bool(use_adg),
             "seed": int(args.seed),
             "ttnn_condition": True,

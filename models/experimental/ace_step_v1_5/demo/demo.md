@@ -18,6 +18,8 @@ For quick start, recipes, and the full CLI table see [`../README.md`](../README.
 
 ## Quick start (BH_QB)
 
+Fast everyday path (turbo):
+
 ```bash
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --mesh-device BH_QB \
@@ -29,6 +31,16 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --prompt "Electronic dance track with deep bass and bright synth lead" \
   --seed 0 \
   --out /tmp/turbo_15s.wav
+```
+
+Upstream RTF comparison (170.64 s / 60 steps / guidance 15 / Euler / base):
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB \
+  --upstream-benchmark \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --out /tmp/upstream_rtf_compare.wav
 ```
 
 Each CLI invocation is **one generation** → one WAV → process exit (devices released in `finally`).
@@ -133,6 +145,9 @@ At ≥30 s on mesh, trace is forced off: latents + TTNN run on **host CPU** whil
 Printed at end of each run when perf logging is enabled (`demo_total` label):
 
 - Per-module milliseconds
+- **KEY METRICS** table: Wall / LM / DiT / VAE / **RTF** / Tokens/sec
+- **RTF** = `audio_duration / wall` (same as [upstream ACE-Step](https://github.com/ace-step/ACE-Step#%EF%B8%8F-hardware-performance); higher = faster)
+- **RTF COMPARISON** table: this-run RTF vs upstream **A100** / **RTX 3090** (27- and 60-step reference rows)
 - Parameters: `frames`, `infer_steps`, `duration_sec`, backends, etc.
 
 ### SESSION SUMMARY

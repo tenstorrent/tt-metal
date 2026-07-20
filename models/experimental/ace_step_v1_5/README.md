@@ -36,9 +36,23 @@ End-to-end prompt-to-WAV (`demo/run_prompt_to_wav.py`) has been tested on **Blac
 | 1.7B | `acestep-5Hz-lm-1.7B` | Tested e2e (default) |
 | 4B | `acestep-5Hz-lm-4B` | Tested e2e |
 
-Default demo pairing: **`acestep-v15-turbo`** + **`acestep-5Hz-lm-1.7B`**. Turbo runs use **`acestep-v15-turbo`** with any of the three LM sizes. SFT uses the same CFG/step defaults as base (`infer_steps=50`, `guidance_scale=7`).
+**BH_QB benchmark data** (historical: prompt *Guitar*, turbo/base/sft matrix): see [`perf/BENCHMARK_RESULTS.md`](perf/BENCHMARK_RESULTS.md).
 
-**BH_QB benchmark data** (prompt *Guitar*, branch `ign/ACE_demo_modified`): full timing + audio-quality notes for **15s / 30s / 60s** × **base / turbo / sft** × **LM 0.6B / 1.7B / 4B** are in [`perf/BENCHMARK_RESULTS.md`](perf/BENCHMARK_RESULTS.md)
+**Upstream RTF comparison (recommended for client A100 / RTX 3090 tables)**
+
+Use the same style of inputs as [ACE-Step hardware performance](https://github.com/ace-step/ACE-Step#%EF%B8%8F-hardware-performance): **170.64 s**, **60 steps**, **guidance 15**, **Euler** (not Guitar @ 8-step turbo):
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB \
+  --upstream-benchmark \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --out /tmp/upstream_rtf_compare.wav
+```
+
+`--upstream-benchmark` forces `acestep-v15-base`, `duration_sec=170.64`, `infer_steps=60`, `guidance_scale=15`, `sampler=euler`, and a preset prompt if `--prompt` is omitted. KEY METRICS then prints **RTF** plus an **A100 / RTX 3090** reference table marked as protocol match.
+
+Default demo pairing for everyday use remains **`acestep-v15-turbo`** + **`acestep-5Hz-lm-1.7B`**. Turbo runs use **`acestep-v15-turbo`** with any of the three LM sizes. SFT uses the same CFG/step defaults as base (`infer_steps=50`, `guidance_scale=7`).
 
 **Why base / SFT can sound noisier than turbo at 60s+**
 
@@ -87,7 +101,7 @@ export MESH_DEVICE=BH_QB
 
 ## How to use the demo
 
-### 1. Minimal command
+### 1. Minimal command (fast turbo path)
 
 ```bash
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
@@ -102,7 +116,19 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --out /tmp/turbo_15s.wav
 ```
 
-Required: `--prompt`. Everything else has sensible defaults (`--variant acestep-v15-turbo`, `--lm_variant acestep-5Hz-lm-1.7B`, `--duration_sec 10`, `--out ttnn_out.wav`).
+Required: `--prompt` (unless `--upstream-benchmark`). Everyday default remains turbo (`--variant acestep-v15-turbo`, `--duration_sec 10`, `--out ttnn_out.wav`).
+
+### 1b. Upstream RTF comparison (A100 / RTX 3090 apples-to-apples)
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB \
+  --upstream-benchmark \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --out /tmp/upstream_rtf_compare.wav
+```
+
+Forces **170.64 s / 60 steps / guidance 15 / Euler / base** (not Guitar @ 8-step turbo).
 
 ### 2. BH_QB run flow (what happens)
 
@@ -253,7 +279,8 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--prompt` | `str` | **(required)** | Text description of the music to generate. |
+| `--prompt` | `str` | **(required)**\* | Text description of the music to generate. \*Optional if `--upstream-benchmark`. |
+| `--upstream-benchmark` | flag | off | Force upstream hardware-performance style inputs: **170.64 s**, **60 steps**, **guidance 15**, **Euler**, **`acestep-v15-base`** (+ preset prompt). Use for A100/RTX 3090 RTF comparison. |
 | `--variant` | `str` | `acestep-v15-turbo` | DiT checkpoint. Choices: `acestep-v15-base`, `acestep-v15-sft`, `acestep-v15-turbo`. |
 | `--lm_variant` | `str` | `acestep-5Hz-lm-1.7B` | 5 Hz LM size. Choices: `acestep-5Hz-lm-0.6B`, `acestep-5Hz-lm-1.7B`, `acestep-5Hz-lm-4B`. |
 | `--device_id` | `int` | `0` | TT device index (single-chip / preprocess device). |

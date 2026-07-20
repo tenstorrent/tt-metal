@@ -53,8 +53,8 @@ def test_split_preprocess_only_for_multi_device():
     assert ace_step_needs_split_device("BH_LB")
 
 
-def test_unknown_mesh_sku_raises():
-    with pytest.raises(ValueError, match="Unknown ACE-Step mesh SKU"):
+def test_unknown_mesh_sku_raises(expect_error):
+    with expect_error(ValueError, "Unknown ACE-Step mesh SKU"):
         resolve_ace_step_mesh_sku(cli_value="NOT_A_SKU")
 
 
@@ -784,8 +784,29 @@ def test_emit_session_summary_rollup(monkeypatch):
         ace_step_build_preprocess_handoff_perf,
         ace_step_effective_wall_ms,
         ace_step_extract_key_metrics,
+        ace_step_matches_upstream_hardware_benchmark,
+        ace_step_rtf,
         ace_step_rtf_per_step,
+        ace_step_time_to_render_1min_s,
+        UPSTREAM_HARDWARE_BENCHMARK,
         emit_session_summary,
+    )
+
+    # Upstream ACE-Step RTF: audio_duration / wall (higher = faster).
+    assert ace_step_rtf(wall_s=2.2, duration_sec=60.0) == pytest.approx(60.0 / 2.2)
+    assert ace_step_rtf(wall_s=111.68, duration_sec=15.0) == pytest.approx(15.0 / 111.68)
+    assert ace_step_time_to_render_1min_s(27.27) == pytest.approx(60.0 / 27.27)
+    assert ace_step_time_to_render_1min_s(12.76) == pytest.approx(60.0 / 12.76)
+    assert ace_step_matches_upstream_hardware_benchmark(
+        {
+            "duration_sec": UPSTREAM_HARDWARE_BENCHMARK["duration_sec"],
+            "infer_steps": UPSTREAM_HARDWARE_BENCHMARK["infer_steps"],
+            "guidance_scale": UPSTREAM_HARDWARE_BENCHMARK["guidance_scale"],
+            "sampler_mode": "euler",
+        }
+    )
+    assert not ace_step_matches_upstream_hardware_benchmark(
+        {"duration_sec": 15.0, "infer_steps": 8, "guidance_scale": 1.0, "sampler_mode": "euler"}
     )
 
     assert ace_step_rtf_per_step(wall_s=60.0, duration_sec=60.0, infer_steps=50) == pytest.approx(0.02)
@@ -798,9 +819,10 @@ def test_emit_session_summary_rollup(monkeypatch):
             ("vae_decode", 2200.0),
         ],
         wall_ms=13000.0,
-        params={"lm_num_tokens": 300, "lm_gen_time_s": 2.0},
+        params={"lm_num_tokens": 300, "lm_gen_time_s": 2.0, "duration_sec": 15.0},
     )
     assert metrics["wall_time_s"] == pytest.approx(13.0)
+    assert metrics["rtf"] == pytest.approx(15.0 / 13.0)
     assert metrics["lm_total_time_s"] == pytest.approx(2.0)
     assert metrics["dit_total_time_s"] == pytest.approx(6.5)
     assert metrics["vae_decode_time_s"] == pytest.approx(2.2)

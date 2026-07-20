@@ -1,0 +1,829 @@
+{
+  "meta": {
+    "config": {
+      "devices": [
+        "BH_QB",
+        "P150"
+      ],
+      "durations": [
+        15,
+        30,
+        60
+      ],
+      "lm_variants": [
+        "acestep-5Hz-lm-0.6B",
+        "acestep-5Hz-lm-1.7B",
+        "acestep-5Hz-lm-4B"
+      ],
+      "prompt": "guitar, saxophone and prominent drums with clear kick and snare",
+      "variant_settings": {
+        "acestep-v15-base": {
+          "guidance_scale": 7.0,
+          "infer_steps": 50
+        },
+        "acestep-v15-turbo": {
+          "guidance_scale": 1.0,
+          "infer_steps": 8
+        }
+      },
+      "variants": [
+        "acestep-v15-turbo",
+        "acestep-v15-base"
+      ]
+    }
+  },
+  "runs": {
+    "acestep-v15-base|15|acestep-5Hz-lm-0.6B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 15,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_15s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 7.36,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 2.59,
+          "rtf": 0.11,
+          "tokens_per_sec": 42.8,
+          "vae_decode_time_s": 12.77,
+          "wall_time_s": 130.5
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:28:28",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_15s_0.6B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 15,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_15s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:46",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_15s_0.6B.wav"
+      }
+    },
+    "acestep-v15-base|15|acestep-5Hz-lm-1.7B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 15,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_15s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": 6.51,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 3.48,
+          "rtf": 0.12,
+          "tokens_per_sec": 31.9,
+          "vae_decode_time_s": 2.18,
+          "wall_time_s": 120.62
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:30:34",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_15s_1.7B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 15,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_15s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:49",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_15s_1.7B.wav"
+      }
+    },
+    "acestep-v15-base|15|acestep-5Hz-lm-4B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 15,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_15s_4B.log",
+        "metrics": {
+          "dit_total_time_s": 6.58,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 4.78,
+          "rtf": 0.1,
+          "tokens_per_sec": 23.2,
+          "vae_decode_time_s": 2.19,
+          "wall_time_s": 147.91
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:33:08",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_15s_4B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 15,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_15s_4B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:52",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_15s_4B.wav"
+      }
+    },
+    "acestep-v15-base|30|acestep-5Hz-lm-0.6B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 30,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_30s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 8.04,
+          "lm_num_tokens": 185,
+          "lm_total_time_s": 6.61,
+          "rtf": 0.24,
+          "tokens_per_sec": 28.0,
+          "vae_decode_time_s": 21.08,
+          "wall_time_s": 126.64
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:35:21",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_30s_0.6B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 30,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_30s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:55",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_30s_0.6B.wav"
+      }
+    },
+    "acestep-v15-base|30|acestep-5Hz-lm-1.7B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 30,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_30s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:30",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_30s_1.7B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 30,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_30s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:58",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_30s_1.7B.wav"
+      }
+    },
+    "acestep-v15-base|30|acestep-5Hz-lm-4B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 30,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_30s_4B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:33",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_30s_4B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 30,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_30s_4B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:56:02",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_30s_4B.wav"
+      }
+    },
+    "acestep-v15-base|60|acestep-5Hz-lm-0.6B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 60,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_60s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:36",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_60s_0.6B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 60,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_60s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:56:05",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_60s_0.6B.wav"
+      }
+    },
+    "acestep-v15-base|60|acestep-5Hz-lm-1.7B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 60,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_60s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:39",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_60s_1.7B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 60,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_60s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:56:08",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_60s_1.7B.wav"
+      }
+    },
+    "acestep-v15-base|60|acestep-5Hz-lm-4B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 60,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_base_60s_4B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:55:43",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_base_60s_4B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 60,
+        "guidance_scale": 7.0,
+        "infer_steps": 50,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_base_60s_4B.log",
+        "metrics": {
+          "dit_total_time_s": null,
+          "lm_num_tokens": null,
+          "lm_total_time_s": null,
+          "rtf": null,
+          "tokens_per_sec": null,
+          "vae_decode_time_s": null,
+          "wall_time_s": null
+        },
+        "returncode": 1,
+        "status": "failed",
+        "timestamp": "2026-07-20T04:56:11",
+        "variant": "acestep-v15-base",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_base_60s_4B.wav"
+      }
+    },
+    "acestep-v15-turbo|15|acestep-5Hz-lm-0.6B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 15,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_15s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 0.73,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 2.53,
+          "rtf": 0.13,
+          "tokens_per_sec": 43.9,
+          "vae_decode_time_s": 2.22,
+          "wall_time_s": 111.42
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:14:40",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_15s_0.6B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 15,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_15s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 0.63,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 2.54,
+          "rtf": 0.14,
+          "tokens_per_sec": 43.7,
+          "vae_decode_time_s": 1.43,
+          "wall_time_s": 104.24
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:04:34",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_15s_0.6B.wav"
+      }
+    },
+    "acestep-v15-turbo|15|acestep-5Hz-lm-1.7B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 15,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_15s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": 0.75,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 3.45,
+          "rtf": 0.13,
+          "tokens_per_sec": 32.2,
+          "vae_decode_time_s": 2.22,
+          "wall_time_s": 112.6
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:16:39",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_15s_1.7B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 15,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_15s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": 0.64,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 3.48,
+          "rtf": 0.14,
+          "tokens_per_sec": 31.9,
+          "vae_decode_time_s": 1.44,
+          "wall_time_s": 107.16
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:06:26",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_15s_1.7B.wav"
+      }
+    },
+    "acestep-v15-turbo|15|acestep-5Hz-lm-4B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 15,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_15s_4B.log",
+        "metrics": {
+          "dit_total_time_s": 0.74,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 4.83,
+          "rtf": 0.11,
+          "tokens_per_sec": 23.0,
+          "vae_decode_time_s": 2.22,
+          "wall_time_s": 142.22
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:19:07",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_15s_4B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 15,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_15s_4B.log",
+        "metrics": {
+          "dit_total_time_s": 0.64,
+          "lm_num_tokens": 111,
+          "lm_total_time_s": 4.87,
+          "rtf": 0.11,
+          "tokens_per_sec": 22.8,
+          "vae_decode_time_s": 1.43,
+          "wall_time_s": 136.12
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:08:46",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_15s_4B.wav"
+      }
+    },
+    "acestep-v15-turbo|30|acestep-5Hz-lm-0.6B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 30,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_30s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 0.78,
+          "lm_num_tokens": 185,
+          "lm_total_time_s": 6.83,
+          "rtf": 0.27,
+          "tokens_per_sec": 27.1,
+          "vae_decode_time_s": 12.14,
+          "wall_time_s": 109.72
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:21:03",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_30s_0.6B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 30,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_30s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 16.03,
+          "lm_num_tokens": 186,
+          "lm_total_time_s": 4.08,
+          "rtf": 0.22,
+          "tokens_per_sec": 45.6,
+          "vae_decode_time_s": 13.71,
+          "wall_time_s": 135.01
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:11:05",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_30s_0.6B.wav"
+      }
+    },
+    "acestep-v15-turbo|30|acestep-5Hz-lm-1.7B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 30,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_30s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": 0.8,
+          "lm_num_tokens": 185,
+          "lm_total_time_s": 7.25,
+          "rtf": 0.27,
+          "tokens_per_sec": 25.5,
+          "vae_decode_time_s": 12.2,
+          "wall_time_s": 110.35
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:23:00",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_30s_1.7B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 30,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_30s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": 15.89,
+          "lm_num_tokens": 186,
+          "lm_total_time_s": 5.6,
+          "rtf": 0.22,
+          "tokens_per_sec": 33.2,
+          "vae_decode_time_s": 13.55,
+          "wall_time_s": 137.09
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:13:26",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_30s_1.7B.wav"
+      }
+    },
+    "acestep-v15-turbo|30|acestep-5Hz-lm-4B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 30,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_30s_4B.log",
+        "metrics": {
+          "dit_total_time_s": 0.79,
+          "lm_num_tokens": 184,
+          "lm_total_time_s": 8.15,
+          "rtf": 0.21,
+          "tokens_per_sec": 22.6,
+          "vae_decode_time_s": 12.14,
+          "wall_time_s": 140.43
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:25:26",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_30s_4B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 30,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_30s_4B.log",
+        "metrics": {
+          "dit_total_time_s": 16.04,
+          "lm_num_tokens": 186,
+          "lm_total_time_s": 7.89,
+          "rtf": 0.18,
+          "tokens_per_sec": 23.6,
+          "vae_decode_time_s": 13.67,
+          "wall_time_s": 167.94
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:16:18",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_30s_4B.wav"
+      }
+    },
+    "acestep-v15-turbo|60|acestep-5Hz-lm-0.6B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 60,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_60s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 1.19,
+          "lm_num_tokens": 335,
+          "lm_total_time_s": 12.29,
+          "rtf": 0.39,
+          "tokens_per_sec": 27.3,
+          "vae_decode_time_s": 50.74,
+          "wall_time_s": 155.02
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:28:07",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_60s_0.6B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 60,
+        "lm_variant": "acestep-5Hz-lm-0.6B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_60s_0.6B.log",
+        "metrics": {
+          "dit_total_time_s": 23.07,
+          "lm_num_tokens": 336,
+          "lm_total_time_s": 7.06,
+          "rtf": 0.38,
+          "tokens_per_sec": 47.6,
+          "vae_decode_time_s": 26.8,
+          "wall_time_s": 158.49
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:19:01",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_60s_0.6B.wav"
+      }
+    },
+    "acestep-v15-turbo|60|acestep-5Hz-lm-1.7B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 60,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_60s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": 1.18,
+          "lm_num_tokens": 335,
+          "lm_total_time_s": 13.19,
+          "rtf": 0.38,
+          "tokens_per_sec": 25.4,
+          "vae_decode_time_s": 50.87,
+          "wall_time_s": 156.85
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:30:51",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_60s_1.7B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 60,
+        "lm_variant": "acestep-5Hz-lm-1.7B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_60s_1.7B.log",
+        "metrics": {
+          "dit_total_time_s": 23.08,
+          "lm_num_tokens": 336,
+          "lm_total_time_s": 9.59,
+          "rtf": 0.37,
+          "tokens_per_sec": 35.0,
+          "vae_decode_time_s": 26.53,
+          "wall_time_s": 161.7
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:21:47",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_60s_1.7B.wav"
+      }
+    },
+    "acestep-v15-turbo|60|acestep-5Hz-lm-4B": {
+      "BH_QB": {
+        "device": "BH_QB",
+        "duration_sec": 60,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/BH_QB_turbo_60s_4B.log",
+        "metrics": {
+          "dit_total_time_s": 1.18,
+          "lm_num_tokens": 334,
+          "lm_total_time_s": 14.32,
+          "rtf": 0.32,
+          "tokens_per_sec": 23.3,
+          "vae_decode_time_s": 50.69,
+          "wall_time_s": 185.22
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T12:34:02",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/BH_QB_turbo_60s_4B.wav"
+      },
+      "P150": {
+        "device": "P150",
+        "duration_sec": 60,
+        "lm_variant": "acestep-5Hz-lm-4B",
+        "log": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/logs/P150_turbo_60s_4B.log",
+        "metrics": {
+          "dit_total_time_s": 23.14,
+          "lm_num_tokens": 336,
+          "lm_total_time_s": 13.72,
+          "rtf": 0.31,
+          "tokens_per_sec": 24.5,
+          "vae_decode_time_s": 26.55,
+          "wall_time_s": 194.77
+        },
+        "returncode": 0,
+        "status": "ok",
+        "timestamp": "2026-07-17T13:25:06",
+        "variant": "acestep-v15-turbo",
+        "wav": "/home/iguser/proj_vox/tt-metal/models/experimental/ace_step_v1_5/perf/bench_out/wav/P150_turbo_60s_4B.wav"
+      }
+    }
+  }
+}
