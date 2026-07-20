@@ -38,6 +38,26 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
         act.dtype() == DataType::BFLOAT16 && weight.dtype() == DataType::BFLOAT16,
         "regime_a_matmul v1 supports only BFLOAT16 inputs");
 
+    // Memory-layout assumptions (v1): the in0-ring reader + output writer use interleaved-DRAM accessors,
+    // and the writer / CBs hardcode bf16 tile size/format. Validate these rather than silently reading or
+    // writing a wrongly-formatted tensor. (in1's DRAM 8-bank width-shard is validated separately below.)
+    TT_FATAL(
+        act.memory_config().buffer_type() == BufferType::DRAM &&
+            act.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "regime_a_matmul input (in0) must be DRAM INTERLEAVED");
+    if (operation_attributes.output_dtype.has_value()) {
+        TT_FATAL(
+            operation_attributes.output_dtype.value() == DataType::BFLOAT16,
+            "regime_a_matmul output dtype must be BFLOAT16 (only bf16 output is implemented), got {}",
+            operation_attributes.output_dtype.value());
+    }
+    if (operation_attributes.output_mem_config.has_value()) {
+        const auto& omc = operation_attributes.output_mem_config.value();
+        TT_FATAL(
+            omc.buffer_type() == BufferType::DRAM && omc.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "regime_a_matmul output must be DRAM INTERLEAVED");
+    }
+
     // Shapes: no batching — all leading dims (< -2) must be 1 for both operands.
     const auto& a_logical = act.logical_shape();
     const auto& w_logical = weight.logical_shape();
@@ -113,6 +133,7 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
     if (has_bias) {
         const auto& bias = *tensor_args.bias_tensor;
         TT_FATAL(bias.storage_type() == StorageType::DEVICE, "regime_a_matmul bias must be on device");
+        TT_FATAL(bias.buffer() != nullptr, "regime_a_matmul bias must be allocated in a device buffer");
         TT_FATAL(bias.device() == act.device(), "regime_a_matmul bias must be on the same device");
         TT_FATAL(bias.layout() == Layout::TILE, "regime_a_matmul bias must be TILE layout");
         // Bias CB (c_4) is hardcoded Float16_b in the program factory; only BFLOAT16 is implemented.
@@ -128,12 +149,21 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(b_logical[-1] == N, "regime_a_matmul bias last dim must equal N ({}), got {}", N, b_logical[-1]);
     }
 
-    const bool has_ternary = operation_attributes.fused_ternary_scalar.has_value();
+    // addcmul is all-or-nothing: {scalar, residual (input_a), gate (input_b)} must be supplied together or
+    // not at all — otherwise a caller that passes residual/gate WITHOUT a scalar would have those tensors
+    // silently ignored (no fusion applied).
+    const bool has_scalar = operation_attributes.fused_ternary_scalar.has_value();
+    const bool has_resid = tensor_args.fused_ternary_input_a.has_value();
+    const bool has_gate = tensor_args.fused_ternary_input_b.has_value();
+    TT_FATAL(
+        (has_scalar && has_resid && has_gate) || (!has_scalar && !has_resid && !has_gate),
+        "regime_a_matmul addcmul requires all of {{scalar, residual (input_a), gate (input_b)}} together or "
+        "none (got scalar={}, residual={}, gate={})",
+        has_scalar,
+        has_resid,
+        has_gate);
+    const bool has_ternary = has_scalar;
     if (has_ternary) {
-        TT_FATAL(
-            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value(),
-            "regime_a_matmul addcmul requires both residual (fused_ternary_input_a) and gate "
-            "(fused_ternary_input_b) tensors");
         TT_FATAL(
             !operation_attributes.fused_activation.has_value(),
             "regime_a_matmul does not support fused_activation together with addcmul; use one or the other");
@@ -141,6 +171,7 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& tb = *tensor_args.fused_ternary_input_b;  // gate [1, N] or [M, N]
         for (const auto* t : {&ta, &tb}) {
             TT_FATAL(t->storage_type() == StorageType::DEVICE, "regime_a_matmul addcmul operands must be on device");
+            TT_FATAL(t->buffer() != nullptr, "regime_a_matmul addcmul operands must be allocated in device buffers");
             TT_FATAL(t->device() == act.device(), "regime_a_matmul addcmul operands must be on the same device");
             TT_FATAL(t->layout() == Layout::TILE, "regime_a_matmul addcmul operands must be TILE layout");
             // Only bf16 (residual+gate) and fp32 (gate) CB formats are implemented; residual is further
@@ -149,6 +180,12 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
                 t->dtype() == DataType::BFLOAT16 || t->dtype() == DataType::FLOAT32,
                 "regime_a_matmul addcmul operand must be BFLOAT16 or FLOAT32, got {}",
                 t->dtype());
+            // No batching: all dims < -2 must be 1 (only the trailing [.., M|1, N] matrix is addressed).
+            const auto& tl = t->logical_shape();
+            TT_FATAL(tl.rank() >= 2, "regime_a_matmul addcmul operand must have rank >= 2");
+            for (int i = 0; i < static_cast<int>(tl.rank()) - 2; ++i) {
+                TT_FATAL(tl[i] == 1, "regime_a_matmul addcmul operand must be 1 in all dims < -2 (no batching)");
+            }
         }
         // Residual (ternary_a) must share in1's bf16 tile format (CB c_5 is bf16).
         TT_FATAL(

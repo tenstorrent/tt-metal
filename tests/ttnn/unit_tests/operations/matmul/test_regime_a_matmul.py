@@ -468,3 +468,80 @@ def test_regime_a_fused_validation(device):
             fused_ternary_input_a=_bf((1, 1, M, N), ttnn.float32),
             fused_ternary_input_b=_mk(device, (1, 1, 1, N)),
         )
+
+    # ---- Output dtype: only bf16 implemented (writer/CBs hardcode bf16). Reject others on BOTH APIs. ----
+    for dt in (ttnn.float32, ttnn.bfloat8_b):
+        with pytest.raises(RuntimeError):
+            ttnn.experimental.regime_a_matmul(a, in1, dtype=dt)
+        with pytest.raises(RuntimeError):
+            ttnn.experimental.regime_a_matmul_split(a, in1, 2, -1, dtype=dt)
+
+    # ---- addcmul all-or-nothing: {scalar, residual, gate} together or none (no silent-ignore). ----
+    # residual + gate WITHOUT scalar -> reject (would otherwise be silently ignored)
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.regime_a_matmul(
+            a, in1, fused_ternary_input_a=_mk(device, (1, 1, M, N)), fused_ternary_input_b=_mk(device, (1, 1, 1, N))
+        )
+    # scalar + residual but no gate -> reject
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.regime_a_matmul(
+            a, in1, fused_ternary_scalar=1.0, fused_ternary_input_a=_mk(device, (1, 1, M, N))
+        )
+    # ---- Leading (batch) dims must be 1 for fusion operands (no batching). ----
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.regime_a_matmul(
+            a,
+            in1,
+            fused_ternary_scalar=1.0,
+            fused_ternary_input_a=_mk(device, (1, 2, M, N)),  # batch dim 2
+            fused_ternary_input_b=_mk(device, (1, 1, 1, N)),
+        )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+def test_regime_a_picker_planner_parity_small_nt(device):
+    # config=None on a bank-infeasible Nt (Nt <= 7*ceil(Nt/8)) must be rejected cleanly by the picker,
+    # not crash later in build_plan(). Nt=9 (N=288): 7*ceil(9/8)=14 >= 9 -> infeasible. A feasible small
+    # Nt=8 (N=256) must still work. Guards picker/planner feasibility parity (shared nt_width_shard_feasible).
+    M, K = 32, 2048
+    for N, feasible in [(288, False), (256, True)]:
+        t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+        t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+        a0 = ttnn.from_torch(t0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
+        a1 = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=wcfg)
+        if feasible:
+            out = ttnn.experimental.regime_a_matmul(a0, a1)  # config=None -> auto
+            got = ttnn.to_torch(ttnn.from_device(out))[0, 0]
+            assert_with_pcc((t0.float() @ t1.float())[0, 0], got.float(), 0.999)
+        else:
+            with pytest.raises(RuntimeError):
+                ttnn.experimental.regime_a_matmul(a0, a1)  # picker must reject, not FATAL in build_plan
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+def test_regime_a_fused_chunked_cache_replay(device):
+    # Fused + chunked program-cache replay on FRESH tensors (different buffer addresses) each trial: the
+    # second call hits the cache and must refresh fused-operand + chunk output addresses via
+    # override_runtime_arguments. Covers bias + addcmul + chunks=2 together.
+    M, K, N, chunks = 64, 6144, 3072, 2
+    for trial in range(2):
+        torch.manual_seed(100 + trial)
+        t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+        t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+        bt = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)
+        rt = torch.randn(1, 1, M, N, dtype=torch.bfloat16)
+        gt = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)
+        ref = rt.float()[0, 0] + 0.5 * ((t0.float() @ t1.float())[0, 0] + bt.float().reshape(1, -1)) * gt.float()[0, 0]
+        a0 = ttnn.from_torch(t0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
+        a1 = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=wcfg)
+        kw = dict(
+            bias_tensor=ttnn.from_torch(bt, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            fused_ternary_scalar=0.5,
+            fused_ternary_input_a=ttnn.from_torch(rt, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            fused_ternary_input_b=ttnn.from_torch(gt, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16),
+        )
+        outs = ttnn.experimental.regime_a_matmul_split(a0, a1, chunks, -1, **kw)
+        got = torch.cat([ttnn.to_torch(ttnn.from_device(o))[0, 0] for o in outs], dim=-1)
+        assert_with_pcc(ref, got.float(), 0.999)

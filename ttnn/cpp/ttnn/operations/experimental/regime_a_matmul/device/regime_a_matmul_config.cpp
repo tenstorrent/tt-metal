@@ -55,6 +55,11 @@ bool pick_plan(
     uint32_t kb,
     uint32_t nsb,
     PickGeo& g) {
+    // Share the planner's bank-interval feasibility so config=None never selects a shape build_plan()
+    // will later reject (picker/planner parity). This constraint is a function of Nt only.
+    if (!plan::nt_width_shard_feasible(Nt)) {
+        return false;
+    }
     g.cores = 8u * Pk * Ns * Sm;
     if (g.cores < 16u || g.cores > 104u) {
         return false;
@@ -286,8 +291,13 @@ plan::PlanResult make_and_build_plan(
     return plan::build_plan(in);
 }
 
-MemoryConfig create_regime_a_weight_memory_config(
-    const ttnn::Shape& weight_shape, DataType /*dtype*/, IDevice* device) {
+MemoryConfig create_regime_a_weight_memory_config(const ttnn::Shape& weight_shape, DataType dtype, IDevice* device) {
+    // v1 supports only bf16 in1 (the reader + CBs are bf16). Reject other dtypes rather than accepting and
+    // silently ignoring the argument — the shard byte layout below assumes a bf16 tile size.
+    TT_FATAL(
+        dtype == DataType::BFLOAT16,
+        "create_regime_a_weight_memory_config supports only BFLOAT16 (only bf16 in1 is implemented), got {}",
+        dtype);
     const uint32_t K = static_cast<uint32_t>(weight_shape[-2]);
     const uint32_t N = static_cast<uint32_t>(weight_shape[-1]);
     const uint32_t Kt = cdiv(K, TILE_HEIGHT);
