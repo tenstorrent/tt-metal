@@ -23,6 +23,7 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import
 )
 from models.experimental.hunyuan_image_3_0.ref.vae.encoder import IN_CHANNELS, PIXEL_H, PIXEL_T, PIXEL_W
 from models.experimental.hunyuan_image_3_0.tt.image_gen.cond_instantiate import (
+    _tokens_from_latents,
     instantiate_continuous_tokens_tt,
     instantiate_vae_image_tokens_tt,
 )
@@ -51,6 +52,251 @@ class CondVaeEncodeTT:
 
     cond_vae_images: ttnn.Tensor | list[ttnn.Tensor] | list[list[ttnn.Tensor]] | None
     cond_timesteps: torch.Tensor | list[torch.Tensor] | None
+
+
+@dataclass
+class CondEncodeCache:
+    """Host-side cond tokens from one TT VAE/ViT encode (cond images fixed).
+
+    Reused across recaption and denoise templates so the resident backbone never
+    has to be unloaded for a second VAE/ViT encode.
+    """
+
+    vae_tokens: torch.Tensor  # [n_cond_rows, n_vae_tokens, H]
+    vit_embeds: torch.Tensor | None  # [n_cond_rows, n_vit_tokens, H] or None
+    cond_timesteps: torch.Tensor  # [n_cond_rows] float (cond noise level, usually 0)
+    timestep_emb_vectors: torch.Tensor | None  # [n_cond_rows, H] for continuous placeholder tokens
+
+
+def _tt_emb_to_host(mesh_device, emb_tt: ttnn.Tensor) -> torch.Tensor:
+    """Mesh/single-device TILE embedding → host float ``[B, S, H]`` (first shard if mesh)."""
+    bsz = int(emb_tt.shape[0])
+    seq = int(emb_tt.shape[1])
+    h = int(emb_tt.shape[2])
+    if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
+        out = ttnn.to_torch(emb_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        out = out[:bsz]
+    else:
+        out = ttnn.to_torch(emb_tt)
+    return out.reshape(bsz, seq, h).float().cpu()
+
+
+def _normalize_batch_cond_images(cond_images) -> list[list[Any]]:
+    """``CondImage | list[CondImage] | list[list[CondImage]]`` → batch rows."""
+    from models.experimental.hunyuan_image_3_0.ref.tokenizer.image_info import CondImage
+
+    if cond_images is None:
+        return []
+    if isinstance(cond_images, CondImage):
+        return [[cond_images]]
+    if isinstance(cond_images, list) and cond_images and isinstance(cond_images[0], CondImage):
+        return [list(cond_images)]
+    if isinstance(cond_images, list) and cond_images and isinstance(cond_images[0], list):
+        return [list(row) for row in cond_images]
+    return [[cond_images]]
+
+
+def build_cond_encode_cache_tt(
+    mesh_device,
+    cond_images,
+    *,
+    model_dir: Path | None = None,
+    vae_encoder: VAEEncoderTTNN | None = None,
+    vision: HunyuanTtSiglip2Vision,
+    aligner: HunyuanTtLightProjector,
+    cond_patch_embed: HunyuanTtUNetDown,
+    cond_time_embed: HunyuanTtTimestepEmbedder,
+    cond_timestep_emb: HunyuanTtTimestepEmbedder,
+    seed: int | None = None,
+    generator: torch.Generator | None = None,
+    vae_scaling_factor: float | None = None,
+    vae_shift_factor: float | None = None,
+    cond_encode_trace: bool = False,
+) -> CondEncodeCache:
+    """Run VAE + patch_embed + ViT once; return host tensors for later sequence scatter."""
+    batch_cond = _normalize_batch_cond_images(cond_images)
+    if not batch_cond or not batch_cond[0]:
+        raise ValueError("build_cond_encode_cache_tt requires at least one cond image")
+
+    if vae_scaling_factor is None:
+        vae_scaling_factor = 0.562679178327931
+
+    enc = encode_cond_images_tt(
+        mesh_device,
+        batch_cond,
+        model_dir=model_dir,
+        vae_encoder=vae_encoder,
+        cfg_factor=1,
+        scaling_factor=vae_scaling_factor,
+        shift_factor=vae_shift_factor,
+        generator=generator,
+        seed=seed,
+        cond_encode_trace=cond_encode_trace,
+    )
+
+    n_rows = len(batch_cond)
+    vae_host_rows: list[torch.Tensor] = []
+    latents = enc.cond_vae_images
+    if isinstance(latents, ttnn.Tensor):
+        toks = _tokens_from_latents(cond_patch_embed, cond_time_embed, latents, mesh_device)
+        host = _tt_emb_to_host(mesh_device, toks)
+        ttnn.deallocate(toks, force=False)
+        for i in range(int(host.shape[0])):
+            vae_host_rows.append(host[i : i + 1])
+    else:
+        for lat_row in latents:
+            if isinstance(lat_row, ttnn.Tensor):
+                toks = _tokens_from_latents(cond_patch_embed, cond_time_embed, lat_row, mesh_device)
+                vae_host_rows.append(_tt_emb_to_host(mesh_device, toks))
+                ttnn.deallocate(toks, force=False)
+            else:
+                chunks = []
+                for lat_i in lat_row:
+                    t_i = _tokens_from_latents(cond_patch_embed, cond_time_embed, lat_i, mesh_device)
+                    chunks.append(_tt_emb_to_host(mesh_device, t_i))
+                    ttnn.deallocate(t_i, force=False)
+                vae_host_rows.append(torch.cat(chunks, dim=1))
+
+    vae_tokens = torch.cat(vae_host_rows, dim=0)
+    n_rows = int(vae_tokens.shape[0])
+
+    # Timesteps (usually zeros) + continuous placeholder embeddings.
+    if isinstance(enc.cond_timesteps, list):
+        t_host = torch.stack(
+            [
+                (ti.reshape(-1)[0].float().cpu() if isinstance(ti, torch.Tensor) else torch.tensor(float(ti)))
+                for ti in enc.cond_timesteps
+            ]
+        )
+    else:
+        t_host = enc.cond_timesteps.reshape(-1).float().cpu()
+    if t_host.numel() == 1 and n_rows > 1:
+        t_host = t_host.repeat(n_rows)
+    t_host = t_host[:n_rows].contiguous()
+
+    te_tt = cond_timestep_emb.forward(t_host)
+    if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
+        te_host = ttnn.to_torch(te_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    else:
+        te_host = ttnn.to_torch(te_tt)
+    te_host = te_host.reshape(-1, te_host.shape[-1]).float().cpu()
+    # Mesh concat may replicate along batch; keep one vector per cond row.
+    if te_host.shape[0] >= n_rows:
+        te_host = te_host[:n_rows]
+    elif te_host.shape[0] == 1 and n_rows > 1:
+        te_host = te_host.repeat(n_rows, 1)
+    ttnn.deallocate(te_tt, force=False)
+
+    vit_host_rows: list[torch.Tensor] = []
+    for row_imgs in batch_cond[:n_rows]:
+        from models.experimental.hunyuan_image_3_0.ref.tokenizer.image_info import CondImage
+
+        has_vit = any(
+            (isinstance(ci, CondImage) and ci.vit_image is not None)
+            or (not isinstance(ci, CondImage) and ci is not None)
+            for ci in row_imgs
+        )
+        if not has_vit:
+            vit_host_rows.append(torch.empty(1, 0, vae_tokens.shape[-1]))
+            continue
+        vit_tt = _encode_vit_batch_row_tt(mesh_device, vision, aligner, row_imgs, cond_encode_trace=cond_encode_trace)
+        vit_host_rows.append(_tt_emb_to_host(mesh_device, vit_tt))
+        ttnn.deallocate(vit_tt, force=False)
+
+    vit_embeds = None
+    if any(v.numel() > 0 for v in vit_host_rows):
+        vit_embeds = torch.cat(vit_host_rows, dim=0)
+
+    # Free device latents
+    if isinstance(latents, ttnn.Tensor):
+        ttnn.deallocate(latents, force=False)
+    elif isinstance(latents, list):
+        for lat_row in latents:
+            if isinstance(lat_row, ttnn.Tensor):
+                ttnn.deallocate(lat_row, force=False)
+            else:
+                for lat_i in lat_row:
+                    ttnn.deallocate(lat_i, force=False)
+
+    print(
+        f"[cond_encode] cache ready: vae_tokens={tuple(vae_tokens.shape)} "
+        f"vit={None if vit_embeds is None else tuple(vit_embeds.shape)} "
+        f"timesteps={tuple(t_host.shape)}",
+        flush=True,
+    )
+    return CondEncodeCache(
+        vae_tokens=vae_tokens,
+        vit_embeds=vit_embeds,
+        cond_timesteps=t_host,
+        timestep_emb_vectors=te_host,
+    )
+
+
+def apply_cond_encode_cache(
+    bundle: GenImageHostInputs,
+    wte_weight: torch.Tensor,
+    cache: CondEncodeCache,
+    *,
+    dtype: torch.dtype = torch.float32,
+) -> GenImageHostInputs:
+    """Host wte + scatter cached VAE/ViT tokens into a new chat-template sequence."""
+    if bundle.vae_image_mask is None:
+        raise ValueError("apply_cond_encode_cache requires vae_image_mask on the bundle")
+
+    hidden = torch.nn.functional.embedding(bundle.input_ids.long(), wte_weight.to(dtype=dtype))
+    bsz, seqlen, n_embd = hidden.shape
+    n_cond = int(cache.vae_tokens.shape[0])
+    index = torch.arange(seqlen).unsqueeze(0).expand(bsz, -1)
+
+    for row in range(bsz):
+        src = cache.vae_tokens[row % n_cond].to(dtype=dtype)
+        if src.ndim == 2:
+            src = src.unsqueeze(0)
+        scatter_index = index[row : row + 1].masked_select(bundle.vae_image_mask[row : row + 1].bool()).reshape(1, -1)
+        if scatter_index.numel() != src.shape[1]:
+            raise ValueError(f"VAE token count mismatch row={row}: mask={scatter_index.numel()} cache={src.shape[1]}")
+        hidden[row : row + 1].scatter_(
+            dim=1,
+            index=scatter_index.unsqueeze(-1).expand(-1, -1, n_embd),
+            src=src.reshape(1, -1, n_embd),
+        )
+
+    if bundle.cond_timestep_scatter_index is not None and cache.timestep_emb_vectors is not None:
+        for row in range(bsz):
+            vec = cache.timestep_emb_vectors[row % n_cond].to(dtype=dtype).reshape(1, 1, n_embd)
+            positions = bundle.cond_timestep_scatter_index[row]
+            if hasattr(positions, "tolist"):
+                positions = positions.tolist()
+            for pos in positions:
+                hidden[row : row + 1, int(pos) : int(pos) + 1, :] = vec
+
+    if (
+        cache.vit_embeds is not None
+        and cache.vit_embeds.numel() > 0
+        and bundle.vit_image_mask is not None
+        and bool(bundle.vit_image_mask.any())
+    ):
+        for row in range(bsz):
+            src = cache.vit_embeds[row % n_cond].to(dtype=dtype)
+            if src.ndim == 2:
+                src = src.unsqueeze(0)
+            scatter_index = (
+                index[row : row + 1].masked_select(bundle.vit_image_mask[row : row + 1].bool()).reshape(1, -1)
+            )
+            if scatter_index.numel() != src.shape[1]:
+                raise ValueError(
+                    f"ViT token count mismatch row={row}: mask={scatter_index.numel()} cache={src.shape[1]}"
+                )
+            hidden[row : row + 1].scatter_(
+                dim=1,
+                index=scatter_index.unsqueeze(-1).expand(-1, -1, n_embd),
+                src=src.reshape(1, -1, n_embd),
+            )
+
+    bundle.inputs_embeds = hidden
+    bundle.cond_vae_images = None
+    bundle.cond_timesteps = cache.cond_timesteps
+    return bundle
 
 
 def _is_dropped_vit_layer(key: str, num_layers: int) -> bool:

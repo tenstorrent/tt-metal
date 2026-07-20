@@ -203,7 +203,12 @@ class HunyuanTtMoEParallel(LightweightModule):
         return ttnn.reshape(s, (A, Bd))
 
     def _expert(self, x, el):
-        """Run local expert `el` (its weight slice differs per device)."""
+        """Run local expert `el` (its weight slice differs per device).
+
+        Use DRAM ``ttnn.linear`` (not L1 width-sharded): the same ``x`` is reused
+        across the gate, every local expert, and the shared MLP. The small-M L1
+        path pads/shards activations and must not consume a shared MoE input.
+        """
         wgu = self.w_gate_up_experts[el]  # [H, 2I] (different global expert per device)
         wdn = self.w_down_experts[el]  # [I, H]
         # The transient SwiGLU multiply runs on the full gathered sequence, so its L1
