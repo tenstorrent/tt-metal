@@ -284,7 +284,8 @@ i {
   transition: opacity 120ms ease, visibility 120ms ease;
 }
 
-.tt-nav-links li.has-dropdown:hover .tt-nav-dropdown {
+.tt-nav-links li.has-dropdown:hover .tt-nav-dropdown,
+.tt-nav-links li.has-dropdown:focus-within .tt-nav-dropdown {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
@@ -415,9 +416,14 @@ i {
    desktop .wy-nav-side / .wy-nav-content-wrap rules below. */
 
 /* ── Nav layout offsets ─────────────────────────────────────── */
+/* These push the page below the custom top navbar, so they must only apply on
+   builds that actually render it (added by layout.html / #49959). Gating on
+   body:has(.tt-top-nav) keeps the offsets off when this stylesheet is loaded
+   without the nav (e.g. merged before its sibling PR, or on a package that
+   doesn't use the shared layout), avoiding an empty strip at the top. */
 
 /* Sidebar pushed below navbar */
-.wy-nav-side {
+body:has(.tt-top-nav) .wy-nav-side {
   top: var(--tt-navbar-height) !important;
   height: calc(100vh - var(--tt-navbar-height)) !important;
   background-color: #E5F2F1 !important;
@@ -425,7 +431,7 @@ i {
 }
 
 /* Content area pushed below navbar, offset for 308px sidebar */
-.wy-nav-content-wrap {
+body:has(.tt-top-nav) .wy-nav-content-wrap {
   padding-top: var(--tt-navbar-height);
   margin-left: 308px !important;
 }
@@ -436,9 +442,11 @@ i {
   background: #fff;
 }
 
-/* On wide screens, make room for right TOC */
+/* On wide screens, make room for the right-hand page TOC — only when it is
+   actually present (built by docs-toc.js / #49958), so wide content isn't
+   squeezed by an empty column otherwise. */
 @media screen and (min-width: 1400px) {
-  .wy-nav-content-wrap {
+  body:has(.tt-page-toc) .wy-nav-content-wrap {
     padding-right: var(--tt-right-toc-width);
   }
 }
@@ -459,8 +467,9 @@ i {
   border-bottom: none !important;
 }
 
-/* Hide logo image — navbar already has it */
-.wy-side-nav-search img {
+/* Hide the sidebar logo only when the top navbar (which carries the logo) is
+   rendered — otherwise this would strip branding from a plain build. */
+body:has(.tt-top-nav) .wy-side-nav-search img {
   display: none !important;
 }
 
@@ -576,8 +585,9 @@ i {
   font-size: 12px;
 }
 
-/* Search form hidden — search is in the top navbar */
-#rtd-search-form {
+/* Hide the RTD search form only when the top navbar provides the replacement
+   search trigger — never leave a page with no search at all. */
+body:has(.tt-top-nav) #rtd-search-form {
   display: none !important;
 }
 
@@ -649,8 +659,9 @@ li.toctree-l1.current>a,
   color: var(--color-main);
 }
 
-/* Nav: mobile — hide native RTD top bar, our tt-top-nav handles mobile */
-.wy-nav-top {
+/* Nav: mobile — hide the native RTD top bar only when our tt-top-nav is present
+   to handle mobile, so plain builds keep a working mobile nav toggle. */
+body:has(.tt-top-nav) .wy-nav-top {
   display: none !important;
   height: 0 !important;
 }
@@ -926,14 +937,6 @@ html.writer-html5 .rst-content dl[class]:not(.option-list):not(.field-list):not(
 
 .rst-content table.tt-index-cards td:not(:empty):hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-
-/* Hide loudbox-bh from sidebar and page content unless viewing that section */
-.wy-menu-vertical li:has(> a[href*="loudbox-bh"]):not(.current) {
-  display: none;
-}
-.rst-content .toctree-wrapper li:has(> a[href*="loudbox-bh"]) {
-  display: none;
 }
 
 /* ── Right-side page TOC ────────────────────────────────────── */
@@ -1251,8 +1254,10 @@ p.tt-api-description {
   margin: 0 0 40px !important;
 }
 
-/* Hide the raw field-list (replaced by JS sections) */
-.rst-content dl.py > dd dl.field-list {
+/* Hide the raw field-list (replaced by api_style.js sections) only on builds
+   with the custom shell that loads api_style.js — plain builds keep the native
+   Parameters/Returns fields visible. */
+body:has(.tt-top-nav) .rst-content dl.py > dd dl.field-list {
   display: none !important;
 }
 
@@ -1318,15 +1323,16 @@ h2.tt-api-section-heading {
   margin: 0 !important;
 }
 
-/* Hide raw docutils table (replaced by JS list) */
-.rst-content dl.cpp.function table.docutils,
-.rst-content dl.py.function table.docutils,
-.rst-content dl.py.class table.docutils {
+/* Hide raw docutils table (replaced by api_style.js list) — gated on the custom
+   shell that loads api_style.js so plain builds keep native API tables. */
+body:has(.tt-top-nav) .rst-content dl.cpp.function table.docutils,
+body:has(.tt-top-nav) .rst-content dl.py.function table.docutils,
+body:has(.tt-top-nav) .rst-content dl.py.class table.docutils {
   display: none !important;
 }
 
 /* Hide field-list via CSS too (JS also removes from DOM) */
-.rst-content dl.py > dd > dl.field-list {
+body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
   display: none !important;
 }
 
