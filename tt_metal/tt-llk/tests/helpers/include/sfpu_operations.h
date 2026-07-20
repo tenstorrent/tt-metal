@@ -624,14 +624,14 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (
         OPERATION == SfpuType::floor || OPERATION == SfpuType::ceil || OPERATION == SfpuType::trunc || OPERATION == SfpuType::frac ||
-        OPERATION == SfpuType::round || OPERATION == SfpuType::silu || OPERATION == SfpuType::relu_max || OPERATION == SfpuType::relu_min)
+        OPERATION == SfpuType::round || OPERATION == SfpuType::add1 || OPERATION == SfpuType::silu || OPERATION == SfpuType::relu_max ||
+        OPERATION == SfpuType::relu_min)
     {
-        // These ops execute via the self-contained tt-llk primitives (_calculate_floor_ / _calculate_silu_ /
-        // _relu_max_ / ...), which need only the generic per-op init: the SFPU config reg + ADDR_MOD_7 set by
-        // llk_math_sfpu_init_once() above, plus a dest RWC counter reset. Production wires the same generic init
-        // (rounding_op_tile_init / relu_{max,min}_tile_init / silu_tile_init all reduce to math::reset_counters),
-        // so route them through the bare `unused` init. The OPERATION-keyed bare init has no delegate branch for
-        // these ops (floor/ceil/trunc/frac/silu) and no linkable definition here (relu_max/relu_min).
+        // These ops execute via the self-contained tt-llk primitives (_calculate_floor_ / calculate_add1 /
+        // _calculate_silu_ / _relu_max_ / ...), which need only the generic per-op init: the SFPU config reg +
+        // ADDR_MOD_7 set by llk_math_sfpu_init_once() above, plus a dest RWC counter reset. The harness routes them
+        // through the bare `unused` init because the OPERATION-keyed bare init has no delegate branch for these ops
+        // (floor/ceil/trunc/frac/round/add1/silu) and no linkable definition here (relu_max/relu_min).
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
     }
     else
