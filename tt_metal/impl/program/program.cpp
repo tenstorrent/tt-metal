@@ -44,6 +44,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
+#include <tt-metalium/hal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "hal_types.hpp"
@@ -384,8 +385,20 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
+    // Metal 2.0: map named CBs to their (first) buffer_index so a KernelDescriptor DFB binding
+    // (which references a CB by name) can resolve to the DFB logical id the kernel-side accessor uses.
+    std::unordered_map<std::string, uint16_t> cb_name_to_index;
     for (const auto& cb_descriptor : descriptor.cbs) {
         internal_->add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
+        if (!cb_descriptor.name.empty() && !cb_descriptor.format_descriptors.empty()) {
+            auto [it, inserted] = cb_name_to_index.emplace(
+                cb_descriptor.name, static_cast<uint16_t>(cb_descriptor.format_descriptors.front().buffer_index));
+            TT_FATAL(
+                inserted,
+                "Duplicate named CBDescriptor '{}' in ProgramDescriptor; a DFB binding could otherwise resolve to "
+                "the wrong circular buffer. CB names must be unique.",
+                cb_descriptor.name);
+        }
     }
 
     for (const auto& semaphore_descriptor : descriptor.semaphores) {
@@ -457,10 +470,101 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             },
             kernel_descriptor.config);
 
-        auto kernel_handle =
-            is_file
-                ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
-                : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
+        KernelHandle kernel_handle;
+        if (kernel_descriptor.has_metal2_bindings()) {
+            // Metal 2.0 path: construct the Kernel directly with named-binding metadata (mirrors the
+            // ProgramSpec build in program_spec.cpp) so it is flagged is_metal2_kernel and receives the
+            // JIT-generated binding headers. Resolve each binding category into the maps/handles the
+            // Kernel ctor (and, via it, JitBuildSettings/genfiles) consume.
+            //
+            // Gen1-only: this always constructs the Gen1 DataMovementKernel/ComputeKernel. The Gen2
+            // (Quasar) build selects QuasarDataMovementKernel/QuasarComputeKernel with processor sets
+            // (see program_spec.cpp), so building Gen1 kernels there would take the wrong path. Fail
+            // loudly until the descriptor path grows Gen2 support, rather than silently mis-dispatching.
+            TT_FATAL(
+                tt::tt_metal::hal::get_arch() != tt::ARCH::QUASAR,
+                "ProgramDescriptor Metal 2.0 named bindings are Gen1-only; not yet supported on Quasar (Gen2).");
+
+            DataflowBufferLocalAccessorHandleMap dfb_handles;
+            dfb_handles.reserve(kernel_descriptor.dfb_bindings.size());
+            for (const auto& b : kernel_descriptor.dfb_bindings) {
+                auto it = cb_name_to_index.find(b.cb_name);
+                TT_FATAL(
+                    it != cb_name_to_index.end(),
+                    "KernelDescriptor DFB binding '{}' references CB '{}' which is not a named CBDescriptor in this "
+                    "ProgramDescriptor",
+                    b.accessor_name,
+                    b.cb_name);
+                dfb_handles.emplace(b.accessor_name, it->second);
+            }
+
+            std::vector<TensorBindingHandle> tensor_handles;
+            tensor_handles.reserve(kernel_descriptor.tensor_bindings.size());
+            uint32_t binding_section_words = 0;
+            for (const auto& b : kernel_descriptor.tensor_bindings) {
+                TensorBindingHandle h;
+                h.accessor_name = b.accessor_name;
+                h.cta_offset = b.cta_offset;
+                h.addr_crta_offset = b.addr_crta_offset;
+                h.num_runtime_field_crta_words = b.num_runtime_field_crta_words;
+                binding_section_words += 1 + b.num_runtime_field_crta_words;
+                tensor_handles.push_back(std::move(h));
+            }
+
+            std::vector<std::string> rta_names(
+                kernel_descriptor.runtime_arg_names.begin(), kernel_descriptor.runtime_arg_names.end());
+
+            // Semaphore bindings and named common-runtime-args are not wired on the descriptor path yet
+            // (no op needs them); pass empty. A future op that needs them adds the fields + validation.
+            const SemaphoreLocalAccessorHandleMap sem_handles;
+            const std::vector<std::string> crta_names;
+
+            // CRTA buffer layout: [ tensor-binding section | (no scratchpad) | varargs ]. No named CRTAs.
+            KernelCrtaLayout crta_layout;
+            crta_layout.num_named_words = 0;
+            crta_layout.binding_section_words = binding_section_words;
+            crta_layout.scratchpad_section_words = 0;
+            crta_layout.vararg_section_offset = binding_section_words;
+
+            KernelSource kernel_src(
+                kernel_descriptor.kernel_source, is_file ? KernelSource::FILE_PATH : KernelSource::SOURCE_CODE);
+            constexpr bool is_metal2_kernel = true;
+            std::shared_ptr<Kernel> kernel = std::visit(
+                ttsl::overloaded{
+                    [&](const DataMovementConfig& dm_config) -> std::shared_ptr<Kernel> {
+                        return std::make_shared<DataMovementKernel>(
+                            kernel_src,
+                            kernel_descriptor.core_ranges,
+                            dm_config,
+                            is_metal2_kernel,
+                            dfb_handles,
+                            sem_handles,
+                            rta_names,
+                            crta_names,
+                            tensor_handles,
+                            crta_layout);
+                    },
+                    [&](const ComputeConfig& compute_config) -> std::shared_ptr<Kernel> {
+                        return std::make_shared<ComputeKernel>(
+                            kernel_src,
+                            kernel_descriptor.core_ranges,
+                            compute_config,
+                            is_metal2_kernel,
+                            dfb_handles,
+                            sem_handles,
+                            rta_names,
+                            crta_names,
+                            tensor_handles,
+                            crta_layout);
+                    }},
+                config);
+            kernel_handle = internal_->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+        } else {
+            kernel_handle =
+                is_file ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
+                        : CreateKernelFromString(
+                              *this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
+        }
 
         for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
             SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);

@@ -836,5 +836,72 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonScalarMatching
     EXPECT_NO_THROW(resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()}));
 }
 
+// ============================================================================
+// Metal 2.0 named-binding descriptor path (rand is the reference op)
+// ============================================================================
+
+// A valid DFB binding (accessor -> a named CBDescriptor in the same descriptor) builds a Metal 2.0
+// kernel without error.
+TEST_F(DescriptorPatchingDeviceTest, Metal2Bindings_ValidDFBReference_Builds) {
+    ProgramDescriptor desc;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .name = "intermed",
+    });
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.dfb_bindings = {{.accessor_name = "cb", .cb_name = "intermed"}};
+    desc.kernels = {kd};
+
+    EXPECT_NO_THROW({ Program program{desc}; });
+}
+
+// A DFB binding referencing a CB name with no matching named CBDescriptor must fail loudly rather than
+// silently bind the kernel to an unrelated circular buffer.
+TEST_F(DescriptorPatchingDeviceTest, Metal2Bindings_DanglingDFBReference_Throws) {
+    ProgramDescriptor desc;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .name = "intermed",
+    });
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.dfb_bindings = {{.accessor_name = "cb", .cb_name = "does_not_exist"}};
+    desc.kernels = {kd};
+
+    EXPECT_ANY_THROW({ Program program{desc}; });
+}
+
+// Two named CBDescriptors sharing a name would let a DFB binding resolve to the wrong CB; the build
+// must reject the duplicate.
+TEST_F(DescriptorPatchingDeviceTest, Metal2Bindings_DuplicateCBName_Throws) {
+    ProgramDescriptor desc;
+    for (uint32_t idx : {0u, 1u}) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2048,
+            .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = idx,
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = 2048,
+            }}},
+            .name = "intermed",
+        });
+    }
+    desc.kernels = {MakeBlankReaderKernel({0, 0})};
+
+    EXPECT_ANY_THROW({ Program program{desc}; });
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

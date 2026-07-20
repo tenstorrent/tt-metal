@@ -21,6 +21,7 @@
 #include <bitset>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -73,6 +74,12 @@ struct CBDescriptor {
     CoreRangeSet core_ranges;
     FormatDescriptors format_descriptors;
     FormatDescriptors remote_format_descriptors;
+
+    // Metal 2.0 (optional): a name that a KernelDescriptor DFB binding can reference.
+    // When set, a kernel's DFBBinding{accessor_name, cb_name} exposes dfb::<accessor_name>
+    // bound to this CB (its first format descriptor's buffer_index becomes the DFB logical id).
+    // Empty for legacy CBs; has no effect on the legacy path.
+    std::string name;
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
@@ -163,6 +170,55 @@ struct KernelDescriptor {
     // enabling O(1) patching on cache hits without calling create_descriptor() again.
     BufferBindings buffer_bindings;
     CommonBufferBindings common_buffer_bindings;
+
+    ///////////////////////////////////////////////////////////////////
+    // Metal 2.0 named bindings (optional).
+    //
+    // These mirror the ProgramSpec KernelSpec bindings. When ANY of them is non-empty
+    // (see has_metal2_bindings()), the kernel is built as a Metal 2.0 kernel and receives
+    // the JIT-generated binding headers (kernel_bindings_generated.h / kernel_args_generated.h),
+    // enabling kernel-side dfb::<name>, Semaphore(sem::<name>), TensorAccessor(tensor::<name>),
+    // and get_arg(args::<name>) — exactly like ProgramSpec kernels.
+    //
+    // When ALL are empty, the kernel is built exactly as a legacy CreateKernel kernel:
+    // no generated headers, no behavior change. (named_compile_time_args alone does NOT
+    // trigger the Metal 2.0 path — those already flow through the legacy macro mechanism.)
+    ///////////////////////////////////////////////////////////////////
+
+    // DFB (circular buffer) named binding: exposes dfb::<accessor_name> bound to the CB
+    // whose CBDescriptor::name == cb_name. The CB's (first) buffer_index is the DFB logical id.
+    struct DFBBinding {
+        std::string accessor_name;  // kernel-side symbol in the dfb:: namespace
+        std::string cb_name;        // refers to a named CBDescriptor in the same ProgramDescriptor
+    };
+    using DFBBindings = std::vector<DFBBinding>;
+    DFBBindings dfb_bindings;
+
+    // Tensor named binding (pass-through): exposes tensor::<accessor_name>.
+    // Unlike the ProgramSpec path there is no TensorParameter auto-resolution here, so the
+    // descriptor author supplies the resolved offsets directly. cta_offset is the first word
+    // index of this binding's TensorAccessorArgs payload within compile_time_args; addr_crta_offset
+    // is the byte offset of the base-address slot within common_runtime_args.
+    struct TensorBinding {
+        std::string accessor_name;
+        uint32_t cta_offset = 0;
+        uint32_t addr_crta_offset = 0;
+        uint32_t num_runtime_field_crta_words = 0;
+    };
+    using TensorBindings = std::vector<TensorBinding>;
+    TensorBindings tensor_bindings;
+
+    // Named per-core runtime-arg schema: exposes args::<name> as RtaArg. The order of names defines
+    // each arg's word offset within the named section, and must match the order values are supplied
+    // in runtime_args.
+    using ArgNames = std::vector<std::string>;
+    ArgNames runtime_arg_names;
+
+    // True when this kernel declares any Metal 2.0 named binding (see above). Drives whether the
+    // descriptor->Program build takes the Metal 2.0 kernel path (generated headers) or the legacy path.
+    bool has_metal2_bindings() const {
+        return !dfb_bindings.empty() || !tensor_bindings.empty() || !runtime_arg_names.empty();
+    }
 
     // Builder for dynamically-constructed runtime arg lists.  Buffer* entries
     // auto-register as buffer bindings; uint32_t entries embed their value.

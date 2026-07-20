@@ -219,6 +219,45 @@ def test_rand_different_seed_values(device):
     device.disable_and_clear_program_cache()
 
 
+def test_rand_cache_hit_repoints_output_address(device):
+    """Regression guard for the output-buffer address re-application on a program-cache hit.
+
+    override_runtime_arguments must re-apply the writer's output buffer address on every cache
+    hit -- it replaces resolve_bindings, which the framework no longer runs for this op. If it
+    didn't, the cached program would keep writing to the FIRST call's output buffer.
+
+    The scalar seed/from/to contract is guarded by the tests above; this pins the address path,
+    which they do NOT robustly cover (the allocator usually hands the freed buffer back at the
+    same address, so a frozen address would still "work"). We force a fresh output address on the
+    cache hit by keeping the first tensor alive so its buffer cannot be reused. With a fixed seed
+    both calls must produce identical data -- but only if the cache-hit write landed in the second
+    tensor's (distinct) buffer; a frozen address leaves that buffer unwritten -> mismatch.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (256, 256)
+    dtype = ttnn.float32
+
+    t1 = ttnn.rand(shape, device=device, dtype=dtype, seed=1234)
+    d1 = ttnn.to_torch(t1).float()
+    assert device.num_program_cache_entries() == 1
+
+    # Keep t1 alive so t2 is allocated at a DIFFERENT address, forcing the cache-hit path to
+    # re-point the writer's output address rather than reuse t1's.
+    t2 = ttnn.rand(shape, device=device, dtype=dtype, seed=1234)
+    d2 = ttnn.to_torch(t2).float()
+    assert device.num_program_cache_entries() == 1, "second rand must be a cache hit (no new entry)"
+
+    assert torch.equal(d1, d2), (
+        "cache-hit output address was not re-applied: the same fixed seed must reproduce identical "
+        "data in the second (distinct) output buffer. A mismatch means the writer kept the first "
+        "call's baked-in output address (frozen-address bug)."
+    )
+
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],
