@@ -176,8 +176,10 @@ void MetalEnvImpl::initialize_base_objects() {
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
 
-    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch()) {
-        if (this->cluster_->get_target_device_type() == tt::TargetDevice::Simulator) {
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch() &&
+        this->cluster_->get_target_device_type() == tt::TargetDevice::Simulator) {
+        // An explicit TT_METAL_DRAM_BACKED_CQ setting (including =0) wins over the force-enable.
+        if (!this->rtoptions_->is_dram_backed_cq_specified()) {
             log_info(
                 tt::LogMetal,
                 "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
