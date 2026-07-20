@@ -435,3 +435,36 @@ def test_regime_a_fused_validation(device):
     # split: N not divisible by chunks -> reject (3072/5 not integer)
     with pytest.raises(RuntimeError):
         ttnn.experimental.regime_a_matmul_split(a, in1, 5, -1)
+    # split: chunks > 16 (writer chunk_addr[16]) -> reject even when N divides evenly (3072/32=96, tile-aligned)
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.regime_a_matmul_split(a, in1, 32, -1)
+
+    # ---- Fusion operand dtype restrictions (only implemented CB formats accepted). ----
+    def _bf(shape, dt):
+        return ttnn.from_torch(
+            torch.randn(*shape, dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device, dtype=dt
+        )
+
+    # bias must be bf16: fp32 / bf8 / bf4 -> reject (bias CB is hardcoded Float16_b)
+    for dt in (ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b):
+        with pytest.raises(RuntimeError):
+            ttnn.experimental.regime_a_matmul(a, in1, bias_tensor=_bf((1, 1, 1, N), dt))
+    # gate must be bf16 or fp32: bf8 / bf4 -> reject
+    for dt in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        with pytest.raises(RuntimeError):
+            ttnn.experimental.regime_a_matmul(
+                a,
+                in1,
+                fused_ternary_scalar=1.0,
+                fused_ternary_input_a=_mk(device, (1, 1, M, N)),
+                fused_ternary_input_b=_bf((1, 1, 1, N), dt),
+            )
+    # residual must be bf16: fp32 gate is fine, but fp32 residual -> reject
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.regime_a_matmul(
+            a,
+            in1,
+            fused_ternary_scalar=1.0,
+            fused_ternary_input_a=_bf((1, 1, M, N), ttnn.float32),
+            fused_ternary_input_b=_mk(device, (1, 1, 1, N)),
+        )

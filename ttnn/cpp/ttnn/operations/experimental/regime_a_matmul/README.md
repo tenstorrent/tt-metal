@@ -51,7 +51,13 @@ Config knobs (all in tiles / slice counts): `k_slices` (Pk, split-K depth), `n_s
 ## Constraints (v1)
 
 - Blackhole only; `Mt = ceil(M/32)` in 1..8 is the tuned range (works beyond, less optimal).
-- bf16 in/out, HiFi2, fp32 accumulation. No bias / activation / transpose / fusion / batching.
+- bf16 in/out, HiFi2, fp32 accumulation. No transpose / batching.
+- **Fused epilogues (single-chip, implemented):** optional row-broadcast `bias` (bf16, `[.., 1, N]`/`[.., N]`);
+  optional unary `fused_activation` (`Y = act(A@B + bias)`); optional `addcmul`
+  (`Y = residual + scalar*(A@B + bias)*gate`, residual `[M,N]` bf16, gate `[1,N]`/`[M,N]` bf16 or fp32).
+  activation and addcmul are mutually exclusive. Output column-split via `regime_a_matmul_split(..., chunks,
+  dim=-1)` (1..16 chunks, `N % chunks == 0`, per-chunk tile-aligned), composable with bias/activation/addcmul.
+  For split-K (`Pk>1`) the epilogue is applied exactly once at the reduction root.
 - `in1` must be DRAM width-shardable across 8 banks (device must expose ≥ 8 DRAM banks).
 - **Non-divisible dims — balanced tails (implemented):** pass **logical** `M×K` and `K×N` tensors (no
   manual padding); output is logical `M×N`. The planner assigns balanced floor/ceil ownership

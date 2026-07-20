@@ -89,15 +89,15 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
     // ---- Fusion validation (bias / activation / addcmul / output-split). ----
     const uint32_t N = w_logical[-1];
     const uint32_t M = a_logical[-2];
-    auto fusion_dtype_ok = [](DataType dt) {
-        return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B ||
-               dt == DataType::FLOAT32;
-    };
 
-    // Output column-split: chunks>=1, dim==-1, N%chunks==0, per-chunk tile-aligned.
+    // Output column-split: chunks>=1, dim==-1, N%chunks==0, per-chunk tile-aligned. The writer stores chunk
+    // base addresses in a fixed chunk_addr[kMaxChunks] array (kMaxChunks=16 in in0_ring_reduce_writer.cpp);
+    // reject chunks beyond that to avoid an out-of-bounds runtime-arg read / write.
+    constexpr int32_t kMaxChunks = 16;
     const int32_t chunks = operation_attributes.chunks;
     const int32_t dim = operation_attributes.dim;
     TT_FATAL(chunks >= 1, "regime_a_matmul requires chunks >= 1, got chunks={}", chunks);
+    TT_FATAL(chunks <= kMaxChunks, "regime_a_matmul supports at most {} chunks, got chunks={}", kMaxChunks, chunks);
     TT_FATAL(dim == -1, "regime_a_matmul only supports dim=-1, got dim={}", dim);
     if (chunks > 1) {
         TT_FATAL(N % static_cast<uint32_t>(chunks) == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
@@ -115,7 +115,11 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(bias.storage_type() == StorageType::DEVICE, "regime_a_matmul bias must be on device");
         TT_FATAL(bias.device() == act.device(), "regime_a_matmul bias must be on the same device");
         TT_FATAL(bias.layout() == Layout::TILE, "regime_a_matmul bias must be TILE layout");
-        TT_FATAL(fusion_dtype_ok(bias.dtype()), "regime_a_matmul bias has unsupported dtype");
+        // Bias CB (c_4) is hardcoded Float16_b in the program factory; only BFLOAT16 is implemented.
+        TT_FATAL(
+            bias.dtype() == DataType::BFLOAT16,
+            "regime_a_matmul bias must be BFLOAT16 (only bf16 bias is implemented), got {}",
+            bias.dtype());
         const auto& b_logical = bias.logical_shape();
         TT_FATAL(b_logical.rank() >= 1, "regime_a_matmul bias must have rank >= 1");
         for (int i = 0; i < static_cast<int>(b_logical.rank()) - 1; ++i) {
@@ -139,7 +143,12 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(t->storage_type() == StorageType::DEVICE, "regime_a_matmul addcmul operands must be on device");
             TT_FATAL(t->device() == act.device(), "regime_a_matmul addcmul operands must be on the same device");
             TT_FATAL(t->layout() == Layout::TILE, "regime_a_matmul addcmul operands must be TILE layout");
-            TT_FATAL(fusion_dtype_ok(t->dtype()), "regime_a_matmul addcmul operand has unsupported dtype");
+            // Only bf16 (residual+gate) and fp32 (gate) CB formats are implemented; residual is further
+            // pinned to BFLOAT16 below. BFLOAT8_B/BFLOAT4_B would silently map to the bf16 format => wrong.
+            TT_FATAL(
+                t->dtype() == DataType::BFLOAT16 || t->dtype() == DataType::FLOAT32,
+                "regime_a_matmul addcmul operand must be BFLOAT16 or FLOAT32, got {}",
+                t->dtype());
         }
         // Residual (ternary_a) must share in1's bf16 tile format (CB c_5 is bf16).
         TT_FATAL(
