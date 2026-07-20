@@ -226,6 +226,9 @@ inline void llk_math_eltwise_unary_sfpu_init() {
 // is itself self-contained (it programs its own ADDR_MOD_6 if needed + resets counters). No generic prefix.
 template <SfpuType sfpu_op, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
+    // ISO(#50381): restore pre-PR per-init generic prefix (re-asserts config+ADDR_MOD+reset each init,
+    // both threads) to test the exp(PACK)/recip(MATH) shared replay/macro interleaving hypothesis.
+    _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
     init_func(std::forward<ARGS>(args)...);
 }
 
