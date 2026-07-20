@@ -1025,7 +1025,7 @@ def test_to_layout_custom_tile_host_roundtrip(tile_shape):
 def test_to_layout_rejects_tile_kwarg_for_row_major(expect_error):
     input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    # Passing tile infomation to a row major transformation
+    # Passing tile information to a row major transformation
     with expect_error(RuntimeError, "tile argument is only supported"):
         ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, tile=ttnn.Tile((16, 16)))
 
