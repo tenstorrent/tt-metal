@@ -507,7 +507,7 @@ int main(int argc, char** argv) {
     std::atomic<uint64_t> consumed{0}, sink_total{0};
     // per-flusher (per-socket) verify results
     std::vector<uint64_t> fl_mk(ndh, 0), fl_start(ndh, 0), fl_end(ndh, 0), fl_prog_ok(ndh, 0), fl_ts_bad(ndh, 0),
-        fl_unbal(ndh, 0);
+        fl_unbal(ndh, 0), fl_stall(ndh, 0);
     // Flusher for socket h: drain ring h IN ORDER, demux (dispatch bulk/per-risc) + decode into fully-
     // resolved device records + per-lane seq verify (this socket owns its half's lanes), push record batches
     // to the MPMC. Demux MUST live here (sticky-src is in-order per stream); records are self-contained so
@@ -519,7 +519,7 @@ int main(int argc, char** argv) {
         std::vector<int32_t> depth(NL, 0);     // per-lane zone nesting (START ++ / END --); 0 at end = balanced
         std::vector<uint64_t> last_ts(NL, 0);  // per-lane last timestamp (monotonicity check)
         uint32_t cur_prog = 0;                 // GLOBAL: runtime host-id (BRISC-only STICKY_PROG, program-global)
-        uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0;
+        uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0, stall = 0;
         Batch batch;
         batch.reserve(BATCH_RECS);
         std::vector<uint32_t> buf;
@@ -545,6 +545,9 @@ int main(int argc, char** argv) {
             // marker: type = ZONE_START/END/TOTAL, zone = 16-bit srcloc hash, ts = full device timestamp
             uint32_t zone = pp_low27(w0) & 0xFFFFu;
             uint64_t ts = pp_full_ts(cur_hi[lane], w1);
+            if (zone == 0x7FFFu && type == PP_ZONE_START) {
+                stall++;  // X280-STALL zone (PROFILER_STALL_ZONE_ID) = producer back-pressure event
+            }
             if (type == PP_ZONE_START) {
                 depth[lane]++;
                 starts++;
@@ -682,6 +685,7 @@ int main(int argc, char** argv) {
         fl_prog_ok[h] = prog_ok;
         fl_ts_bad[h] = ts_bad;
         fl_unbal[h] = unbal;
+        fl_stall[h] = stall;
     };
     // Consumer: pop record batches, do the "sink" work (a real profiler emits Tracy zones here). We do a
     // representative touch of every record so the compiler can't elide it and the cost is real-ish.
@@ -1041,7 +1045,7 @@ int main(int argc, char** argv) {
         // the record MPMC. Real markers carry no synthetic seq, so "lossless" here means: every ZONE_START had
         // its ZONE_END (balanced per lane), each active lane produced at least its kernel zones, the prog id
         // propagated, and timestamps are monotonic per lane. ----
-        uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0, unbal = 0;
+        uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0, unbal = 0, stall = 0;
         for (uint64_t h = 0; h < ndh; h++) {
             mk += fl_mk[h];
             starts += fl_start[h];
@@ -1049,6 +1053,7 @@ int main(int argc, char** argv) {
             prog_ok += fl_prog_ok[h];
             ts_bad += fl_ts_bad[h];
             unbal += fl_unbal[h];
+            stall += fl_stall[h];
         }
         // each DeviceZoneScopedN = 1 START + 1 END, so >= 2*nmarkers markers/active-lane from the kernel
         // (FW main zone + any X280-STALL zones add more -- a lower bound, not an equality). Tolerances: the
@@ -1074,6 +1079,10 @@ int main(int argc, char** argv) {
             (unsigned long long)starts,
             (unsigned long long)ends,
             (unsigned long long)unbal);
+        printf(
+            "  X280-STALL   : %llu back-pressure zones  (delay=%u/marker)  [0 = drain fully kept up]\n",
+            (unsigned long long)stall,
+            prod_delay);
         printf(
             "  prog id      : %llu/%llu markers carried 0x%x   ts regressions: %llu   ring overflow: %llu  (sink "
             "%llx)\n",
