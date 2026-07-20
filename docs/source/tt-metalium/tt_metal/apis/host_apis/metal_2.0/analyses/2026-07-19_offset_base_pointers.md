@@ -23,6 +23,8 @@ So any legacy op that produces an *offset* base pointer is a porting considerati
 
 > How ops are detected (grep signatures per type) will live in the **audit recipe**, which flags these at audit time. This document is the findings + per-op tables the recipe references.
 
+*Factory paths in Types 1–2 and 4 are relative to `ttnn/cpp/ttnn/operations/`; Type 3 paths are relative to `models/demos/deepseek_v3_b1/`. Arguments are named by their receiving kernel + role rather than a numeric slot, since roles survive edits (indices and line numbers do not).*
+
 ---
 
 ## Type 1 — Offset pointer passed as an argument, used raw
@@ -33,11 +35,11 @@ So any legacy op that produces an *offset* base pointer is a porting considerati
 
 **Remedy (ops team, before porting — straightforward).** Pass the **base** (which becomes a `TensorBinding`) and the **offset as a separate scalar** runtime arg; move the addition into the kernel. The offset must be deterministic from cache-miss inputs (attrs / tensor args / mesh coords) — for all ops below it is (shard/bank/head geometry), so the fix is a mechanical arg-split, no design decision.
 
-| Op | Factory · lines | Folded offset | Kernel use |
-|---|---|---|---|
-| `roll` | `data_movement/roll/device/roll_program_factory.cpp` L419, L425, L450, L454 | DRAM bank-slab `(shard_idx / num_dram_banks) · dram_shard_size` (+ intra-shard `src_l1_offset` on L425) | raw `AllocatorBank<DRAM>` `.addr` in `noc.async_read/write` |
-| `nlp_create_qkv_heads` | `experimental/transformer/nlp_create_qkv_heads/device/nlp_create_qkv_heads_program_factory.cpp` L382, L390, L391, L412, L424, L425 | per-head `head_start_idx · head_size` (carves Q/K/V from a fused tensor) | raw, sharded reader |
-| `nlp_create_qkv_heads_boltz` | `experimental/transformer/nlp_create_qkv_heads_boltz/device/nlp_create_qkv_heads_boltz_program_factory.cpp` L331, L333, L396, L424, L425 | same per-head offset | raw, sharded reader |
+| op | factory | argument | offset expression | caveat |
+|---|---|---|---|---|
+| `roll` | `data_movement/roll/device/`<br>`roll_program_factory.cpp` | reader RTA — `dst_bank_base`<br>reader RTA — `src_bank_addr` | `buf->address()`<br>`+ (shard_idx / num_dram_banks)`<br>`· dram_shard_size`<br>`(+ intra-shard offset)` | single reader kernel. `src_bank_addr` is a **per-transfer** field, not a fixed slot. DRAM_TILE folds the intra-shard offset in; DRAM_RM passes it as a separate arg |
+| `nlp_create_qkv_heads` | `experimental/transformer/`<br>`nlp_create_qkv_heads/device/`<br>`nlp_create_qkv_heads_program_factory.cpp` | reader RTA — `q_start_addr`,<br>`kv_base_addr`, `kv_start_addr`<br>writer RTA — `q_start_addr`,<br>`v_base_addr`, `v_start_addr` | `<q/k/v base>`<br>`+ head_start_idx · head_size` | fused-QKV path only; the separate-KV path passes clean bases |
+| `nlp_create_qkv_heads_boltz` | `experimental/transformer/`<br>`nlp_create_qkv_heads_boltz/device/`<br>`nlp_create_qkv_heads_boltz_program_factory.cpp` | reader RTA — `q_start_addr`,<br>`kv_base_addr`, `kv_start_addr`<br>writer RTA — `q_start_addr`,<br>`v_base_addr`, `v_start_addr` | `<q/k/v base>`<br>`+ head_start_idx · head_size` | same as `nlp_create_qkv_heads` |
 
 *Notes.* `roll`'s own **DRAM_RM mode already passes base + offset separately** — the target shape exists in the same file. The `nlp_create_qkv_heads` offsets are conditional on the **fused-QKV** path (`read_from_input_tensor_kv == false`); the separate-KV path passes a clean base.
 
@@ -56,11 +58,11 @@ So any legacy op that produces an *offset* base pointer is a porting considerati
 
 These should be surfaced early (to Audrey / framework), not handed to a porter as a mechanical task.
 
-| Op | Factory · line | Folded expression → `TensorAccessor` base | Caveat |
-|---|---|---|---|
-| `slice` | `data_movement/slice/device/slice_program_factory_rm.cpp` L99 | `input.buffer()->address() + begins_bytes − misalignment` | the canonical case |
-| `padded_slice` | `experimental/padded_slice/device/padded_slice_rm_program_factory.cpp` L110 (+ L164) | `start_addr + begins_bytes − misalignment`, then `+= width_offset` per core | two-stage host fold |
-| `slice_write` | `experimental/slice_write/device/slice_write_rm_sharded_input_program_factory.cpp` L174 | `output.buffer()->address() + output_start[-1]·elem_size + width_offset` (write side) | **BLOCK_SHARDED only**; HEIGHT_SHARDED path folds offset 0 (bare base) |
+| op | factory | argument | offset expression | caveat |
+|---|---|---|---|---|
+| `slice` | `data_movement/slice/device/`<br>`slice_program_factory_rm.cpp` | reader RTA[0] — input base | `input->address()`<br>`+ begins_bytes − misalignment` | the canonical case |
+| `padded_slice` | `experimental/padded_slice/device/`<br>`padded_slice_rm_program_factory.cpp` | reader RTA[0] — input base | `start_addr`<br>`+ begins_bytes − misalignment`<br>`(+ per-core width_offset)` | two-stage host fold |
+| `slice_write` | `experimental/slice_write/device/`<br>`slice_write_rm_sharded_input_program_factory.cpp` | writer RTA[0] — output base | `output->address()`<br>`+ output_start[-1] · elem_size`<br>`+ width_offset` | **BLOCK_SHARDED only**; HEIGHT_SHARDED folds offset 0 (bare base) |
 
 *Note.* Only the **row-major** slice-family factories are affected. The **tiled** variants of the very same ops (`slice_program_factory_tile`, `padded_slice_tile`, `slice_write_tiled_sharded_input`) pass a clean **tile-index scalar** and are unaffected — the wall is an RM-layout phenomenon.
 
@@ -103,8 +105,8 @@ These should be surfaced early (to Audrey / framework), not handed to a porter a
 
 Correct **provided the narrowed `TensorSpec` matches the subtensor** — which `ValidateTensorArgs` enforces (spec equality). No framework backstop beyond the spec, but the spec check is the load-bearing guard and it holds.
 
-| Op | Site | Mechanism | Action |
-|---|---|---|---|
-| `narrow` | `data_movement/narrow/narrow.cpp` L122–126 (DRAM interleaved), L282–286 (L1 sharded) | `MeshBuffer::create(…, parent_base + offset)` → delivered as a `TensorBinding` / `borrowed_from` base | **None** — ports as-is |
+| op | factory | argument | offset expression | action |
+|---|---|---|---|---|
+| `narrow` | `data_movement/narrow/`<br>`narrow.cpp` | `TensorBinding` / `borrowed_from` base<br>(the view's own reported base) | `parent_base + offset`<br>via `MeshBuffer::create(…, addr)`<br>— DRAM interleaved & L1 sharded | **None** — ports as-is |
 
 *Caveat on the precondition (on record, not a port blocker).* The "ports correctly *provided the narrowed spec matches the subtensor*" verdict rests on `narrow` emitting a base that is actually consistent with the spec it reports — and Metal 2.0 validates the **spec only**, so it is not a backstop if `narrow` gets that wrong. One case where it does: last-dim (width) narrowing of a **DRAM-interleaved row-major** tensor silently mis-addresses for `start > 0` — the page-granular offset math truncates (`start_page_id = start / width → 0`), so the view points at element 0. Reachable and untested; code-traced, not yet run. This is a `narrow` defect for the op owner to fix, independent of Metal 2.0 — noted here only because it qualifies the Type 4 verdict.
