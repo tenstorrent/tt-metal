@@ -116,16 +116,38 @@ RegimeAMatmulParams fields change only the cache KEY, never the compiled program
   shapes. Overlap + RISC ownership intact: all three RISCs remain active and overlapping; extra work lands
   on the writer-side DM RISC + compute.
 
+### Combined + chunked fusions (same-config A/B; overhead vs mask-0 none; all PCC 0.99999)
+Full 8-variant matrix (none/bias/act/addcmul/bias_act/bias_addcmul/chunk2/bias_chunk2 × 5 shapes) in
+`tools/mm_sweep/REGIME_A_FUSION_PERF.md`; overlap intact (all three RISCs ~= total) on every variant.
+
+| shape (regime) | bias_act | bias_addcmul | chunk2 | bias_chunk2 |
+|---|---|---|---|---|
+| 256x2048x1024 (compute-light) | +13.6% | +20.1% | -1.2% | +3.2% |
+| 256x6144x768 (Pk>1, Sm>1) | +10.1% | +15.7% | +4.2% | +6.2% |
+| 256x15360x768 (deep-K, W>1) | +2.6% | +4.3% | -0.1% | +0.2% |
+| 32x2304x6144 (wide-N) | +3.4% | +5.7% | -0.1% | +2.1% |
+| 32x6144x3072 (Pk=1) | +1.3% | +2.1% | +0.1% | +0.4% |
+
+- **Combined epilogues are at-or-below the sum of the individual overheads** (the two epilogue ops share
+  one output-CB post-pass): e.g. 256x2048x1024 bias_act +13.6% < bias(+3.1%)+act(+16.7%); bias_addcmul
+  ~= bias+addcmul. Largest on the compute-light shape, negligible on deep-K/large.
+- **Chunking is essentially free**: chunk2 is within noise of none (-1.2% .. +4.2%, mostly ~0 or slightly
+  negative — chunks are written directly, no full-output-then-slice), and bias_chunk2 ~= bias-alone, so
+  chunking composes with an epilogue at no cost beyond the epilogue itself.
+
 ## 4. Unsupported combinations / planner constraints
 - activation + addcmul together: rejected (matches minimal_matmul / dit addcmul).
-- addcmul residual must be BFLOAT16 (shares in1's bf16 tile format / CB c_5); gate may be BF16 or FLOAT32.
+- Fusion operand dtypes are restricted to the implemented CB formats (validated; BF8_B/BF4_B rejected):
+  bias BFLOAT16 only (CB c_4 = Float16_b); addcmul residual BFLOAT16 (CB c_5 = Float16_b); addcmul gate
+  BFLOAT16 or FLOAT32 (CB c_6 = Float16_b/Float32).
 - Full [M,N] gate vs [1,N] broadcast is decided from the gate's LOGICAL M (==1 => broadcast, else full),
   matching validate(). (Fix: previously decided by padded tile-row count, which silently broadcast a
   genuine per-row gate whenever M<=32 padded to a single tile row — see test_regime_a_fused_addcmul_full_gate
   M=32.) Any M>=1 per-row gate now applies correctly.
 - NO planner/picker constraint added and Pk was NOT forced: every fusion coexists with the picker's chosen
   Pk/Ns/Sm/kb/nsb (Pk=1 & Pk>1, Ns>1, Sm>1, W=1 & W>1 all validated). Picker NOT retuned on fused timings.
-- Chunking composes with all fusions; requires N%chunks==0 + N/chunks tile-aligned, dim=-1 only.
+- Chunking composes with all fusions; requires 1<=chunks<=16 (writer chunk_addr[16]), N%chunks==0 +
+  N/chunks tile-aligned, dim=-1 only. chunks>16 rejected.
 - Single-chip only; multi-chip in0 all-gather deferred (unchanged this turn).
 
 ## 5. Watcher status
@@ -135,4 +157,5 @@ CLEAN — no watcher errors / pending-transaction / hang / assert dumps; only no
 fused path.
 
 ## Raw data
-tools/mm_sweep/regime_a_fusion.json (this matrix); regenerate with tools/mm_sweep/regime_a_fusion_perf.py.
+tools/mm_sweep/regime_a_fusion.json (full 8-variant matrix data) + tools/mm_sweep/REGIME_A_FUSION_PERF.md
+(auto-generated table); regenerate both with tools/mm_sweep/regime_a_fusion_perf.py.
