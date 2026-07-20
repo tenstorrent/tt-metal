@@ -1021,10 +1021,9 @@ def run_chunked_transformer_no_pcc(
     attends to REAL prior KV — the MoE gate then sees realistic hidden states and routes representatively
     (a zero prefix would degrade routing). preload_isl>0 therefore requires a trace (set PREFILL_TRACE_DIR);
     KV depths beyond the trace length are filled with random KV (still non-degenerate for routing) so larger
-    ISLs than the trace can be exercised. NOTE: by default the KVPE gather is full-cache-width (SEQ_CACHE_NOPCC)
-    every chunk, so that fixed component does not grow with preload_isl. Set TT_MLA_GATHER_POPULATED_KV=1 to
-    trim the gather to the populated KV depth (preload_isl + measured chunks) instead, so the measured gather
-    cost tracks the real valid length (more realistic per-depth perf).
+    ISLs than the trace can be exercised. NOTE: the sparse KVPE gather trims to the populated KV depth
+    (preload_isl + measured chunks, rounded up to whole block-cyclic slabs), so the measured gather cost
+    tracks the real valid length and grows with preload_isl (realistic per-depth perf).
 
     Perf gate: when `baseline_chunk_times_s` is provided (a per-chunk list of baseline medians pulled
     from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
