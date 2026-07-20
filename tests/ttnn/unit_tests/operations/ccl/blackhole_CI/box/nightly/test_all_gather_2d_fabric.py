@@ -7,7 +7,6 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0()
@@ -34,8 +33,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("cluster_axis", [0])
-def test_all_gather_2d_fabric_linear(
+def test_all_gather_2d_fabric(
     bh_2d_mesh_device,
     ag_output_shape,
     dim,
@@ -45,21 +43,13 @@ def test_all_gather_2d_fabric_linear(
     mem_config_ag,
     enable_trace,
     num_iters,
-    cluster_axis,
 ):
-    # On bh-llmbox (4,1 mesh), use 2 devices to avoid fabric routing issues
-    # On other machines, use all devices in first dimension
-    if bh_2d_mesh_device.shape == ttnn.MeshShape(4, 1):
-        num_devices = 2
-    else:
-        num_devices = bh_2d_mesh_device.shape[0]
-    cluster_axis = 0
-
-    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    # Reshape mesh_device to match its default MeshGraphDescriptor device_topology to prevent hang
+    system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+    bh_2d_mesh_device.reshape(system_mesh_desc.local_shape())
 
     run_all_gather_impl(
-        submesh_device,
+        bh_2d_mesh_device,
         ag_output_shape,
         dim,
         ag_input_dtype,
@@ -68,6 +58,5 @@ def test_all_gather_2d_fabric_linear(
         mem_config_ag,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
     )
