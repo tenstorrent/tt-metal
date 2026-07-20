@@ -12,7 +12,7 @@
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-    constexpr bool region_aware = get_compile_time_arg_val(2) != 0;
+    constexpr bool skip_padding = get_compile_time_arg_val(2) != 0;
     constexpr uint32_t cb_ctl_id = tt::CBIndex::c_1;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
@@ -23,7 +23,7 @@ void kernel_main() {
                                    : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
 
     uint32_t num_blocks = per_core_block_cnt;
-    if constexpr (region_aware) {
+    if constexpr (skip_padding) {
         // this_core_blocks published by the reader (bounded to the filled prefix).
         CircularBuffer cb_ctl(cb_ctl_id);
         cb_ctl.wait_front(1);

@@ -7,14 +7,15 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-// Pipelined interleaved DRAM writer. The stock tilize writer flushes after every single tile
-// (noc_async_writes_flushed) → never more than one write outstanding → caps interleaved-TILE write BW.
-// Here we issue a whole block's tile-writes back-to-back and barrier once, so consecutive tiles (which
-// round-robin across the 8 DRAM banks) drain concurrently. The output CB holds exactly one block, so
-// wait_front(tiles_per_block) always leaves the read pointer at the CB base (contiguous, valid src offset).
+// Interleaved DRAM writer. Issues a whole block's tile-writes back-to-back and barriers once, instead of the
+// stock tilize writer's per-tile flush (noc_async_writes_flushed). On the bf16 / DRAM-read-bound path this is
+// bandwidth-neutral — the op's win is the padding skip, not the writer — but batching avoids the per-tile flush
+// overhead and is harmless. The output CB holds exactly one block, so wait_front(tiles_per_block) always leaves
+// the read pointer at the CB base (contiguous, valid src offset). Output is always interleaved DRAM
+// (enforced in validate); there is no sharded path.
 //
-// In the region-aware path the compute produces only this_core_blocks blocks (the filled prefix), so the
-// writer reads that count from the control CB and writes exactly that many blocks — matching the compute.
+// On the skip path the compute produces only this_core_blocks blocks (the filled prefix), so the writer reads
+// that count from the control CB (c_1) and writes exactly that many blocks — matching the compute.
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_pages_arg = get_arg_val<uint32_t>(1);
@@ -22,7 +23,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    constexpr bool region_aware = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) != 0;
+    constexpr bool skip_padding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) != 0;
     constexpr uint32_t cb_ctl_id = tt::CBIndex::c_1;
 
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
@@ -30,14 +31,10 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb(cb_id_out);
-
-#ifdef OUT_SHARDED
-    dfb.wait_front(num_pages_arg);
-#else
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t num_pages = num_pages_arg;
-    if constexpr (region_aware) {
+    if constexpr (skip_padding) {
         DataflowBuffer dfb_ctl(cb_ctl_id);
         dfb_ctl.wait_front(1);
         volatile tt_l1_ptr uint32_t* ctl = (volatile tt_l1_ptr uint32_t*)dfb_ctl.get_read_ptr();
@@ -57,5 +54,4 @@ void kernel_main() {
         page += batch;
         remaining -= batch;
     }
-#endif
 }

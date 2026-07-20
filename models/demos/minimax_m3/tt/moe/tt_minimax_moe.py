@@ -65,6 +65,8 @@ class TtMiniMaxMoE(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
+        # Opt-in (bring-up) flag for the region-aware dispatch_tilize; resolved once here, not per forward().
+        self.use_region_tilize = os.getenv("REGION_TILIZE") == "1"
 
         # MiniMax routing: sigmoid + e_score_correction_bias, no groups -> n_group=1.
         gate_config = TtMoEGateConfig(
@@ -213,10 +215,11 @@ class TtMiniMaxMoE(LightweightModule):
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
         _dispatched_rm = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        if os.getenv("REGION_TILIZE") == "1":
+        if self.use_region_tilize:
             # Region-aware tilize: skips the worst-case dispatch padding (mostly empty). Pass the per-expert
             # token counts so the kernel bounds work by the filled prefix; experts_per_chip groups the counts
-            # into the per-chip valid_rows (the fullest chip's fill).
+            # into the per-chip valid_rows (the fullest chip's fill). The padded tail past valid_rows is left
+            # undefined — safe only because routed_expert (below) reads just the filled prefix.
             dispatched_buffer_tiled = ttnn.experimental.deepseek_prefill.dispatch_tilize(
                 _dispatched_rm,
                 tt_expert_token_counts,

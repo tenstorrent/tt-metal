@@ -23,13 +23,13 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
 
-    // Region-aware skip: when total_counts_per_expert is supplied the kernels bound work to the filled prefix of
-    // the worst-case-padded dispatch buffer (valid_blocks = ceil(max_chip Σ_{e∈chip} align32(count[e]) / 32),
+    // Padding skip: when total_counts_per_expert is supplied the kernels bound work to the filled prefix of the
+    // worst-case-padded dispatch buffer (valid_blocks = ceil(max_chip Σ_{e∈chip} align32(count[e]) / 32),
     // grouping the [1,E] counts into experts_per_chip chips = the fullest chip's fill). The reader publishes
     // this_core_blocks via a control CB (c_1) for the compute + writer. Omitted => full tilize.
-    const bool region_aware = tensor_args.total_counts_per_expert.has_value();
-    Buffer* counts_buffer = region_aware ? tensor_args.total_counts_per_expert->buffer() : nullptr;
-    const uint32_t num_experts = region_aware ? (uint32_t)tensor_args.total_counts_per_expert->logical_shape()[-1] : 0u;
+    const bool skip_padding = tensor_args.total_counts_per_expert.has_value();
+    Buffer* counts_buffer = skip_padding ? tensor_args.total_counts_per_expert->buffer() : nullptr;
+    const uint32_t num_experts = skip_padding ? (uint32_t)tensor_args.total_counts_per_expert->logical_shape()[-1] : 0u;
     const uint32_t experts_per_chip = operation_attributes.experts_per_chip;
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -82,25 +82,28 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
         }}},
     });
 
-    if (region_aware) {
+    if (skip_padding) {
         // c_1: control (this_core_blocks, one uint32). c_2: reader scratch for the [1,E] counts page.
-        const uint32_t exp_bytes = num_experts * 4;
+        // Both round up to the L1 alignment so the CB page and its NoC-read destination stay aligned.
+        constexpr uint32_t kL1Align = 16;
+        const uint32_t ctl_bytes = kL1Align;  // one uint32, min-aligned
+        const uint32_t counts_bytes = tt::round_up(num_experts * 4u, kL1Align);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = 16,
+            .total_size = ctl_bytes,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
                 .data_format = tt::DataFormat::UInt32,
-                .page_size = 16,
+                .page_size = ctl_bytes,
             }}},
         });
         desc.cbs.push_back(CBDescriptor{
-            .total_size = exp_bytes,
+            .total_size = counts_bytes,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
                 .data_format = tt::DataFormat::UInt32,
-                .page_size = exp_bytes,
+                .page_size = counts_bytes,
             }}},
         });
     }
@@ -111,17 +114,20 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
     uint32_t num_pages_in_row = 1;
     uint32_t size_of_valid_data_in_last_page_in_row = page_size;
 
+    // The leading three CT args + the RM read loop mirror the stock interleaved tilize reader's arg layout
+    // (num_pages_in_row is 1 here — the dispatch buffer is one page per row), kept ABI-compatible so the shared
+    // reader idioms carry over unchanged.
     std::vector<uint32_t> reader_ct_args = {
         aligned_page_size, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
-    reader_ct_args.push_back(region_aware ? 1u : 0u);
+    reader_ct_args.push_back(skip_padding ? 1u : 0u);
     reader_ct_args.push_back(num_experts);
     reader_ct_args.push_back(experts_per_chip);
     // Always append the counts accessor args so TensorAccessorArgs<after_src+3> is well-formed on the full path
-    // too: kernel_main is not a template, so if constexpr(region_aware)'s discarded branch is still compiled. When
-    // not region-aware this describes src0 as a harmless placeholder and is never read (that branch is discarded
-    // at runtime, so RT arg 9 is never fetched).
-    TensorAccessorArgs(*(region_aware ? counts_buffer : src0_buffer)).append_to(reader_ct_args);
+    // too: kernel_main is not a template, so if constexpr(skip_padding)'s discarded branch is still semantically
+    // checked. When not skipping this describes src0 as a harmless placeholder and is never read (the branch is
+    // dropped at compile time, so RT arg 9 is never fetched).
+    TensorAccessorArgs(*(skip_padding ? counts_buffer : src0_buffer)).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -135,7 +141,7 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
     // writer
     std::vector<uint32_t> writer_ct_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    writer_ct_args.push_back(region_aware ? 1u : 0u);
+    writer_ct_args.push_back(skip_padding ? 1u : 0u);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -147,8 +153,8 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     // compute
-    std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block, region_aware ? 1u : 0u};
-    std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block, region_aware ? 1u : 0u};
+    std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block, skip_padding ? 1u : 0u};
+    std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block, skip_padding ? 1u : 0u};
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_llk_acc) {
@@ -204,7 +210,7 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
         reader_rt_args.push_back(std::uint32_t{0});
         reader_rt_args.push_back(std::uint32_t{0});
         reader_rt_args.push_back(page_start_id);
-        if (region_aware) {
+        if (skip_padding) {
             reader_rt_args.push_back(counts_buffer);
         }
         reader_desc.emplace_runtime_args(core, reader_rt_args);
@@ -224,7 +230,7 @@ ProgramDescriptor DispatchTilizeProgramFactory::create_descriptor(
         reader_rt_args.push_back(std::uint32_t{0});
         reader_rt_args.push_back(std::uint32_t{0});
         reader_rt_args.push_back(page_start_id);
-        if (region_aware) {
+        if (skip_padding) {
             reader_rt_args.push_back(counts_buffer);
         }
         reader_desc.emplace_runtime_args(core, reader_rt_args);

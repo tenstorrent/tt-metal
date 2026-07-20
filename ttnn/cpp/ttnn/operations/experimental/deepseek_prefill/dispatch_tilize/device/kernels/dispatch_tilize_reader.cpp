@@ -28,7 +28,7 @@ void kernel_main() {
 
     constexpr auto src_tensor_args = TensorAccessorArgs<3>();
     constexpr uint32_t after_src = src_tensor_args.next_compile_time_args_offset();
-    constexpr bool region_aware = get_compile_time_arg_val(after_src) != 0;
+    constexpr bool skip_padding = get_compile_time_arg_val(after_src) != 0;
     constexpr uint32_t num_experts = get_compile_time_arg_val(after_src + 1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(after_src + 2);
 
@@ -38,12 +38,12 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb_id_in0);
 
     // Bound this core's block count by the filled prefix of the padded dispatch buffer. valid_rows is the
-    // GLOBAL-max fill: the fullest chip's Σ_{e∈chip} align32(count[e]) over the experts_per_chip groups. Region
-    // offsets restart per chip, so a chip's summed aligned counts == its region end; the tilize is a mesh op
-    // bounded by the slowest device, so the global max on every core matches an ideal per-device skip with no
-    // device index.
+    // GLOBAL-max fill: the fullest chip's Σ_{e∈chip} align32(count[e]) over the experts_per_chip groups. The
+    // dispatch buffer packs each chip's experts back-to-back from row 0, so a chip's summed aligned counts is
+    // exactly its filled extent; the tilize is a mesh op bounded by the slowest device, so the global max on
+    // every core matches an ideal per-device skip with no device index.
     uint32_t core_blocks = num_rows / tile_height;
-    if constexpr (region_aware) {
+    if constexpr (skip_padding) {
         constexpr auto counts_args = TensorAccessorArgs<after_src + 3>();
         const uint32_t counts_addr = get_arg_val<uint32_t>(9);
         const auto counts_acc = TensorAccessor(counts_args, counts_addr);
@@ -58,10 +58,10 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* counts = (volatile tt_l1_ptr uint32_t*)dfb_counts.get_write_ptr();
         uint32_t valid_rows = 0;
-        for (uint32_t chip = 0; chip < num_experts; chip += experts_per_chip) {
+        for (uint32_t chip_base = 0; chip_base < num_experts; chip_base += experts_per_chip) {
             uint32_t chip_fill = 0;
             for (uint32_t i = 0; i < experts_per_chip; i++) {
-                chip_fill += ((counts[chip + i] + tile_height - 1) / tile_height) * tile_height;
+                chip_fill += ((counts[chip_base + i] + tile_height - 1) / tile_height) * tile_height;
             }
             if (chip_fill > valid_rows) {
                 valid_rows = chip_fill;

@@ -38,6 +38,9 @@ void DispatchTilizeDeviceOperation::validate_on_program_cache_miss(
 
     const ttnn::Tensor& input = tensor_args.input_tensor;
     TT_FATAL(input.layout() == ttnn::Layout::ROW_MAJOR, "dispatch_tilize input must be ROW_MAJOR");
+    // The writer only implements the interleaved path (no sharded branch), so both sides must be interleaved.
+    TT_FATAL(!input.memory_config().is_sharded(), "dispatch_tilize input must be interleaved");
+    TT_FATAL(!operation_attributes.output_memory_config.is_sharded(), "dispatch_tilize output must be interleaved");
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FP8_E4M3,
         "dispatch_tilize input must be bfloat16 or fp8_e4m3, got {}",
