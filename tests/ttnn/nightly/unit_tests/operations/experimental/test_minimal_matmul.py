@@ -197,9 +197,8 @@ def test_linear_granular_write_ordering(
         subblock_w,
     )
 
-
-assert check_result["pcc"] > 0.999_500, f'Expected PCC > 0.999500, got {check_result["pcc"]}'
-assert check_result["relative_rmse"] < 0.02, f'Expected relative RMSE < 0.02, got {check_result["relative_rmse"]}'
+    assert check_result["pcc"] > 0.999_500, f'Expected PCC > 0.999500, got {check_result["pcc"]}'
+    assert check_result["relative_rmse"] < 0.02, f'Expected relative RMSE < 0.02, got {check_result["relative_rmse"]}'
 
 
 @pytest.mark.parametrize(
