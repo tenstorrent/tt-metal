@@ -38,8 +38,7 @@ class CreateTensorWithLayoutTest : public GenericMeshDeviceFixture,
 TEST_P(CreateTensorWithLayoutTest, Tile) {
     const CreateTensorParams& params = GetParam();
 
-    auto tensor = MeshTensor::allocate_on_device(
-        *mesh_device_, TensorSpec(params.inputs.shape, params.inputs.layout), TensorTopology());
+    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, TensorSpec(params.inputs.shape, params.inputs.layout));
     EXPECT_EQ(tensor.padded_shape(), params.expected.padded_shape);
     EXPECT_EQ(tensor.logical_shape(), params.inputs.shape);
 }

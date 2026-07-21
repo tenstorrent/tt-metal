@@ -34,7 +34,7 @@ void test_tensor_on_device(
         host_data[i] = static_cast<std::byte>(i % random_prime_number);
     }
 
-    auto tensor = MeshTensor::allocate_on_device(device, TensorSpec(input_shape, layout), TensorTopology());
+    auto tensor = MeshTensor::allocate_on_device(device, TensorSpec(input_shape, layout));
 
     auto& cq = device.mesh_command_queue();
     enqueue_write_tensor(cq, host_data.data(), tensor);

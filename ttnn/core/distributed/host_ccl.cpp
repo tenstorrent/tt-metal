@@ -16,6 +16,7 @@
 
 #include "tt_stl/span.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::distributed::host_ccl {
 
@@ -104,7 +105,7 @@ Tensor all_gather(const Tensor& tensor) {
         }
     }
 
-    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+    return Tensor(tt::tt_metal::host_tensor_from_buffer(
         std::move(all_gather_buffer), tensor.tensor_spec(), tensor.tensor_topology()));
 }
 }  // namespace ttnn::distributed::host_ccl

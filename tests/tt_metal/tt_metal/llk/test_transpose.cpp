@@ -171,9 +171,9 @@ void run_single_core_transpose(
     uint32_t dram_buffer_size = test_config.single_tile_size * num_tensor_tiles;
 
     auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles), TensorTopology{});
+        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles), TensorTopology{});
+        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;

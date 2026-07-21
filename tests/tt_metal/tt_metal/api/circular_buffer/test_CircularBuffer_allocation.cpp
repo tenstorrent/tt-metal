@@ -408,7 +408,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
             PageConfig(Layout::TILE),
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
         Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(tensor_buffer, nullptr);
 
@@ -451,7 +451,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMat
             PageConfig(Layout::TILE),
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
 
         Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(underlying_buffer, nullptr);
@@ -477,7 +477,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromM
             PageConfig(Layout::TILE),
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
 
         Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(underlying_buffer, nullptr);

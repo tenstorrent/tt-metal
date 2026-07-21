@@ -1258,7 +1258,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_AttachWritesTensorAddressToDFB) {
     ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), 0u) << "DFB base addr before attach should be the placeholder 0";
 
     // Allocate the borrowed tensor and attach via SetProgramRunArgs.
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.tensor_args = {
         {TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}},
@@ -1276,8 +1276,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
-    MeshTensor tensor1 =
-        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.tensor_args = {
         {TensorParamName{"borrowed_tensor"}, TensorArgument{tensor1}},
@@ -1285,8 +1284,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
     SetProgramRunArgs(program, params);
     ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor1.address()));
 
-    MeshTensor tensor2 =
-        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ASSERT_NE(tensor1.address(), tensor2.address())
         << "Test pre-condition: two separate allocations should yield distinct addresses";
 
@@ -1306,7 +1304,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithout
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
     SetProgramRunArgs(program, setup);
@@ -1327,7 +1325,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithTen
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
     SetProgramRunArgs(program, setup);
@@ -1350,7 +1348,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBBeyondB
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
     SetProgramRunArgs(program, setup);
@@ -1380,7 +1378,7 @@ TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsSucceeds) {
 
     // Supply the bound tensor via tensor_args, but provide NO kernel_run_args entry for the binding
     // kernel (the whole point of the relaxation — pre-fix this aborted in ValidateProgramRunArgs).
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs params;
     params.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor}}};
 
@@ -1407,16 +1405,14 @@ TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsReSetSucceed
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    MeshTensor tensor1 =
-        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs params1;
     params1.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor1}}};
     EXPECT_NO_THROW(SetProgramRunArgs(program, params1));
 
     // Second enqueue with a different tensor: must not re-allocate (no fatal), and the binding
     // address must update in place.
-    MeshTensor tensor2 =
-        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ASSERT_NE(tensor1.address(), tensor2.address())
         << "test pre-condition: two live allocations should have distinct addresses";
     ProgramRunArgs params2;
@@ -1626,7 +1622,7 @@ TEST_F(ProgramRunArgsTestGen1, UnknownTensorParameterInRunArgsFails) {
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
 
     // tensor_parameter_name doesn't match any TensorParameter in the spec.
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
@@ -1656,7 +1652,7 @@ TEST_F(ProgramRunArgsTestGen1, TensorSpecMismatchFails) {
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, tensor_layout);  // different shape!
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -1679,7 +1675,7 @@ TEST_F(ProgramRunArgsTestGen1, TensorSpecMismatchFails) {
 
 // Helper: allocate a MeshTensor matching the given TensorParameter's spec.
 inline MeshTensor AllocateTensorForBinding(distributed::MeshDevice& mesh_device, const TensorParameter& binding) {
-    return MeshTensor::allocate_on_device(mesh_device, binding.spec, TensorTopology{});
+    return MeshTensor::allocate_on_device(mesh_device, binding.spec);
 }
 
 // Helper: read the patched tensor binding address out of a kernel's CRTA buffer.
@@ -1790,7 +1786,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_TensorSpecMismatchFails) {
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, tensor_layout);
-    MeshTensor wrong_tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+    MeshTensor wrong_tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec);
 
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"input_tensor"}, TensorArgument{wrong_tensor}},
@@ -1936,7 +1932,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_InterleavedAcceptsDifferentSha
     // Different shape, same layout.
     auto wrong_spec_layout = binding.spec.tensor_layout();
     auto larger_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, wrong_spec_layout);
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, larger_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, larger_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -1962,7 +1958,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_DTypeMismatchStillFails) {
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     auto wrong_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
     auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 32}, wrong_layout);
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -1987,7 +1983,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_RankMismatchFails) {
 
     // Rank-3 tensor with same layout.
     auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32}, binding.spec.tensor_layout());
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -2051,7 +2047,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
@@ -2078,7 +2074,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // First Set: tensor of declared shape (2 shards along height).
-    MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+    MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor1}},
@@ -2089,7 +2085,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
 
     // Second Update: smaller-shape tensor (1 shard along height). Same shard_spec, fewer shards.
     auto smaller_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, binding.spec.tensor_layout());
-    MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, smaller_spec, TensorTopology{});
+    MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, smaller_spec);
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"input_tensor"}, TensorArgument{tensor2}},
     };
@@ -2135,7 +2131,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_AcceptsDifferentLogicalShape
     auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 20, 20}, layout);
     ASSERT_EQ(runtime_spec.padded_shape(), declared_spec.padded_shape())
         << "Test precondition: runtime logical {1,1,20,20} should pad to the same {1,1,32,32} as declared.";
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -2167,7 +2163,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_PaddedShapeMismatchFails) {
     auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 33}, layout);
     ASSERT_NE(runtime_spec.padded_shape(), declared_spec.padded_shape())
         << "Test precondition: runtime logical {1,1,32,33} should pad to a different padded_shape than declared.";
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -2196,7 +2192,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     auto wrong_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
     auto wrong_spec = tt::tt_metal::TensorSpec(binding.spec.logical_shape(), wrong_layout);
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -2223,7 +2219,7 @@ TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelOmittedFromRunArgsSucceeds
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     // Supply the bound tensor but no kernel_run_args entry for the binding kernel.
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
     ProgramRunArgs params;
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
@@ -2251,7 +2247,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
     // Different logical shape; for ROW_MAJOR this also gives a different padded_shape, which
     // dynamic accepts but padded_only alone would not.
     auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, binding.spec.tensor_layout());
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {

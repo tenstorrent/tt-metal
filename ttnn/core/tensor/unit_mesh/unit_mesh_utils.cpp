@@ -10,6 +10,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::experimental::unit_mesh {
 using tt::tt_metal::MeshTensor;
@@ -96,7 +97,7 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     auto topology = tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
         tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0);
 
-    MeshTensor mesh_tensor = MeshTensor::from_buffer(std::move(*mesh_buffer), reference_spec, topology);
+    MeshTensor mesh_tensor = mesh_tensor_from_buffer(std::move(*mesh_buffer), reference_spec, topology);
 
     auto result = Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     return result;
@@ -139,8 +140,7 @@ std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
 
-        Tensor unit_tensor(tt::tt_metal::MeshTensor::from_buffer(
-            std::move(*mesh_buffer), reference_spec, tt::tt_metal::TensorTopology{}));
+        Tensor unit_tensor(tt::tt_metal::MeshTensor::from_buffer(std::move(*mesh_buffer), reference_spec));
         TT_FATAL(
             unit_tensor.device_storage().get_coords().size() == 1 &&
                 unit_tensor.device_storage().get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -78,25 +80,18 @@ std::size_t MeshTensor::element_size() const {
 
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
-MeshTensor MeshTensor::allocate_on_device(
-    distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
-    // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
-    // check this, but we enforce it here at the device-binding boundary so any path that
-    // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
-    // generating programs that misbehave later.
-    if (spec.data_type() == DataType::FP8_E4M3) {
-        TT_FATAL(
-            mesh_device.arch() == tt::ARCH::BLACKHOLE,
-            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
-            mesh_device.arch());
-    }
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
-    return MeshTensor::from_buffer(std::move(*mesh_buffer), spec, topology);
+MeshTensor MeshTensor::allocate_on_device(distributed::MeshDevice& mesh_device, const TensorSpec& spec) {
+    return allocate_mesh_tensor_on_device(
+        mesh_device, spec, TensorTopology::create_fully_replicated_tensor_topology(mesh_device.shape()));
 }
 
-MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology) {
-    return MeshTensor(
-        std::make_shared<distributed::MeshBuffer>(std::move(mesh_buffer)), std::move(spec), std::move(topology));
+MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec) {
+    auto* device = mesh_buffer.device();
+    TT_FATAL(device != nullptr, "MeshBuffer must be associated with a MeshDevice");
+    return mesh_tensor_from_buffer(
+        std::move(mesh_buffer),
+        std::move(spec),
+        TensorTopology::create_fully_replicated_tensor_topology(device->shape()));
 }
 
 }  // namespace tt::tt_metal

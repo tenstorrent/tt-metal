@@ -46,8 +46,8 @@ static void run_single_dfb_multicore_2_0(
 
     // Each core owns num_entries slots → total = 2 * num_entries.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 2 * num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
@@ -137,8 +137,8 @@ static void run_concurrent_dfbs_program_2_0(
     // One big DRAM tensor sliced num_dfbs ways for input + same for output.
     const uint32_t total_entries = num_dfbs * entries_per_dfb;
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // Build N DFBs + N producer kernels + N consumer kernels.
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -263,8 +263,8 @@ static void run_sequential_4_dfbs_2_0(
     in_tensors.reserve(4);
     out_tensors.reserve(4);
     for (uint32_t i = 0; i < 4; ++i) {
-        in_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{}));
-        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{}));
+        in_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec));
+        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec));
     }
 
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -444,7 +444,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     std::vector<MeshTensor> out_tensors;
     out_tensors.reserve(4);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, dram_spec, TensorTopology{}));
+        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, dram_spec));
     }
 
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -591,8 +591,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
 
     // Each core owns num_entries slots → 4 cores × num_entries pages total.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 4 * num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,

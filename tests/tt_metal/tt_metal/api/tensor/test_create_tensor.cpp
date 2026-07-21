@@ -103,7 +103,7 @@ TEST_P(EmptyTensorTest, Combinations) {
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
     auto tensor = MeshTensor::allocate_on_device(
-        *mesh_device_, TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), TensorTopology());
+        *mesh_device_, TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)));
     EXPECT_EQ(tensor.logical_shape(), shape);
 
     ::test_utils::test_tensor_on_device(shape, tensor_layout, *mesh_device_);

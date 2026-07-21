@@ -12,6 +12,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 using namespace tt::tt_metal;
 
@@ -28,7 +29,8 @@ Tensor create_ghost_tensor(const Tensor& input_tensor) {
     const auto& mesh_buffer = input_tensor.mesh_buffer();
     auto ghost_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         mesh_buffer.global_config(), mesh_buffer.device_local_config(), mesh_buffer.device(), mesh_buffer.address());
-    return Tensor(MeshTensor::from_buffer(std::move(*ghost_mesh_buffer), input_tensor.tensor_spec(), input_tensor.tensor_topology()));
+    return Tensor(mesh_tensor_from_buffer(
+        std::move(*ghost_mesh_buffer), input_tensor.tensor_spec(), input_tensor.tensor_topology()));
 }
 
 inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {

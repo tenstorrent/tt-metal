@@ -46,7 +46,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
     auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
-    auto res = HostTensor::from_buffer(std::move(host_buffer), buffer_spec, TensorTopology{});
+    auto res = HostTensor::from_buffer(std::move(host_buffer), buffer_spec);
     return to_dtype(res, spec.data_type());
 }
 
@@ -74,7 +74,7 @@ HostTensor HostTensor::from_borrowed_data(
     auto buffer_dtype = convert_to_data_type<T>();
     TensorSpec tensor_spec(shape, TensorLayout(buffer_dtype, PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{}));
 
-    return HostTensor::from_buffer(std::move(host_buffer), std::move(tensor_spec), TensorTopology{});
+    return HostTensor::from_buffer(std::move(host_buffer), std::move(tensor_spec));
 }
 
 template <typename T>
@@ -101,7 +101,7 @@ HostTensor HostTensor::from_vector(std::vector<T>&& buffer, const TensorSpec& sp
             ? HostBuffer(std::move(buffer))
             : HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
-    auto res = HostTensor::from_buffer(std::move(host_buffer), buffer_spec, TensorTopology{});
+    auto res = HostTensor::from_buffer(std::move(host_buffer), buffer_spec);
     return to_dtype(res, spec.data_type());
 }
 

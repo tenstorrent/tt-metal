@@ -241,10 +241,10 @@ inline void run_single_dfb_program_2_0(
     std::optional<MeshTensor> in_tensor;
     std::optional<MeshTensor> out_tensor;
     if (p.producer_type == M2PorCType::DM) {
-        in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+        in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
     }
     if (p.consumer_type == M2PorCType::DM) {
-        out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+        out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
     }
 
     m2::DataflowBufferSpec dfb_spec{

@@ -24,8 +24,8 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
 
     // Tensors
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     const m2::DFBSpecName DFB_IN{"dfb_in"};
     const m2::DFBSpecName DFB_OUT{"dfb_out"};
@@ -170,8 +170,8 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_tiles, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // DFB-level implicit_sync must match the kernels' CTA (inverted polarity).
     m2::DataflowBufferSpec dfb{
@@ -282,8 +282,8 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     const m2::SemaphoreSpecName SEM_CONS_READY{"sem_cons_ready"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(kEntrySize, kPushTiles, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb{
         .unique_id = DFB,
@@ -469,8 +469,8 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 2 * entries_per_core, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // Decoy DFB: lives on core A only.
     m2::DataflowBufferSpec decoy_dfb{

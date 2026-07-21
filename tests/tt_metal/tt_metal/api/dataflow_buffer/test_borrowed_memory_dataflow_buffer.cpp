@@ -206,15 +206,12 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    MeshTensor src_tensor =
-        MeshTensor::allocate_on_device(*mesh_device, src_spec, TensorTopology{});
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_spec);
     std::optional<MeshTensor> dst_tensor;
     if (!cfg.tensix_consumer) {
-        dst_tensor.emplace(
-            MeshTensor::allocate_on_device(*mesh_device, dst_spec, TensorTopology{}));
+        dst_tensor.emplace(MeshTensor::allocate_on_device(*mesh_device, dst_spec));
     }
-    MeshTensor ring_tensor =
-        MeshTensor::allocate_on_device(*mesh_device, ring_spec, TensorTopology{});
+    MeshTensor ring_tensor = MeshTensor::allocate_on_device(*mesh_device, ring_spec);
 
     // -----------------------------------------------------------------------
     // Build and apply run params
@@ -374,12 +371,12 @@ void run_update_address_test(
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_spec, TensorTopology{});
-    MeshTensor dst_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_spec, TensorTopology{});
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_spec);
+    MeshTensor dst_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_spec);
 
     // Two distinct L1 ring tensors - swapped between runs.
-    MeshTensor ring_tensor_a = MeshTensor::allocate_on_device(*mesh_device, ring_spec, TensorTopology{});
-    MeshTensor ring_tensor_b = MeshTensor::allocate_on_device(*mesh_device, ring_spec, TensorTopology{});
+    MeshTensor ring_tensor_a = MeshTensor::allocate_on_device(*mesh_device, ring_spec);
+    MeshTensor ring_tensor_b = MeshTensor::allocate_on_device(*mesh_device, ring_spec);
     ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 

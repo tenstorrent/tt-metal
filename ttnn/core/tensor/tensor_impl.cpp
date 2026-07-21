@@ -37,6 +37,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::tensor_impl {
 
@@ -431,7 +432,7 @@ tt::tt_metal::HostTensor view(
 
     // TODO (#25340): Review tensor topology logic for reshape
     const auto& buffer = tensor.buffer();
-    return tt::tt_metal::HostTensor::from_buffer(buffer, new_spec, tensor.tensor_topology());
+    return host_tensor_from_buffer(buffer, new_spec, tt::tt_metal::tensor_topology(tensor));
 }
 
 // ======================================================================================

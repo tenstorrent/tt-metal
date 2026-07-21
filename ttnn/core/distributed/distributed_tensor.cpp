@@ -33,6 +33,7 @@
 #include "distribution_mode.hpp"
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::distributed {
 namespace {
@@ -227,7 +228,7 @@ public:
                 tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
 
             return Tensor(
-                tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), tensor_spec, tensor_topology));
+                tt::tt_metal::host_tensor_from_buffer(std::move(distributed_buffer), tensor_spec, tensor_topology));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -400,7 +401,7 @@ private:
             tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
 
         return Tensor(
-            tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), shard_spec, tensor_topology));
+            tt::tt_metal::host_tensor_from_buffer(std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
     // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.

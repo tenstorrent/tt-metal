@@ -14,6 +14,7 @@
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -34,7 +35,7 @@ static Tensor manual_insertion(
         logical_shape,
         TensorLayout::fromPaddedShape(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));
-    auto output = Tensor(tt::tt_metal::HostTensor::from_buffer(
+    auto output = Tensor(tt::tt_metal::host_tensor_from_buffer(
                              cpu_tensor.host_storage().buffer(), std::move(output_spec), cpu_tensor.tensor_topology()))
                       .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
