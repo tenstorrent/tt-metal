@@ -150,7 +150,7 @@ Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const tt::t
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(tt::tt_metal::host_tensor_from_buffer(
+    return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
         std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 
@@ -1025,7 +1025,7 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                 return tt::tt_metal::HostBuffer(std::move(output_buffer));
             },
             tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-        return Tensor(tt::tt_metal::host_tensor_from_buffer(
+        return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
             std::move(folded_buffer),
             tt::tt_metal::TensorSpec(
                 output_shape,

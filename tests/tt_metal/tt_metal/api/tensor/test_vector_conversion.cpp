@@ -183,7 +183,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            auto copy = host_tensor_from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor_topology(tensor));
+            auto copy = host_tensor_from_buffer_with_topology(
+                tensor.buffer(), tensor.tensor_spec(), get_tensor_topology(tensor));
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -216,7 +217,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        auto copy = host_tensor_from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor_topology(tensor));
+        auto copy =
+            host_tensor_from_buffer_with_topology(tensor.buffer(), tensor.tensor_spec(), get_tensor_topology(tensor));
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }

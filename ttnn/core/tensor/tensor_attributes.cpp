@@ -34,7 +34,7 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
     return std::visit(
         ttsl::overloaded{
             [](const HostStorage& host_storage) -> const TensorTopology& {
-                return tensor_topology(host_storage.host_tensor());
+                return tt::tt_metal::get_tensor_topology(host_storage.host_tensor());
             },
             [](const DeviceStorage& device_storage) -> const TensorTopology& {
                 return device_storage.get_tensor_topology();

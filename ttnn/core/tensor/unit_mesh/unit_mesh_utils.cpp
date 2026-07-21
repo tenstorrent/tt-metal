@@ -97,7 +97,7 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     auto topology = tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
         tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0);
 
-    MeshTensor mesh_tensor = mesh_tensor_from_buffer(std::move(*mesh_buffer), reference_spec, topology);
+    MeshTensor mesh_tensor = mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), reference_spec, topology);
 
     auto result = Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     return result;

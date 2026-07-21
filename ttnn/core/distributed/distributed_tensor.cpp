@@ -227,8 +227,8 @@ public:
             const auto tensor_topology =
                 tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
 
-            return Tensor(
-                tt::tt_metal::host_tensor_from_buffer(std::move(distributed_buffer), tensor_spec, tensor_topology));
+            return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
+                std::move(distributed_buffer), tensor_spec, tensor_topology));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -400,8 +400,8 @@ private:
         const auto tensor_topology =
             tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
 
-        return Tensor(
-            tt::tt_metal::host_tensor_from_buffer(std::move(distributed_buffer), shard_spec, tensor_topology));
+        return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
+            std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
     // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.

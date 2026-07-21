@@ -432,7 +432,7 @@ tt::tt_metal::HostTensor view(
 
     // TODO (#25340): Review tensor topology logic for reshape
     const auto& buffer = tensor.buffer();
-    return host_tensor_from_buffer(buffer, new_spec, tt::tt_metal::tensor_topology(tensor));
+    return host_tensor_from_buffer_with_topology(buffer, new_spec, tt::tt_metal::get_tensor_topology(tensor));
 }
 
 // ======================================================================================

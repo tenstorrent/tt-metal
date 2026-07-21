@@ -39,7 +39,7 @@ HostTensor create_simple_host_tensor(const Shape& shape, DataType dtype = DataTy
     auto spec = create_simple_spec(shape, dtype);
     auto buffer = DistributedHostBuffer::create(distributed::MeshShape{1});
     auto topology = TensorTopology();
-    return host_tensor_from_buffer(std::move(buffer), std::move(spec), std::move(topology));
+    return host_tensor_from_buffer_with_topology(std::move(buffer), std::move(spec), std::move(topology));
 }
 
 // Type trait tests verifying HostTensor's semantic constraints
@@ -183,7 +183,7 @@ TEST(HostTensorTest, TensorTopologyAccess) {
     Shape shape{4, 32};
     auto tensor = create_simple_host_tensor(shape);
 
-    const auto& topology = tensor_topology(tensor);
+    const auto& topology = get_tensor_topology(tensor);
     // Default topology should have distribution shape of {1}
     EXPECT_EQ(topology.distribution_shape().dims(), 1);
 }

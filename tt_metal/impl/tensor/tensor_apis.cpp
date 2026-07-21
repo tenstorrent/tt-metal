@@ -71,8 +71,8 @@ HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTens
 
     cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    return host_tensor_from_buffer(
-        std::move(distributed_host_buffer), device_tensor.tensor_spec(), tensor_topology(device_tensor));
+    return host_tensor_from_buffer_with_topology(
+        std::move(distributed_host_buffer), device_tensor.tensor_spec(), get_tensor_topology(device_tensor));
 }
 
 MeshTensor enqueue_write_tensor(
@@ -100,7 +100,8 @@ MeshTensor enqueue_write_tensor(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &host_tensor.tensor_spec();
 
-    auto result = allocate_mesh_tensor_on_device(mesh_device, *tensor_spec, tensor_topology(host_tensor));
+    auto result =
+        allocate_mesh_tensor_on_device_with_topology(mesh_device, *tensor_spec, get_tensor_topology(host_tensor));
     enqueue_write_tensor(cq, host_tensor, result);
     return result;
 }
@@ -142,7 +143,7 @@ void enqueue_read_tensor(
     }
 
     cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
-    update_tensor_topology(host_tensor, tensor_topology(device_tensor));
+    update_tensor_topology(host_tensor, get_tensor_topology(device_tensor));
 }
 
 void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
@@ -214,7 +215,7 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
-    device_tensor = mesh_tensor_from_buffer(
+    device_tensor = mesh_tensor_from_buffer_with_topology(
         std::move(*mesh_buffer),
         TensorSpec(
             host_tensor.tensor_spec().logical_shape(),
@@ -223,7 +224,7 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
                 host_tensor.tensor_spec().tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
                 host_tensor.tensor_spec().tensor_layout().get_alignment())),
-        tensor_topology(host_tensor));
+        get_tensor_topology(host_tensor));
 }
 
 // ======================================================================================
@@ -277,7 +278,8 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    return host_tensor_from_buffer(std::move(transformed_buffer), new_tensor_spec, tensor_topology(tensor));
+    return host_tensor_from_buffer_with_topology(
+        std::move(transformed_buffer), new_tensor_spec, get_tensor_topology(tensor));
 }
 
 template <typename T>
@@ -320,7 +322,8 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
 
         assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_tile_layout");
 
-        return host_tensor_from_buffer(std::move(transformed_buffer), output_spec, tensor_topology(tensor));
+        return host_tensor_from_buffer_with_topology(
+            std::move(transformed_buffer), output_spec, get_tensor_topology(tensor));
     }
 }
 
@@ -405,7 +408,7 @@ HostTensor pad_bfloat8_b(
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())));
-    update_tensor_topology(intermediate, tensor_topology(tensor));
+    update_tensor_topology(intermediate, get_tensor_topology(tensor));
     auto float_tensor = pad(intermediate, output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
@@ -422,7 +425,7 @@ HostTensor pad_bfloat8_b(
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
     auto result = HostTensor::from_buffer(std::move(output_uint32_buffer), output_spec);
-    update_tensor_topology(result, tensor_topology(tensor));
+    update_tensor_topology(result, get_tensor_topology(tensor));
     return result;
 }
 
@@ -449,7 +452,7 @@ HostTensor unpad_bfloat8_b(
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())));
-    update_tensor_topology(intermediate, tensor_topology(tensor));
+    update_tensor_topology(intermediate, get_tensor_topology(tensor));
     auto float_tensor = unpad(intermediate, output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
@@ -467,7 +470,7 @@ HostTensor unpad_bfloat8_b(
                 MemoryConfig{},
                 float_tensor.logical_shape(),
                 float_tensor.padded_shape())));
-    update_tensor_topology(result, tensor_topology(tensor));
+    update_tensor_topology(result, get_tensor_topology(tensor));
     return result;
 }
 
@@ -494,7 +497,7 @@ HostTensor pad_bfloat4_b(
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.logical_shape())));
-    update_tensor_topology(intermediate, tensor_topology(tensor));
+    update_tensor_topology(intermediate, get_tensor_topology(tensor));
     auto float_tensor = pad(intermediate, output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
@@ -511,7 +514,7 @@ HostTensor pad_bfloat4_b(
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
     auto result = HostTensor::from_buffer(std::move(output_uint32_buffer), output_spec);
-    update_tensor_topology(result, tensor_topology(tensor));
+    update_tensor_topology(result, get_tensor_topology(tensor));
     return result;
 }
 
@@ -537,7 +540,7 @@ HostTensor unpad_bfloat4_b(
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())));
-    update_tensor_topology(intermediate, tensor_topology(tensor));
+    update_tensor_topology(intermediate, get_tensor_topology(tensor));
     auto float_tensor = unpad(intermediate, output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT4_B
@@ -555,7 +558,7 @@ HostTensor unpad_bfloat4_b(
                 MemoryConfig{},
                 float_tensor.logical_shape(),
                 float_tensor.padded_shape())));
-    update_tensor_topology(result, tensor_topology(tensor));
+    update_tensor_topology(result, get_tensor_topology(tensor));
     return result;
 }
 
@@ -645,7 +648,7 @@ HostTensor pad_impl(
         tile = tensor.tensor_spec().tile();
     }
 
-    return host_tensor_from_buffer(
+    return host_tensor_from_buffer_with_topology(
         std::move(transformed_buffer),
         TensorSpec(
             tensor.logical_shape(),
@@ -655,7 +658,7 @@ HostTensor pad_impl(
                 MemoryConfig{},
                 tensor.logical_shape(),
                 output_padded_shape)),
-        tensor_topology(tensor));
+        get_tensor_topology(tensor));
 }
 
 template <>
@@ -731,7 +734,7 @@ HostTensor unpad_impl(
     auto transformed_buffer = tensor.buffer().transform(
         [&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return host_tensor_from_buffer(
+    return host_tensor_from_buffer_with_topology(
         std::move(transformed_buffer),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
@@ -739,7 +742,7 @@ HostTensor unpad_impl(
                 tensor.dtype(),
                 tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
                 tt::tt_metal::MemoryConfig{})),
-        tensor_topology(tensor));
+        get_tensor_topology(tensor));
 }
 
 template <>
@@ -1035,7 +1038,8 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         }
     }
 
-    return host_tensor_from_buffer(std::move(result_buffer), output_spec, tensor_topology(input_tensor));
+    return host_tensor_from_buffer_with_topology(
+        std::move(result_buffer), output_spec, get_tensor_topology(input_tensor));
 }
 
 // ======================================================================================
