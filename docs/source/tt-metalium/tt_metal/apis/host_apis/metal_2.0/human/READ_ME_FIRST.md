@@ -32,9 +32,10 @@ Although Metal 2.0 porting is largely AI-automated, it's important to familiariz
 
 Please read all of the following:
  - This document (obviously!)
- - **Intro to Metal 2.0**: `intro_to_metal_2.0.md`
+ - **Intro to Metal 2.0**: `intro_to_metal_2.0.md` -- this document is a work in progress, apologies, as it's messy at the moment. Better orientation resources coming soon.
+- **Metal 2.0 headers** (extensively commented)**: `tt_metal/api/tt-metalium/experimental/metal2_host_api/*`
  - **Device 2.0 guide**: `docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.md`
- - **Metal 2.0 headers** (extensively commented)**: `tt_metal/api/tt-metalium/experimental/metal2_host_api/*`
+
 
 
 ### Google Drive MCP setup
