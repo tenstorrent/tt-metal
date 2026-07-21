@@ -16,7 +16,7 @@ from transformers.utils import logging
 
 
 from .modular_vibevoice_diffusion_head import VibeVoiceDiffusionHead
-from vibevoice.schedule.dpm_solver import DPMSolverMultistepScheduler
+from schedule.dpm_solver import DPMSolverMultistepScheduler
 
 from .configuration_vibevoice import VibeVoiceConfig
 

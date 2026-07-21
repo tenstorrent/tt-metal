@@ -8,8 +8,7 @@ Defaults to the shortest golden clip with a local text script (1p_CH2EN /
 resources/text/1p_Ch2EN.txt vs resources/golden/1p_CH2EN.wav from
 https://microsoft.github.io/VibeVoice/).
 
-This script runs TT inference only (no HuggingFace reference model). For an optional
-PyTorch baseline on the same inputs, use demo_hf.py or reference/run_inference.py.
+This script runs TT inference only (no HuggingFace reference model).
 
 Multi-speaker climate demos auto-enable voice cloning from resources/voices/:
   Speaker 1 Alice  -> en-Alice_woman.wav
@@ -260,7 +259,7 @@ def main() -> int:
     else:
         print("[demo_ttnn] text-only prompt (no voice cloning samples)", flush=True)
 
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from processor.vibevoice_processor import VibeVoiceProcessor
 
     processor = VibeVoiceProcessor.from_pretrained(model_path)
     processor_kwargs = {

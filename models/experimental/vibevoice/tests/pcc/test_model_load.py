@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 from models.experimental.vibevoice.common.config import MODEL_PATH
-from vibevoice.modular.modeling_vibevoice import VibeVoiceForConditionalGeneration
+from modular.modeling_vibevoice import VibeVoiceForConditionalGeneration
 
 
 def test_model_load_has_qwen_backbone():

@@ -27,7 +27,7 @@ for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
 
 
 def _build_reference_scheduler():
-    from vibevoice.schedule.dpm_solver import DPMSolverMultistepScheduler as RefScheduler
+    from schedule.dpm_solver import DPMSolverMultistepScheduler as RefScheduler
 
     return RefScheduler(
         num_train_timesteps=1000,

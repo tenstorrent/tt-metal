@@ -443,7 +443,7 @@ class TTVibeVoiceGenerator:
         return self._token_mask_tt
 
     def _reset_ref_tokenizer_caches(self):
-        from vibevoice.modular.modular_vibevoice_tokenizer import VibeVoiceTokenizerStreamingCache
+        from modular.modular_vibevoice_tokenizer import VibeVoiceTokenizerStreamingCache
 
         self._ref_acoustic_cache = VibeVoiceTokenizerStreamingCache()
         self._ref_semantic_cache = VibeVoiceTokenizerStreamingCache()

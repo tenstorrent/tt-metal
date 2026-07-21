@@ -50,7 +50,7 @@ def _voice_path() -> str:
 
 
 def _build_processor_batch():
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from processor.vibevoice_processor import VibeVoiceProcessor
 
     assert _TEXT_PATH.is_file(), f"Missing demo text: {_TEXT_PATH}"
     script = load_script(_TEXT_PATH)
@@ -344,7 +344,7 @@ def test_decode_ref_cond_frame_pcc(mesh_device):
       3. Gate per-frame fused-embed PCC (>= 0.99) and LM-hidden PCC (>= 0.99) — isolates
          post-diffusion drift while keeping diffusion inputs identical.
     """
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 
     processor, inputs = _build_processor_batch()
     prefill_len = inputs["input_ids"].shape[1]

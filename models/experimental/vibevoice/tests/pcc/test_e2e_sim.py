@@ -161,7 +161,7 @@ def _make_verifier():
 
 
 def _make_processor():
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from processor.vibevoice_processor import VibeVoiceProcessor
 
     return VibeVoiceProcessor.from_pretrained(MODEL_PATH)
 

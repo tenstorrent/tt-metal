@@ -61,7 +61,7 @@ RANDOM_SEED = 2
 
 
 def _load_processor():
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from processor.vibevoice_processor import VibeVoiceProcessor
 
     return VibeVoiceProcessor.from_pretrained(MODEL_PATH)
 
@@ -300,7 +300,7 @@ def tt_full_prefill_chain(tt_model: TTVibeVoiceModel, processor, inputs: dict):
 
 
 def _load_ref_model():
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 
     ref_model = VibeVoiceForConditionalGenerationInference.from_pretrained(
         MODEL_PATH,

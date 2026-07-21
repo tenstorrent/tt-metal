@@ -74,7 +74,7 @@ def test_e2e_lm_hidden_state_pcc(mesh_device, vv_config, lm_state):
     input_ids = torch.randint(0, cfg.vocab_size, (1, SEQ_LEN), dtype=torch.long)
 
     # Reference: the real VibeVoice model, use its language_model's last hidden state.
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 
     ref_model = VibeVoiceForConditionalGenerationInference.from_pretrained(
         MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
@@ -100,7 +100,7 @@ def test_e2e_dpm_scheduler_pcc(mesh_device):
     """DPM scheduler latent PCC >= 0.99 after 10 steps with synthetic noise."""
     torch.manual_seed(42)
 
-    from vibevoice.schedule.dpm_solver import DPMSolverMultistepScheduler as RefScheduler
+    from schedule.dpm_solver import DPMSolverMultistepScheduler as RefScheduler
 
     LATENT_SIZE = 64
     ref_sched = RefScheduler(
