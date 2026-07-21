@@ -394,11 +394,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         chunk_M_tiles = per_core_M * GRID_Y;
     }
 
-    // DIAGNOSTIC (not for merge): force in0_block_w_gu=8 on BOTH layouts to A/B
-    // the gate/up K-block width in isolation — run the TILE path at the same 28
-    // K-blocks the RM path uses. Delete to restore TILE's adaptive ibw (16 here).
-    in0_block_w_gu = 8;
-
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); holds
     // for every value the guard above picks and for the default 16 on all
     // shipped models (emb a multiple of 512 => K_gate_tiles a multiple of 16).
