@@ -4,19 +4,20 @@
 """GPT-OSS ModelArgs (config + weight loader). Mirrors ``minimax_m3/tt/model_config.py``.
 
 Loads the HF gpt-oss config (dims live at the top level — gpt-oss is NOT a VL wrapper, but
-``text_config`` is unwrapped defensively) and reads the bf16 safetensors directly, converting the
-q/k projections to Meta format for the on-device (indexed) RoPE. Dim constants are cross-checked
+``text_config`` is unwrapped defensively) and loads the weights via HF ``from_pretrained``
+(dequantizing the MXFP4 experts to bf16 on the host), converting the q/k projections to Meta
+format for the on-device (indexed) RoPE. Dim constants are cross-checked
 against ``deepseek_v3_d_p/reference/gpt_oss_120b_config.py::GptOss120BConfig``.
 """
 
-import json
+import gc
 import os
 from pathlib import Path
 
 import torch
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
@@ -124,23 +125,33 @@ class ModelArgs:
 
     @staticmethod
     def _load_safetensors(weights_path):
-        """Read all safetensors shards into a single state dict (cast fp32 -> bf16)."""
-        from safetensors.torch import load_file
+        """Load the gpt-oss weights, dequantizing the MXFP4 experts to bf16.
 
-        weights_path = str(weights_path)
-        index_path = os.path.join(weights_path, "model.safetensors.index.json")
-        if os.path.exists(index_path):
-            with open(index_path) as f:
-                weight_map = json.load(f)["weight_map"]
-            shards = sorted(set(weight_map.values()))
-        else:
-            shards = [f for f in os.listdir(weights_path) if f.endswith(".safetensors")]
-
-        state_dict = {}
-        for shard in tqdm(shards, desc="Loading GPT-OSS bf16 safetensors"):
-            shard_sd = load_file(os.path.join(weights_path, shard))
-            for k, v in shard_sd.items():
-                state_dict[k] = v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+        openai/gpt-oss ships the MoE experts MXFP4-quantized (``experts.gate_up_proj_blocks`` /
+        ``_scales`` + ``down_proj_blocks`` / ``_scales``); the raw safetensors have NO dense
+        ``gate_up_proj`` / ``down_proj`` tensor, so reading them directly leaves the experts packed
+        and ``prepare_routed_expert_weights`` KeyErrors. Load via HF ``from_pretrained`` so
+        transformers dequantizes the experts on the host, and target bf16 directly so the dequant
+        intermediate is bf16 (not fp32) -- avoids ~2x host footprint / OOM on the 120B. Mirrors
+        ``models/demos/gpt_oss/tt/model_config.py`` (see #48508/#48509).
+        """
+        model = AutoModelForCausalLM.from_pretrained(
+            str(weights_path),
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+        )
+        state_dict = model.state_dict()
+        # Drop the HF module now that we hold the weight tensors (state_dict shares storage), so the
+        # peak host footprint is bounded by the bf16 weights rather than weights + a live model.
+        del model
+        gc.collect()
+        # Safety net: cast any fp32 stragglers. No-op for the bf16-loaded tensors (rebinds refs).
+        norm = state_dict.get("model.norm.weight")
+        if norm is not None and norm.dtype != torch.bfloat16:
+            state_dict = {
+                k: (v.to(torch.bfloat16) if v.dtype == torch.float32 else v)
+                for k, v in tqdm(state_dict.items(), desc="Casting fp32 stragglers -> bf16")
+            }
         return state_dict
 
     def weight_cache_path(self, dtype):
