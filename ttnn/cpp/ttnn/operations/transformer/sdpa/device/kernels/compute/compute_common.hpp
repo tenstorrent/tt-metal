@@ -27,6 +27,8 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "cpp/ttnn/kernel_lib/matmul_block_helpers_advanced.hpp"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
@@ -944,8 +946,57 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
 }
 
 /**
- * out_cb = in0_cb @ in1_cb
+ * Post-compute callback used by `matmul_blocks` to handle the optional add_mask path.
+ * Captures the mask CB ids + subblock shape and applies the mask add-tiles per subblock
+ * after the matmul phase. Reconfigs unpacker and re-issues mm_block_init_short so the
+ * next K-block iteration sees a consistent LLK state (PR #42446).
  */
+struct OptionalMaskPostCompute {
+    uint32_t mask_cb_id;
+    uint32_t zero_cb_id;
+    uint32_t in0_cb_id;
+    uint32_t in1_cb_id;
+    uint32_t subblock_h;
+    uint32_t subblock_w;
+    uint32_t in0_block_w;
+    bool transpose;
+    bool add_mask;
+    ALWI void operator()(uint32_t out_subblock_num_tiles) const {
+        if (!add_mask) {
+            return;
+        }
+        cb_wait_front(mask_cb_id, out_subblock_num_tiles);
+        cb_wait_front(zero_cb_id, 1);
+        reconfig_data_format(zero_cb_id, mask_cb_id);
+        add_tiles_init(zero_cb_id, mask_cb_id, true);
+        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+            add_tiles(zero_cb_id, mask_cb_id, 0, i, i);
+        }
+        reconfig_data_format(in1_cb_id, in0_cb_id);
+        mm_block_init_short(in0_cb_id, in1_cb_id, transpose, subblock_w, subblock_h, in0_block_w);
+    }
+};
+
+/**
+ * out_cb = in0_cb @ in1_cb
+ *
+ * Thin SDPA wrapper around compute_kernel_lib::matmul_block. The helper owns the K-loop,
+ * DST acquire/commit/wait/release lifecycle, per-K pack lifecycle, and mm_block_init dispatch.
+ * `transpose` is a template arg (compile-time at every call site). `add_mask` is runtime
+ * (sdpa_decode passes it dynamically) — handled via the OptionalMaskPostCompute callback.
+ *
+ * Known fix: pass `out_buf` (not `in0_buf`) as the interm placeholder. The helper uses
+ * `interm_cb_id` at InitMode::Short time to set the pack format via
+ * pack_reconfig_data_format(interm_cb_id). For bfp8 Q with QK matmul (in0=bfp8, out=fp16),
+ * passing in0 sets the pack format to bfp8 → garbage in cb_qk_im. Passing out_buf makes
+ * the init's pack_reconfig target the actual pack format. Safe because interm is otherwise
+ * unused at num_k_blocks=1 (SDPA's only mode). Fixes test_sdpa_sliding_window[bfp8],
+ * test_sdpa_decode_sharded[all_bfp8], test_sdpa_decode_program_cache[bfp8].
+ *
+ * M/N/K are kept in the wrapper signature for caller-side documentation but the helper
+ * derives them from (subblocks × dims) internally, so they're unused here.
+ */
+template <bool transpose>
 ALWI void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
@@ -959,84 +1010,41 @@ ALWI void matmul_blocks(
     const uint32_t& in0_block_w,
     const uint32_t& subblock_h,
     const uint32_t& subblock_w,
-    const bool& transpose,
     const bool& add_mask = false,
     const uint32_t& mask_cb = 0,
     const uint32_t& zero_cb = 0) {
     // precondition: in0_cb has M*K produced
     // precondition: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
+    // postcondition: in0_cb is full (retained), in1_cb is empty, out_cb has M*N produced.
+    (void)M;
+    (void)N;
+    (void)K;
 
-    CircularBuffer cb_in0(in0_cb);
-    CircularBuffer cb_in1(in1_cb);
-    CircularBuffer cb_out(out_cb);
-    CircularBuffer cb_mask(mask_cb);
-    CircularBuffer cb_zero(zero_cb);
+    CircularBuffer in0_buf(in0_cb);
+    CircularBuffer in1_buf(in1_cb);
+    CircularBuffer out_buf(out_cb);
 
-    matmul_block_init(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    const uint32_t output_num_tiles = M * N;
-    const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    const uint32_t in0_subblock_all_cols_num_tiles = subblock_h * N;
-
-    uint32_t in0_index_offset = 0;
-
-    const uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
-    uint32_t in0_wait_tiles = in0_subblock_num_tiles;
-
-    reconfig_data_format(in1_cb, in0_cb);
-    cb_in1.wait_front(K * N);
-    cb_out.reserve_back(output_num_tiles);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        cb_in0.wait_front(in0_wait_tiles);
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                in1_index += N;
-            }
-            if (add_mask) {
-                cb_mask.wait_front(out_subblock_num_tiles);
-                cb_zero.wait_front(1);
-                reconfig_data_format(zero_cb, mask_cb);
-                add_tiles_init(zero_cb, mask_cb, true);
-                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(zero_cb, mask_cb, 0, i, i);
-                }
-                reconfig_data_format(in1_cb, in0_cb);
-                matmul_block_init(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            uint32_t dst_idx = 0;
-            uint32_t out_col_offset = in1_subblock * subblock_w;
-            for (uint32_t r = 0; r < subblock_h; r++) {
-                uint32_t out_row_offset = r * N;
-                for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
-                    dst_idx++;
-                }
-            }
-            tile_regs_release();
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
-        in0_wait_tiles += in0_subblock_num_tiles;
-        // Somewhat granularize the push of in0 subblocks
-        cb_out.push_back(in0_subblock_all_cols_num_tiles);
-    }
-    cb_in1.pop_front(K * N);
+    compute_kernel_lib::matmul_block_gathered<
+        transpose,
+        /*packer_l1_acc=*/false,
+        compute_kernel_lib::LastBlockTarget::Out,
+        compute_kernel_lib::OutputCBLayout::TileRowMajor,
+        compute_kernel_lib::matmul_config::InitMode::Short,
+        compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock,
+        compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
+        compute_kernel_lib::matmul_config::DataFormatReconfig::InputAndOutput,  // reconfig (was defaulted)
+        compute_kernel_lib::NoneActivation,                                     // Activation (was defaulted)
+        OptionalMaskPostCompute,
+        compute_kernel_lib::NoPreKBlock>(
+        in0_buf,
+        in1_buf,
+        out_buf,
+        out_buf,  // interm placeholder — see fix note above
+        compute_kernel_lib::MatmulBlockShape::of(
+            in0_num_subblocks, in1_num_subblocks, subblock_h, subblock_w, in0_block_w, num_blocks, /*batch=*/1),
+        OptionalMaskPostCompute{
+            mask_cb, zero_cb, in0_cb, in1_cb, subblock_h, subblock_w, in0_block_w, transpose, add_mask},
+        compute_kernel_lib::NoPreKBlock{});
 }
 
 template <uint32_t M>
@@ -1660,7 +1668,7 @@ void sdpa_inner_loop(
              */
             reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks(
+            matmul_blocks</*transpose=*/true>(
                 cb_q_in,
                 cb_k_in,
                 cb_qk_im,
@@ -1672,8 +1680,7 @@ void sdpa_inner_loop(
                 qk_in1_num_subblocks,
                 qk_in0_block_w,
                 qk_subblock_h,
-                qk_subblock_w,
-                true /*transpose*/);
+                qk_subblock_w);
 
             /**
              * Note
@@ -1819,7 +1826,7 @@ void sdpa_inner_loop(
             pack_reconfig_data_format(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
-            matmul_blocks(
+            matmul_blocks</*transpose=*/false>(
                 cb_qk_im,
                 cb_v_in,
                 alias_mm2_cur_out,
@@ -1831,8 +1838,7 @@ void sdpa_inner_loop(
                 out_in1_num_subblocks,
                 out_in0_block_w,
                 out_subblock_h,
-                out_subblock_w,
-                false /*transpose*/);
+                out_subblock_w);
 
             cb_qk_im_obj.pop_front(qk_chunk_tiles);
             reconfig_data_format(alias_prev_max, alias_cur_max);

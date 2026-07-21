@@ -121,7 +121,8 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
-        // WRITER
+        // WRITER (interleaved output): compute packs sequentially per subblock, so read
+        // subblock-by-subblock and write each subblock at its output offset.
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
         for (uint32_t sbh = 0; sbh < out_num_subblocks_h; ++sbh) {
             uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
@@ -142,7 +143,6 @@ void kernel_main() {
                             {.page_id = out_tensor_tile_id});
 
                         out_read_offset += output_single_tile_size_bytes;
-
                         out_tensor_tile_id += out_tensor_stride_w;
                     }
                     out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
