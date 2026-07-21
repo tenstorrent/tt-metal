@@ -5,14 +5,22 @@
 # _llk_unpack_A_custom_(address) programs the SrcA base address and unpacks a full
 # 32x32 tile to SrcA with dvalid. We drive it through an identity path
 # (unpack_A_custom -> A2D datacopy to DEST -> pack out) and compare the packed
-# result to the input via DataCopyGolden. The LLK is fixed to full 4-face 32x32
-# tiles (it hardcodes SETADCXX to 1023 datums), so num_faces is not swept; instead
-# we sweep formats and multiple tile counts, which exercises the per-tile source L1
-# address programming inside _llk_unpack_A_custom_.
+# result to the input via DataCopyGolden. This is the same kernel pipeline as
+# sources/eltwise_unary_datacopy_custom_test.cpp (which already wires
+# _llk_unpack_A_custom_); we reuse that source and drive it from a focused sweep
+# so the two coverage paths cannot drift apart.
+#
+# The LLK is fixed to a full 4-face 32x32 tile (it hardcodes SETADCXX to 1023
+# datums), and the kernel hardcodes 16-bit destination (dest_acc=No), so:
+#   - num_faces is not swept (always 4);
+#   - formats are restricted to combinations that do not require 32-bit dest
+#     accumulation (i.e. the harness would not flip dest_acc on us).
+# Instead we sweep formats and multiple tile counts, exercising the per-tile
+# source L1 base-address programming inside _llk_unpack_A_custom_.
 
 import torch
-from conftest import skip_for_wormhole
-from helpers.format_config import DataFormat
+from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
     DataCopyGolden,
@@ -38,16 +46,21 @@ from helpers.utils import passed_test
 # _llk_unpack_A_custom_ always unpacks a full 4-face 32x32 tile.
 NUM_FACES_FULL_TILE = 4
 
+# The custom kernel hardcodes 16-bit destination (dest_acc=No), so drop any
+# format pair the harness would otherwise force onto a 32-bit destination.
+UNPACK_A_CUSTOM_FORMATS = [
+    fmt
+    for fmt in input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b]
+    )
+    if not is_dest_acc_needed(fmt)
+]
+
 
 @skip_for_wormhole
+@skip_for_quasar
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Bfp8_b,
-        ]
-    ),
+    formats=UNPACK_A_CUSTOM_FORMATS,
     # Sweep tile counts to exercise several distinct source L1 addresses inside
     # _llk_unpack_A_custom_ (one base-address program per tile).
     input_dimensions=[[32, 32], [64, 64], [32, 256]],
@@ -77,7 +90,7 @@ def test_unpack_A_custom(
     )
 
     configuration = TestConfig(
-        "sources/unpack_A_custom_test.cpp",
+        "sources/eltwise_unary_datacopy_custom_test.cpp",
         formats,
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -103,9 +116,13 @@ def test_unpack_A_custom(
     outcome = configuration.run()
     res_from_L1 = outcome.result
 
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "unpack_A_custom identity result does not match DataCopyGolden"
