@@ -10,13 +10,11 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_prefill_rot_mat,
     HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.llama3_70b_galaxy.reference.llama import Transformer
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -96,8 +94,6 @@ def test_llama_model_inference(
     )
     model_args.use_prefetcher = False
     model_args.n_layers = 1
-    tokenizer = Tokenizer(model_args.tokenizer_path)
-
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     state_dict = model_args.load_state_dict()
@@ -123,10 +119,7 @@ def test_llama_model_inference(
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompt = f.read()
 
-    if instruct:
-        encoded_prompt = encode_prompt_llama_instruct(tokenizer, prompt)[:seq_len]
-    else:
-        encoded_prompt = tokenizer.encode(prompt, bos=True, eos=False)[:seq_len]
+    encoded_prompt = model_args.encode_prompt(prompt, instruct=instruct)[:seq_len]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)

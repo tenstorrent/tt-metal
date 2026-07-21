@@ -13,8 +13,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.llama3_70b_galaxy.reference.llama import Transformer
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -176,11 +175,11 @@ def test_llama_model_inference(
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = model_args.create_tokenizer()
         # if instruct:
         #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
         # else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+        encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
