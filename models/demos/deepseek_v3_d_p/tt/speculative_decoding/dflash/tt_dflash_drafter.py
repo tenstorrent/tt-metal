@@ -29,11 +29,11 @@ from typing import Optional
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.dflash.dflash_drafter_config import (
+from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
+from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.dflash_drafter_config import (
     DFlashDrafterConfig,
     build_drafter_rope_hf_config,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
 

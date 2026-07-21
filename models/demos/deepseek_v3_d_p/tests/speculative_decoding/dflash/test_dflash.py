@@ -17,8 +17,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.dflash.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.tt_dflash_drafter import TtDFlashDrafter
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
