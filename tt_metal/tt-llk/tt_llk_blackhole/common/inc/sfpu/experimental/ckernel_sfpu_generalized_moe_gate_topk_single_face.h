@@ -212,14 +212,14 @@ inline void bitonic_top8_ph0_to_ph3()
 {
     // Phase 0
     {
-        constexpr bool start_transpose   = true;
-        constexpr bool end_transpose     = false;
+        constexpr bool start_transpose = true;
+        constexpr bool end_transpose   = false;
         bitonic_topk_ph0_st1_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 1
     {
-        constexpr bool start_transpose   = false;
-        constexpr bool end_transpose     = true;
+        constexpr bool start_transpose = false;
+        constexpr bool end_transpose   = true;
         // Odd Columns
         bitonic_topk_ph1_st2_to_1_single_face<start_transpose, end_transpose>();
     }
@@ -247,11 +247,7 @@ inline void reverse_sort_order()
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _generalized_moe_gate_sum_top2()
 {
-    constexpr bool idir                   = false; // Sort descending order
-    constexpr int load_store_replay_count = 8;
-    constexpr int load_replay_offset      = 0;
-    constexpr int store_replay_offset     = load_replay_offset + load_store_replay_count;
-    constexpr int phase_replay_offset     = store_replay_offset + load_store_replay_count;
+    constexpr bool idir = false; // Sort descending order
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPCONFIG(0x4, 0xF, 1);

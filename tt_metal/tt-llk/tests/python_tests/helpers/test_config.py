@@ -461,11 +461,16 @@ class TestConfig:
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                # Experimental SFPU lib headers (e.g. generalized_moe_gate topk) include
+                # metal-layer SFPU primitives (ckernel_sfpu_exp.h / ckernel_sfpu_recip.h)
+                # by bare name; those live only in the metal llk_sfpu dir.
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
+                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
