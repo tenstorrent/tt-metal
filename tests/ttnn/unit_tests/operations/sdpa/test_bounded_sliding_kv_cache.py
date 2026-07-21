@@ -214,7 +214,7 @@ def test_bounded_sliding_kv_cache_without_modulo_clobbers(device):
 # ── Validator negatives ────────────────────────────────────────────────────
 
 
-def test_paged_update_cache_modulo_requires_page_table(device):
+def test_paged_update_cache_modulo_requires_page_table(device, expect_error):
     """``cache_position_modulo`` without ``page_table`` must be rejected at validation
     (same gate as the other paged-mode-only kwargs)."""
     torch.manual_seed(1)
@@ -232,7 +232,7 @@ def test_paged_update_cache_modulo_requires_page_table(device):
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_kv_input(device, x_padded)
 
-    with pytest.raises(RuntimeError, match="cache_position_modulo is only supported in paged mode"):
+    with expect_error(RuntimeError, "cache_position_modulo is only supported in paged mode"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,
@@ -241,7 +241,7 @@ def test_paged_update_cache_modulo_requires_page_table(device):
         )
 
 
-def test_paged_update_cache_modulo_must_be_multiple_of_block_size(device):
+def test_paged_update_cache_modulo_must_be_multiple_of_block_size(device, expect_error):
     """``cache_position_modulo`` not a multiple of effective block_size must fail."""
     torch.manual_seed(2)
     num_users = 1
@@ -261,9 +261,7 @@ def test_paged_update_cache_modulo_must_be_multiple_of_block_size(device):
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_kv_input(device, x_padded)
 
-    with pytest.raises(
-        RuntimeError, match="cache_position_modulo .* must be a positive multiple of effective block_size"
-    ):
+    with expect_error(RuntimeError, "cache_position_modulo .* must be a positive multiple of effective block_size"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,
@@ -337,3 +335,138 @@ def test_paged_fill_cache_bounded_capacity_wrap(device):
 
     eq, msg = comp_pcc(ref, cache_view, pcc=0.99)
     assert eq, f"Bounded fill_cache wrap mismatch: {msg}"
+
+
+@pytest.mark.timeout(60)
+def test_paged_fill_cache_valid_seq_len_tensor_skips_padding_tail(device):
+    """Padded prefill + valid_seq_len_tensor must keep the last real window, not padding.
+
+    Without the runtime cap, a bounded fill of a padded input wraps the zero
+    padding tail over the recent real tokens. Refreshing a 1-element device
+    tensor between program-cache hits must change which tiles survive.
+    """
+    torch.manual_seed(5)
+
+    num_kv_heads = 1
+    head_dim = 128
+    block_size = 32
+    sliding_window = 128
+    sliding_blocks = sliding_window // block_size
+    padded_len = sliding_window + block_size  # crosses capacity so wrap matters
+    real_len = sliding_window  # last real token ends exactly at capacity
+
+    max_blocks_per_req = sliding_blocks * 4
+    cache_torch = torch.zeros(max_blocks_per_req, num_kv_heads, block_size, head_dim).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    page_table = torch.zeros(1, max_blocks_per_req, dtype=torch.int32)
+    page_table[0, :sliding_blocks] = torch.arange(sliding_blocks, dtype=torch.int32)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    K_full = torch.randn(1, num_kv_heads, padded_len, head_dim).bfloat16().float()
+    # Explicit padding tail — if these wrap into the ring, PCC vs real window fails.
+    K_full[:, :, real_len:, :] = 0.0
+    Kt = ttnn.from_torch(K_full, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    valid_host = torch.tensor([real_len], dtype=torch.int32)
+    valid_tt = ttnn.from_torch(valid_host, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, device=device)
+
+    ttnn.experimental.paged_fill_cache(
+        cache_tt,
+        Kt,
+        page_table_tt,
+        batch_idx=0,
+        cache_position_modulo=sliding_window,
+        valid_seq_len_tensor=valid_tt,
+    )
+
+    got = cache_tt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    cache_view = torch.zeros(sliding_window, num_kv_heads, head_dim).bfloat16().float()
+    for vb in range(sliding_blocks):
+        phys = int(page_table[0, vb].item())
+        cache_view[vb * block_size : (vb + 1) * block_size] = (
+            got[phys, :, :, :].transpose(0, 1).squeeze(1).reshape(block_size, num_kv_heads, head_dim)
+        )
+
+    ref = torch.zeros(sliding_window, num_kv_heads, head_dim).bfloat16().float()
+    for p in range(real_len):
+        ref[p % sliding_window] = K_full[0, :, p, :]
+
+    eq, msg = comp_pcc(ref, cache_view, pcc=0.99)
+    assert eq, f"valid_seq_len_tensor fill cap mismatch: {msg}"
+
+    # Program-cache hit path: shrink the real window and refresh the tensor in place.
+    shorter = sliding_window - block_size
+    K_full2 = torch.randn(1, num_kv_heads, padded_len, head_dim).bfloat16().float()
+    K_full2[:, :, shorter:, :] = 0.0
+    Kt2 = ttnn.from_torch(K_full2, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    valid_refresh = ttnn.from_torch(
+        torch.tensor([shorter], dtype=torch.int32),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        device=device,
+    )
+    ttnn.copy(valid_refresh, valid_tt)
+
+    cache_tt2 = (
+        ttnn.Tensor(
+            torch.zeros(max_blocks_per_req, num_kv_heads, block_size, head_dim).bfloat16().float(),
+            ttnn.bfloat16,
+        )
+        .to(ttnn.TILE_LAYOUT)
+        .to(device)
+    )
+    ttnn.experimental.paged_fill_cache(
+        cache_tt2,
+        Kt2,
+        page_table_tt,
+        batch_idx=0,
+        cache_position_modulo=sliding_window,
+        valid_seq_len_tensor=valid_tt,
+    )
+
+    got2 = cache_tt2.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    cache_view2 = torch.zeros(sliding_window, num_kv_heads, head_dim).bfloat16().float()
+    for vb in range(sliding_blocks):
+        phys = int(page_table[0, vb].item())
+        cache_view2[vb * block_size : (vb + 1) * block_size] = (
+            got2[phys, :, :, :].transpose(0, 1).squeeze(1).reshape(block_size, num_kv_heads, head_dim)
+        )
+    ref2 = torch.zeros(sliding_window, num_kv_heads, head_dim).bfloat16().float()
+    for p in range(shorter):
+        ref2[p % sliding_window] = K_full2[0, :, p, :]
+
+    eq2, msg2 = comp_pcc(ref2, cache_view2, pcc=0.99)
+    assert eq2, f"valid_seq_len_tensor refresh mismatch: {msg2}"
+
+
+@pytest.mark.timeout(30)
+def test_paged_fill_cache_valid_seq_len_tensor_rejects_multi_element(device, expect_error):
+    """API contract: valid_seq_len_tensor must be a single scalar element."""
+    block_size = 32
+    sliding_window = 64
+    cache_tt = (
+        ttnn.Tensor(torch.zeros(4, 1, block_size, 64).bfloat16().float(), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    )
+    page_table_tt = ttnn.Tensor(torch.arange(4, dtype=torch.int32).view(1, 4), ttnn.int32).to(device)
+    Kt = ttnn.from_torch(
+        torch.randn(1, 1, sliding_window, 64).bfloat16().float(),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    bad = ttnn.from_torch(
+        torch.tensor([32, 64], dtype=torch.int32),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        device=device,
+    )
+    with expect_error(RuntimeError, "exactly 1 element"):
+        ttnn.experimental.paged_fill_cache(
+            cache_tt,
+            Kt,
+            page_table_tt,
+            batch_idx=0,
+            cache_position_modulo=sliding_window,
+            valid_seq_len_tensor=bad,
+        )

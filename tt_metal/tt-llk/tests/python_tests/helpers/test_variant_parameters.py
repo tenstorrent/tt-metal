@@ -475,8 +475,9 @@ def generate_input_dim(
     srcB: tuple[int],
     block_ct_dim: int = None,
     block_rt_dim: int = None,
+    tile_dimensions: tuple[int, int] = (32, 32),
 ):
-    num_rows, num_cols = 32, 32
+    num_rows, num_cols = tile_dimensions
     validate_tile_dimensions(srcA[0], num_rows)
     validate_tile_dimensions(srcA[1], num_cols)
     validate_tile_dimensions(srcB[0], num_rows)

@@ -136,7 +136,7 @@ def msa_indexer_sparse(
         num_groups=num_groups,
         block_size=block_size,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
-        cluster_axis=cluster_axis,
+        seq_shard_axes=[cluster_axis] if cluster_axis is not None else [],
         block_cyclic_sp_axis=block_cyclic_sp_axis,
         block_cyclic_chunk_local=block_cyclic_chunk_local,
     )
