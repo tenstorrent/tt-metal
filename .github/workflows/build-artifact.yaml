@@ -658,7 +658,12 @@ jobs:
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
-        if: steps.cpm-cache.outputs.hit != 'true'
+        # Only pack when we can actually save. For fork PRs the restore step is
+        # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
+        # pointless ultra-zstd compression that never gets uploaded.
+        if: >-
+          steps.cpm-cache.outputs.hit != 'true' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         run: |
           [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
 
