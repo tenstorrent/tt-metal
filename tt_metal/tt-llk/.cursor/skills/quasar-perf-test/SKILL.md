@@ -80,11 +80,6 @@ In `tests/sources/quasar/[op]_quasar_test.cpp`:
 - Use current Quasar LLK signatures and TensorShape APIs; do not copy stale
   call signatures from older perf branches.
 
-Use these existing perf kernels as references for generic orchestration:
-
-- `tests/sources/pack_untilize_perf.cpp`
-- `tests/sources/eltwise_binary_fpu_perf.cpp`
-
 Use the target Quasar correctness kernel for current Quasar LLK signatures.
 The generic perf references use older-architecture APIs and must not be copied
 verbatim.
