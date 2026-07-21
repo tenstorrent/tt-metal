@@ -17,8 +17,37 @@ def default_num_links():
     on Gemma4 prefill the per-layer all-reduces are ~31% of device time, so this
     is the single highest-ROI CCL knob. Wormhole (T3K) defaults to 1 link here
     (its multi-link tuning needs a separate sweep).
+
+    Override with ``GEMMA4_CCL_NUM_LINKS``.
     """
+    env = os.environ.get("GEMMA4_CCL_NUM_LINKS")
+    if env is not None:
+        return max(1, int(env))
     return 2 if is_blackhole() else 1
+
+
+def ccl_chunks_per_sync() -> int:
+    """Async RS/AG ``chunks_per_sync`` (fabric packet grouping). Default 10."""
+    return max(1, int(os.environ.get("GEMMA4_CCL_CHUNKS_PER_SYNC", "10")))
+
+
+def ccl_num_workers_per_link() -> int:
+    """Async RS/AG workers per link. Default 2."""
+    return max(1, int(os.environ.get("GEMMA4_CCL_NUM_WORKERS", "2")))
+
+
+def ccl_num_buffers_per_channel() -> int:
+    """Async RS/AG ``num_buffers_per_channel``. Default 2."""
+    return max(1, int(os.environ.get("GEMMA4_CCL_NUM_BUFFERS", "2")))
+
+
+def ccl_persistent_buffers_enabled() -> bool:
+    """Reuse DRAM destination buffers across RS/AG calls (Phase P1).
+
+    Default on for async path; disable with ``GEMMA4_CCL_PERSISTENT_BUF=0``.
+    Sync ``ttnn.all_reduce`` ignores this (no persistent buffer API).
+    """
+    return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
 def default_ccl_topology(mesh_device=None):
@@ -80,6 +109,8 @@ class CCLManager:
 
     Stores mesh_device, num_links, and topology for CCL operations.
     Semaphores support the async RS+AG path (``GEMMA4_CCL_ASYNC=1``).
+    Persistent DRAM buffers (``GEMMA4_CCL_PERSISTENT_BUF``) are keyed by shape
+    so repeated collectives of the same activation shape skip realloc+barrier.
     """
 
     def __init__(self, mesh_device, num_links=None, topology=None):
@@ -94,7 +125,8 @@ class CCLManager:
         topo_name = "Ring" if topology == ttnn.Topology.Ring else "Linear"
         logger.info(
             f"Gemma4 CCLManager: devices={self.num_devices} num_links={num_links} "
-            f"topology={topo_name} async={int(ccl_async_enabled())}"
+            f"topology={topo_name} async={int(ccl_async_enabled())} "
+            f"persistent_buf={int(ccl_persistent_buffers_enabled())}"
         )
 
         grid = mesh_device.compute_with_storage_grid_size()
@@ -113,6 +145,10 @@ class CCLManager:
         self._rs_idx = 0
         self._ag_idx = 0
         self._barrier_idx = 0
+        # shape_key -> ttnn.Tensor (DRAM interleaved zeros)
+        self._persistent_ag: dict = {}
+        self._persistent_rs_out: dict = {}
+        self._persistent_rs_inter: dict = {}
 
     def get_rs_semaphore(self):
         """Returns list of 3 semaphores for reduce_scatter (cycles double-buffer)."""
@@ -132,6 +168,63 @@ class CCLManager:
         self._barrier_idx = (self._barrier_idx + 1) % 2
         return sem
 
+    def _shape_key(self, shape, dtype, memory_config):
+        return (tuple(int(x) for x in shape), str(dtype), str(memory_config))
+
+    def _alloc_like(self, ref_tensor, memory_config):
+        return ttnn.zeros_like(ref_tensor, device=self.mesh_device, memory_config=memory_config)
+
+    def get_persistent_ag_buffer(self, scattered, memory_config):
+        if not ccl_persistent_buffers_enabled():
+            return None
+        # All-gather expands dim=3 by tp.
+        out_shape = list(scattered.shape)
+        out_shape[3] = int(out_shape[3]) * self.num_devices
+        key = self._shape_key(out_shape, scattered.dtype, memory_config)
+        buf = self._persistent_ag.get(key)
+        if buf is None:
+            buf = ttnn.zeros(
+                out_shape,
+                dtype=scattered.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=memory_config,
+            )
+            self._persistent_ag[key] = buf
+            logger.debug(f"CCL persistent AG buffer allocated shape={out_shape}")
+        return buf
+
+    def get_persistent_rs_buffers(self, tensor, memory_config):
+        if not ccl_persistent_buffers_enabled():
+            return None
+        # Reduce-scatter shrinks dim=3 by tp; intermediate matches input layout.
+        out_shape = list(tensor.shape)
+        out_shape[3] = int(out_shape[3]) // self.num_devices
+        inter_key = self._shape_key(tensor.shape, tensor.dtype, ttnn.DRAM_MEMORY_CONFIG)
+        out_key = self._shape_key(out_shape, tensor.dtype, memory_config)
+        inter = self._persistent_rs_inter.get(inter_key)
+        if inter is None:
+            inter = ttnn.zeros(
+                list(tensor.shape),
+                dtype=tensor.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._persistent_rs_inter[inter_key] = inter
+        out = self._persistent_rs_out.get(out_key)
+        if out is None:
+            out = ttnn.zeros(
+                out_shape,
+                dtype=tensor.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=memory_config,
+            )
+            self._persistent_rs_out[out_key] = out
+            logger.debug(f"CCL persistent RS buffers allocated out={out_shape}")
+        return [inter, out]
+
 
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     """All-reduce across TP devices.
@@ -147,10 +240,14 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     tp_axis = mesh_config.tp_axis
     topology = ccl_manager.topology
 
+    chunks = ccl_chunks_per_sync()
+    workers = ccl_num_workers_per_link()
+    nbuf = ccl_num_buffers_per_channel()
     if ccl_async_enabled():
+        rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
-            persistent_output_buffers=None,
+            persistent_output_buffers=rs_bufs,
             dim=3,
             multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
@@ -159,14 +256,15 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks,
+            num_workers_per_link=workers,
+            num_buffers_per_channel=nbuf,
         )
         tensor.deallocate(True)
+        ag_buf = ccl_manager.get_persistent_ag_buffer(scattered, memory_config)
         gathered = ttnn.experimental.all_gather_async(
             scattered,
-            persistent_output_buffer=None,
+            persistent_output_buffer=ag_buf,
             dim=3,
             multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
             num_links=ccl_manager.num_links,
@@ -174,9 +272,9 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks,
+            num_workers_per_link=workers,
+            num_buffers_per_channel=nbuf,
         )
         scattered.deallocate(True)
         return gathered
@@ -200,11 +298,17 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
     topology = ccl_manager.topology
+    chunks = ccl_chunks_per_sync()
+    workers = ccl_num_workers_per_link()
+    nbuf = ccl_num_buffers_per_channel()
 
     if ccl_async_enabled():
+        ag_buf = None
+        if dim == 3:
+            ag_buf = ccl_manager.get_persistent_ag_buffer(tensor, memory_config)
         gathered = ttnn.experimental.all_gather_async(
             tensor,
-            persistent_output_buffer=None,
+            persistent_output_buffer=ag_buf,
             dim=dim,
             multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
             num_links=ccl_manager.num_links,
@@ -212,19 +316,19 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks,
+            num_workers_per_link=workers,
+            num_buffers_per_channel=nbuf,
         )
         tensor.deallocate(True)
         return gathered
 
+    # Sync all_gather: do not pass deprecated num_links/topology/chunks_* —
+    # Fabric config supplies those; passing them only emits Sep-2026 warnings.
     gathered = ttnn.all_gather(
         tensor,
         dim=dim,
         cluster_axis=tp_axis,
-        num_links=ccl_manager.num_links,
-        topology=topology,
         memory_config=memory_config,
     )
     tensor.deallocate(True)
