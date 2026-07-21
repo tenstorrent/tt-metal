@@ -2,28 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end Word Error Rate (WER): TTNN VibeVoice vs the golden reference audio, by Whisper.
+End-to-end Word Error Rate (WER): TTNN VibeVoice vs the fp32 PyTorch reference, by Whisper.
 
-Runs ``demo_ttnn.py --demo <DEMO_ID>`` inputs — the 4-speaker ``resources/text/<DEMO_ID>.txt``
-script with voice cloning (Speaker 1-4 → en-Alice_woman / en-Carter_man / en-Frank_man /
-en-Maya_woman) — generating the FULL audio on TTNN. The **reference** side is NOT regenerated (the
-fp32 CPU reference would take many hours, and there is no GPU); instead we use the shipped golden
-clip ``resources/golden/<DEMO_ID>.wav`` (the microsoft.github.io/VibeVoice reference).
+Runs the 4-speaker ``resources/text/<DEMO_ID>.txt`` script with voice cloning (Speaker 1-4 →
+en-Alice_woman / en-Carter_man / en-Frank_man / en-Maya_woman). Both the TTNN model and the
+vendored fp32 PyTorch reference free-run the SAME input (same script, voices, seed, AR cap), so
+the comparison is apples-to-apples. Because the CPU reference is slow, ``MAX_NEW_TOKENS``
+(env ``VV_WER_MAX_NEW_TOKENS``) caps AR steps and the default demo is the 45-min script.
 
 Whisper (``WHISPER_MODEL``) transcribes both waveforms, and WER is reported **by sequence
 length** — at cumulative transcript-word prefixes (32, 64, 128, 256, …): for each length N we
 compare the first N words of a hypothesis against the first N words of the target. Comparing
 aligned prefixes keeps every point a fair local measure (a token cap only shortens the curve, it
 does not inflate WER with trailing deletions), so the curve shows how WER drifts as generation
-proceeds. Target text = the ground-truth transcript ``…_gt_timestamp.json`` (the actual golden
-words). Three series per length:
-  * ``golden_vs_gt`` — Whisper's own error on the golden clip (a floor / sanity baseline).
-  * ``tt_vs_gt``     — TT synthesis intelligibility vs the true words.
-  * ``tt_vs_golden`` — TT transcript vs the golden transcript (direct divergence).
+proceeds. Target text = the input script (Speaker-N prefixes stripped). Three series per length:
+  * ``ref_vs_gt``  — the fp32 reference's own Whisper error vs the script (a floor / sanity baseline).
+  * ``tt_vs_gt``   — TT synthesis intelligibility vs the script words.
+  * ``tt_vs_ref``  — TT transcript vs the reference transcript (direct TT-vs-reference divergence).
 
 Report-only: asserts both waveforms are finite / non-silent and both transcripts non-empty.
-``MAX_NEW_TOKENS`` (env ``VV_WER_MAX_NEW_TOKENS``) caps AR steps; the default renders the full
-script. Decode uses the whole-segment fused-frame trace (``VV_TRACE_SEGMENT=1``, ~4.4x faster).
+Decode uses the whole-segment fused-frame trace (``VV_TRACE_SEGMENT=1``, ~4.4x faster).
 """
 
 import json
@@ -36,7 +34,6 @@ import pytest
 import torch
 
 from models.experimental.vibevoice.common.config import (
-    GOLDEN_DIR,
     MODEL_PATH,
     TEXT_EXAMPLES_DIR,
 )
@@ -51,18 +48,15 @@ for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
 
 CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
-SR = 24000  # VibeVoice / golden sample rate
+SR = 24000  # VibeVoice sample rate
 WHISPER_SR = 16000  # Whisper feature-extractor sample rate
 WHISPER_MODEL = "openai/whisper-medium"
-# Match `demo_ttnn.py --demo <DEMO_ID>`: 4-speaker climate script + voice cloning.
-DEMO_ID = os.environ.get("VV_WER_DEMO_ID", "4p_climate_100min")
+# 4-speaker climate script + voice cloning. Both TT and the fp32 reference free-run this input.
+DEMO_ID = os.environ.get("VV_WER_DEMO_ID", "4p_climate_45min")
 _TEXT_PATH = TEXT_EXAMPLES_DIR / f"{DEMO_ID}.txt"
-_GOLDEN_WAV = GOLDEN_DIR / f"{DEMO_ID}.wav"
-_GT_JSON = GOLDEN_DIR / "transcripts" / f"{DEMO_ID}_gt_timestamp.json"
-# AR-step cap. Default renders the full 100-min script: prefill is 23,038 tokens, so 42,498 frames
-# fit under the 65,536 max_position ceiling (94.4 min); the ~42,071-frame script EOSes first.
-# Override with VV_WER_MAX_NEW_TOKENS (e.g. 32 for a quick traced smoke test).
-MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "42400"))
+# AR-step cap. The fp32 CPU reference free-runs the same input, so keep this modest by default
+# (override with VV_WER_MAX_NEW_TOKENS; e.g. 32 for a quick smoke test).
+MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "512"))
 # Cumulative transcript-word prefixes at which WER is reported.
 WER_PREFIX_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 _OUT_DIR = _VIBEVOICE_ROOT / "output" / "e2e_wer"
@@ -77,13 +71,9 @@ def _normalize(text: str) -> list[str]:
 
 
 def _target_words() -> list[str]:
-    """Ground-truth spoken words: the golden transcript JSON (fallback: the input script)."""
-    if _GT_JSON.is_file():
-        segs = json.loads(_GT_JSON.read_text(encoding="utf-8"))
-        text = " ".join(s.get("text", "") for s in segs)
-    else:
-        script = load_script(_TEXT_PATH)
-        text = " ".join(re.sub(r"(?i)^\s*speaker\s+\d+\s*:\s*", "", ln.strip()) for ln in script.split("\n"))
+    """Ground-truth spoken words: the input script (Speaker-N prefixes stripped)."""
+    script = load_script(_TEXT_PATH)
+    text = " ".join(re.sub(r"(?i)^\s*speaker\s+\d+\s*:\s*", "", ln.strip()) for ln in script.split("\n"))
     return _normalize(text)
 
 
@@ -103,21 +93,21 @@ def _wer(ref_words: list[str], hyp_words: list[str]) -> float:
     return dp[m] / n
 
 
-def _cumulative_wer(target: list[str], golden: list[str], tt: list[str]) -> list[dict]:
+def _cumulative_wer(target: list[str], ref: list[str], tt: list[str]) -> list[dict]:
     """WER over the first N words for N in WER_PREFIX_LENGTHS (+ a final full-length row).
 
-    Each series compares aligned prefixes: golden↔target, tt↔target, tt↔golden.
+    Each series compares aligned prefixes: ref↔target, tt↔target, tt↔ref.
     """
     rows = []
-    lengths = [n for n in WER_PREFIX_LENGTHS if n < max(len(golden), len(tt))]
-    lengths.append(max(len(golden), len(tt)))  # final full-length point
+    lengths = [n for n in WER_PREFIX_LENGTHS if n < max(len(ref), len(tt))]
+    lengths.append(max(len(ref), len(tt)))  # final full-length point
     for n in lengths:
         rows.append(
             {
                 "n": n,
-                "golden_vs_gt": round(_wer(target[:n], golden[:n]), 4),
+                "ref_vs_gt": round(_wer(target[:n], ref[:n]), 4),
                 "tt_vs_gt": round(_wer(target[:n], tt[:n]), 4),
-                "tt_vs_golden": round(_wer(golden[:n], tt[:n]), 4),
+                "tt_vs_ref": round(_wer(ref[:n], tt[:n]), 4),
             }
         )
     return rows
@@ -139,6 +129,33 @@ def _build_inputs():
         return_attention_mask=True,
     )
     return processor, inputs
+
+
+def _generate_reference(processor, inputs) -> torch.Tensor:
+    """Free-run the fp32 PyTorch reference on the same input; return its speech waveform.
+
+    fp32 on CPU (bf16 matmul has no CPU acceleration); greedy decode, seed 0, same AR cap as TT.
+    """
+    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+
+    ref = VibeVoiceForConditionalGenerationInference.from_pretrained(
+        MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
+    )
+    ref.eval()
+    ref.set_ddpm_inference_steps(num_steps=NUM_DIFFUSION_STEPS)
+    ref.model.acoustic_tokenizer.std_dist_type = "none"
+    torch.manual_seed(0)
+    ref_out = ref.generate(
+        **inputs,
+        max_new_tokens=MAX_NEW_TOKENS,
+        cfg_scale=CFG_SCALE,
+        tokenizer=processor.tokenizer,
+        generation_config={"do_sample": False},
+        verbose=False,
+        is_prefill=True,
+    )
+    assert ref_out.speech_outputs and ref_out.speech_outputs[0] is not None, "reference produced no audio"
+    return ref_out.speech_outputs[0].to(torch.float32).reshape(-1)
 
 
 def _load_whisper():
@@ -188,15 +205,14 @@ def _sanity_check(name: str, speech: torch.Tensor) -> None:
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_e2e_wer_tt_vs_golden(mesh_device):
-    """Generate the full script on TT, transcribe TT + golden with Whisper, report WER by length."""
+def test_e2e_wer_tt_vs_ref(mesh_device):
+    """Free-run the same input on TT and the fp32 reference; transcribe both, report WER by length."""
     # Load Whisper up front so an unavailable ASR skips fast (before slow generation).
     try:
         asr = _load_whisper()
     except Exception as exc:
         pytest.skip(f"Whisper ASR unavailable ({WHISPER_MODEL}): {exc}")
 
-    assert _GOLDEN_WAV.is_file(), f"Missing golden reference audio: {_GOLDEN_WAV}"
     processor, inputs = _build_inputs()
 
     # TT free-run — full on-device TTNN pipeline (the demo_ttnn path). Save the wav immediately
@@ -239,61 +255,56 @@ def test_e2e_wer_tt_vs_golden(mesh_device):
         )
     _sanity_check("tt", tt_speech)
 
-    golden_full = _load_wav(_GOLDEN_WAV)
-    _sanity_check("golden", golden_full)
-    golden_full_sec = golden_full.numel() / SR
-    # TT is capped (~9 min) but the golden is ~43 min. Transcribe only the overlapping golden
-    # span (+30 s margin) so the WER curve compares aligned coverage and Whisper isn't run over
-    # the ~34 min of golden the TT side never reached.
-    golden_span = min(golden_full.numel(), tt_speech.numel() + 30 * SR)
-    golden_speech = golden_full[:golden_span]
+    # Reference free-run on the same input (fp32 CPU, same seed + AR cap).
+    ref_speech = _generate_reference(processor, inputs)
+    _sanity_check("ref", ref_speech)
+    sf.write(str(_OUT_DIR / f"{DEMO_ID}{_OUT_TAG}_ref.wav"), ref_speech.clamp(-1.0, 1.0).numpy(), SR)
 
     # Transcribe both.
-    golden_text = _transcribe(asr, golden_speech)
+    ref_text = _transcribe(asr, ref_speech)
     tt_text = _transcribe(asr, tt_speech)
-    assert golden_text, "Whisper produced an empty golden transcript"
+    assert ref_text, "Whisper produced an empty reference transcript"
     assert tt_text, "Whisper produced an empty TT transcript"
 
     target = _target_words()
-    golden_words = _normalize(golden_text)
+    ref_words = _normalize(ref_text)
     tt_words = _normalize(tt_text)
 
-    table = _cumulative_wer(target, golden_words, tt_words)
+    table = _cumulative_wer(target, ref_words, tt_words)
     overall = {
-        "golden_vs_gt": round(_wer(target, golden_words), 4),
+        "ref_vs_gt": round(_wer(target, ref_words), 4),
         "tt_vs_gt": round(_wer(target, tt_words), 4),
-        "tt_vs_golden": round(_wer(golden_words, tt_words), 4),
+        "tt_vs_ref": round(_wer(ref_words, tt_words), 4),
     }
 
-    # Persist transcripts + metrics (TT wav already saved above; golden is shipped).
+    # Persist transcripts + metrics (TT + reference wavs already saved above).
     metrics = {
         "whisper_model": WHISPER_MODEL,
         "demo": DEMO_ID,
         "max_new_tokens": MAX_NEW_TOKENS,
-        "golden_full_audio_sec": round(golden_full_sec, 1),
-        "golden_transcribed_sec": round(golden_speech.numel() / SR, 2),
+        "ref_audio_sec": round(ref_speech.numel() / SR, 2),
         "tt_audio_sec": round(tt_speech.numel() / SR, 2),
         "target_word_count": len(target),
-        "golden_word_count": len(golden_words),
+        "ref_word_count": len(ref_words),
         "tt_word_count": len(tt_words),
         "overall_wer": overall,
         "wer_by_length": table,
-        "golden_transcript": golden_text,
+        "ref_transcript": ref_text,
         "tt_transcript": tt_text,
     }
     (_OUT_DIR / f"{DEMO_ID}{_OUT_TAG}_wer.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
 
-    header = f"{'N':>7} | {'golden_vs_gt':>12} | {'tt_vs_gt':>9} | {'tt_vs_golden':>12}"
+    header = f"{'N':>7} | {'ref_vs_gt':>9} | {'tt_vs_gt':>9} | {'tt_vs_ref':>9}"
     lines = [header, "-" * len(header)]
     for r in table:
-        lines.append(f"{r['n']:>7} | {r['golden_vs_gt']:>12.4f} | {r['tt_vs_gt']:>9.4f} | {r['tt_vs_golden']:>12.4f}")
+        lines.append(f"{r['n']:>7} | {r['ref_vs_gt']:>9.4f} | {r['tt_vs_gt']:>9.4f} | {r['tt_vs_ref']:>9.4f}")
     print(
         f"\n[e2e_wer] whisper={WHISPER_MODEL} demo={DEMO_ID} max_new_tokens={MAX_NEW_TOKENS}\n"
-        f"[e2e_wer] golden {golden_speech.numel() / SR:.1f}s ({len(golden_words)}w) | "
+        f"[e2e_wer] ref {ref_speech.numel() / SR:.1f}s ({len(ref_words)}w) | "
         f"tt {tt_speech.numel() / SR:.1f}s ({len(tt_words)}w) | target {len(target)}w\n"
         f"[e2e_wer] WER by cumulative transcript length:\n" + "\n".join(lines) + "\n"
-        f"[e2e_wer] overall: golden_vs_gt={overall['golden_vs_gt']:.4f} "
-        f"tt_vs_gt={overall['tt_vs_gt']:.4f} tt_vs_golden={overall['tt_vs_golden']:.4f}\n"
+        f"[e2e_wer] overall: ref_vs_gt={overall['ref_vs_gt']:.4f} "
+        f"tt_vs_gt={overall['tt_vs_gt']:.4f} tt_vs_ref={overall['tt_vs_ref']:.4f}\n"
         f"[e2e_wer] artifacts -> {_OUT_DIR}"
     )
 
