@@ -1073,7 +1073,7 @@ def test_conv1d_depthwise_fused_activation(device, fused_activation, golden_acti
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
-def test_conv1d_depthwise_auto_shard_qwen35_9b(device):
+def test_conv1d_depthwise_auto_shard_qwen35_9b(device, expect_error):
     channels = 8192
     common_args = dict(
         device=device,
@@ -1103,7 +1103,7 @@ def test_conv1d_depthwise_auto_shard_qwen35_9b(device):
 
     run_conv1d_route(**{**common_args, "input_length": 10, "kernel_size": 7})
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Prepared 1D depthwise weights are incompatible with the current convolution plan"):
         run_conv1d_route(
             **{
                 **common_args,
@@ -1135,7 +1135,7 @@ def test_conv1d_depthwise_raw_device_weight(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
-def test_conv1d_depthwise_rejects_prepared_weight_plan_collision(device):
+def test_conv1d_depthwise_rejects_prepared_weight_plan_collision(device, expect_error):
     channels = 512
     _, prepared_weight = run_conv1d_route(
         device,
@@ -1171,7 +1171,7 @@ def test_conv1d_depthwise_rejects_prepared_weight_plan_collision(device):
         pcc=0.995,
     )
     run_conv1d_route(**next_plan)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Prepared 1D depthwise weights are incompatible with the current convolution plan"):
         run_conv1d_route(**next_plan, prepared_weight=prepared_weight)
 
 
@@ -1276,9 +1276,9 @@ def test_conv1d_depthwise_block_sharded_multi_height(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
-def test_conv1d_depthwise_rejects_width_sharding(device):
+def test_conv1d_depthwise_rejects_width_sharding(device, expect_error):
     channels = 64
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "1D depthwise convolution does not support WIDTH_SHARDED layout"):
         run_conv1d_route(
             device,
             batch_size=1,
@@ -1295,7 +1295,7 @@ def test_conv1d_depthwise_rejects_width_sharding(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
-def test_conv1d_depthwise_rejects_pre_sharded_width_input_with_height_config(device):
+def test_conv1d_depthwise_rejects_pre_sharded_width_input_with_height_config(device, expect_error):
     channels = 64
     input_length = 10
     input_memory_config = ttnn.create_sharded_memory_config(
@@ -1305,7 +1305,7 @@ def test_conv1d_depthwise_rejects_pre_sharded_width_input_with_height_config(dev
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "1D depthwise convolution does not support WIDTH_SHARDED layout"):
         run_conv1d_route(
             device,
             batch_size=1,
