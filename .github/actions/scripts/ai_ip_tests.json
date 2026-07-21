@@ -1,10 +1,38 @@
 {
-  "_comment": "RTL sim tests that warrant a RELEASE Jira ticket when they fail. Each failed test from the 'RTL Sim CI test' check output is matched by (config, group, filter); a field omitted in an entry is a wildcard. Tests not listed here are ignored (no ticket). Add real relevant tests as they are identified.",
+  "_comment": "RTL sim tests that warrant a RELEASE Jira ticket when they fail. Each failed test from the 'RTL Sim CI test' check is matched by (config, group, filter); a field omitted in an entry is a wildcard. Optional per-entry fields: assignee (Jira accountId the ticket is assigned to), assignee_name (human label, ignored by code), requirement (AIIPSW ticket key, added as a label), team. Tests not listed here are ignored (no ticket).",
   "relevant_tests": [
     {
       "config": "1x3",
+      "group": "unit_tests_legacy",
+      "filter": "*DmLoopback*",
+      "requirement": "AIIPSW-2",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens"
+    },
+    {
+      "config": "1x3",
+      "group": "unit_tests_legacy",
+      "filter": "*QuasarComputeKernelMultipleThread*",
+      "requirement": "AIIPSW-2",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens"
+    },
+    {
+      "config": "2x3",
+      "group": "unit_tests_legacy",
+      "filter": "*MultiDmAddTwoInts*",
+      "requirement": "AIIPSW-2",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens"
+    },
+    {
+      "config": "1x3",
       "group": "unit_tests_api",
-      "filter": "RtlSimCheckOutput.DoesNotExist_ForcedFailure"
+      "filter": "RtlSimCheckOutput.DoesNotExist_ForcedFailure",
+      "_note": "forced-failure fixture for end-to-end testing; inert now (test reverted)"
     }
   ]
 }

@@ -48,11 +48,12 @@ def parse_failed(detail):
     return out
 
 
-def is_relevant(config, group, filt, mapping):
+def match_entry(config, group, filt, mapping):
+    """Return the relevance-map entry matching this failed test, or None."""
     for e in mapping.get("relevant_tests", []):
         if e.get("config", config) == config and e.get("group", group) == group and e.get("filter", filt) == filt:
-            return True
-    return False
+            return e
+    return None
 
 
 def main():
@@ -79,9 +80,21 @@ def main():
     filed = 0
     for config, group, filt in failed:
         test = f"[{config}] {group} --gtest_filter={filt}"
-        if not is_relevant(config, group, filt, mapping):
+        entry = match_entry(config, group, filt, mapping)
+        if entry is None:
             print(f"skip (not in relevance map): {test}")
             continue
+        requirement = entry.get("requirement")
+        team = entry.get("team")
+        labels = ["rtl-sim", "ci-failure", "release"]
+        if requirement:
+            labels.append(requirement)
+        desc = ["The RTL sim regression test below failed during Package and release.\n", f"Test:        {test}"]
+        if requirement:
+            desc.append(f"Requirement: {requirement}")
+        if team:
+            desc.append(f"Team:        {team}")
+        desc += [f"Commit:      {sha}", f"Sim results: {url}", f"Release run: {run_url}"]
         result = file_issue(
             base=base,
             email=email,
@@ -89,16 +102,11 @@ def main():
             project=project,
             summary=f"RTL sim test failed during release: {test}",
             issue_type=issue_type,
-            description=(
-                "The RTL sim regression test below failed during Package and release.\n\n"
-                f"Test:        {test}\n"
-                f"Commit:      {sha}\n"
-                f"Sim results: {url}\n"
-                f"Release run: {run_url}\n"
-            ),
-            labels=["rtl-sim", "ci-failure", "release"],
+            description="\n".join(desc) + "\n",
+            labels=labels,
             # Stable per-test label: this test owns one issue; reruns comment.
             dedup_label="rtl-sim:" + _slug(f"{config}-{group}-{filt}"),
+            assignee=entry.get("assignee"),
             dry_run=dry,
         )
         print(result)

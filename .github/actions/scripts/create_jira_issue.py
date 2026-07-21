@@ -82,12 +82,23 @@ def _find_open_dupe(base, email, token, project, dedup_label):
 
 
 def file_issue(
-    base, email, token, project, summary, issue_type="Bug", description="", labels=None, dedup_label="", dry_run=False
+    base,
+    email,
+    token,
+    project,
+    summary,
+    issue_type="Bug",
+    description="",
+    labels=None,
+    dedup_label="",
+    assignee=None,
+    dry_run=False,
 ):
     """Create (or comment onto a de-duped) Jira issue.
 
     Returns a human-readable result string. When dedup_label is set and an open
     issue already carries it, a comment is added instead of opening a duplicate.
+    assignee, when set, is a Jira accountId the new issue is assigned to.
     """
     labels = list(labels or [])
     if dedup_label and dedup_label not in labels:
@@ -101,6 +112,8 @@ def file_issue(
     }
     if labels:
         fields["labels"] = labels
+    if assignee:
+        fields["assignee"] = {"accountId": assignee}
 
     if dry_run:
         return "DRY RUN -- would POST /rest/api/3/issue with fields:\n" + json.dumps({"fields": fields}, indent=2)
