@@ -447,7 +447,7 @@ jobs:
     runs-on:
       - ${{ matrix.test-group.runner-label }}
       - ${{ matrix.test-group.arch }}
-      - in-service
+      - OM1-01A02-STGWH01
       # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
       - ${{ ((matrix.test-group.runner-label == 'BH-Quietbox-2' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
     # Per-phase log paths kept job-level so they resolve in both the ${{ env }}
