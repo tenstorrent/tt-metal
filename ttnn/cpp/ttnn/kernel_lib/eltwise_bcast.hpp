@@ -12,8 +12,17 @@
 
 namespace compute_kernel_lib {
 
+namespace detail {
+
+constexpr uint32_t unary_bcast_config_bits(BroadcastDim dim, InputSpec input_spec, Dst dst) noexcept;
+
+template <uint32_t Cb, uint32_t ConfigBits>
+struct UnaryBcastImpl;
+
+}  // namespace detail
+
 template <BroadcastDim Dim, uint32_t Cb, InputSpec Input = input(), Dst DstSlot = Dst::D0>
-struct UnaryBcast;
+using UnaryBcast = detail::UnaryBcastImpl<Cb, detail::unary_bcast_config_bits(Dim, Input, DstSlot)>;
 
 template <BroadcastDim Dim, uint32_t CbIn, uint32_t CbOut, InputSpec Input = input(), OutputSpec Output = output()>
 ALWI void unary_bcast(EltwiseShape shape);

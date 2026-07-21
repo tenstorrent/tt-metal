@@ -394,12 +394,17 @@ constexpr uint32_t pack_tile_config_bits(OutputSpec output_spec, Dst dst) noexce
 constexpr uint32_t binary_fpu_config_bits(
     BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst, DestAccumulation accumulation) noexcept;
 
+constexpr uint32_t dest_reuse_binary_config_bits(
+    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst_in, Dst dst_out) noexcept;
+
 template <uint32_t Cb, uint32_t ConfigBits>
 struct CopyTileImpl;
 template <uint32_t Cb, uint32_t ConfigBits>
 struct PackTileImpl;
 template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits>
 struct BinaryFpuImpl;
+template <uint32_t Cb, uint32_t ConfigBits>
+struct DestReuseBinaryImpl;
 
 }  // namespace detail
 
@@ -425,7 +430,8 @@ template <
     InputSpec Input = input(),
     Dst DstIn = Dst::D0,
     Dst DstOut = Dst::D0>
-struct DestReuseBinary;
+using DestReuseBinary =
+    detail::DestReuseBinaryImpl<Cb, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstIn, DstOut)>;
 
 template <uint32_t Cb, OutputSpec Output = output(), Dst DstSlot = Dst::D0>
 using PackTile = detail::PackTileImpl<Cb, detail::pack_tile_config_bits(Output, DstSlot)>;

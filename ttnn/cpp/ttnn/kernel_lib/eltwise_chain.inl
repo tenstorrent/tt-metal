@@ -316,6 +316,31 @@ struct BinaryFpuConfig {
     constexpr DestAccumulation accumulation() const noexcept { return AccumulationField::decode(bits); }
 };
 
+struct DestReuseBinaryConfig {
+    using OpField = ConfigField<BinaryFpuOp, first_config_bit, BinaryFpuOp::Mul>;
+    using ReuseField = ConfigField<DestReuseType, OpField::end, DestReuseType::DEST_TO_SRCB>;
+    using InputField =
+        ConfigField<uint16_t, ReuseField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
+    using DstInField = ConfigField<Dst, InputField::end, Dst::D15>;
+    using DstOutField = ConfigField<Dst, DstInField::end, Dst::D15>;
+
+    uint32_t bits;
+
+    constexpr DestReuseBinaryConfig(
+        BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst_in, Dst dst_out) noexcept :
+        bits(
+            OpField::encode(op) | ReuseField::encode(reuse) |
+            InputField::encode(InputSpecConfig::encode(input_spec)) | DstInField::encode(dst_in) |
+            DstOutField::encode(dst_out)) {}
+    constexpr explicit DestReuseBinaryConfig(uint32_t encoded) noexcept : bits(encoded) {}
+
+    constexpr BinaryFpuOp op() const noexcept { return OpField::decode(bits); }
+    constexpr DestReuseType reuse() const noexcept { return ReuseField::decode(bits); }
+    constexpr InputSpec input_spec() const noexcept { return InputSpecConfig::decode(InputField::decode(bits)); }
+    constexpr Dst dst_in() const noexcept { return DstInField::decode(bits); }
+    constexpr Dst dst_out() const noexcept { return DstOutField::decode(bits); }
+};
+
 constexpr uint32_t copy_tile_config_bits(Dst dst, InputSpec input_spec) noexcept {
     return CopyTileConfig{dst, input_spec}.bits;
 }
@@ -332,6 +357,11 @@ constexpr uint32_t binary_fpu_config_bits(
     Dst dst,
     DestAccumulation accumulation) noexcept {
     return BinaryFpuConfig{op, bcast, a, b, dst, accumulation}.bits;
+}
+
+constexpr uint32_t dest_reuse_binary_config_bits(
+    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst_in, Dst dst_out) noexcept {
+    return DestReuseBinaryConfig{op, reuse, input_spec, dst_in, dst_out}.bits;
 }
 
 }  // namespace detail
@@ -1151,14 +1181,14 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
 // 5. DestReuseBinary chain element
 // =============================================================================
 
-template <uint32_t Cb,
-          BinaryFpuOp Op,
-          DestReuseType ReuseType,
-          InputSpec Input,
-          Dst DstIn,
-          Dst DstOut>
-struct DestReuseBinary : InputStream, DestReuseBinaryTag {
-    static constexpr InputSpec InputConfig = Input;
+template <uint32_t Cb, uint32_t ConfigBits>
+struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
+    static constexpr DestReuseBinaryConfig Config{ConfigBits};
+    static constexpr BinaryFpuOp Op = Config.op();
+    static constexpr DestReuseType ReuseType = Config.reuse();
+    static constexpr InputSpec InputConfig = Config.input_spec();
+    static constexpr Dst DstIn = Config.dst_in();
+    static constexpr Dst DstOut = Config.dst_out();
     static constexpr InputLifecycle Policy = InputConfig.lifecycle;
     static constexpr OperandKind IndexMode = InputConfig.index;
     static constexpr TileOffset Offset = InputConfig.offset;
@@ -1197,8 +1227,8 @@ struct DestReuseBinary : InputStream, DestReuseBinaryTag {
             : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
-    constexpr DestReuseBinary() noexcept = default;
-    constexpr explicit DestReuseBinary(uint32_t base) noexcept : Base(base) {}
+    constexpr DestReuseBinaryImpl() noexcept = default;
+    constexpr explicit DestReuseBinaryImpl(uint32_t base) noexcept : Base(base) {}
 
     // srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.

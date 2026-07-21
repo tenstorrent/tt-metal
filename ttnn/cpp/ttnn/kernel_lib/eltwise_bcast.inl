@@ -7,8 +7,38 @@
 
 namespace compute_kernel_lib {
 
-template <BroadcastDim Dim, uint32_t Cb, InputSpec Input, Dst DstSlot>
-struct UnaryBcast : InputStream, UnaryBcastTag {
+namespace detail {
+
+struct UnaryBcastConfig {
+    using DimField = ConfigField<BroadcastDim, first_config_bit, BroadcastDim::Scalar>;
+    using InputField = ConfigField<uint16_t, DimField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
+    using DstField = ConfigField<Dst, InputField::end, Dst::D15>;
+
+    uint32_t bits;
+
+    constexpr UnaryBcastConfig(BroadcastDim dim, InputSpec input_spec, Dst dst) noexcept :
+        bits(
+            DimField::encode(dim) | InputField::encode(InputSpecConfig::encode(input_spec)) |
+            DstField::encode(dst)) {}
+    constexpr explicit UnaryBcastConfig(uint32_t encoded) noexcept : bits(encoded) {}
+
+    constexpr BroadcastDim dim() const noexcept { return DimField::decode(bits); }
+    constexpr InputSpec input_spec() const noexcept { return InputSpecConfig::decode(InputField::decode(bits)); }
+    constexpr Dst dst() const noexcept { return DstField::decode(bits); }
+};
+
+constexpr uint32_t unary_bcast_config_bits(BroadcastDim dim, InputSpec input_spec, Dst dst) noexcept {
+    return UnaryBcastConfig{dim, input_spec, dst}.bits;
+}
+
+}  // namespace detail
+
+template <uint32_t Cb, uint32_t ConfigBits>
+struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
+    static constexpr UnaryBcastConfig Config{ConfigBits};
+    static constexpr BroadcastDim Dim = Config.dim();
+    static constexpr InputSpec Input = Config.input_spec();
+    static constexpr Dst DstSlot = Config.dst();
     static constexpr InputLifecycle Policy = Input.lifecycle;
     static constexpr OperandKind IndexMode = Input.index;
     static constexpr TileOffset Offset = Input.offset;
@@ -34,8 +64,8 @@ struct UnaryBcast : InputStream, UnaryBcastTag {
     static constexpr uint32_t reconfig_srca_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
     static constexpr uint32_t reconfig_srcb_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
 
-    constexpr UnaryBcast() noexcept = default;
-    constexpr explicit UnaryBcast(uint32_t base) noexcept : Base(base) {}
+    constexpr UnaryBcastImpl() noexcept = default;
+    constexpr explicit UnaryBcastImpl(uint32_t base) noexcept : Base(base) {}
 
     static ALWI void init() {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
