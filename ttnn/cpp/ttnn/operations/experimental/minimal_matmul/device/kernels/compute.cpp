@@ -48,6 +48,53 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     }
 }
 
+#ifdef SPLIT_OUTPUT_WRITE
+// Percent of the block's M-rows routed to NOC_1 (dm_in1 / out_cb_a); the rest go to NOC_0 (dm_in0 /
+// out_cb_b). Must match dm_in0/dm_in1 so the c_2/c_8 counts stay in lockstep.
+#ifndef AG_SPLIT_NOC1_PCT
+#define AG_SPLIT_NOC1_PCT 50
+#endif
+// Two-NoC output-write split: pack the block's first split_rows M-rows into out_cb_a (drained by the NOC_1
+// writer dm_in1) and the rest into out_cb_b (drained by the NOC_0 writer dm_in0). Same per-row pack as
+// copy_block; only the destination CB switches at the row boundary. Both CBs share the output format.
+void copy_block_split(
+    uint32_t in_cb,
+    uint32_t out_cb_a,
+    uint32_t out_cb_b,
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t split_rows) {
+    CircularBuffer cb_out_a(out_cb_a);
+    CircularBuffer cb_out_b(out_cb_b);
+    copy_tile_to_dst_init_short(in_cb);
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(out_cb_a);
+    uint32_t fused_act_dst_id = 0;
+
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        const uint32_t out_cb = (m < split_rows) ? out_cb_a : out_cb_b;
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            tile_regs_acquire();
+            tile_regs_wait();
+            copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
+#ifdef SFPU_OP_INIT_ACTIVATION
+            SFPU_OP_FUNC_ACTIVATION
+#endif
+            pack_tile(fused_act_dst_id, out_cb);
+            tile_regs_commit();
+            tile_regs_release();
+            tile_id++;
+        }
+        if (m < split_rows) {
+            cb_out_a.push_back(N_block_tiles);
+        } else {
+            cb_out_b.push_back(N_block_tiles);
+        }
+    }
+}
+#endif  // SPLIT_OUTPUT_WRITE
+
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in
 // `in_cb` (the intermediate accumulator): within each M row, column tile 2p is the
@@ -448,6 +495,11 @@ void kernel_main() {
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
     CircularBuffer cb_out(out_cb);
+#ifdef SPLIT_OUTPUT_WRITE
+    // Second output CB for the two-NoC write split; drained by dm_in0 on NOC_0.
+    constexpr uint32_t out_cb_b = OUT_CB_B;
+    CircularBuffer cb_out_b(out_cb_b);
+#endif
     CircularBuffer cb_intermediate(intermediate_cb);
     CircularBuffer cb_in2(in2_cb);
 
@@ -594,6 +646,19 @@ void kernel_main() {
             cb_intermediate.pop_front(out_block_num_tiles);
 
 #elif !defined(FUSE_TERNARY)
+#if defined(SPLIT_OUTPUT_WRITE) && !defined(FUSE_BIAS)
+            // Two-NoC split: pack low rows -> c_2 (dm_in1/NOC_1), high rows -> c_8 (dm_in0/NOC_0).
+            constexpr uint32_t split_rows = (M_block_tiles * AG_SPLIT_NOC1_PCT) / 100;
+            if (split_rows) {
+                cb_out.reserve_back(split_rows * N_block_tiles);
+            }
+            if (split_rows < M_block_tiles) {
+                cb_out_b.reserve_back((M_block_tiles - split_rows) * N_block_tiles);
+            }
+            cb_intermediate.wait_front(out_block_num_tiles);
+            copy_block_split(intermediate_cb, out_cb, out_cb_b, M_block_tiles, N_block_tiles, split_rows);
+            cb_intermediate.pop_front(out_block_num_tiles);
+#else
             cb_out.reserve_back(out_block_num_tiles);
             cb_intermediate.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
@@ -604,6 +669,7 @@ void kernel_main() {
             cb_in2.pop_front(N_block_tiles);
 #endif  // FUSE_BIAS
             cb_intermediate.pop_front(out_block_num_tiles);
+#endif  // SPLIT_OUTPUT_WRITE
 
 #else   // FUSE_TERNARY is set
             cb_out.reserve_back(out_block_num_tiles);

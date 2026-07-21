@@ -321,8 +321,14 @@ void write_block_sync_granular(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
-    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+    uint32_t d1_end,
+    // Restrict the write to the block's M-row sub-range [m_id_start, m_id_end). Used by the two-NoC output
+    // split: each DM writer drains only its half of a separate out CB and writes only its rows. The per-row
+    // cb_wait_front/pop happen once per iterated row, so the pop count matches what compute pushed to that
+    // CB. Defaults span the whole block (single-writer baseline).
+    uint32_t m_id_start = 0,
+    uint32_t m_id_end = M_block_tiles) {
+    for (uint32_t m_id = m_id_start; m_id < m_id_end; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < shape.logical_d0) {

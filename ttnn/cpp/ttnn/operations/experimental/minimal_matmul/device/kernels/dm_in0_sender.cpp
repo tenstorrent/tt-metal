@@ -20,6 +20,17 @@
 #define IN0_SUB_CHUNKS 1
 #endif
 
+// Two-NoC output-write split: under SPLIT_OUTPUT_WRITE, dm_in0 becomes a co-writer draining the second
+// output CB (AG_OUT_WRITE_CB = c_8) and writing the block's high M-rows [split_rows, M) on NOC_0, while
+// dm_in1 writes [0, split_rows) on NOC_1. split_rows = M_block_tiles*AG_SPLIT_NOC1_PCT/100; must match
+// compute/dm_in1. Defaults: single out CB c_2, 50% (inactive unless SPLIT_OUTPUT_WRITE is set).
+#ifndef AG_OUT_WRITE_CB
+#define AG_OUT_WRITE_CB 2
+#endif
+#ifndef AG_SPLIT_NOC1_PCT
+#define AG_SPLIT_NOC1_PCT 50
+#endif
+
 void kernel_main() {
     Noc noc;
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -152,7 +163,7 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_out_id = tt::CBIndex::c_2;
+    constexpr uint32_t cb_out_id = AG_OUT_WRITE_CB;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_in2_id = tt::CBIndex::c_4;
 #endif
@@ -720,6 +731,21 @@ void kernel_main() {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
+#ifdef SPLIT_OUTPUT_WRITE
+                        // NOC_0 writer: high rows [split_rows, M) from c_8.
+                        constexpr uint32_t split_rows = (M_block_tiles * AG_SPLIT_NOC1_PCT) / 100;
+                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                            std::get<0>(outputs_tuple),
+                            out_shape,
+                            cb_out_id,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end,
+                            split_rows,
+                            M_block_tiles);
+#else
                         write_block_sync_granular<M_block_tiles, N_block_tiles>(
                             std::get<0>(outputs_tuple),
                             out_shape,
@@ -729,6 +755,7 @@ void kernel_main() {
                             m_tile_end,
                             n_tile,
                             n_tile_end);
+#endif
                     } else {
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                             outputs_tuple,

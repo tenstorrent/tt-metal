@@ -379,8 +379,41 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_data_format);
     }
 
+    // Two-NoC output-write split (env AG_SPLIT_OUTPUT_WRITE=1): the whole-block post-loop write is split
+    // across M-rows so dm_in1 writes the low rows on NOC_1 and dm_in0 writes the high rows on NOC_0. Both DMs
+    // are idle at the write (reads/mcasts done), so no input contention and no dynamic-NoC needed. Only the
+    // plain (copy) epilogue with a single output and one M-block per core (defer_write always false).
+    // AG_SPLIT_NOC1_PCT (0..100, default 50) sets the percent of rows going to NOC_1 (dm_in1); the rest go to
+    // NOC_0. Lower values shift more onto NOC_0, which does not also carry the in1 mcast.
+    bool split_output_write = false;
+    uint32_t split_noc1_pct = 50;
+    {
+        const char* se = std::getenv("AG_SPLIT_OUTPUT_WRITE");
+        if (se != nullptr && se[0] == '1' && N_chunks == 1 && !use_bias && !use_fused_ternary && !fuse_swiglu &&
+            M_blocks_per_core == 1 && M_block_tiles > 1) {
+            split_output_write = true;
+            if (const char* p = std::getenv("AG_SPLIT_NOC1_PCT")) {
+                long v = std::strtol(p, nullptr, 10);
+                if (v < 0) {
+                    v = 0;
+                }
+                if (v > 100) {
+                    v = 100;
+                }
+                split_noc1_pct = static_cast<uint32_t>(v);
+            }
+        }
+    }
+
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
+    if (split_output_write) {
+        // Second output CB (c_8): the high-row half drained by dm_in0 on NOC_0. Full-block size upper-bounds
+        // the high half; total out-CB L1 stays modest.
+        uint32_t out_cb_b_id = tt::CBIndex::c_8;
+        tt::tt_metal::create_cb(
+            out_cb_b_id, program, core_grid, out_tile_size, out_block_num_tiles, output_data_format);
+    }
 
     uint32_t intermediate_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::create_cb(
@@ -448,7 +481,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
-    std::map<std::string, std::string> in0_injector_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -555,10 +587,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (skip_in0_read_env != nullptr && skip_in0_read_env[0] == '1') {
             defines["SKIP_IN0_DRAM_READ"] = "1";
         }
-        if (fused_op_signaler->read_local_slice_from_input) {
-            in0_injector_defines = defines;
-            in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
-        }
     }
 
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
@@ -597,8 +625,27 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
      * Create kernels
      */
 
-    bool in0_is_output_writer = !transpose_core_grid;
-    bool in1_is_output_writer = transpose_core_grid;
+    // Under the two-NoC split both DMs write (dm_in1 the low rows on NOC_1, dm_in0 the high rows on NOC_0);
+    // otherwise exactly one writes.
+    bool in0_is_output_writer = split_output_write ? true : !transpose_core_grid;
+    bool in1_is_output_writer = split_output_write ? true : transpose_core_grid;
+
+    // Per-DM-family defines. Under the split: dm_in1 writes rows [0, split) from c_2; dm_in0 drains c_8 and
+    // writes [split, M). Both get the same split percent so their ranges line up with compute's copy.
+    auto in0_defines = defines;
+    auto in1_defines = defines;
+    if (split_output_write) {
+        in1_defines["SPLIT_OUTPUT_WRITE"] = "1";
+        in1_defines["AG_SPLIT_NOC1_PCT"] = std::to_string(split_noc1_pct);
+        in0_defines["SPLIT_OUTPUT_WRITE"] = "1";
+        in0_defines["AG_OUT_WRITE_CB"] = std::to_string(static_cast<uint32_t>(tt::CBIndex::c_8));
+        in0_defines["AG_SPLIT_NOC1_PCT"] = std::to_string(split_noc1_pct);
+    }
+    // dm_in0 injector (read-local) variant layers READ_FROM_LOCAL_INPUT on top of the in0 defines.
+    auto in0_injector_defines = in0_defines;
+    if (fuse_op && fused_op_signaler->read_local_slice_from_input) {
+        in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+    }
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
@@ -640,7 +687,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .processor = in0_risc,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
+            .defines = in0_injector_defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         M_tiles,
@@ -680,7 +727,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
         in0_receiver_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
+            .processor = in0_risc,
+            .noc = in0_noc,
+            .compile_args = in0_receiver_compile_time_args,
+            .defines = in0_defines});
 
     std::vector<uint32_t> in1_sender_compile_time_args = {
         M_tiles,
@@ -719,7 +769,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
         in1_sender_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_sender_compile_time_args,
+            .defines = in1_defines});
 
     std::vector<uint32_t> in1_receiver_compile_time_args = {
         M_tiles,
@@ -758,7 +811,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
         in1_receiver_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_receiver_compile_time_args,
+            .defines = in1_defines});
 
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
@@ -772,6 +828,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         num_local_k_blocks};
 
     auto compute_defines = defines;
+    if (split_output_write) {
+        compute_defines["SPLIT_OUTPUT_WRITE"] = "1";
+        compute_defines["OUT_CB_B"] = std::to_string(static_cast<uint32_t>(tt::CBIndex::c_8));
+        compute_defines["AG_SPLIT_NOC1_PCT"] = std::to_string(split_noc1_pct);
+    }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {
         compute_activation_defines = ttnn::operations::unary::utils::get_defines(
