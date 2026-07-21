@@ -872,19 +872,8 @@ def test_eltwise_unary_sfpu_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # The inverse-hyperbolics cascade through an inlined 3rd-order log polynomial, so
-    # their Quasar accuracy is measurably below the default tolerance. Relax atol/rtol
-    # for those three; every other op uses the default tolerance.
-    custom_atol = None
-    custom_rtol = None
-    if mathop in (MathOperation.Acosh, MathOperation.Asinh, MathOperation.Atanh):
-        custom_atol = 0.1
-        custom_rtol = 0.1
-
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
     ), "Assert against golden failed"

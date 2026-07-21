@@ -86,7 +86,7 @@ inline constexpr bool is_trig_op(SfpuType op)
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
  * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step.
  */
-template <SfpuType OPERATION>
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en>
 void init_unary_sfpu_operation_quasar()
 {
     if constexpr (OPERATION == SfpuType::gelu)
@@ -107,7 +107,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (is_trig_op(OPERATION))
     {
-        init_trigonometry();
+        init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
     }
 }
 
@@ -229,7 +229,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // One op-templated kernel serves sine/cosine/acosh/asinh/atanh; OPERATION picks the branch
         // at compile time. APPROXIMATION_MODE=false selects the full-polynomial (accurate) path;
         // VectorMode::RC (the params default) runs the functor once per face.
-        _llk_math_eltwise_unary_sfpu_params_(calculate_trigonometry<OPERATION, false /* APPROX */, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_trigonometry<OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
