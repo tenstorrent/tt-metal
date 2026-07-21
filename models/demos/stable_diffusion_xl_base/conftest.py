@@ -487,7 +487,7 @@ def te_lora_path(request, is_ci_env, is_ci_v2_env):
             repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env and not is_ci_v2_env
         )
     except Exception as _:
-        # TODO(#47509): confirm PE_BalloonStyle is mirrored in the CI HF cache; until
+        # TODO(#47509): confirm alienzkin-sdxl is mirrored in the CI HF cache; until
         # then this skips on offline CI runners rather than failing.
         pytest.skip(
             f"Text-encoder LoRA weights not available from HF ({hf_repo_id}, {hf_filename}). "

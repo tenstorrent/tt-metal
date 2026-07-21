@@ -103,7 +103,7 @@ def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_promp
         (
             "An astronaut riding a green horse",
             "disturbing",
-            "A PE_BalloonStyle astronaut riding a green horse",
+            "An alienzkin astronaut riding a green horse",
         )
     ],
 )
