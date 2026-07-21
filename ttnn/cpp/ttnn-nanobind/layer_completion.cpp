@@ -1,11 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Standalone nanobind module (`_layer_completion`) for the pipelined-prefill layer-completion
-// aggregation feature. Exposed via ttnn._experimental.layer_completion. Binds the host-local ring
-// (LayerCompletionQueue), the per-host router (LayerCompletionRouter), and the test-only scheduler
-// stand-in consumer (LayerCompletionConsumer).
+
+#include "layer_completion.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -23,9 +20,9 @@
 #include <internal/disaggregation/layer_completion_queue.hpp>
 #include <internal/disaggregation/layer_completion_router.hpp>
 
-namespace nb = nanobind;
+namespace ttnn::disaggregation {
 
-NB_MODULE(_layer_completion, mod) {  // NOLINT(performance-unnecessary-value-param)
+void bind_layer_completion(nb::module_& mod) {
     using tt::tests::prefill_test::LayerCompletionConsumer;
     using tt::tt_metal::internal::LayerCompletionMessage;
     using tt::tt_metal::internal::LayerCompletionQueue;
@@ -128,3 +125,5 @@ NB_MODULE(_layer_completion, mod) {  // NOLINT(performance-unnecessary-value-par
         .def_prop_ro("total", &LayerCompletionConsumer::total)
         .def_prop_ro("reached_expected", &LayerCompletionConsumer::reached_expected);
 }
+
+}  // namespace ttnn::disaggregation

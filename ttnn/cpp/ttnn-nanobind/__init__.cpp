@@ -15,6 +15,7 @@
 #include "ttnn-nanobind/events.hpp"
 #include "ttnn-nanobind/fabric.hpp"
 #include "ttnn-nanobind/disaggregation.hpp"
+#include "ttnn-nanobind/layer_completion.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
@@ -192,6 +193,10 @@ void py_module(nb::module_& mod) {
     auto m_disaggregation =
         m_experimental.def_submodule("disaggregation", "Disaggregation APIs for KV cache management");
     disaggregation::bind_disaggregation_api(m_disaggregation);
+
+    auto m_layer_completion =
+        m_experimental.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router/consumer");
+    disaggregation::bind_layer_completion(m_layer_completion);
 
     auto m_moreh = mod.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
