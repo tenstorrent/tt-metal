@@ -153,6 +153,23 @@ any D, no L1-scratch. Result: `conv1d_op` PCC 1.0; layer PCC byte-identical to t
 
 ---
 
+### Phase 8 — distribution implementation (in progress)
+
+- **Option B approved** (SP=8×TP=4 Galaxy; measured on LoudBox SP2×TP4 proxy). Roofline in `ROOFLINE.md`
+  (CCL-bound, esp. Galaxy 0.27:1). Rebased onto origin/main `b8012569c86` (realtime profiler available).
+- **TP distribution done + validated.** `tt/ttnn_kda_dist.py::TtKimiDeltaAttentionMesh`: TP shards heads
+  (col-parallel q/k/v/gate projections, row-parallel o_proj + TP all-reduce via all-gather+local-sum);
+  recurrence/gate/conv/norm are per-head-local, reused unchanged. **PCC 0.99998 on the real (2,4)
+  LoudBox board** (`test_kda_dist.py`, conv on/off), sequence replicated over SP.
+- **HW findings:** (1,4) is NOT a trainable mesh on the 8-device LoudBox — supported shapes are
+  {(8,1),(4,2),(2,4)} (`sparse_mla_mesh.py`); use (2,4). Fabric config = canonical **FABRIC_2D**
+  (fabric_router_config + RELAXED_INIT); a bare `open_mesh_device(fabric_config=…)` fails — the mesh_device
+  fixture applies fabric via `set_fabric`. `reduce_scatter_minimal_async` needs 3 semaphores (own set);
+  `all_gather_async` needs 2 — used all-gather+sum for the all-reduce. `test_fabric_probe.py` is a kept
+  board-health probe.
+- **Next:** real SP sequence-sharding + cross-span state-scan (currently SP is redundant-replicated);
+  then perf harness (realtime profiler, warm/cold/long) before/after; then fused chunk kernel.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
