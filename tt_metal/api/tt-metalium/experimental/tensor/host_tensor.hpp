@@ -14,7 +14,7 @@
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -151,11 +151,6 @@ public:
     const TensorSpec& tensor_spec() const;
 
     /**
-     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     */
-    const TensorTopology& tensor_topology() const;
-
-    /**
      * Returns true if this HostTensor was left in a moved-from state.
      *
      * A HostTensor becomes valueless when it is the source of a move construction or move assignment.
@@ -195,9 +190,6 @@ public:
 
     // Applies a transformation function to each host buffer across devices in parallel, returning a new HostTensor.
     HostTensor transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
-
-    // Updates the topology of the HostTensor post construction.
-    void update_tensor_topology(TensorTopology tensor_topology);
 
     /**
      * Access to the implementation.

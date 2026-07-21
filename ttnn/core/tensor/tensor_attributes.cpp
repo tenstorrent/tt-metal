@@ -5,6 +5,8 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
 
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+
 namespace ttnn {
 
 using tt::tt_metal::TensorSpec;
@@ -32,7 +34,7 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
     return std::visit(
         ttsl::overloaded{
             [](const HostStorage& host_storage) -> const TensorTopology& {
-                return host_storage.host_tensor().tensor_topology();
+                return tensor_topology(host_storage.host_tensor());
             },
             [](const DeviceStorage& device_storage) -> const TensorTopology& {
                 return device_storage.get_tensor_topology();
@@ -44,9 +46,11 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
 void TensorAttributes::update_tensor_topology(const TensorTopology& tensor_topology) {
     std::visit(
         ttsl::overloaded{
-            [&](HostStorage& host_storage) { host_storage.host_tensor().update_tensor_topology(tensor_topology); },
+            [&](HostStorage& host_storage) {
+                tt::tt_metal::update_tensor_topology(host_storage.host_tensor(), tensor_topology);
+            },
             [&](DeviceStorage& device_storage) {
-                device_storage.get_mesh_tensor().update_tensor_topology(tensor_topology);
+                tt::tt_metal::update_tensor_topology(device_storage.get_mesh_tensor(), tensor_topology);
             },
         },
         storage_);

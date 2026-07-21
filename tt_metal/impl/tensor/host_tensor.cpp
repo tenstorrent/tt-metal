@@ -58,8 +58,6 @@ const HostTensorImpl& HostTensor::impl() const {
 
 const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
 
-const TensorTopology& HostTensor::tensor_topology() const { return impl().topology(); }
-
 bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
 const DistributedHostBuffer& HostTensor::buffer() const { return impl().buffer(); }
@@ -103,11 +101,7 @@ Strides HostTensor::strides() const { return tensor_spec().tensor_layout().compu
 HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     auto transformed_buffer =
         buffer().transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return HostTensor(std::move(transformed_buffer), tensor_spec(), tensor_topology());
-}
-
-void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    impl().update_topology(std::move(tensor_topology));
+    return HostTensor(std::move(transformed_buffer), tensor_spec(), impl().topology());
 }
 
 }  // namespace tt::tt_metal

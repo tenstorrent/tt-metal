@@ -37,8 +37,6 @@ distributed::MeshDevice& MeshTensor::mutable_device() const { return *mesh_buffe
 
 const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 
-const TensorTopology& MeshTensor::tensor_topology() const { return impl().topology(); }
-
 bool MeshTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
 DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
@@ -79,10 +77,6 @@ std::size_t MeshTensor::element_size() const {
 }
 
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
-
-void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    impl().update_topology(std::move(tensor_topology));
-}
 
 MeshTensor MeshTensor::allocate_on_device(
     distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {

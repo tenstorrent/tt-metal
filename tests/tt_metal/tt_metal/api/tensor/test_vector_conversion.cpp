@@ -21,6 +21,7 @@
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
@@ -181,7 +182,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
+            auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor_topology(tensor));
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -214,7 +215,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
+        auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor_topology(tensor));
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }

@@ -87,8 +87,12 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
+    api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
+    api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp
+    api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp
     api/tt-metalium/experimental/tensor/host_tensor.hpp
     api/tt-metalium/experimental/tensor/impl/tensor_impl.hpp
+    api/tt-metalium/experimental/tensor/internal/unit_tensor_apis.hpp
     api/tt-metalium/experimental/tensor/mesh_tensor.hpp
     api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
     api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
@@ -98,8 +102,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
     api/tt-metalium/experimental/tensor/tensor_apis.hpp
     api/tt-metalium/experimental/tensor/tensor_types.hpp
-    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
-    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
     api/tt-metalium/experimental/udm/mesh_builder.hpp
     api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
     api/tt-metalium/experimental/udm/mesh_kernel.hpp
