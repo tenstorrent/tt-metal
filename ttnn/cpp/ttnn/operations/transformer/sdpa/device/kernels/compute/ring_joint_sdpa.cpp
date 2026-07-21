@@ -76,6 +76,14 @@ void kernel_main() {
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
+    // Sparse-frames extension (SR windowed pattern). All three set together at the host or all
+    // zero (feature disabled). Slots placed after the CB block (base = cb_arg_offset + 23 = 72).
+    // With `sparse_frames_enabled=1`, the kernel treats each Q chunk as one frame (Sq_chunk_t ==
+    // Sk_chunk_t == frame_seqlen_tiles) and drains K/V chunks whose (q_frame, k_frame) pair is
+    // disallowed by the packed frame_allow bitmap in runtime args 11..(11+31).
+    constexpr bool sparse_frames_enabled = get_compile_time_arg_val(72) == 1;
+    constexpr uint32_t frame_seqlen_tiles = get_compile_time_arg_val(73);
+    constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(74);
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
@@ -119,6 +127,15 @@ void kernel_main() {
     const uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+
+    // Sparse-frames packed frame_allow bitmap (32 uint32 words). Runtime-arg slots so the same
+    // kernel binary handles any windowed pattern that fits (nf_padded <= 32 -> at most 32 * 32
+    // = 1024 bits). Only read when sparse_frames_enabled; when disabled the host passes zeros.
+    uint32_t frame_allow_words[32];
+#pragma GCC unroll 32
+    for (uint32_t w = 0; w < 32; ++w) {
+        frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
+    }
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -319,7 +336,10 @@ void kernel_main() {
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
                 v_shares_k_buffer,
-                kt_inplace_v>(
+                kt_inplace_v,
+                sparse_frames_enabled,
+                frame_seqlen_tiles,
+                num_frames_padded_compile>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -341,7 +361,8 @@ void kernel_main() {
                 skip_first_half_q,
                 use_zigzag_balancing,
                 chunked_context,
-                is_first_active_iter);
+                is_first_active_iter,
+                frame_allow_words);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

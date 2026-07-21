@@ -1024,6 +1024,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TT_FATAL(
         use_streaming_compute || !v_shares_k_buffer,
         "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
+    TT_FATAL(
+        !args.has_sparse_frames() || use_streaming_compute,
+        "sparse-frames windowed attention requires the ring-joint streaming compute path; the "
+        "compute_common.hpp path selected by fp32_dest_acc_en=true is not supported for this feature.");
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -1484,6 +1488,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
+
+    // Sparse-frames extension (slots 72..74, after the CB block). Compile-time args reflect the
+    // pattern's shape (enable flag + frame_seqlen_tiles + nf_padded); the packed frame_allow bits
+    // ride as compute-kernel runtime args (see below). Zero when disabled — the compute kernel
+    // gates on `sparse_frames_enabled` and skips the check entirely.
+    const bool sparse_frames_enabled = args.has_sparse_frames();
+    const uint32_t sparse_frame_seqlen_tiles =
+        sparse_frames_enabled ? (args.frame_seqlen.value() / tt::constants::TILE_HEIGHT) : 0u;
+    const uint32_t sparse_num_frames_padded = sparse_frames_enabled ? args.num_frames_padded.value() : 0u;
+    compute_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
+    compute_compile_time_args.push_back(sparse_frame_seqlen_tiles);
+    compute_compile_time_args.push_back(sparse_num_frames_padded);
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -2386,6 +2402,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        // Sparse-frames extension: append the 32 uint32 packed frame_allow words. Compute reads
+        // them right after `active_ring_iter_mask` (slot 11..42). Same values on every core (the
+        // pattern is device-global). Passes zeros when the feature is disabled — the kernel gates
+        // on `sparse_frames_enabled` at compile time so the reads have no effect.
+        constexpr uint32_t kSparseFramesPackedWords = 32;
+        for (uint32_t w = 0; w < kSparseFramesPackedWords; ++w) {
+            const uint32_t word =
+                (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
+            compute_args.push_back(word);
+        }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 

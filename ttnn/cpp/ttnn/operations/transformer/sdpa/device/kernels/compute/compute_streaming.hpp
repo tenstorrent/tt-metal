@@ -2257,6 +2257,9 @@ template <
     uint32_t v_cb_physical_width_t = vDHt,
     bool v_shares_k_buffer = false,
     bool kt_inplace_v = false,
+    bool sparse_frames_enabled = false,
+    uint32_t frame_seqlen_tiles = 0,
+    uint32_t num_frames_padded_compile = 0,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2280,7 +2283,8 @@ void sdpa_ring_v2(
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
-    const bool is_first_active_iter = true) {
+    const bool is_first_active_iter = true,
+    const uint32_t* frame_allow_words = nullptr) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2395,6 +2399,39 @@ void sdpa_ring_v2(
         return false;
     };
 
+    // Sparse-frames skip: this (q_frame, k_frame) pair is disallowed by the packed bitmap.
+    // Drain K/V from CBs (reader pushes K/V for every k_chunk in an active ring iter; compute
+    // must consume) and skip. `q_frame_for_chunk` is set per Q chunk before the k_chunk loop
+    // (uniform within a chunk because Sq_chunk_t == frame_seqlen_tiles). k_frame comes from the
+    // K chunk's absolute global tile position in the padded sequence.
+    //
+    //   bit_idx = q_frame * num_frames_padded_compile + k_frame
+    //   allowed = (frame_allow_words[bit_idx / 32] >> (bit_idx % 32)) & 1
+    auto try_skip_sparse_frames = [&](uint32_t k_chunk, uint32_t q_frame_for_chunk, bool kv_chunk_is_joint) -> bool {
+        if constexpr (sparse_frames_enabled) {
+            if (kv_chunk_is_joint) {
+                return false;  // joint K is always attended (no frame semantics)
+            }
+            // K chunk's global tile position along the padded sequence (all sp shards concatenated).
+            const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+            const uint32_t k_frame = k_global_start_tile / frame_seqlen_tiles;
+            const uint32_t bit_idx = q_frame_for_chunk * num_frames_padded_compile + k_frame;
+            const uint32_t word = frame_allow_words[bit_idx >> 5];
+            const uint32_t bit = (word >> (bit_idx & 31u)) & 1u;
+            if (bit == 0u) {
+                CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                if constexpr (!kt_inplace_v) {
+                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                }
+                KV_chunks_processed_in_iter++;
+                return true;
+            }
+        }
+        return false;
+    };
+
     // -----------------------------------------------------------------------
 
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
@@ -2425,6 +2462,17 @@ void sdpa_ring_v2(
 
         // Per-Q pre-scan: count K chunks that will actually be processed.
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
+        // Note: this scan does NOT drain CBs (reader hasn't pushed yet); it only mirrors the
+        // skip predicates so `is_last_k` fires on the right chunk in the main loop below.
+        //
+        // Sparse-frames: q_frame is uniform within a Q chunk when the pattern is enabled (host
+        // asserts Sq_chunk_t == frame_seqlen_tiles). Computed once here and reused inline.
+        uint32_t q_frame_for_this_chunk = 0;
+        if constexpr (sparse_frames_enabled) {
+            // q_start_tile was set above under `is_causal_sdpa || chunked_enabled`; for the
+            // sparse-frames path (mutually exclusive with those), derive it from q_chunk.
+            q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / frame_seqlen_tiles;
+        }
         uint32_t per_q_valid_kv = 0;
         for (uint32_t k = 0; k < num_kv_chunks; ++k) {
             const bool is_joint = k >= num_local_k_chunks;
@@ -2434,6 +2482,17 @@ void sdpa_ring_v2(
             if constexpr (is_causal_sdpa) {
                 if (is_causal_iter && k >= causal_k_limit) {
                     continue;
+                }
+            }
+            if constexpr (sparse_frames_enabled) {
+                if (!is_joint) {
+                    const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
+                    const uint32_t k_frame = k_global / frame_seqlen_tiles;
+                    const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
+                    const uint32_t word = frame_allow_words[bit_idx >> 5];
+                    if (((word >> (bit_idx & 31u)) & 1u) == 0u) {
+                        continue;
+                    }
                 }
             }
             per_q_valid_kv++;
@@ -2462,6 +2521,9 @@ void sdpa_ring_v2(
                 continue;
             }
             if (try_skip_causal_above_diag(k_chunk, causal_k_limit)) {
+                continue;
+            }
+            if (try_skip_sparse_frames(k_chunk, q_frame_for_this_chunk, kv_chunk_is_joint)) {
                 continue;
             }
 

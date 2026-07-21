@@ -59,6 +59,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    std::optional<uint32_t> latent_v_head_dim = std::nullopt);
+    std::optional<uint32_t> latent_v_head_dim = std::nullopt,
+    // Sparse-frames extension: enables frame-block-sparse attention (SR windowed pattern) inside
+    // the ring op. All three or none. `frame_allow_packed` is a bitpacked host-side vector — see
+    // ring_joint_sdpa_device_operation_types.hpp.
+    std::optional<uint32_t> frame_seqlen = std::nullopt,
+    std::optional<uint32_t> num_frames_padded = std::nullopt,
+    std::vector<uint32_t> frame_allow_packed = {});
 
 }  // namespace ttnn::prim
