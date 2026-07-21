@@ -4258,13 +4258,17 @@ class UntilizeGolden:
         data_format,
         dimensions=[32, 32],
         input_format: Optional[DataFormat] = None,
+        tile_dimensions=None,
     ):
         from helpers.tilize_untilize import untilize_block
 
         operand = quantize_input_to_unpack_format(operand, input_format)
 
         result = untilize_block(
-            operand, stimuli_format=data_format, dimensions=dimensions
+            operand,
+            stimuli_format=data_format,
+            dimensions=dimensions,
+            tile_dimensions=tile_dimensions,
         )
         result = result.flatten()
 
