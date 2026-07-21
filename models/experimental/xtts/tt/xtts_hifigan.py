@@ -91,20 +91,23 @@ class TtHifiganGenerator(LightweightModule):
     ``[N, 1, 512]``. Output is ``[N, T*256, 1]``.
     """
 
-    def __init__(self, device, state_dict):
+    def __init__(self, device, state_dict, bf16_stages=None):
         super().__init__()
         self.device = device
         self.num_kernels = len(RESBLOCK_KERNEL_SIZES)  # 3
         self.num_upsamples = len(UPSAMPLE_RATES)  # 4
         self.inv_num_kernels = 1.0 / self.num_kernels
 
-        # Mixed precision: the last upsample stage runs its ups/conds/resblocks in
-        # bf16, the rest in fp32. The late stages carry the largest activations (most
-        # DRAM eltwise traffic) and the least remaining accumulation depth, so bf16
-        # there buys the most device time for the least PCC drift. Measured: stage 3
-        # alone holds PCC >=0.99 and cuts ~7.5% device time; adding stage 2 drops PCC
-        # to ~0.984 (below threshold).
-        bf16_stages = {self.num_upsamples - 1}
+        # Mixed precision: stages listed in ``bf16_stages`` run their ups/conds/resblocks
+        # in bf16, the rest in fp32. The late stages carry the largest activations (most
+        # DRAM eltwise traffic) and the least remaining accumulation depth, so bf16 there
+        # buys the most device time for the least PCC drift. Default = the last three
+        # stages: on *real* GPT latents (std ~2.3, large outliers) this holds PCC ~0.995
+        # up to ~100 mel frames (-24.7% device time vs stage-3-only), where random
+        # latents ~N(0, 0.5) misleadingly suggested it fails — see tests. Stage 0 stays
+        # fp32 (its wide 256-ch conv is where bf16 costs the most PCC for the least time).
+        if bf16_stages is None:
+            bf16_stages = {i for i in range(1, self.num_upsamples)}
 
         def act_dtype(i):
             return ttnn.bfloat16 if i in bf16_stages else ttnn.float32
@@ -163,11 +166,15 @@ class TtHifiganGenerator(LightweightModule):
         for i in range(self.num_upsamples):
             a = ttnn.leaky_relu(o, negative_slope=LRELU_SLOPE)
             ttnn.deallocate(o)
-            u = self.ups[i](a)
+            # ``conds[i](g)`` is a length-1, per-channel constant, so ``ups[i](a) +
+            # conds[i](g)`` is just a per-channel bias add — fold it into the ups conv's
+            # fused bias epilogue instead of a separate full-length broadcast add.
+            cg = self.conds[i](g)  # [1, 1, C_i]
+            cg = ttnn.reshape(cg, [1, 1, 1, cg.shape[-1]])
+            if cg.dtype != ttnn.float32:
+                cg = ttnn.typecast(cg, ttnn.float32)
+            o = self.ups[i](a, cond_bias=cg)
             ttnn.deallocate(a)
-            cg = self.conds[i](g)
-            o = ttnn.add(u, cg)
-            ttnn.deallocate(u)
             ttnn.deallocate(cg)
             z_sum = None
             for j in range(self.num_kernels):
