@@ -795,7 +795,10 @@ void InitDeviceProfiler(IDevice* device) {
     profiler.setProfileBufferBankSizeBytes(bank_size_bytes, num_dram_banks);
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    // Quasar uses the L1-only path for now;
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    }
 
     if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
@@ -915,6 +918,9 @@ static void ReadDeviceProfilerResultsImpl(
         // buffer is nearly full), so the L1 buffers must be read alongside DRAM.
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -966,6 +972,9 @@ void ReadDeviceProfilerResultsInternal(
         MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance(context_id).hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -1021,6 +1030,9 @@ void ProcessDeviceProfilerResults(
     if (MetalContext::instance().rtoptions().get_profiler_trace_only() ||
         MetalContext::instance().rtoptions().get_profiler_accumulate()) {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }

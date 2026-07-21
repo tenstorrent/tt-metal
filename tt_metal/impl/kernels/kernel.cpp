@@ -798,8 +798,12 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
         .programmable_core_type = get_kernel_programmable_core_type(),
     };
 
-    if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-        result.math_fidelity = std::get<ComputeConfig>(config()).math_fidelity;
+    const auto& kernel_config = config();
+    if (const auto* compute_config = std::get_if<ComputeConfig>(&kernel_config)) {
+        result.math_fidelity = compute_config->math_fidelity;
+    } else if (
+        const auto* quasar_compute_config = std::get_if<experimental::quasar::QuasarComputeConfig>(&kernel_config)) {
+        result.math_fidelity = quasar_compute_config->math_fidelity;
     }
 
     if (device != nullptr) {

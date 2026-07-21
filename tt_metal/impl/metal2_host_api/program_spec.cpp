@@ -827,7 +827,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
                     "DataMovementGen2Config. Supply a Gen1 config (e.g. "
-                    "CreateReader1xxDataMovementConfig()/CreateWriter1xxDataMovementConfig()).",
+                    "CreateReaderGen1DataMovementConfig()/CreateWriterGen1DataMovementConfig()).",
                     kernel.unique_id);
 
                 // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).

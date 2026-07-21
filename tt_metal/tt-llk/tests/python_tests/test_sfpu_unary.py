@@ -45,8 +45,6 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 SUPPORTED_FAST_MODE_OPS = [
-    MathOperation.Log1p,
-    MathOperation.Exp,
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
 ]
@@ -407,8 +405,6 @@ DOMAIN_MATHOPS = [
 DOMAIN_CUSTOM_TOLERANCES = {
     # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
     MathOperation.SigmoidAppx: (0.13, 0.05),
-    # gelu_appx is a 6-segment piecewise-linear LUT of gelu; abs error peaks near
-    # the segment knees, so loosen tolerance the same way as sigmoid_appx.
     MathOperation.GeluAppx: (0.13, 0.05),
 }
 
