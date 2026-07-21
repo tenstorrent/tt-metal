@@ -124,7 +124,7 @@ def _cumulative_wer(target: list[str], golden: list[str], tt: list[str]) -> list
 
 
 def _build_inputs():
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from processor.vibevoice_processor import VibeVoiceProcessor
 
     assert _TEXT_PATH.is_file(), f"Missing script: {_TEXT_PATH}"
     script = load_script(_TEXT_PATH)
@@ -319,8 +319,8 @@ def test_e2e_wer_teacher_forced(mesh_device):
     except Exception as exc:
         pytest.skip(f"Whisper ASR unavailable ({WHISPER_MODEL}): {exc}")
 
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from processor.vibevoice_processor import VibeVoiceProcessor
 
     from models.experimental.vibevoice.tt.ttnn_vibevoice_generator import _host_2d_to_embeds
 

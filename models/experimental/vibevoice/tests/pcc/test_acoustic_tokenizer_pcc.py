@@ -58,8 +58,8 @@ def ac_tokenizer_tt(mesh_device, ac_tok_state, vv_config):
 
 
 def _reference_acoustic_encode(hf_state, audio, vv_config):
-    from vibevoice.modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
-    from vibevoice.modular.modular_vibevoice_tokenizer import VibeVoiceAcousticTokenizerModel
+    from modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
+    from modular.modular_vibevoice_tokenizer import VibeVoiceAcousticTokenizerModel
 
     cfg = vv_config.acoustic_tokenizer
     tok_cfg = VibeVoiceAcousticTokenizerConfig(
@@ -84,8 +84,8 @@ def _reference_acoustic_encode(hf_state, audio, vv_config):
 
 
 def _reference_acoustic_decode(hf_state, latents, vv_config):
-    from vibevoice.modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
-    from vibevoice.modular.modular_vibevoice_tokenizer import VibeVoiceAcousticTokenizerModel
+    from modular.configuration_vibevoice import VibeVoiceAcousticTokenizerConfig
+    from modular.modular_vibevoice_tokenizer import VibeVoiceAcousticTokenizerModel
 
     cfg = vv_config.acoustic_tokenizer
     tok_cfg = VibeVoiceAcousticTokenizerConfig(

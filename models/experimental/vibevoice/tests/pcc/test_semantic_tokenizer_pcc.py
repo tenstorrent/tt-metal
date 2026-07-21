@@ -50,8 +50,8 @@ def sem_tok_state():
 
 def _reference_semantic_encode(hf_state: dict, audio: torch.Tensor, vv_config) -> torch.Tensor:
     """Run reference semantic tokenizer encode."""
-    from vibevoice.modular.configuration_vibevoice import VibeVoiceSemanticTokenizerConfig
-    from vibevoice.modular.modular_vibevoice_tokenizer import VibeVoiceSemanticTokenizerModel
+    from modular.configuration_vibevoice import VibeVoiceSemanticTokenizerConfig
+    from modular.modular_vibevoice_tokenizer import VibeVoiceSemanticTokenizerModel
 
     cfg = vv_config.semantic_tokenizer
     tok_cfg = VibeVoiceSemanticTokenizerConfig(

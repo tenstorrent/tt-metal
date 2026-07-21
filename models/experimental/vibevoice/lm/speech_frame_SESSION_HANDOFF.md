@@ -150,7 +150,7 @@ The long-form gate always runs the trace path. (Opt A only touched `sample_speec
 - Model: `tt/ttnn_vibevoice_generator.py` (frame graph, both paths), `tt/ttnn_vibevoice_lm.py` (Qwen2 28L,
   decode-traced path = deploy), `tt/ttnn_diffusion_head.py`, `tt/ttnn_dpm_scheduler.py`,
   `tt/ttnn_acoustic_tokenizer.py`, `tt/ttnn_semantic_tokenizer.py`, `tt/ttnn_speech_connector.py`.
-- HF reference (golden): `models/experimental/vibevoice/reference/vibevoice/modular/`. LM = stock
+- HF reference (golden): `models/experimental/vibevoice/reference/modular/`. LM = stock
   transformers Qwen2 4.51.3 (hidden 1536, 28L, 12 heads, 2 KV, head_dim 128, intermediate 8960,
   rope_theta 1e6). Diffusion head: 4 layers, ffn 4608, latent 64, 10 inference steps (demo default).
   Component PCC tests: `tests/pcc/test_{lm_decode,decoder_layer,diffusion_head,acoustic_tokenizer,
