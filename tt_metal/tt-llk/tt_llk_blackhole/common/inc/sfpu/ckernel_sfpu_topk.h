@@ -41,33 +41,23 @@ constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
 // SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
 constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 
-// Blackhole SFPU addr_mode is 3 bits (physical banks 0..7 directly; no addr_mod_base).
-// Topk bitonic uses ADDR_MOD_7 (ADDR_MOD_6 for alt stores). Strip uses ADDR_MOD_5 (load,
-// incr=0) + ADDR_MOD_2 (store, incr=2). 4 faces × 8 iters = one 32-bit DEST tile.
-inline void topk_uint16_inc_dst_face_addr()
-{
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-}
+// 32 SFPU vectors cover one 32-bit DEST tile at addresses 0,2,...,62. Explicit offsets on
+// ADDR_MOD_7 (topk's incr=0 bank) avoid mutating ADDR_MOD_6 used for alt-stores.
+constexpr int TOPK_UINT16_ITERS_PER_TILE = 32;
 
-inline void topk_uint16_strip_one_tile(std::uint32_t dst_tile_index, std::uint32_t store_mode)
+inline void topk_uint16_strip_tile(std::uint32_t tile_index, std::uint32_t store_mode)
 {
-    set_dst_write_addr(dst_tile_index * 64);
+    const std::uint32_t base = tile_index * 64;
 #pragma GCC unroll 0
-    for (int face = 0; face < 4; face++)
+    for (int i = 0; i < TOPK_UINT16_ITERS_PER_TILE; i++)
     {
-#pragma GCC unroll 0
-        for (int d = 0; d < 8; d++)
-        {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_5, 0);
-            TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-            TTI_SFPSTORE(p_sfpu::LREG0, store_mode, ADDR_MOD_2, 0);
-        }
-        topk_uint16_inc_dst_face_addr();
+        const std::uint32_t addr = base + (i << 1);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, store_mode, ADDR_MOD_7, addr);
     }
 }
 
-// Explicit-offset clear so we do not mutate ADDR_MOD_6/7 that topk bitonic relies on.
 inline void topk_uint16_clear_value_tiles_high_bits()
 {
     if constexpr (TOPK_UINT16_IN_FP32_DEST)
@@ -75,25 +65,8 @@ inline void topk_uint16_clear_value_tiles_high_bits()
         sfpi::vConstIntPrgm0 = 0x0000FFFF;
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-#pragma GCC unroll 0
-        for (std::uint32_t tile = 0; tile < 2; tile++)
-        {
-            const std::uint32_t tile_base = tile * 64;
-#pragma GCC unroll 0
-            for (std::uint32_t face = 0; face < 4; face++)
-            {
-                const std::uint32_t face_base = tile_base + face * 16;
-#pragma GCC unroll 0
-                for (std::uint32_t col = 0; col < 8; col++)
-                {
-                    const std::uint32_t addr = face_base + col * 2;
-                    // BH: 3-bit addr_mode selects physical banks directly; ADDR_MOD_7 is topk's incr=0 bank.
-                    TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
-                    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-                    TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
-                }
-            }
-        }
+        topk_uint16_strip_tile(0, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
+        topk_uint16_strip_tile(1, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
@@ -104,13 +77,10 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
     if constexpr (TOPK_UINT16_IN_FP32_DEST)
     {
         sfpi::vConstIntPrgm0 = 0x0000FFFF;
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_5);
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_2);
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-        topk_uint16_strip_one_tile(dst_tile_index, TOPK_SFPSTORE_MODE_PACK_UINT16);
+        set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_5);
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_2);
+        topk_uint16_strip_tile(dst_tile_index, TOPK_SFPSTORE_MODE_PACK_UINT16);
         set_dst_write_addr(0);
     }
     else
