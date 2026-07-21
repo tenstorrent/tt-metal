@@ -327,6 +327,26 @@ Galaxy) is the other open item.
 fork mechanics; (B) apply the ~14 gate edits, build, PCC vs `naive_chunk_kda`; (C) wire into the layer,
 measure vs the composed ~10.9 ms. C++ builds are multi-minute; expect kernel-debug iterations.
 
+### Phase 9 — C++ fused kernel Phase A: fork compiles
+
+Forked `chunk_gated_delta_rule` → `ttnn.transformer.chunk_kda` (20 files, symbol-renamed). Build wired
+(sources.cmake, CMakeLists kernel glob, transformer_nanobind). **Unity-build gotcha:** the fork's
+file-local anonymous-namespace helpers (`pad_time_tile`, `check`, `compute_cfg`, `PrepWorkDist`,
+`distribute_prep`, …) clash with the original's in a merged unity TU → `SKIP_UNITY_BUILD_INCLUSION` on the
+5 forked host TUs (cleaner than renaming every symbol; a `using namespace` wrap *reintroduced* ambiguity).
+**Builds clean; `ttnn.transformer.chunk_kda` loads** — still scalar-gate (identical to source). Commit `3d820fc`.
+
+**Phase B — the gate edits (scalar→per-channel), sites confirmed by reading the kernels:**
+`compute/chunk_kda_prep.cpp`: cumsum `mm(cb_tril,cb_g,cb_decay,Ct,Ct,1)` → `Nt=Kt` (:446); `expc` Ct→ck
+(:448); **delete** the `[C,C]` L_mask block (:453-468) + its two consumers (:491 A, :555 intra) — instead
+pre-scale operands `A=(k⊙eg)@(k⊙eng)ᵀ`, `intra=(q⊙eg)@(k⊙eng)ᵀ`; `decayfac` → `[C,K]` (:473-482); `w`
+`bcast_cols_mul`→elementwise (:547); `q_decay` (:559), `k_dec` (:563) elementwise; `dl` 1→Kt tiles
+`=exp(g_last)` (:587). `compute/chunk_kda_scan.cpp`: state decay `bcast_scalar_mul(cur_S,cb_dl,…)` →
+`bcast_cols_mul(cur_S[K,V], dl[K,1])` per-K over V (:172, copy the helper from prep). Readers/writers: g
+`Ct→ck`, dl `1→Kt`. Program factories: cb_g/decay*/dl tile-sizes. Host `chunk_kda.cpp`: g head-split
+`[BH,NC,C,1]→[BH,NC,C,K]`. **Keep the WY block-inverse untouched** (gate-independent). Validate PCC vs
+`naive_chunk_kda` (prototype's factored form = 0.9999993); C++ builds ~2-3 min each, iterative.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
