@@ -143,3 +143,26 @@ this shape's table entry was suboptimal.
 - Regression: unit 111/111 + corpus 60/60 (config=None PCC fresh+cached; no other shape moved).
 - Decision: KEPT, −2.3% (A/B; low-boundary of gate but stable + cleanly separated + zero-regression keyed fix).
 - Artifacts: ltxflux_sweep_64x15360x1536.json.
+
+### [8] 64x6144x1536 (Mt2, Nt48) — KEPT: picker win −3.5%
+- Baseline: auto (1,12,1,2,1), us_med 44.4, ideal 38.8, wall/ideal 1.14, 448 GB/s.
+- Sweep (229 configs; ltxflux_sweep_64x6144x1536.json): best (1,3,1,8,2)=42.87µs vs auto 44.35 => 3.4%.
+  Direction = much shallower split-K + big kb (Pk3/kb8 vs Pk12/kb2).
+- A/B (3 interleaved): auto 44.34 [44.25–44.41] vs (1,3,1,8,2) 42.77 [42.71–42.78] = **−3.5% cleanly
+  separated**; (1,6,1,4,2) −2.7%.
+- Fix: {{2,192,48}} {12,1,1,2,1} -> {3,1,1,8,2} + mirror. KEPT.
+- Artifacts: ltxflux_sweep_64x6144x1536.json.
+
+### [9] 32x6144x2304 (Mt1, Nt72) — KEPT: picker win −3.8%
+- Baseline: auto (1,4,1,2,9), us_med 61.3, ideal 56.4, wall/ideal 1.09, 471 GB/s.
+- Sweep (133 configs; ltxflux_sweep_32x6144x2304.json): best (1,3,1,4,5)=58.72µs vs auto 60.86 => 3.6%.
+  Direction = Pk3/kb4/nsb5 vs Pk4/kb2/nsb9 (picker picked a poor nsb=9 too).
+- A/B (3 interleaved): auto 60.99 [60.8–61.1] vs (1,3,1,4,5) 58.69 [58.6–58.75] = **−3.8% cleanly
+  separated**; (1,3,1,8,2) −2.2%.
+- Fix: {{1,192,72}} {4,1,1,2,9} -> {3,1,1,4,5} + mirror. KEPT.
+- Artifacts: ltxflux_sweep_32x6144x2304.json.
+
+### [10] 32x6144x1536 (Mt1, Nt48) — CLOSED: picker optimal (0.3%)
+- Baseline: auto (1,6,1,4,2), 469 GB/s, wall/ideal 1.09. Sweep (125 configs): best (1,3,1,4,6)=40.46µs vs
+  auto 40.60 => 0.3%. Auto already low-Pk (Pk6) => no over-split; picker correct. Speedup 0%.
+- Artifacts: ltxflux_sweep_32x6144x1536.json.
