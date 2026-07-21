@@ -51,12 +51,46 @@ The single-device path (no mesh) is unchanged and still composes the graduated
 
 from __future__ import annotations
 
+import os as _os
+import time as _time
+
 import torch
 
 import ttnn
 from models.demos.vision.generative.hunyuanimage_3_0._stubs import mo_e as _mo_e
 
 HF_MODEL_ID = "tencent/HunyuanImage-3.0"
+
+# --- optional tracy-free stage profiler (HUNYUAN_STAGE_PROFILE=1) -------------
+# Accumulates per-stage device wall-time (attention vs MoE) across a forward via
+# ttnn.synchronize_device, to find the gen_image bottleneck WITHOUT a tracy build.
+# No-op (zero overhead) unless enabled -> production/trace paths are unaffected.
+# The synchronize serializes stages so absolute ms are inflated vs the pipelined
+# run, but the attn:moe:other RATIO is the signal.
+_STAGE_PROF = {"on": _os.environ.get("HUNYUAN_STAGE_PROFILE") == "1", "attn_ms": 0.0, "moe_ms": 0.0, "layers": 0}
+
+
+class _StageTimer:
+    def __init__(self, dev, key):
+        self.dev, self.key, self.t = dev, key, None
+
+    def __enter__(self):
+        if _STAGE_PROF["on"]:
+            try:
+                ttnn.synchronize_device(self.dev)
+            except Exception:
+                pass
+            self.t = _time.time()
+        return self
+
+    def __exit__(self, *a):
+        if _STAGE_PROF["on"] and self.t is not None:
+            try:
+                ttnn.synchronize_device(self.dev)
+            except Exception:
+                pass
+            _STAGE_PROF[self.key] += (_time.time() - self.t) * 1000.0
+
 
 # Max sequence the decode KV cache is allocated for (prefill_len + generated).
 # Tile-aligned. Tiny on device (per-chip [B, 1_kv_head, max_seq, 128] bf16).
@@ -534,7 +568,8 @@ class _TtDecoderLayer:
     def _forward_sharded(self, hidden_states, custom_pos_emb=None, return_l_aux=False, attn_mask=None):
         residual = hidden_states
         x = ttnn.rms_norm(hidden_states, epsilon=self.eps, weight=self.input_ln_w)
-        attn = self._attention_sharded(x, custom_pos_emb, attn_mask=attn_mask)
+        with _StageTimer(self.device, "attn_ms"):
+            attn = self._attention_sharded(x, custom_pos_emb, attn_mask=attn_mask)
         ttnn.deallocate(x)
         hidden = ttnn.add(residual, attn)
         ttnn.deallocate(attn)
@@ -542,12 +577,15 @@ class _TtDecoderLayer:
         residual2 = hidden
         x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
         # Composed graduated MoE (which composes the graduated gate), sharded.
-        if return_l_aux:
-            moe, l_aux = self.moe(x2, return_l_aux=True)
-        else:
-            # inference: skip l_aux (mo_e returns a single tensor).
-            moe = self.moe(x2, return_l_aux=False)
-            l_aux = None
+        with _StageTimer(self.device, "moe_ms"):
+            if return_l_aux:
+                moe, l_aux = self.moe(x2, return_l_aux=True)
+            else:
+                # inference: skip l_aux (mo_e returns a single tensor).
+                moe = self.moe(x2, return_l_aux=False)
+                l_aux = None
+        if _STAGE_PROF["on"]:
+            _STAGE_PROF["layers"] += 1
         ttnn.deallocate(x2)
         out = ttnn.add(residual2, moe)
         ttnn.deallocate(moe)

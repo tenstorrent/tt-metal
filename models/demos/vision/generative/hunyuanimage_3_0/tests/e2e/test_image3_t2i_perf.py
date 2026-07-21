@@ -83,6 +83,20 @@ def test_t2i_e2e_perf(device_params, mesh_device):
         f"vae {timing['vae_decode_s']:.1f}s) num_layers={NUM_LAYERS} token_hw={timing['token_hw']} out={timing['out_path']}"
     )
 
+    # tracy-free stage profile (HUNYUAN_STAGE_PROFILE=1): attn vs MoE vs other.
+    from models.demos.vision.generative.hunyuanimage_3_0._stubs import image3_decoder_layer as _dl
+
+    sp = _dl._STAGE_PROF
+    if sp["on"] and sp["layers"]:
+        n = sp["layers"]
+        other = timing["loop_s"] * 1000.0 - sp["attn_ms"] - sp["moe_ms"]
+        print(
+            f"STAGE_PROFILE: attn={sp['attn_ms']:.0f}ms moe={sp['moe_ms']:.0f}ms "
+            f"other(loop-attn-moe,incl.sync-inflation)={other:.0f}ms over {n} layer-calls | "
+            f"per-layer attn={sp['attn_ms'] / n:.1f}ms moe={sp['moe_ms'] / n:.1f}ms "
+            f"(attn:moe = {sp['attn_ms'] / max(sp['moe_ms'], 1e-9):.2f}:1)"
+        )
+
     # Sanity: a broken render must not post a fast time.
     assert timing["total_latency_s"] > 0.0
     assert img.size[0] > 0 and img.size[1] > 0
