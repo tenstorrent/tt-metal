@@ -174,12 +174,20 @@ class CCLManager:
     def _alloc_like(self, ref_tensor, memory_config):
         return ttnn.zeros_like(ref_tensor, device=self.mesh_device, memory_config=memory_config)
 
-    def get_persistent_ag_buffer(self, scattered, memory_config):
+    def get_persistent_ag_buffer(self, scattered, memory_config, tp):
+        """Allocate a persistent AG destination sized by TP group width.
+
+        Disabled by default in ``ccl_allreduce`` / ``ccl_allgather``: the gathered
+        result is returned as a normal activation and Gemma4 force-deallocates
+        those, which would free a manager-cached buffer. Kept for opt-in / tests.
+        """
         if not ccl_persistent_buffers_enabled():
             return None
-        # All-gather expands dim=3 by tp.
+        if tp <= 1:
+            return None
+        # All-gather expands dim=3 by the TP group size (cluster_axis width).
         out_shape = list(scattered.shape)
-        out_shape[3] = int(out_shape[3]) * self.num_devices
+        out_shape[3] = int(out_shape[3]) * tp
         key = self._shape_key(out_shape, scattered.dtype, memory_config)
         buf = self._persistent_ag.get(key)
         if buf is None:
@@ -194,18 +202,24 @@ class CCLManager:
             logger.debug(f"CCL persistent AG buffer allocated shape={out_shape}")
         return buf
 
-    def get_persistent_rs_buffers(self, tensor, memory_config):
+    def get_persistent_rs_buffers(self, tensor, memory_config, tp):
         if not ccl_persistent_buffers_enabled():
             return None
-        # Reduce-scatter shrinks dim=3 by tp; intermediate matches input layout.
+        if tp <= 1:
+            return None
+        # Reduce-scatter shrinks dim=3 by TP group size (not full mesh size).
         out_shape = list(tensor.shape)
-        out_shape[3] = int(out_shape[3]) // self.num_devices
-        inter_key = self._shape_key(tensor.shape, tensor.dtype, ttnn.DRAM_MEMORY_CONFIG)
+        out_shape[3] = int(out_shape[3]) // tp
+        # Linear topology needs a leading size-2 dim for forward/backward streams.
+        inter_shape = list(tensor.shape)
+        if self.topology == ttnn.Topology.Linear:
+            inter_shape = [2] + inter_shape
+        inter_key = self._shape_key(inter_shape, tensor.dtype, ttnn.DRAM_MEMORY_CONFIG)
         out_key = self._shape_key(out_shape, tensor.dtype, memory_config)
         inter = self._persistent_rs_inter.get(inter_key)
         if inter is None:
             inter = ttnn.zeros(
-                list(tensor.shape),
+                inter_shape,
                 dtype=tensor.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
@@ -222,7 +236,7 @@ class CCLManager:
                 memory_config=memory_config,
             )
             self._persistent_rs_out[out_key] = out
-            logger.debug(f"CCL persistent RS buffers allocated out={out_shape}")
+            logger.debug(f"CCL persistent RS buffers allocated out={out_shape} inter={inter_shape}")
         return [inter, out]
 
 
@@ -244,7 +258,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
     if ccl_async_enabled():
-        rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config)
+        tp = mesh_config.tp
+        rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
             persistent_output_buffers=rs_bufs,
@@ -261,10 +276,12 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             num_buffers_per_channel=nbuf,
         )
         tensor.deallocate(True)
-        ag_buf = ccl_manager.get_persistent_ag_buffer(scattered, memory_config)
+        # Do not pass a persistent AG buffer: the gather result is returned as a
+        # normal activation and force-deallocated by callers. Persistent RS out
+        # aliases ``scattered`` when rs_bufs is set — do not free it either.
         gathered = ttnn.experimental.all_gather_async(
             scattered,
-            persistent_output_buffer=ag_buf,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
             num_links=ccl_manager.num_links,
@@ -276,7 +293,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             num_workers_per_link=workers,
             num_buffers_per_channel=nbuf,
         )
-        scattered.deallocate(True)
+        if rs_bufs is None:
+            scattered.deallocate(True)
         return gathered
 
     result = ttnn.all_reduce(
@@ -303,12 +321,10 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     nbuf = ccl_num_buffers_per_channel()
 
     if ccl_async_enabled():
-        ag_buf = None
-        if dim == 3:
-            ag_buf = ccl_manager.get_persistent_ag_buffer(tensor, memory_config)
+        # Fresh AG output each call (caller-owned); see ccl_allreduce note.
         gathered = ttnn.experimental.all_gather_async(
             tensor,
-            persistent_output_buffer=ag_buf,
+            persistent_output_buffer=None,
             dim=dim,
             multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
             num_links=ccl_manager.num_links,
