@@ -118,9 +118,8 @@ def build(device, torch_module):
             x, epsilon=eps, weight=ttnn_norm_w, bias=ttnn_norm_b, compute_kernel_config=compute_config
         )
 
-        one_plus_scale = ttnn.add(scale, 1.0)
-        out = ttnn.multiply(norm, one_plus_scale)
-        out = ttnn.add(out, shift)
+        # norm*(1+scale)+shift fused into one ternary launch (was add(mul(norm,·),shift)).
+        out = ttnn.addcmul(shift, norm, ttnn.add(scale, 1.0))
         return out
 
     return forward

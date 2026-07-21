@@ -74,7 +74,7 @@ python -m pytest models/demos/hf_eager/hunyuanvideo_1_5/tests/pcc/test_timesteps
 <!-- BEGIN optimize -->
 # Optimize (perf) — `hunyuanvideo_1_5`
 
-_Updated live: 2026-07-21 02:44:59 UTC · 13 lever attempt(s) so far — each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed._
+_Updated live: 2026-07-21 03:07:48 UTC · 17 lever attempt(s) so far — each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed._
 
 ```
 Optimization summary — hunyuanvideo_1_5 · main (device_ms)
@@ -84,11 +84,12 @@ optimizing… — baseline->final speedup is finalized when the module converges
 Op breakdown — device time by op class (latest profile · what to target, ranked):
 op class         device_ms      %   count  bound  dominant op (shape)
 ---------------------------------------------------------------------------------------------------
-matmul                3.72  69.2%      56   dram  MatmulDeviceOperation 32 x 8192 x 2048
-host_overhead         2.38  44.2%       0   host  
-datamove              0.65  12.1%     140   slow  ReshapeViewDeviceOperation
-reduction             0.56  10.4%      27   slow  LayerNormDeviceOperation
-eltwise               0.40   7.5%     104   slow  BinaryNgDeviceOperation
+matmul                3.71  69.7%      56   dram  MatmulDeviceOperation 32 x 8192 x 2048
+host_overhead         3.00  56.3%       0   host  
+datamove              0.65  12.3%     140   slow  ReshapeViewDeviceOperation
+reduction             0.56  10.5%      27   slow  LayerNormDeviceOperation
+eltwise               0.31   5.9%      64   slow  BinaryNgDeviceOperation
+other                 0.05   0.9%      16   slow  TernaryDeviceOperation
 attention             0.04   0.8%       2   slow  JointSDPADeviceOperation
 
 Block-level timing (per-stage trace) — latest lever on generation_loop:
@@ -102,9 +103,12 @@ Block-level timing (per-stage trace) — latest lever on generation_loop:
 op                                    grid   dtype tt-lang     cpp    host   best ms
 ------------------------------------------------------------------------------------
 BinaryNgDeviceOperation                  —       —    ✓win    ·try       —      5.44
+BinaryNgDeviceOperation                  —       —    ✓win       —       —      5.33
+MatmulDeviceOperation                    —       —    ·try       —       —      5.48
 MatmulDeviceOperation                    —       —    ·try       —       —      5.39
 MatmulDeviceOperation                 ·try    ·try       —       —       —      6.43
-MatmulDeviceOperation                    —    ·try       —    ·try    ·try      5.37
+MatmulDeviceOperation                    —    ·try    ·try    ·try    ·try      5.32
+ReshapeViewDeviceOperation               —       —    ·try       —       —      5.39
 generation_loop                          —       —       —       —    ·try      5.37
 host_overhead                            —       —       —       —    ·try      5.37
 
@@ -112,24 +116,28 @@ host_overhead                            —       —       —       —    ·
 Per-attempt detail (every optimization tried — win OR fail — with gain vs baseline and WHY):
 op                                      lever        ms  gain vs base  result     why tried / why it won or failed
 ------------------------------------------------------------------------------------------------------------------
-MatmulDeviceOperation                    grid      6.44      -1.07 ms  · no gain  Hypothesis: dominant matmul profiled as grid=partial, so full core_grid should saturate idle DRAM bandwidth. Outcome: no gain (6.4316->6.4426, slightly slower) — M=32 is only 1 tile high, so widening 
-MatmulDeviceOperation                   dtype      6.44      -1.06 ms  · no gain  Hypothesis: op tagged bound_by=memory (weight reads dominate at M=32), so bf8_b weights quarter the DRAM read bytes vs fp32. Outcome: NO gain (bf16 also flat, bf8_b 6.4316->6.4376). Weight-dtype is in
-MatmulDeviceOperation                   dtype      6.43      -1.06 ms  · no gain  Enabled the stub's purpose-built bf16 fast path (HY_DIT_BF16 default off->on): bf16 weights+activations, HiFi2, fp32 accumulate, its own comment claims '2-4x faster matmuls + 2x less DRAM'. This is th
-BinaryNgDeviceOperation               tt-lang      6.34      -0.97 ms  ✓ win      Bias-fusion (ttnn.linear) in the profiled transformer_block stub removes ~38 standalone BinaryNg add launches from the 2-layer forward. WIN: 6.4316->6.344ms (1.36%, is_real_gain). Root cause: path is 
-BinaryNgDeviceOperation                   cpp      5.44      -0.06 ms  · no gain  Authored a real C++ Metalium eltwise-add via ttnn.generic_op (in-repo binary reader/compute + unary writer kernels by FILE_PATH, single Tensix core, fp32 tiles; plain ProgramDescriptor -> SPMD replica
-MatmulDeviceOperation                     cpp      6.03      -0.66 ms  · no gain  Authored a real C++ Metalium matmul via ttnn.generic_op (official multi-core output-tiles-partitioned reader + mm compute + unary writer, full core grid, fp32, SPMD across mesh) on the replicated toke
-generation_loop                          host      5.37      +0.00 ms  · no gain  none (already handled): investigated the decode/repeat_prefill signal. This is a DIFFUSION transformer, not autoregressive — there is no KV-cache. The analogous cross-step lever (cache the step-INVARI
-MatmulDeviceOperation                    host      5.37      +0.00 ms  · no gain  none reducible (stable): the 8192x2048 op is the FF up-projection — DENSE (no MoE/sparsity to gather), and within a single denoise forward it is not recomputed (conditioning is cached; see generation_
-host_overhead                            host      5.37      +0.00 ms  · no gain  already implemented: the trace-capture + 2-CQ structural lever for the generation loop EXISTS in the model — denoise_trace_setup captures resident buffers, denoise_trace_step is a host-op-free fixed-s
-generation_loop                          host      5.37      +0.00 ms  · no gain  none applicable (architectural mismatch + already handled): this is a DIFFUSION transformer (MMDiT), NOT autoregressive generation — there is no token-by-token decode and no KV-cache to add (every den
-MatmulDeviceOperation                   dtype      5.37      -0.00 ms  · no gain  Hypothesis: dominant FF matmul tagged bound_by=memory at M=32, so bf8_b WEIGHTS (activations/accum stay fp32) should quarter the KxN weight-read bytes vs fp32 and cut DRAM traffic. Applied to the STUB
-generation_loop                          host      5.37      +0.00 ms  · no gain  structural-decode rung, re-verified this session. Signal 'repeat_prefill: add KV-cache + single-token decode_step' is an ARCHITECTURAL MISCLASSIFICATION: HunyuanVideo-1.5 is a DIFFUSION MMDiT, not aut
-MatmulDeviceOperation                 tt-lang      5.39      -0.01 ms  · no gain  Fusion lever (not kernel): merged the two dual-stream AdaLayerNormZero modulation matmuls into ONE C->12C matmul sharing a single silu(temb), and produced all 12 params directly as (B,1,C) to drop ~11
+MatmulDeviceOperation                    grid      6.44      -1.12 ms  · no gain  Hypothesis: dominant matmul profiled as grid=partial, so full core_grid should saturate idle DRAM bandwidth. Outcome: no gain (6.4316->6.4426, slightly slower) — M=32 is only 1 tile high, so widening 
+MatmulDeviceOperation                   dtype      6.44      -1.11 ms  · no gain  Hypothesis: op tagged bound_by=memory (weight reads dominate at M=32), so bf8_b weights quarter the DRAM read bytes vs fp32. Outcome: NO gain (bf16 also flat, bf8_b 6.4316->6.4376). Weight-dtype is in
+MatmulDeviceOperation                   dtype      6.43      -1.10 ms  · no gain  Enabled the stub's purpose-built bf16 fast path (HY_DIT_BF16 default off->on): bf16 weights+activations, HiFi2, fp32 accumulate, its own comment claims '2-4x faster matmuls + 2x less DRAM'. This is th
+BinaryNgDeviceOperation               tt-lang      6.34      -1.02 ms  ✓ win      Bias-fusion (ttnn.linear) in the profiled transformer_block stub removes ~38 standalone BinaryNg add launches from the 2-layer forward. WIN: 6.4316->6.344ms (1.36%, is_real_gain). Root cause: path is 
+BinaryNgDeviceOperation                   cpp      5.44      -0.11 ms  · no gain  Authored a real C++ Metalium eltwise-add via ttnn.generic_op (in-repo binary reader/compute + unary writer kernels by FILE_PATH, single Tensix core, fp32 tiles; plain ProgramDescriptor -> SPMD replica
+MatmulDeviceOperation                     cpp      6.03      -0.70 ms  · no gain  Authored a real C++ Metalium matmul via ttnn.generic_op (official multi-core output-tiles-partitioned reader + mm compute + unary writer, full core grid, fp32, SPMD across mesh) on the replicated toke
+generation_loop                          host      5.37      -0.05 ms  · no gain  none (already handled): investigated the decode/repeat_prefill signal. This is a DIFFUSION transformer, not autoregressive — there is no KV-cache. The analogous cross-step lever (cache the step-INVARI
+MatmulDeviceOperation                    host      5.37      -0.05 ms  · no gain  none reducible (stable): the 8192x2048 op is the FF up-projection — DENSE (no MoE/sparsity to gather), and within a single denoise forward it is not recomputed (conditioning is cached; see generation_
+host_overhead                            host      5.37      -0.05 ms  · no gain  already implemented: the trace-capture + 2-CQ structural lever for the generation loop EXISTS in the model — denoise_trace_setup captures resident buffers, denoise_trace_step is a host-op-free fixed-s
+generation_loop                          host      5.37      -0.05 ms  · no gain  none applicable (architectural mismatch + already handled): this is a DIFFUSION transformer (MMDiT), NOT autoregressive generation — there is no token-by-token decode and no KV-cache to add (every den
+MatmulDeviceOperation                   dtype      5.37      -0.05 ms  · no gain  Hypothesis: dominant FF matmul tagged bound_by=memory at M=32, so bf8_b WEIGHTS (activations/accum stay fp32) should quarter the KxN weight-read bytes vs fp32 and cut DRAM traffic. Applied to the STUB
+generation_loop                          host      5.37      -0.05 ms  · no gain  structural-decode rung, re-verified this session. Signal 'repeat_prefill: add KV-cache + single-token decode_step' is an ARCHITECTURAL MISCLASSIFICATION: HunyuanVideo-1.5 is a DIFFUSION MMDiT, not aut
+MatmulDeviceOperation                 tt-lang      5.39      -0.06 ms  · no gain  Fusion lever (not kernel): merged the two dual-stream AdaLayerNormZero modulation matmuls into ONE C->12C matmul sharing a single silu(temb), and produced all 12 params directly as (B,1,C) to drop ~11
+BinaryNgDeviceOperation               tt-lang      5.33      +0.00 ms  ✓ win      Eltwise fusion (not a kernel): the block's AdaLN modulation (norm*(1+scale)+shift) and 4 gated residuals (h + x*gate) each ran as a multiply+add PAIR of dispatch-bound BinaryNg launches. Hypothesis: o
+ReshapeViewDeviceOperation            tt-lang      5.39      -0.07 ms  · no gain  Datamove fusion (not a kernel): replaced per-QKV 3 slice + 3 head-split reshape + 3 permute with one ttnn.experimental.nlp_create_qkv_heads, output permute+reshape with nlp_concat_heads, and the RoPE 
+MatmulDeviceOperation                 tt-lang      5.48      -0.15 ms  · no gain  Two fusions batched (both reverted): (A) fold FF GELU-tanh into up-proj matmul epilogue via ttnn.linear(activation='gelu_tanh'); (B) RoPE rot as a batched 4D (B,S,H,D)@(D,D) matmul to drop the flatten
+MatmulDeviceOperation                 tt-lang      5.32      +0.00 ms  · no gain  Fidelity knob (reverted): dropped the fp32 path's math_fidelity HiFi4->HiFi2 (half the MAC passes) on the shared compute_config. Hypothesis: if the 69%% matmul bucket were compute-pass-bound, HiFi2 wo
 
 Code changes — every attempt (win or fail):
 ===========================================
 
-[#1] MatmulDeviceOperation · grid · no gain  -1.07 ms
+[#1] MatmulDeviceOperation · grid · no gain  -1.12 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py b/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
     index 41b47828b22..7086127ee9a 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
@@ -162,7 +170,7 @@ Code changes — every attempt (win or fail):
              y = ttnn.add(y, b)
          return y
 
-[#2] MatmulDeviceOperation · dtype · no gain  -1.06 ms
+[#2] MatmulDeviceOperation · dtype · no gain  -1.11 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py b/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
     index 41b47828b22..4d27939e637 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
@@ -188,7 +196,7 @@ Code changes — every attempt (win or fail):
          b = _f32(device, linear.bias.detach().reshape(1, -1)) if linear.bias is not None else None
          return w, b
 
-[#3] MatmulDeviceOperation · dtype · no gain  -1.06 ms
+[#3] MatmulDeviceOperation · dtype · no gain  -1.10 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index b1550b31cb9..409d47b2a1e 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -203,7 +211,7 @@ Code changes — every attempt (win or fail):
      
          blk = torch_module
 
-[#4] BinaryNgDeviceOperation · tt-lang · win  -0.97 ms
+[#4] BinaryNgDeviceOperation · tt-lang · win  -1.02 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index b1550b31cb9..4d79e9de61c 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -246,7 +254,7 @@ Code changes — every attempt (win or fail):
     @@ -0,0 +1,198 @@
     ... (truncated, 657 more lines)
 
-[#5] BinaryNgDeviceOperation · cpp · no gain  -0.06 ms
+[#5] BinaryNgDeviceOperation · cpp · no gain  -0.11 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
     index 1c0da6f75cc..e152e3dcd91 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
@@ -289,7 +297,7 @@ Code changes — every attempt (win or fail):
     +            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=page)],
     ... (truncated, 39 more lines)
 
-[#6] MatmulDeviceOperation · cpp · no gain  -0.66 ms
+[#6] MatmulDeviceOperation · cpp · no gain  -0.70 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
     index 1c0da6f75cc..24500a1c720 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
@@ -332,7 +340,7 @@ Code changes — every attempt (win or fail):
     +            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=page)],
     ... (truncated, 50 more lines)
 
-[#7] generation_loop · host · no gain  +0.00 ms
+[#7] generation_loop · host · no gain  -0.05 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index 951dc2ca456..555149f9866 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -375,7 +383,7 @@ Code changes — every attempt (win or fail):
          adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
     ... (truncated, 42 more lines)
 
-[#8] MatmulDeviceOperation · host · no gain  +0.00 ms
+[#8] MatmulDeviceOperation · host · no gain  -0.05 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index 951dc2ca456..555149f9866 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -418,7 +426,7 @@ Code changes — every attempt (win or fail):
          adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
     ... (truncated, 42 more lines)
 
-[#9] host_overhead · host · no gain  +0.00 ms
+[#9] host_overhead · host · no gain  -0.05 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index 951dc2ca456..555149f9866 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -461,7 +469,7 @@ Code changes — every attempt (win or fail):
          adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
     ... (truncated, 42 more lines)
 
-[#10] generation_loop · host · no gain  +0.00 ms
+[#10] generation_loop · host · no gain  -0.05 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index 951dc2ca456..555149f9866 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -504,7 +512,7 @@ Code changes — every attempt (win or fail):
          adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
     ... (truncated, 42 more lines)
 
-[#11] MatmulDeviceOperation · dtype · no gain  -0.00 ms
+[#11] MatmulDeviceOperation · dtype · no gain  -0.05 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index 951dc2ca456..555149f9866 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -547,7 +555,7 @@ Code changes — every attempt (win or fail):
          adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
     ... (truncated, 42 more lines)
 
-[#12] generation_loop · host · no gain  +0.00 ms
+[#12] generation_loop · host · no gain  -0.05 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index 951dc2ca456..555149f9866 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -590,7 +598,7 @@ Code changes — every attempt (win or fail):
          adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
     ... (truncated, 42 more lines)
 
-[#13] MatmulDeviceOperation · tt-lang · no gain  -0.01 ms
+[#13] MatmulDeviceOperation · tt-lang · no gain  -0.06 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index 951dc2ca456..555149f9866 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -632,9 +640,181 @@ Code changes — every attempt (win or fail):
          ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
          adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
     ... (truncated, 42 more lines)
+
+[#14] BinaryNgDeviceOperation · tt-lang · win  +0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 555149f9866..e12d24b2ed8 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -208,7 +208,16 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             L = adazero.linear
+             C = int(L.out_features) // 6
+             w = f32(L.weight.detach().t())  # (Cin, 6C)
+    -        b = f32(L.bias.detach().reshape(1, -1)) if L.bias is not None else None  # (1, 6C)
+    +        # Bake the modulation "+1" into the bias of the two SCALE params (order:
+    +        # shift_msa,scale_msa,gate_msa,shift_mlp,scale_mlp,gate_mlp -> idx 1 & 4), so
+    +        # the matmul emits (1+scale) directly and the runtime add(scale,1.0) is gone
+    +        # (correct for any batch; the bias is per-feature). Downstream modulation then
+    +        # collapses to a single fused addcmul(shift, norm, scale).
+    +        bias = L.bias.detach().clone() if L.bias is not None else torch.zeros(6 * C)
+    +        bias = bias.reshape(6, C)
+    +        bias[1] += 1.0
+    +        bias[4] += 1.0
+    +        b = f32(bias.reshape(1, -1))  # (1, 6C)
+             eps = float(getattr(adazero.norm, "eps", 1e-6))
+             return w, b, eps, C
+     
+    @@ -326,9 +335,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             )
+             B = int(x.shape[0])
+             nx = ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)  # no affine
+    -        scale_r = ttnn.reshape(scale_msa, (B, 1, C))
+    +        scale_r = ttnn.reshape(scale_msa, (B, 1, C))  # already (1+scale): +1 baked into bias
+             shift_r = ttnn.reshape(shift_msa, (B, 1, C))
+    -        nx = ttnn.add(ttnn.multiply(nx, ttnn.add(scale_r, 1.0)), shift_r)
+    +        # Fused shift + norm*scale in ONE ternary launch (was add(mul(norm,scale),shift)).
+    +        nx = ttnn.addcmul(shift_r, nx, scale_r)
+             return nx, gate_msa, shift_mlp, scale_mlp, gate_mlp
+     
+         def _unsq(g):
+    @@ -509,16 +519,19 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+                 nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
+             )
+     
+    -        h = ttnn.add(h, ttnn.multiply(attn_out, _unsq(gate_msa)))
+    ... (truncated, 21 more lines)
+
+[#15] ReshapeViewDeviceOperation · tt-lang · no gain  -0.07 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 555149f9866..e12d24b2ed8 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -208,7 +208,16 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             L = adazero.linear
+             C = int(L.out_features) // 6
+             w = f32(L.weight.detach().t())  # (Cin, 6C)
+    -        b = f32(L.bias.detach().reshape(1, -1)) if L.bias is not None else None  # (1, 6C)
+    +        # Bake the modulation "+1" into the bias of the two SCALE params (order:
+    +        # shift_msa,scale_msa,gate_msa,shift_mlp,scale_mlp,gate_mlp -> idx 1 & 4), so
+    +        # the matmul emits (1+scale) directly and the runtime add(scale,1.0) is gone
+    +        # (correct for any batch; the bias is per-feature). Downstream modulation then
+    +        # collapses to a single fused addcmul(shift, norm, scale).
+    +        bias = L.bias.detach().clone() if L.bias is not None else torch.zeros(6 * C)
+    +        bias = bias.reshape(6, C)
+    +        bias[1] += 1.0
+    +        bias[4] += 1.0
+    +        b = f32(bias.reshape(1, -1))  # (1, 6C)
+             eps = float(getattr(adazero.norm, "eps", 1e-6))
+             return w, b, eps, C
+     
+    @@ -326,9 +335,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             )
+             B = int(x.shape[0])
+             nx = ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)  # no affine
+    -        scale_r = ttnn.reshape(scale_msa, (B, 1, C))
+    +        scale_r = ttnn.reshape(scale_msa, (B, 1, C))  # already (1+scale): +1 baked into bias
+             shift_r = ttnn.reshape(shift_msa, (B, 1, C))
+    -        nx = ttnn.add(ttnn.multiply(nx, ttnn.add(scale_r, 1.0)), shift_r)
+    +        # Fused shift + norm*scale in ONE ternary launch (was add(mul(norm,scale),shift)).
+    +        nx = ttnn.addcmul(shift_r, nx, scale_r)
+             return nx, gate_msa, shift_mlp, scale_mlp, gate_mlp
+     
+         def _unsq(g):
+    @@ -509,16 +519,19 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+                 nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
+             )
+     
+    -        h = ttnn.add(h, ttnn.multiply(attn_out, _unsq(gate_msa)))
+    ... (truncated, 21 more lines)
+
+[#16] MatmulDeviceOperation · tt-lang · no gain  -0.15 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 555149f9866..e12d24b2ed8 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -208,7 +208,16 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             L = adazero.linear
+             C = int(L.out_features) // 6
+             w = f32(L.weight.detach().t())  # (Cin, 6C)
+    -        b = f32(L.bias.detach().reshape(1, -1)) if L.bias is not None else None  # (1, 6C)
+    +        # Bake the modulation "+1" into the bias of the two SCALE params (order:
+    +        # shift_msa,scale_msa,gate_msa,shift_mlp,scale_mlp,gate_mlp -> idx 1 & 4), so
+    +        # the matmul emits (1+scale) directly and the runtime add(scale,1.0) is gone
+    +        # (correct for any batch; the bias is per-feature). Downstream modulation then
+    +        # collapses to a single fused addcmul(shift, norm, scale).
+    +        bias = L.bias.detach().clone() if L.bias is not None else torch.zeros(6 * C)
+    +        bias = bias.reshape(6, C)
+    +        bias[1] += 1.0
+    +        bias[4] += 1.0
+    +        b = f32(bias.reshape(1, -1))  # (1, 6C)
+             eps = float(getattr(adazero.norm, "eps", 1e-6))
+             return w, b, eps, C
+     
+    @@ -326,9 +335,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             )
+             B = int(x.shape[0])
+             nx = ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)  # no affine
+    -        scale_r = ttnn.reshape(scale_msa, (B, 1, C))
+    +        scale_r = ttnn.reshape(scale_msa, (B, 1, C))  # already (1+scale): +1 baked into bias
+             shift_r = ttnn.reshape(shift_msa, (B, 1, C))
+    -        nx = ttnn.add(ttnn.multiply(nx, ttnn.add(scale_r, 1.0)), shift_r)
+    +        # Fused shift + norm*scale in ONE ternary launch (was add(mul(norm,scale),shift)).
+    +        nx = ttnn.addcmul(shift_r, nx, scale_r)
+             return nx, gate_msa, shift_mlp, scale_mlp, gate_mlp
+     
+         def _unsq(g):
+    @@ -509,16 +519,19 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+                 nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
+             )
+     
+    -        h = ttnn.add(h, ttnn.multiply(attn_out, _unsq(gate_msa)))
+    ... (truncated, 21 more lines)
+
+[#17] MatmulDeviceOperation · tt-lang · no gain  +0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 555149f9866..e12d24b2ed8 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -208,7 +208,16 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             L = adazero.linear
+             C = int(L.out_features) // 6
+             w = f32(L.weight.detach().t())  # (Cin, 6C)
+    -        b = f32(L.bias.detach().reshape(1, -1)) if L.bias is not None else None  # (1, 6C)
+    +        # Bake the modulation "+1" into the bias of the two SCALE params (order:
+    +        # shift_msa,scale_msa,gate_msa,shift_mlp,scale_mlp,gate_mlp -> idx 1 & 4), so
+    +        # the matmul emits (1+scale) directly and the runtime add(scale,1.0) is gone
+    +        # (correct for any batch; the bias is per-feature). Downstream modulation then
+    +        # collapses to a single fused addcmul(shift, norm, scale).
+    +        bias = L.bias.detach().clone() if L.bias is not None else torch.zeros(6 * C)
+    +        bias = bias.reshape(6, C)
+    +        bias[1] += 1.0
+    +        bias[4] += 1.0
+    +        b = f32(bias.reshape(1, -1))  # (1, 6C)
+             eps = float(getattr(adazero.norm, "eps", 1e-6))
+             return w, b, eps, C
+     
+    @@ -326,9 +335,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             )
+             B = int(x.shape[0])
+             nx = ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)  # no affine
+    -        scale_r = ttnn.reshape(scale_msa, (B, 1, C))
+    +        scale_r = ttnn.reshape(scale_msa, (B, 1, C))  # already (1+scale): +1 baked into bias
+             shift_r = ttnn.reshape(shift_msa, (B, 1, C))
+    -        nx = ttnn.add(ttnn.multiply(nx, ttnn.add(scale_r, 1.0)), shift_r)
+    +        # Fused shift + norm*scale in ONE ternary launch (was add(mul(norm,scale),shift)).
+    +        nx = ttnn.addcmul(shift_r, nx, scale_r)
+             return nx, gate_msa, shift_mlp, scale_mlp, gate_mlp
+     
+         def _unsq(g):
+    @@ -509,16 +519,19 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+                 nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
+             )
+     
+    -        h = ttnn.add(h, ttnn.multiply(attn_out, _unsq(gate_msa)))
+    ... (truncated, 21 more lines)
 
 Limitations / suggested manual next steps:
-- 5 op(s) tried but no lever beat baseline: MatmulDeviceOperation, MatmulDeviceOperation, MatmulDeviceOperation, generation_loop, host_overhead
+- 7 op(s) tried but no lever beat baseline: MatmulDeviceOperation, MatmulDeviceOperation, MatmulDeviceOperation, MatmulDeviceOperation, ReshapeViewDeviceOperation, generation_loop, host_overhead
   -> inspect the per-op device report and consider a hand-written kernel or a structural change.
 - No net speedup recorded — the model may already be at its ttnn floor, or the dominant op needs a custom kernel.
 

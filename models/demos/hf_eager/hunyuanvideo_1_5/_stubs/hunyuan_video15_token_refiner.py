@@ -249,9 +249,9 @@ def build(device, torch_module):
             norm_h = _ln(h, blk["n1"])
             attn_out = _attention(norm_h, blk)
             gate_msa, gate_mlp = _ada_gate(temb, blk)
-            h = ttnn.add(h, ttnn.multiply(attn_out, gate_msa))
+            h = ttnn.addcmul(h, attn_out, gate_msa)  # h + attn_out*gate in one ternary launch
             ff_out = _ff(_ln(h, blk["n2"]), blk)
-            h = ttnn.add(h, ttnn.multiply(ff_out, gate_mlp))
+            h = ttnn.addcmul(h, ff_out, gate_mlp)
         return h
 
     return forward
