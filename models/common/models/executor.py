@@ -2386,39 +2386,48 @@ def _compile_prefill_and_decode(
         prefill_page_table.dim() == 2
     ), f"prefill_page_table must be [batch_size, max_blocks], got {prefill_page_table.dim()}D"
 
+    # Capture the DECODE trace BEFORE the prefill trace. The batched-prefill trace's folded buffers are
+    # ~padded_batch× the single-user footprint; when the prefill trace is captured FIRST and the decode
+    # trace is captured immediately after (while the prefill trace is live), the decode capture lands in
+    # a layout that overlaps the large batched-prefill trace and clobbers its replay — every batched user
+    # then decodes garbage from the very first token (single-user prefill survives only by its far smaller
+    # footprint). Capturing decode first — so its buffers are reserved before the large prefill trace is
+    # built, and nothing is captured after prefill to overlap it — removes the overlap. Correctness is
+    # unaffected by the swap: the decode trace is warmed with placeholder tokens, but decode
+    # tokens/positions are refreshed from host (or fed back on device) on every replay, so warmup values
+    # never reach the output; only the capture ORDER changes. (This also removes the reason the sampling
+    # buffers had to be pre-materialised while the prefill trace was live — decode now captures with no
+    # prefill trace active — while _prealloc_sampling_buffers in compile_prefill still guards the prefill
+    # capture.)
     prefill_context = (
         _get_validation_context(executor, mode="prefill") if validate_configs else contextlib.nullcontext()
     )
-    with prefill_context:
-        logits = executor.compile_prefill(
-            tokens=prefill_tokens,
-            page_table=prefill_page_table,
-            kv_cache=kv_cache,
-            prompt_lens=prompt_lens,
-            empty_slots=empty_slots,
-            start_pos=start_pos,
-            sampling_params=sampling_params,
-        )
-
-    # todo)) check these against what is actually running in TTTv1 --> the prefill_forward may run sampling on device!
+    decode_context = _get_validation_context(executor, mode="decode") if validate_configs else contextlib.nullcontext()
     batch_size = prefill_tokens.shape[0]
-    decode_tokens = torch.zeros(batch_size, dtype=torch.long, device=prefill_tokens.device)
-    if logits is not None:
-        decode_tokens = torch.argmax(logits[:, -1:, :], dim=-1).view(-1)
+
     decode_start_pos = torch.full(
         (batch_size,),
         prefill_tokens.shape[-1],
         dtype=torch.long,
         device=prefill_tokens.device,
     )
-
-    decode_context = _get_validation_context(executor, mode="decode") if validate_configs else contextlib.nullcontext()
     with decode_context:
         executor.compile_decode(
-            tokens=decode_tokens,
+            tokens=torch.zeros(batch_size, dtype=torch.long, device=prefill_tokens.device),
             start_pos=decode_start_pos,
             page_table=prefill_page_table,
             kv_cache=kv_cache,
+            sampling_params=sampling_params,
+        )
+
+    with prefill_context:
+        executor.compile_prefill(
+            tokens=prefill_tokens,
+            page_table=prefill_page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            start_pos=start_pos,
             sampling_params=sampling_params,
         )
 
