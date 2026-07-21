@@ -154,7 +154,7 @@ ProgramDescriptor create_descriptor_tiled(
     const uint32_t front_n = attrs.front_n;
 
     const uint32_t dram_alignment = input.buffer()->alignment();
-    const DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
     // DRAM page pitch is placement-specific: the pad reader (fill size), CB page, and writer
     // must ALL step at the same aligned pitch or multi-page tensors accrue a page skew.
     const uint32_t tile_bytes = tt::align(tt::tile_size(data_format), dram_alignment);
