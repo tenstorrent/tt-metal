@@ -21,8 +21,6 @@ from models.tt_dit.utils.conv3d import (
     get_conv3d_config,
 )
 
-import os
-
 register_hunyuan_conv3d_blockings()
 
 # Max im2col elements (in_ch*T*H*W*kernel_vol) before a conv3d chunks over H.
@@ -30,8 +28,57 @@ register_hunyuan_conv3d_blockings()
 # above ~4 GB (2^31 bf16 elems) faults with a "non-existent physical address" bus
 # error. Cap the per-conv im2col well under that (~1 GB elems => ~2 GB bf16) so a
 # chunk always fits; GRID<=64 stays below this and is unaffected (no chunking).
-# HY_CONV_CHUNK_ELEMS overrides it (used to A/B chunk-vs-nochunk for correctness).
-_CONV3D_CHUNK_ELEMS = int(os.environ.get("HY_CONV_CHUNK_ELEMS", str(1024 * 1024 * 1024)))
+_CONV3D_CHUNK_ELEMS = 1024 * 1024 * 1024
+
+# Decoder tail conv_out pins this cap via ``_h_chunk_override`` so a higher global
+# threshold cannot coalesce its H-chunks (1280M regressed tail ~3.3 ms/chunk vs ~1.3).
+_TAIL_CONV_OUT_CHUNK_ELEMS = _CONV3D_CHUNK_ELEMS
+
+_KERNEL_VOLUME = 3 * 3 * 3
+_KERNEL_H = 3
+
+
+def conv3d_h_chunk_size(
+    *,
+    t: int,
+    h: int,
+    w: int,
+    in_channels: int,
+    valid_conv: bool,
+    chunk_elems: int = _CONV3D_CHUNK_ELEMS,
+) -> int | None:
+    """Output-H strip height for im2col chunking, or None if a single conv fits."""
+    im2col_elems = in_channels * t * h * w * _KERNEL_VOLUME
+    if im2col_elems <= chunk_elems:
+        return None
+    h_span = h - (_KERNEL_H - 1) if valid_conv else h
+    n_chunks = (im2col_elems + chunk_elems - 1) // chunk_elems
+    return (h_span + n_chunks - 1) // n_chunks
+
+
+def conv3d_h_chunk_size_for_conv(
+    conv: HunyuanSymmetricConv3d,
+    *,
+    t: int,
+    h: int,
+    w: int,
+    chunk_elems: int = _CONV3D_CHUNK_ELEMS,
+) -> int | None:
+    """Tail conv_out only: plan H-chunk strips using post-pad spatial geometry."""
+    pH, pW = conv.padding[1], conv.padding[2]
+    if conv.spatial_sharded:
+        if conv.h_mesh_axis is not None and pH > 0:
+            h += 2 * pH
+        if conv.w_mesh_axis is not None and pW > 0:
+            w += 2 * pW
+    return conv3d_h_chunk_size(
+        t=t,
+        h=h,
+        w=w,
+        in_channels=conv.in_channels,
+        valid_conv=conv.spatial_sharded,
+        chunk_elems=chunk_elems,
+    )
 
 
 def promote_conv3d_fallback_to_exact(
@@ -267,13 +314,17 @@ class HunyuanSymmetricConv3d(Module):
             W=w,
         )
         im2col_elems = self.in_channels * t * h * w * kT * kH * kW
+        h_chunk_override = getattr(self, "_h_chunk_override", None)
         # Only the valid-conv (halo-padded, conv_pH==0) case can be chunked cleanly.
-        if im2col_elems <= _CONV3D_CHUNK_ELEMS or conv_pH != 0 or h <= kH:
+        if (im2col_elems <= _CONV3D_CHUNK_ELEMS and h_chunk_override is None) or conv_pH != 0 or h <= kH:
             return self._conv(x_bthwc, (pT, conv_pH, conv_pW), cfg_full)
 
         h_out = h - (kH - 1)  # valid-conv output height (padding_h == 0)
-        n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
-        hc = (h_out + n_chunks - 1) // n_chunks
+        if h_chunk_override is not None:
+            hc = h_chunk_override
+        else:
+            n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
+            hc = (h_out + n_chunks - 1) // n_chunks
         outs = []
         for o in range(0, h_out, hc):
             oe = min(h_out, o + hc)
@@ -322,14 +373,23 @@ class HunyuanSymmetricConv3d(Module):
         kT, kH, kW = self.kernel_size
         pT, pH, pW = self.padding
         im2col_elems = self.in_channels * t * h * w * kT * kH * kW
-        if im2col_elems <= _CONV3D_CHUNK_ELEMS or h <= 1 or self.stride[1] != 1 or pH == 0:
+        h_chunk_override = getattr(self, "_h_chunk_override", None)
+        if (
+            (im2col_elems <= _CONV3D_CHUNK_ELEMS and h_chunk_override is None)
+            or h <= 1
+            or self.stride[1] != 1
+            or pH == 0
+        ):
             return self._conv(x_bthwc, self.padding, self.conv_config)
 
         # Chunk over H to bound the conv's ~im2col DRAM buffer. Zero-pad H by pH
         # (true-boundary padding), then conv overlapping strips with padding_h=0;
         # interior strips read real neighbor rows from the padded tensor (halo).
-        n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
-        hc = (h + n_chunks - 1) // n_chunks
+        if h_chunk_override is not None:
+            hc = h_chunk_override
+        else:
+            n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
+            hc = (h + n_chunks - 1) // n_chunks
         last = x_bthwc.shape[-1]
         zpad = self._cached_h_pad_zeros(b, t, pH, w, last, x_bthwc.dtype)
         x_pad = ttnn.concat([zpad, x_bthwc, zpad], dim=2)
