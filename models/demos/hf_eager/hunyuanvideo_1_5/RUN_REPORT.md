@@ -74,7 +74,7 @@ python -m pytest models/demos/hf_eager/hunyuanvideo_1_5/tests/pcc/test_timesteps
 <!-- BEGIN optimize -->
 # Optimize (perf) — `hunyuanvideo_1_5`
 
-_Updated live: 2026-07-21 01:47:51 UTC · 4 lever attempt(s) so far — each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed._
+_Updated live: 2026-07-21 02:44:59 UTC · 13 lever attempt(s) so far — each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed._
 
 ```
 Optimization summary — hunyuanvideo_1_5 · main (device_ms)
@@ -84,31 +84,52 @@ optimizing… — baseline->final speedup is finalized when the module converges
 Op breakdown — device time by op class (latest profile · what to target, ranked):
 op class         device_ms      %   count  bound  dominant op (shape)
 ---------------------------------------------------------------------------------------------------
-host_overhead        38.20 593.9%       0   host  
-matmul                4.40  68.4%      90   slow  MatmulDeviceOperation 32 x 2048 x 2048
-eltwise               0.84  13.1%     175   slow  BinaryNgDeviceOperation
-datamove              0.59   9.2%      94   slow  ReshapeViewDeviceOperation
-reduction             0.56   8.7%      27   slow  LayerNormDeviceOperation
-attention             0.04   0.7%       2   slow  JointSDPADeviceOperation
+matmul                3.72  69.2%      56   dram  MatmulDeviceOperation 32 x 8192 x 2048
+host_overhead         2.38  44.2%       0   host  
+datamove              0.65  12.1%     140   slow  ReshapeViewDeviceOperation
+reduction             0.56  10.4%      27   slow  LayerNormDeviceOperation
+eltwise               0.40   7.5%     104   slow  BinaryNgDeviceOperation
+attention             0.04   0.8%       2   slow  JointSDPADeviceOperation
+
+Block-level timing (per-stage trace) — latest lever on generation_loop:
+  matmul (FF/QKV/out, M=32 dispatch-bound)      3.72 ms  ###################### · True  <- hottest
+  host_overhead (denoise glue, overlapped under trace+2CQ)      2.38 ms  ##############........
+  datamove (ReshapeView x140)      0.65 ms  ####..................
+  reduction (LayerNorm x27, fused)      0.56 ms  ###...................
+  eltwise (BinaryNg x104, bias-fused)      0.40 ms  ##....................
+  attention (JointSDPA)      0.04 ms  ......................
 
 op                                    grid   dtype tt-lang     cpp    host   best ms
 ------------------------------------------------------------------------------------
-BinaryNgDeviceOperation                  —       —    ✓win       —       —      6.34
+BinaryNgDeviceOperation                  —       —    ✓win    ·try       —      5.44
+MatmulDeviceOperation                    —       —    ·try       —       —      5.39
 MatmulDeviceOperation                 ·try    ·try       —       —       —      6.43
+MatmulDeviceOperation                    —    ·try       —    ·try    ·try      5.37
+generation_loop                          —       —       —       —    ·try      5.37
+host_overhead                            —       —       —       —    ·try      5.37
 
 
 Per-attempt detail (every optimization tried — win OR fail — with gain vs baseline and WHY):
 op                                      lever        ms  gain vs base  result     why tried / why it won or failed
 ------------------------------------------------------------------------------------------------------------------
-MatmulDeviceOperation                    grid      6.44      -0.01 ms  · no gain  Hypothesis: dominant matmul profiled as grid=partial, so full core_grid should saturate idle DRAM bandwidth. Outcome: no gain (6.4316->6.4426, slightly slower) — M=32 is only 1 tile high, so widening 
-MatmulDeviceOperation                   dtype      6.44      -0.01 ms  · no gain  Hypothesis: op tagged bound_by=memory (weight reads dominate at M=32), so bf8_b weights quarter the DRAM read bytes vs fp32. Outcome: NO gain (bf16 also flat, bf8_b 6.4316->6.4376). Weight-dtype is in
-MatmulDeviceOperation                   dtype      6.43      +0.00 ms  · no gain  Enabled the stub's purpose-built bf16 fast path (HY_DIT_BF16 default off->on): bf16 weights+activations, HiFi2, fp32 accumulate, its own comment claims '2-4x faster matmuls + 2x less DRAM'. This is th
-BinaryNgDeviceOperation               tt-lang      6.34      +0.09 ms  ✓ win      Bias-fusion (ttnn.linear) in the profiled transformer_block stub removes ~38 standalone BinaryNg add launches from the 2-layer forward. WIN: 6.4316->6.344ms (1.36%, is_real_gain). Root cause: path is 
+MatmulDeviceOperation                    grid      6.44      -1.07 ms  · no gain  Hypothesis: dominant matmul profiled as grid=partial, so full core_grid should saturate idle DRAM bandwidth. Outcome: no gain (6.4316->6.4426, slightly slower) — M=32 is only 1 tile high, so widening 
+MatmulDeviceOperation                   dtype      6.44      -1.06 ms  · no gain  Hypothesis: op tagged bound_by=memory (weight reads dominate at M=32), so bf8_b weights quarter the DRAM read bytes vs fp32. Outcome: NO gain (bf16 also flat, bf8_b 6.4316->6.4376). Weight-dtype is in
+MatmulDeviceOperation                   dtype      6.43      -1.06 ms  · no gain  Enabled the stub's purpose-built bf16 fast path (HY_DIT_BF16 default off->on): bf16 weights+activations, HiFi2, fp32 accumulate, its own comment claims '2-4x faster matmuls + 2x less DRAM'. This is th
+BinaryNgDeviceOperation               tt-lang      6.34      -0.97 ms  ✓ win      Bias-fusion (ttnn.linear) in the profiled transformer_block stub removes ~38 standalone BinaryNg add launches from the 2-layer forward. WIN: 6.4316->6.344ms (1.36%, is_real_gain). Root cause: path is 
+BinaryNgDeviceOperation                   cpp      5.44      -0.06 ms  · no gain  Authored a real C++ Metalium eltwise-add via ttnn.generic_op (in-repo binary reader/compute + unary writer kernels by FILE_PATH, single Tensix core, fp32 tiles; plain ProgramDescriptor -> SPMD replica
+MatmulDeviceOperation                     cpp      6.03      -0.66 ms  · no gain  Authored a real C++ Metalium matmul via ttnn.generic_op (official multi-core output-tiles-partitioned reader + mm compute + unary writer, full core grid, fp32, SPMD across mesh) on the replicated toke
+generation_loop                          host      5.37      +0.00 ms  · no gain  none (already handled): investigated the decode/repeat_prefill signal. This is a DIFFUSION transformer, not autoregressive — there is no KV-cache. The analogous cross-step lever (cache the step-INVARI
+MatmulDeviceOperation                    host      5.37      +0.00 ms  · no gain  none reducible (stable): the 8192x2048 op is the FF up-projection — DENSE (no MoE/sparsity to gather), and within a single denoise forward it is not recomputed (conditioning is cached; see generation_
+host_overhead                            host      5.37      +0.00 ms  · no gain  already implemented: the trace-capture + 2-CQ structural lever for the generation loop EXISTS in the model — denoise_trace_setup captures resident buffers, denoise_trace_step is a host-op-free fixed-s
+generation_loop                          host      5.37      +0.00 ms  · no gain  none applicable (architectural mismatch + already handled): this is a DIFFUSION transformer (MMDiT), NOT autoregressive generation — there is no token-by-token decode and no KV-cache to add (every den
+MatmulDeviceOperation                   dtype      5.37      -0.00 ms  · no gain  Hypothesis: dominant FF matmul tagged bound_by=memory at M=32, so bf8_b WEIGHTS (activations/accum stay fp32) should quarter the KxN weight-read bytes vs fp32 and cut DRAM traffic. Applied to the STUB
+generation_loop                          host      5.37      +0.00 ms  · no gain  structural-decode rung, re-verified this session. Signal 'repeat_prefill: add KV-cache + single-token decode_step' is an ARCHITECTURAL MISCLASSIFICATION: HunyuanVideo-1.5 is a DIFFUSION MMDiT, not aut
+MatmulDeviceOperation                 tt-lang      5.39      -0.01 ms  · no gain  Fusion lever (not kernel): merged the two dual-stream AdaLayerNormZero modulation matmuls into ONE C->12C matmul sharing a single silu(temb), and produced all 12 params directly as (B,1,C) to drop ~11
 
 Code changes — every attempt (win or fail):
 ===========================================
 
-[#1] MatmulDeviceOperation · grid · no gain  -0.01 ms
+[#1] MatmulDeviceOperation · grid · no gain  -1.07 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py b/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
     index 41b47828b22..7086127ee9a 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
@@ -141,7 +162,7 @@ Code changes — every attempt (win or fail):
              y = ttnn.add(y, b)
          return y
 
-[#2] MatmulDeviceOperation · dtype · no gain  -0.01 ms
+[#2] MatmulDeviceOperation · dtype · no gain  -1.06 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py b/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
     index 41b47828b22..4d27939e637 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/tt/pipeline.py
@@ -167,7 +188,7 @@ Code changes — every attempt (win or fail):
          b = _f32(device, linear.bias.detach().reshape(1, -1)) if linear.bias is not None else None
          return w, b
 
-[#3] MatmulDeviceOperation · dtype · no gain  +0.00 ms
+[#3] MatmulDeviceOperation · dtype · no gain  -1.06 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index b1550b31cb9..409d47b2a1e 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -182,7 +203,7 @@ Code changes — every attempt (win or fail):
      
          blk = torch_module
 
-[#4] BinaryNgDeviceOperation · tt-lang · win  +0.09 ms
+[#4] BinaryNgDeviceOperation · tt-lang · win  -0.97 ms
     diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
     index b1550b31cb9..4d79e9de61c 100644
     --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
@@ -225,9 +246,397 @@ Code changes — every attempt (win or fail):
     @@ -0,0 +1,198 @@
     ... (truncated, 657 more lines)
 
+[#5] BinaryNgDeviceOperation · cpp · no gain  -0.06 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
+    index 1c0da6f75cc..e152e3dcd91 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
+    @@ -36,6 +36,65 @@ HF_MODEL_ID = "tencent/HunyuanVideo-1.5"
+     
+     _MAX_PERIOD = 10000
+     
+    +# --------------------------------------------------------------------------- #
+    +# C++ Metalium kernel (ttnn.generic_op) — the terminal cpp rung for the eltwise
+    +# BinaryNgDeviceOperation. Single-core interleaved fp32 tile add adapting the
+    +# in-repo binary reader/compute + unary writer kernels by FILE_PATH (compute
+    +# hardcodes out CB c_2). Single core keeps the NoC/CB choreography trivial ->
+    +# wedge-safe. A plain ProgramDescriptor is replicated SPMD across the mesh.
+    +# --------------------------------------------------------------------------- #
+    +_RD_BIN = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp"
+    +_CP_BIN = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp"
+    +_WR_UN = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+    +
+    +
+    +def _generic_add(a, b):
+    +    """a + b for identical-shape fp32 TILE_LAYOUT DRAM tensors via a C++ Metalium
+    +    kernel (ttnn.generic_op). One Tensix core streams all tiles."""
+    +    dev = a.device()
+    +    shape = [int(v) for v in a.shape]
+    +    h = ((shape[-2] + 31) // 32) * 32
+    +    w = ((shape[-1] + 31) // 32) * 32
+    +    num_tiles = (h // 32) * (w // 32)
+    +    for d in shape[:-2]:
+    +        num_tiles *= int(d)
+    +    out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.float32, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG)
+    +
+    +    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    +    page = 4096  # fp32 tile = 32*32*4
+    +
+    +    def _cb(idx):
+    +        return ttnn.CBDescriptor(
+    +            total_size=2 * page,
+    +            core_ranges=core,
+    +            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=page)],
+    ... (truncated, 39 more lines)
+
+[#6] MatmulDeviceOperation · cpp · no gain  -0.66 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
+    index 1c0da6f75cc..24500a1c720 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_token_refiner.py
+    @@ -36,6 +36,74 @@ HF_MODEL_ID = "tencent/HunyuanVideo-1.5"
+     
+     _MAX_PERIOD = 10000
+     
+    +# --------------------------------------------------------------------------- #
+    +# C++ Metalium kernel (ttnn.generic_op) — cpp rung for MatmulDeviceOperation
+    +# (the 32x8192x2048 FF projection). Adapts the official multi-core matmul
+    +# programming example (output-tiles-partitioned reader + mm compute + unary
+    +# writer, out CB c_16). Embarrassingly parallel (no mcast/semaphores) so low
+    +# wedge risk; plain ProgramDescriptor is SPMD-replicated across the mesh.
+    +# --------------------------------------------------------------------------- #
+    +_MM_PFX = "tt_metal/programming_examples/matmul/matmul_multi_core/kernels/"
+    +
+    +
+    +def _generic_matmul(x, w, compute_config):
+    +    """x @ w for fp32 TILE_LAYOUT DRAM tensors via a C++ Metalium kernel."""
+    +    dev = x.device()
+    +    xs, ws = [int(v) for v in x.shape], [int(v) for v in w.shape]
+    +    M = 1
+    +    for d in xs[:-1]:
+    +        M *= d
+    +    K, N = xs[-1], ws[-1]
+    +    Mt, Kt, Nt = (M + 31) // 32, (K + 31) // 32, (N + 31) // 32  # tile counts (padded)
+    +    num_out = Mt * Nt
+    +    out = ttnn.allocate_tensor_on_device(
+    +        ttnn.Shape(xs[:-1] + [N]), ttnn.float32, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
+    +    )
+    +    g = dev.compute_with_storage_grid_size()
+    +    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))])
+    +    (_, cores, cg1, cg2, wpc1, wpc2) = ttnn.split_work_to_cores(all_cores, num_out)
+    +    page = 4096
+    +
+    +    def _cb(idx):
+    +        return ttnn.CBDescriptor(
+    +            total_size=2 * page, core_ranges=cores,
+    +            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=page)],
+    ... (truncated, 50 more lines)
+
+[#7] generation_loop · host · no gain  +0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 951dc2ca456..555149f9866 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
+             return w, b
+     
+    +    def lin_col_qkv(linears):
+    +        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+    +        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+    +        parallelism correct, interleave the output columns per tp-device group as
+    +        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+    +        own local heads of q, k and v contiguously; the forward then slices the
+    +        fused output at the LOCAL inner dim."""
+    +        g = tp if sharded else 1
+    +        hloc = heads_total // g
+    +
+    +        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+    +            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+    +
+    +        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+    +        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+    +        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+    +        if all(m.bias is not None for m in linears):
+    +            bcat = torch.cat(
+    +                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+    +                dim=1,
+    +            ).reshape(1, -1)
+    +            b = f32(bcat, mesh_mapper=_mapper(-1))
+    +        else:
+    +            b = None
+    +        return w, b
+    +
+         def lin_row(linear):
+             """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+             replicated and is added once, by the caller, after the all-reduce."""
+    @@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+         ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
+         adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
+    ... (truncated, 42 more lines)
+
+[#8] MatmulDeviceOperation · host · no gain  +0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 951dc2ca456..555149f9866 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
+             return w, b
+     
+    +    def lin_col_qkv(linears):
+    +        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+    +        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+    +        parallelism correct, interleave the output columns per tp-device group as
+    +        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+    +        own local heads of q, k and v contiguously; the forward then slices the
+    +        fused output at the LOCAL inner dim."""
+    +        g = tp if sharded else 1
+    +        hloc = heads_total // g
+    +
+    +        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+    +            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+    +
+    +        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+    +        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+    +        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+    +        if all(m.bias is not None for m in linears):
+    +            bcat = torch.cat(
+    +                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+    +                dim=1,
+    +            ).reshape(1, -1)
+    +            b = f32(bcat, mesh_mapper=_mapper(-1))
+    +        else:
+    +            b = None
+    +        return w, b
+    +
+         def lin_row(linear):
+             """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+             replicated and is added once, by the caller, after the all-reduce."""
+    @@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+         ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
+         adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
+    ... (truncated, 42 more lines)
+
+[#9] host_overhead · host · no gain  +0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 951dc2ca456..555149f9866 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
+             return w, b
+     
+    +    def lin_col_qkv(linears):
+    +        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+    +        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+    +        parallelism correct, interleave the output columns per tp-device group as
+    +        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+    +        own local heads of q, k and v contiguously; the forward then slices the
+    +        fused output at the LOCAL inner dim."""
+    +        g = tp if sharded else 1
+    +        hloc = heads_total // g
+    +
+    +        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+    +            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+    +
+    +        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+    +        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+    +        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+    +        if all(m.bias is not None for m in linears):
+    +            bcat = torch.cat(
+    +                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+    +                dim=1,
+    +            ).reshape(1, -1)
+    +            b = f32(bcat, mesh_mapper=_mapper(-1))
+    +        else:
+    +            b = None
+    +        return w, b
+    +
+         def lin_row(linear):
+             """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+             replicated and is added once, by the caller, after the all-reduce."""
+    @@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+         ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
+         adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
+    ... (truncated, 42 more lines)
+
+[#10] generation_loop · host · no gain  +0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 951dc2ca456..555149f9866 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
+             return w, b
+     
+    +    def lin_col_qkv(linears):
+    +        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+    +        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+    +        parallelism correct, interleave the output columns per tp-device group as
+    +        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+    +        own local heads of q, k and v contiguously; the forward then slices the
+    +        fused output at the LOCAL inner dim."""
+    +        g = tp if sharded else 1
+    +        hloc = heads_total // g
+    +
+    +        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+    +            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+    +
+    +        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+    +        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+    +        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+    +        if all(m.bias is not None for m in linears):
+    +            bcat = torch.cat(
+    +                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+    +                dim=1,
+    +            ).reshape(1, -1)
+    +            b = f32(bcat, mesh_mapper=_mapper(-1))
+    +        else:
+    +            b = None
+    +        return w, b
+    +
+         def lin_row(linear):
+             """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+             replicated and is added once, by the caller, after the all-reduce."""
+    @@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+         ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
+         adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
+    ... (truncated, 42 more lines)
+
+[#11] MatmulDeviceOperation · dtype · no gain  -0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 951dc2ca456..555149f9866 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
+             return w, b
+     
+    +    def lin_col_qkv(linears):
+    +        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+    +        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+    +        parallelism correct, interleave the output columns per tp-device group as
+    +        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+    +        own local heads of q, k and v contiguously; the forward then slices the
+    +        fused output at the LOCAL inner dim."""
+    +        g = tp if sharded else 1
+    +        hloc = heads_total // g
+    +
+    +        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+    +            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+    +
+    +        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+    +        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+    +        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+    +        if all(m.bias is not None for m in linears):
+    +            bcat = torch.cat(
+    +                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+    +                dim=1,
+    +            ).reshape(1, -1)
+    +            b = f32(bcat, mesh_mapper=_mapper(-1))
+    +        else:
+    +            b = None
+    +        return w, b
+    +
+         def lin_row(linear):
+             """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+             replicated and is added once, by the caller, after the all-reduce."""
+    @@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+         ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
+         adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
+    ... (truncated, 42 more lines)
+
+[#12] generation_loop · host · no gain  +0.00 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 951dc2ca456..555149f9866 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
+             return w, b
+     
+    +    def lin_col_qkv(linears):
+    +        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+    +        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+    +        parallelism correct, interleave the output columns per tp-device group as
+    +        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+    +        own local heads of q, k and v contiguously; the forward then slices the
+    +        fused output at the LOCAL inner dim."""
+    +        g = tp if sharded else 1
+    +        hloc = heads_total // g
+    +
+    +        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+    +            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+    +
+    +        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+    +        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+    +        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+    +        if all(m.bias is not None for m in linears):
+    +            bcat = torch.cat(
+    +                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+    +                dim=1,
+    +            ).reshape(1, -1)
+    +            b = f32(bcat, mesh_mapper=_mapper(-1))
+    +        else:
+    +            b = None
+    +        return w, b
+    +
+         def lin_row(linear):
+             """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+             replicated and is added once, by the caller, after the all-reduce."""
+    @@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+         ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
+         adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
+    ... (truncated, 42 more lines)
+
+[#13] MatmulDeviceOperation · tt-lang · no gain  -0.01 ms
+    diff --git a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    index 951dc2ca456..555149f9866 100644
+    --- a/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    +++ b/models/demos/hf_eager/hunyuanvideo_1_5/_stubs/hunyuan_video15_transformer_block.py
+    @@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+             b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
+             return w, b
+     
+    +    def lin_col_qkv(linears):
+    +        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+    +        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+    +        parallelism correct, interleave the output columns per tp-device group as
+    +        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+    +        own local heads of q, k and v contiguously; the forward then slices the
+    +        fused output at the LOCAL inner dim."""
+    +        g = tp if sharded else 1
+    +        hloc = heads_total // g
+    +
+    +        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+    +            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+    +
+    +        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+    +        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+    +        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+    +        if all(m.bias is not None for m in linears):
+    +            bcat = torch.cat(
+    +                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+    +                dim=1,
+    +            ).reshape(1, -1)
+    +            b = f32(bcat, mesh_mapper=_mapper(-1))
+    +        else:
+    +            b = None
+    +        return w, b
+    +
+         def lin_row(linear):
+             """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+             replicated and is added once, by the caller, after the all-reduce."""
+    @@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
+         ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
+         adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
+    ... (truncated, 42 more lines)
+
 Limitations / suggested manual next steps:
-- 1 op(s) tried but no lever beat baseline: MatmulDeviceOperation
+- 5 op(s) tried but no lever beat baseline: MatmulDeviceOperation, MatmulDeviceOperation, MatmulDeviceOperation, generation_loop, host_overhead
   -> inspect the per-op device report and consider a hand-written kernel or a structural change.
+- No net speedup recorded — the model may already be at its ttnn floor, or the dominant op needs a custom kernel.
 
 Reproduce:
   trace+2CQ perf:  python -m pytest models/demos/hf_eager/hunyuanvideo_1_5/tests/e2e/test_main_perf.py::test_main_perf -svv

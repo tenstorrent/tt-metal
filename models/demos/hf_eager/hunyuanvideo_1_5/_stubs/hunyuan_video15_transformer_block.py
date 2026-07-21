@@ -208,7 +208,16 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         L = adazero.linear
         C = int(L.out_features) // 6
         w = f32(L.weight.detach().t())  # (Cin, 6C)
-        b = f32(L.bias.detach().reshape(1, -1)) if L.bias is not None else None  # (1, 6C)
+        # Bake the modulation "+1" into the bias of the two SCALE params (order:
+        # shift_msa,scale_msa,gate_msa,shift_mlp,scale_mlp,gate_mlp -> idx 1 & 4), so
+        # the matmul emits (1+scale) directly and the runtime add(scale,1.0) is gone
+        # (correct for any batch; the bias is per-feature). Downstream modulation then
+        # collapses to a single fused addcmul(shift, norm, scale).
+        bias = L.bias.detach().clone() if L.bias is not None else torch.zeros(6 * C)
+        bias = bias.reshape(6, C)
+        bias[1] += 1.0
+        bias[4] += 1.0
+        b = f32(bias.reshape(1, -1))  # (1, 6C)
         eps = float(getattr(adazero.norm, "eps", 1e-6))
         return w, b, eps, C
 
@@ -326,9 +335,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         )
         B = int(x.shape[0])
         nx = ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)  # no affine
-        scale_r = ttnn.reshape(scale_msa, (B, 1, C))
+        scale_r = ttnn.reshape(scale_msa, (B, 1, C))  # already (1+scale): +1 baked into bias
         shift_r = ttnn.reshape(shift_msa, (B, 1, C))
-        nx = ttnn.add(ttnn.multiply(nx, ttnn.add(scale_r, 1.0)), shift_r)
+        # Fused shift + norm*scale in ONE ternary launch (was add(mul(norm,scale),shift)).
+        nx = ttnn.addcmul(shift_r, nx, scale_r)
         return nx, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
     def _unsq(g):
@@ -509,16 +519,19 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
             nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
         )
 
-        h = ttnn.add(h, ttnn.multiply(attn_out, _unsq(gate_msa)))
-        e = ttnn.add(e, ttnn.multiply(ctx_out, _unsq(c_gate_msa)))
+        # Gated residual in ONE ternary launch: h + attn_out*gate (was mul+add).
+        h = ttnn.addcmul(h, attn_out, _unsq(gate_msa))
+        e = ttnn.addcmul(e, ctx_out, _unsq(c_gate_msa))
 
+        # norm2 modulation fused to addcmul(shift, norm, scale); scale_mlp already
+        # carries (1+scale) (+1 baked into the AdaLN bias in ada_chunks).
         nh2 = ttnn.layer_norm(h, epsilon=norm2_eps, compute_kernel_config=compute_config)
-        nh2 = ttnn.add(ttnn.multiply(nh2, ttnn.add(_unsq(scale_mlp), 1.0)), _unsq(shift_mlp))
+        nh2 = ttnn.addcmul(_unsq(shift_mlp), nh2, _unsq(scale_mlp))
         ne2 = ttnn.layer_norm(e, epsilon=norm2c_eps, compute_kernel_config=compute_config)
-        ne2 = ttnn.add(ttnn.multiply(ne2, ttnn.add(_unsq(c_scale_mlp), 1.0)), _unsq(c_shift_mlp))
+        ne2 = ttnn.addcmul(_unsq(c_shift_mlp), ne2, _unsq(c_scale_mlp))
 
-        h = ttnn.add(h, ttnn.multiply(_unsq(gate_mlp), _ff(nh2, ff_p)))
-        e = ttnn.add(e, ttnn.multiply(_unsq(c_gate_mlp), _ff(ne2, ffc_p)))
+        h = ttnn.addcmul(h, _unsq(gate_mlp), _ff(nh2, ff_p))
+        e = ttnn.addcmul(e, _unsq(c_gate_mlp), _ff(ne2, ffc_p))
         if wdt != ttnn.float32:  # keep the block fp32-in/fp32-out for the fp32 glue
             h = ttnn.typecast(h, ttnn.float32)
             e = ttnn.typecast(e, ttnn.float32)
