@@ -27,6 +27,7 @@ import torch
 import ttnn
 
 from models.experimental.xtts_v2.reference.xtts_gpt_ref import load_gpt_core_state
+from models.experimental.xtts_v2.tt.ttnn_xtts_layernorm import TTNNLayerNorm
 
 
 @dataclass
@@ -63,10 +64,7 @@ def preprocess_gpt_parameters(device, ckpt_path=None, dtype=ttnn.bfloat16):
         }
 
     def norm(w, b):
-        return {
-            "weight": ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
-            "bias": ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
-        }
+        return TTNNLayerNorm(device, w, b, cfg.n_embd, eps=cfg.layer_norm_eps, dtype=dtype)
 
     params = {"blocks": []}
     for i in range(cfg.n_layer):
@@ -108,6 +106,8 @@ class TTNNGPTCore:
         self.attention = attention
         self.scale = 1.0 / (self.config.head_dim**0.5)
         self._causal_mask = {}
+        # single-token decoders flip this to use the width-sharded LayerNorm path.
+        self.ln_sharded = False
 
     def _get_causal_mask(self, S):
         if S not in self._causal_mask:
@@ -119,13 +119,9 @@ class TTNNGPTCore:
         return self._causal_mask[S]
 
     def _layer_norm(self, x, p):
-        return ttnn.layer_norm(
-            x,
-            weight=p["weight"],
-            bias=p["bias"],
-            epsilon=self.config.layer_norm_eps,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        # p is a TTNNLayerNorm. ln_sharded (set by the single-token decoders) selects the
+        # width-sharded program-config path; the prefill core keeps the interleaved path.
+        return p(x, sharded=self.ln_sharded, compute_kernel_config=self.compute_kernel_config)
 
     def _linear(self, x, p):
         return ttnn.linear(

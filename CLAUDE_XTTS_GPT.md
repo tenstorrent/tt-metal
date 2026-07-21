@@ -156,6 +156,15 @@ host-side (input tilization/copy, latent readback, CPU sampling head), which now
     slice/reshape/permute (no `split_query_key_value_and_split_heads`), so we stay faithful.
   - PCC unchanged after fusions (bf16 0.99971, manual/fp32 0.99994); wall-clock neutral
     (traced decode 12.44 vs 12.37 ms/token) — the fused ops were already cheap vs matmul+SDPA.
+- 2026-07-21: **Sharded-LayerNorm decode speedup** (reuse of tt_transformers `TtLayerNorm`).
+  Norm params are now `TTNNLayerNorm` (`ttnn_xtts_layernorm.py`) with an interleaved path
+  (prefill/`TTNNGPTCore`, unchanged) and a **width-sharded `LayerNormShardedMultiCoreProgramConfig`
+  path** used by the single-token decoders (`ln_sharded=True`). The interleaved decode LayerNorm
+  on `[1,1,1024]` ran effectively single-core; sharding the hidden-dim reduction across 32 cores
+  cut the **traced decode step 12.44 → 11.05 ms/token (~11%)** over the 62 LayerNorms/token.
+  Sharded weights built lazily before trace capture (trace-safe). Cost: a small PCC dip —
+  decode latent 0.99972→0.99968, generate latent 0.99955→0.99931 (both still >0.999 gate),
+  from the different (multi-core) reduction order. Prefill/interleaved PCC unchanged.
 
 ## Known bugs
 - **BUG-1 (FIXED 2026-07-20):** decode returned garbage when `max_seq` was an **odd number of
