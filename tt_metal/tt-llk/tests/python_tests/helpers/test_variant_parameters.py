@@ -530,10 +530,10 @@ class LOOP_FACTOR(RuntimeParameter):
 
 @dataclass
 class UNPACK_TRANS_FACES(RuntimeParameter):
-    unpack_transpose_faces: Transpose = Transpose.No
+    unpack_trans_faces: Transpose = Transpose.No
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool UNPACK_TRANSPOSE_FACES = {str(self.unpack_transpose_faces.value).lower()};"
+        return f"constexpr bool UNPACK_TRANSPOSE_FACES = {str(self.unpack_trans_faces.value).lower()};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"bool UNPACK_TRANSPOSE_FACES;", "?"
@@ -541,10 +541,10 @@ class UNPACK_TRANS_FACES(RuntimeParameter):
 
 @dataclass
 class UNPACK_TRANS_WITHIN_FACE(RuntimeParameter):
-    unpack_transpose_within_face: Transpose = Transpose.No
+    unpack_trans_within_face: Transpose = Transpose.No
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {str(self.unpack_transpose_within_face.value).lower()};"
+        return f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {str(self.unpack_trans_within_face.value).lower()};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"bool UNPACK_TRANSPOSE_WITHIN_FACE;", "?"
@@ -563,10 +563,10 @@ class NARROW_TILE(RuntimeParameter):
 
 @dataclass
 class DEST_INDEX(RuntimeParameter):
-    dst_index: int = 0
+    dest_index: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int DST_INDEX = {self.dst_index};"
+        return f"constexpr int DST_INDEX = {self.dest_index};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"int DST_INDEX;", "i"
@@ -610,10 +610,10 @@ class L1_ACC(RuntimeParameter):
 
 @dataclass
 class TILE_COUNT(RuntimeParameter):
-    tile_cnt: int = 0
+    tile_count: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t TILE_CNT = {self.tile_cnt};"
+        return f"constexpr std::uint32_t TILE_CNT = {self.tile_count};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t TILE_CNT;", "I"
@@ -621,10 +621,10 @@ class TILE_COUNT(RuntimeParameter):
 
 @dataclass
 class NUM_GUARD_TILES(RuntimeParameter):
-    count: int = 0
+    num_guard_tiles: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.count};"
+        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.num_guard_tiles};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t NUM_GUARD_TILES;", "I"
@@ -632,10 +632,10 @@ class NUM_GUARD_TILES(RuntimeParameter):
 
 @dataclass
 class INPUT_TILE_CNT(RuntimeParameter):
-    tile_cnt: int = 0
+    input_tile_cnt: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int INPUT_TILE_CNT = {self.tile_cnt};"
+        return f"constexpr int INPUT_TILE_CNT = {self.input_tile_cnt};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int INPUT_TILE_CNT;", "i"
@@ -643,10 +643,10 @@ class INPUT_TILE_CNT(RuntimeParameter):
 
 @dataclass
 class OUTPUT_TILE_CNT(RuntimeParameter):
-    tile_cnt: int = 0
+    output_tile_cnt: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int OUTPUT_TILE_CNT = {self.tile_cnt};"
+        return f"constexpr int OUTPUT_TILE_CNT = {self.output_tile_cnt};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int OUTPUT_TILE_CNT;", "i"
@@ -654,28 +654,13 @@ class OUTPUT_TILE_CNT(RuntimeParameter):
 
 @dataclass
 class REDUCE_TO_ONE(RuntimeParameter):
-    is_reduce_to_one: bool = False
+    reduce_to_one: bool = False
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr bool IS_REDUCE_TO_ONE = {str(self.is_reduce_to_one).lower()};"
-        )
+        return f"constexpr bool IS_REDUCE_TO_ONE = {str(self.reduce_to_one).lower()};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool IS_REDUCE_TO_ONE;", "?"
-
-
-@dataclass
-class NUM_TILES_IN_BLOCK(RuntimeParameter):
-    num_tiles_in_block: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr std::uint32_t NUM_TILES_IN_BLOCK = {self.num_tiles_in_block};"
-        )
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "std::uint32_t NUM_TILES_IN_BLOCK;", "I"
 
 
 @dataclass
