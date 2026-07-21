@@ -45,6 +45,11 @@ KNOWN_VIOLATIONS: frozenset[str] = frozenset(
         "tt-train/sources/ttml/metal/ops/select_target_logit/device/kernels/dataflow/select_target_logit_reader.cpp",
         "tt-train/sources/ttml/metal/ops/subtract_at_target/device/kernels/dataflow/subtract_at_target_reader.cpp",
         "tt-train/sources/ttml/metal/ops/cross_entropy_fw/device/kernels/dataflow/reader_cross_entropy_fw_interleaved_start_id.cpp",
+        # Reviewed-safe, NOT a to-fix violation: this writer reserves N packet-header slots at once,
+        # takes the pinned base via get_read_ptr a single time (nothing pops this scratch CB, so the
+        # read ptr never moves), then manually offsets each header by sizeof(PACKET_HEADER_TYPE) — the
+        # headers are distinct and there is no per-iteration get_read_ptr aliasing. Do not "fix" it.
+        "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/writer_all_to_all_combine.cpp",
     }
 )
 
