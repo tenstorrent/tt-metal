@@ -4,6 +4,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
 
@@ -132,11 +133,38 @@ void EventSynchronize(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return;
     }
+    // Epoch short-circuit: if the CQ's quiesce epoch differs from the epoch
+    // captured in this event, the event is from a prior quiesce cycle.
+    // finish_and_reset_in_use() already drained all work from that cycle and reset
+    // counters, so the event is implicitly complete. This covers the window AFTER
+    // mark_in_use() clears is_quiesced but before counters reach the stale event_id
+    // — without this check, the spin below would never terminate.
+    auto& mesh_cq = event.device()->mesh_command_queue(event.mesh_cq_id());
+    const uint32_t event_epoch = event.quiesce_epoch();
+    if (event_epoch != mesh_cq.quiesce_epoch()) {
+        return;
+    }
     for (const auto& coord : event.device_range()) {
-        auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
-            ;
+        // In multi-host meshes, event.device_range() spans all coordinates including remote
+        // ranks. Remote devices are not accessible from this host — the remote rank runs its
+        // own EventSynchronize and manages its local CQs. Skip non-local coordinates to
+        // avoid TT_FATAL("Cannot get device for remote device") in MeshDeviceViewImpl::get_device.
+        if (!event.device()->impl().is_local(coord)) {
+            continue;
         }
+        auto* physical_device = event.device()->impl().get_device(coord);
+        auto& sysmem = physical_device->sysmem_manager();
+        const auto cq_id = event.mesh_cq_id();
+        const auto target_id = event.id();
+        // If the device has been quiesced since this event was recorded, all in-flight
+        // events are implicitly complete (finish_and_reset_in_use drained the CQ).
+        if (sysmem.is_quiesced(cq_id)) {
+            continue;
+        }
+        ttsl::nice_spin_until([&mesh_cq, &sysmem, cq_id, target_id, event_epoch] {
+            return mesh_cq.quiesce_epoch() != event_epoch || sysmem.is_quiesced(cq_id) ||
+                   sysmem.get_last_completed_event(cq_id) >= target_id;
+        });
     }
 }
 
@@ -144,12 +172,29 @@ bool EventQuery(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return true;
     }
+    // Epoch short-circuit: see EventSynchronize above.
+    auto& mesh_cq = event.device()->mesh_command_queue(event.mesh_cq_id());
+    const uint32_t event_epoch = event.quiesce_epoch();
+    if (event_epoch != mesh_cq.quiesce_epoch()) {
+        return true;
+    }
     bool event_completed = true;
     for (const auto& coord : event.device_range()) {
+        // Skip remote coordinates — see comment in EventSynchronize above.
+        if (!event.device()->impl().is_local(coord)) {
+            continue;
+        }
         auto* physical_device = event.device()->impl().get_device(coord);
+        // If the CQ has been quiesced since this event was recorded, all in-flight
+        // events are implicitly complete (finish_and_reset_in_use drained the CQ).
+        if (physical_device->sysmem_manager().is_quiesced(event.mesh_cq_id())) {
+            continue;
+        }
         event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
     }
-    return event_completed;
+    // A complete quiesce/reactivation cycle may race the per-device checks above.
+    // Epoch change proves the old event was drained even if is_quiesced is already clear.
+    return event_epoch != mesh_cq.quiesce_epoch() || event_completed;
 }
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
@@ -171,9 +216,7 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<co
     }
 }
 
-void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {
-    mesh_cq.finish(sub_device_ids);
-}
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) { mesh_cq.finish(sub_device_ids); }
 
 bool UsingDistributedEnvironment() {
     using multihost::DistributedContext;

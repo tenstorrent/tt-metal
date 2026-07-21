@@ -41,6 +41,7 @@ public:
     ~DummyMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;
+    bool in_use() const override { return false; }
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;

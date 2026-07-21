@@ -41,6 +41,9 @@ public:
 
     uint32_t get_current_event(uint8_t cq_id);
 
+    void set_quiesced(uint8_t cq_id, bool val);
+    bool is_quiesced(uint8_t cq_id) const;
+
     void reset(uint8_t cq_id);
 
     void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
@@ -130,6 +133,11 @@ private:
     std::vector<tt::umd::TlbWindow*> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
+    // Set to true by finish_and_reset_in_use() after quiesce; cleared when new work is enqueued.
+    // Allows EventSynchronize() to return immediately for stale tensor-destructor events that
+    // predate the quiesce, without the UINT32_MAX sentinel bleeding into the next workload cycle.
+    // std::atomic<bool> is non-copyable/non-movable so we use a heap array instead of std::vector.
+    std::unique_ptr<std::atomic<bool>[]> cq_to_quiesced;
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;

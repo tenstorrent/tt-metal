@@ -4,12 +4,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
+#include <mesh_event.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
@@ -238,14 +241,32 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     state_(std::move(other.state_)) {
+    TT_ASSERT(
+        other.active_event_publishers_.load(std::memory_order_acquire) == 0,
+        "Cannot move a MeshBuffer with active pending-event registrations");
+    // std::atomic is non-movable; transfer each slot manually.
+    // Caller must guarantee no concurrent access to either object during the move.
+    for (size_t i = 0; i < kMaxMeshCQs; ++i) {
+        pending_event_ids_[i].value.store(
+            other.pending_event_ids_[i].value.exchange(0ULL, std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+    if (std::holds_alternative<DeallocatedState>(state_)) {
+        deallocation_started_.test_and_set(std::memory_order_relaxed);
+    } else {
+        deallocation_started_.clear(std::memory_order_relaxed);
+    }
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
+    other.deallocation_started_.test_and_set(std::memory_order_release);
 }
 
 MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
     if (this != &other) {
         deallocate();
+        TT_ASSERT(
+            other.active_event_publishers_.load(std::memory_order_acquire) == 0,
+            "Cannot move-assign a MeshBuffer with active pending-event registrations");
         config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
         mesh_device_ = std::move(other.mesh_device_);
@@ -253,21 +274,192 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
         state_ = std::move(other.state_);
-
+        // std::atomic is non-movable; transfer each slot manually.
+        // Caller must guarantee no concurrent access to either object during the move.
+        for (size_t i = 0; i < kMaxMeshCQs; ++i) {
+            pending_event_ids_[i].value.store(
+                other.pending_event_ids_[i].value.exchange(0ULL, std::memory_order_relaxed), std::memory_order_relaxed);
+        }
+        active_event_publishers_.store(0, std::memory_order_relaxed);
+        if (std::holds_alternative<DeallocatedState>(state_)) {
+            deallocation_started_.test_and_set(std::memory_order_relaxed);
+        } else {
+            deallocation_started_.clear(std::memory_order_relaxed);
+        }
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;
+        other.deallocation_started_.test_and_set(std::memory_order_release);
     }
     return *this;
 }
 
+MeshBuffer::PendingEventRegistration::PendingEventRegistration(PendingEventRegistration&& other) noexcept :
+    buffer_(std::exchange(other.buffer_, nullptr)) {}
+
+MeshBuffer::PendingEventRegistration& MeshBuffer::PendingEventRegistration::operator=(
+    PendingEventRegistration&& other) noexcept {
+    if (this != &other) {
+        release();
+        buffer_ = std::exchange(other.buffer_, nullptr);
+    }
+    return *this;
+}
+
+MeshBuffer::PendingEventRegistration::~PendingEventRegistration() { release(); }
+
+void MeshBuffer::PendingEventRegistration::publish(const MeshEvent& event) {
+    TT_FATAL(buffer_ != nullptr, "Cannot publish an inactive MeshBuffer pending-event registration");
+    buffer_->add_pending_event(event);
+    release();
+}
+
+void MeshBuffer::PendingEventRegistration::release() {
+    if (buffer_ != nullptr) {
+        buffer_->release_pending_event_registration();
+        buffer_ = nullptr;
+    }
+}
+
+std::optional<MeshBuffer::PendingEventRegistration> MeshBuffer::try_acquire_pending_event_registration() const {
+    if (deallocation_started_.test(std::memory_order_acquire)) {
+        return std::nullopt;
+    }
+
+    active_event_publishers_.fetch_add(1, std::memory_order_acq_rel);
+    if (deallocation_started_.test(std::memory_order_acquire)) {
+        release_pending_event_registration();
+        return std::nullopt;
+    }
+
+    PendingEventRegistration registration(this);
+    return std::optional<PendingEventRegistration>(std::move(registration));
+}
+
+void MeshBuffer::release_pending_event_registration() const {
+    const uint32_t previous = active_event_publishers_.fetch_sub(1, std::memory_order_release);
+    TT_ASSERT(previous > 0, "MeshBuffer pending-event registration count underflow");
+    if (previous == 1) {
+        active_event_publishers_.notify_all();
+    }
+}
+
+void MeshBuffer::wait_for_pending_event_registrations() const {
+    uint32_t active = active_event_publishers_.load(std::memory_order_acquire);
+    while (active != 0) {
+        active_event_publishers_.wait(active, std::memory_order_acquire);
+        active = active_event_publishers_.load(std::memory_order_acquire);
+    }
+}
+
+void MeshBuffer::add_pending_event(const MeshEvent& event) const {
+    const uint32_t cq = event.mesh_cq_id();
+    TT_FATAL(cq < kMaxMeshCQs, "CQ id {} exceeds kMaxMeshCQs ({})", cq, kMaxMeshCQs);
+    auto mesh_device = mesh_device_.lock();
+    TT_FATAL(mesh_device != nullptr, "Cannot add a pending event after the MeshDevice has been destroyed");
+    TT_FATAL(event.device() == mesh_device.get(), "MeshBuffer pending event belongs to a different MeshDevice");
+    const MeshCoordinateRange full_device_range(event.device()->shape());
+    TT_FATAL(
+        event.device_range() == full_device_range,
+        "MeshBuffer pending-event tracking requires full-mesh events. Received range {} but expected {}",
+        event.device_range(),
+        full_device_range);
+    const uint64_t new_packed = pack_epoch_event(event.quiesce_epoch(), event.id());
+
+    // CAS loop: only advance the stored packed value if the new one is strictly greater.
+    // Within the same epoch, event IDs are monotonically increasing, so the packed
+    // 64-bit value (epoch << 32 | event_id) is also monotonically increasing.
+    // Across epochs, a newer epoch always dominates regardless of event_id.
+    // Publishing happens before the registration's release operation. Deallocation
+    // observes that release before draining these slots.
+    uint64_t current = pending_event_ids_[cq].value.load(std::memory_order_relaxed);
+    while (current < new_packed && !pending_event_ids_[cq].value.compare_exchange_weak(
+                                       current, new_packed, std::memory_order_release, std::memory_order_relaxed)) {
+    }
+}
+
+void MeshBuffer::wait_for_pending_events() {
+    auto mesh_device = mesh_device_.lock();
+    if (!mesh_device) {
+        return;  // MeshDevice destroyed, nothing to wait for
+    }
+    if (!mesh_device->is_initialized()) {
+        // Device was closed (e.g. ttnn.close_device() called before Python GC runs on tensors).
+        // close_impl() already flushed all outstanding work via ~FDMeshCommandQueue(), so the
+        // operations behind these events have already completed.  Calling EventSynchronize() here
+        // would hit Device::sysmem_manager()'s lazy-reinit path — new SystemMemoryManager starts
+        // with last_completed_event=0, so the busy-spin "while (0 < event_N)" never exits.
+        // Skip safely: the work is done, the device just isn't alive anymore.
+        return;
+    }
+
+    // add_pending_event() accepts only full-mesh events, so reconstructing the full
+    // range preserves the event synchronization contract without storing per-slot ranges.
+    const MeshCoordinateRange device_range(mesh_device->shape());
+
+    // Every publisher has released its registration before this drain starts.
+    for (uint32_t cq_id = 0; cq_id < kMaxMeshCQs; ++cq_id) {
+        const uint64_t packed = pending_event_ids_[cq_id].value.exchange(0ULL, std::memory_order_acquire);
+        if (packed == 0) {
+            continue;
+        }
+        const uint32_t stored_epoch = unpack_epoch(packed);
+        const uint32_t event_id = unpack_event_id(packed);
+
+        auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
+
+        // If the parent mesh CQ has been quiesced (in_use_==false) and no new work submitted
+        // on the parent mesh CQ since, then finish_and_reset_in_use() already drained all
+        // outstanding work — including the work behind this event — and reset the event counters.
+        // Skip safely: all work on the parent mesh CQ has already completed.
+        if (!mesh_cq.in_use()) {
+            continue;
+        }
+
+        // If the CQ's quiesce epoch has advanced since this event was recorded, the event
+        // is from a previous quiesce cycle.  finish_and_reset_in_use() already drained all
+        // work from that cycle and reset the event counters to 0.  Calling EventSynchronize
+        // with the old event_id would spin forever because the new cycle's counter will
+        // never reach the stale value.  Skip safely: the work is already complete.
+        if (stored_epoch != mesh_cq.quiesce_epoch()) {
+            continue;
+        }
+
+        EventSynchronize(MeshEvent(event_id, mesh_device.get(), cq_id, device_range, stored_epoch));
+    }
+}
+
+bool MeshBuffer::has_pending_events() const {
+    for (const auto& id : pending_event_ids_) {
+        if (id.value.load(std::memory_order_relaxed) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void MeshBuffer::deallocate() {
+    if (std::holds_alternative<DeallocatedState>(state_)) {
+        return;
+    }
+
+    // Close registration before waiting. A publisher either acquired before this
+    // transition (and must publish/cancel before we continue) or observes the closed
+    // gate and refuses to dispatch work that could reference this allocation.
+    deallocation_started_.test_and_set(std::memory_order_release);
+    wait_for_pending_event_registrations();
+
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
+        // Wait for all pending operations to complete before deallocating.
+        // This prevents address reuse while operations are still in-flight on other CQs.
+        wait_for_pending_events();
+
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
-        if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
+        if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid() &&
+            mesh_device->is_initialized()) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
             // Skip per-device unmirror if the device has been closed (default_allocator_ reset
             // by Device::close()). This can happen at process teardown when the mesh device is

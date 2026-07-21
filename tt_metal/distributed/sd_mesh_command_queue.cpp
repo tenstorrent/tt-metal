@@ -82,6 +82,11 @@ std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     return std::nullopt;
 }
 
+bool SDMeshCommandQueue::in_use() const {
+    std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+    return !logical_cores_for_previous_workload_.empty();
+}
+
 bool SDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
@@ -109,8 +114,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    auto payload =
-        ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -156,13 +160,24 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
-    if (!logical_cores_for_previous_workload_.empty()) {
+    decltype(logical_cores_for_previous_workload_) workloads_to_wait;
+    {
+        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+        workloads_to_wait = logical_cores_for_previous_workload_;
+    }
+    if (!workloads_to_wait.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
-        for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
+        for (const auto& [device_id, logical_cores] : workloads_to_wait) {
             tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
         }
-        logical_cores_for_previous_workload_.clear();
+        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+        for (const auto& [device_id, logical_cores] : workloads_to_wait) {
+            auto it = logical_cores_for_previous_workload_.find(device_id);
+            if (it != logical_cores_for_previous_workload_.end() && it->second == logical_cores) {
+                logical_cores_for_previous_workload_.erase(it);
+            }
+        }
     }
 }
 

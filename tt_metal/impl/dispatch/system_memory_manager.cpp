@@ -122,7 +122,8 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     cq_to_event_locks(num_hw_cqs),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
-    prefetch_q_dev_fences(num_hw_cqs) {
+    prefetch_q_dev_fences(num_hw_cqs),
+    cq_to_quiesced(std::make_unique<std::atomic<bool>[]>(num_hw_cqs)) {
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -374,6 +375,14 @@ uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
     return last_completed_event;
 }
 
+void SystemMemoryManager::set_quiesced(uint8_t cq_id, bool val) {
+    this->cq_to_quiesced[cq_id].store(val, std::memory_order_release);
+}
+
+bool SystemMemoryManager::is_quiesced(uint8_t cq_id) const {
+    return this->cq_to_quiesced[cq_id].load(std::memory_order_acquire);
+}
+
 void SystemMemoryManager::reset(const uint8_t cq_id) {
     if (is_mock_device()) {
         return;
@@ -384,6 +393,10 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     cq_interface.issue_fifo_wr_toggle = false;
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
     cq_interface.completion_fifo_rd_toggle = false;
+    // Reset starts a fresh CQ session: clear the quiesced flag so the next
+    // EventSynchronize / wait_for_pending_events actually waits on new events
+    // instead of short-circuiting on a stale quiesce publication.
+    this->cq_to_quiesced[cq_id].store(false, std::memory_order_release);
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {

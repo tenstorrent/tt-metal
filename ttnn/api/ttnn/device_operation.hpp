@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <exception>
 #include <optional>
@@ -171,6 +172,41 @@ inline void log_operation(
 
 #endif
 
+// Collects all MeshBuffer pointers that need a completion event recorded.
+// A single pass over all reachable Tensors in `object` — avoids the two-pass
+// (check-then-iterate) pattern that previously walked device tensors twice per op.
+// Unique buffers are appended to `out`; callers should reserve() if they know the typical size.
+//
+// Note: DeviceStorage retains sole ownership of its MeshBuffer since #47291, so this
+// returns a non-owning `MeshBuffer*` (address-of the const ref returned by
+// get_mesh_buffer()). The pointer is valid only while the source Tensor stays alive,
+// and registrations are acquired inline before tensor_args/tensor_return_value can
+// leave scope.
+template <typename T>
+inline void collect_trackable_mesh_buffers(
+    const T& object, std::vector<const tt::tt_metal::distributed::MeshBuffer*>& out) {
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            if (!tensor.is_allocated() || tensor.storage_type() != StorageType::DEVICE) {
+                return;
+            }
+            for (const auto& device_tensor : ttnn::distributed::get_device_tensors(tensor)) {
+                if (device_tensor.storage_type() != StorageType::DEVICE) {
+                    continue;
+                }
+                const auto& storage = device_tensor.device_storage();
+                if (!storage.is_allocated()) {
+                    continue;
+                }
+                const auto* mesh_buffer = &storage.get_mesh_buffer();
+                if (std::find(out.begin(), out.end(), mesh_buffer) == out.end()) {
+                    out.push_back(mesh_buffer);
+                }
+            }
+        },
+        object);
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -207,7 +243,69 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& mesh_cq = mesh_device->mesh_command_queue();
+
+    // Acquire one registration per unique buffer BEFORE dispatch. Deallocation closes
+    // this gate and waits for active registrations before draining completion events,
+    // so there is no enqueue-to-event window where an address can be reused.
+    //
+    // SCOPE: this auto-pinning covers ONLY the TTNN device_operation dispatch path
+    // (i.e. ops routed through enqueue_mesh_workload). It does NOT cover:
+    //   - EnqueueWriteMeshBuffer / EnqueueReadMeshBuffer (raw I/O enqueue)
+    //   - direct distributed::EnqueueMeshWorkload callers bypassing this template
+    //   - operation_attributes tensors (only tensor_args / tensor_return_value are walked)
+    // Callers that drive device buffers outside this path must keep their buffers alive
+    // until the CQ completes. Tracking those paths is a follow-up (#43725 scope is the
+    // async-runtime op loop).
+    //
+    // Skip during trace capture: enqueue_record_event_to_host() TT_FATALs when trace_id is
+    // set ("Event Synchronization is not supported during trace capture"). Buffer lifetime
+    // during trace execution is managed by the trace infrastructure, which keeps all captured
+    // buffer addresses alive for the lifetime of the trace — the eager-mode reuse race cannot
+    // occur during capture.
+    //
+    std::vector<tt::tt_metal::distributed::MeshBuffer::PendingEventRegistration> registrations;
+    if (!mesh_cq.trace_id().has_value()) {
+        std::vector<const tt::tt_metal::distributed::MeshBuffer*> trackable_buffers;
+        detail::collect_trackable_mesh_buffers(tensor_args, trackable_buffers);
+        detail::collect_trackable_mesh_buffers(tensor_return_value, trackable_buffers);
+
+        registrations.reserve(trackable_buffers.size());
+        for (const auto* buffer : trackable_buffers) {
+            auto registration = buffer->try_acquire_pending_event_registration();
+            TT_FATAL(
+                registration.has_value(),
+                "Cannot dispatch a TTNN operation using a MeshBuffer after deallocation has started");
+            registrations.emplace_back(std::move(*registration));
+        }
+    }
+
+    try {
+        log_trace(tt::LogMetal, "[device_operation] EnqueueMeshWorkload start");
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
+        log_trace(tt::LogMetal, "[device_operation] EnqueueMeshWorkload done");
+
+        // Record one full-mesh host event after the workload and publish it to every
+        // registered buffer before releasing the registration gate.
+        if (!registrations.empty()) {
+            auto completion_event = mesh_cq.enqueue_record_event_to_host();
+            for (auto& registration : registrations) {
+                registration.publish(completion_event);
+            }
+        }
+    } catch (...) {
+        if (!registrations.empty()) {
+            // Enqueue may have partially submitted work. Keep registrations active
+            // until the CQ is drained so stack unwinding cannot release addresses
+            // still referenced by hardware.
+            try {
+                mesh_cq.finish();
+            } catch (...) {
+                std::terminate();
+            }
+        }
+        throw;
+    }
 
     TracyOpMeshWorkload(
         mesh_device,
@@ -303,57 +401,47 @@ void create_and_cache_mesh_workload(
             "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
     };
     // WorkloadFactory is unconstrained — dispatch_to_mesh_workload_factory resolves the type.
-    dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
-        program_factory, [&]<typename WorkloadFactory>() {
-            using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
+    dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
+        using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
 
-            ttnn::MeshCoordinateRangeSet tensor_coords;
-            if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
-                // Fast path - a range covers the entire mesh.
-                tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
-            } else {
-                // Slow path - iterate over coordinates and merge them into a range set one by one.
-                log_msg_func();  // Work around for g++12 compiler bug
-                for (const auto& coord :
-                     mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-                    tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
-                }
+        ttnn::MeshCoordinateRangeSet tensor_coords;
+        if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+            // Fast path - a range covers the entire mesh.
+            tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
+        } else {
+            // Slow path - iterate over coordinates and merge them into a range set one by one.
+            log_msg_func();  // Work around for g++12 compiler bug
+            for (const auto& coord :
+                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+                tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
             }
-            auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
-                operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+        }
+        auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
-            // Don't cache programs during NO_DISPATCH graph capture mode because
-            // buffer addresses are invalid (address=0). Caching such programs would
-            // cause issues when later running in NORMAL mode.
-            // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
-            bool hook_blocks = false;
-            if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
-                auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get());
-                if (processor_hooks) {
-                    hook_blocks = processor_hooks->get_block();
-                }
+        // Don't cache programs during NO_DISPATCH graph capture mode because
+        // buffer addresses are invalid (address=0). Caching such programs would
+        // cause issues when later running in NORMAL mode.
+        // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
+        bool hook_blocks = false;
+        if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
+            auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get());
+            if (processor_hooks) {
+                hook_blocks = processor_hooks->get_block();
             }
-            bool should_cache = program_cache.is_enabled() && !hook_blocks;
-            if (should_cache) {
-                program_cache.insert(
-                    program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});
-                auto& cached_program_factory = program_cache.get(program_key);
-                auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
-                enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes,
-                    tensor_args,
-                    tensor_return_value,
-                    mesh_device,
-                    workload);
-            } else {
-                enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes,
-                    tensor_args,
-                    tensor_return_value,
-                    mesh_device,
-                    cached_workload.workload);
-            }
-        });
+        }
+        bool should_cache = program_cache.is_enabled() && !hook_blocks;
+        if (should_cache) {
+            program_cache.insert(program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});
+            auto& cached_program_factory = program_cache.get(program_key);
+            auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
+            enqueue_mesh_workload<mesh_device_operation_t>(
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+        } else {
+            enqueue_mesh_workload<mesh_device_operation_t>(
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
+        }
+    });
 }
 
 // Main function to launch operations on mesh devices with special handling for MeshDeviceOperationAdapter

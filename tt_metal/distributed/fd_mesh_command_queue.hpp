@@ -139,6 +139,14 @@ private:
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
     std::atomic<bool> in_use_ = false;
+    // Monotonically increasing epoch incremented on each finish_and_reset_in_use() quiesce.
+    // Allows MeshBuffer to detect stale pending events from a previous quiesce cycle.
+    std::atomic<uint32_t> quiesce_epoch_{0};
+
+    // Sets in_use_=true and clears the per-device quiesced sentinel.  Private because it is
+    // an implementation detail of the CQ lifecycle — it must only be called while the API
+    // mutex is held, which every public entry point already guarantees via lock_api_function_().
+    void mark_in_use();
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;
@@ -278,7 +286,8 @@ public:
 
     void wait_for_completion(bool reset_launch_msg_state) override;
     void finish_and_reset_in_use() override;
-    bool in_use() override { return in_use_.load(); }
+    bool in_use() const override { return in_use_.load(); }
+    uint32_t quiesce_epoch() const override { return quiesce_epoch_.load(std::memory_order_acquire); }
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -5,6 +5,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
+#include <array>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -16,6 +18,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -91,6 +94,26 @@ namespace tt::tt_metal::distributed {
 // replication, or 2D sharding. The allocation is done in lock-step across all devices in the mesh.
 class MeshBuffer {
 public:
+    class PendingEventRegistration {
+    public:
+        PendingEventRegistration(const PendingEventRegistration&) = delete;
+        PendingEventRegistration& operator=(const PendingEventRegistration&) = delete;
+        PendingEventRegistration(PendingEventRegistration&& other) noexcept;
+        PendingEventRegistration& operator=(PendingEventRegistration&& other) noexcept;
+        ~PendingEventRegistration();
+
+        // Publishes the completion event and releases this registration. The event
+        // must be ordered after all work that references the buffer.
+        void publish(const MeshEvent& event);
+
+    private:
+        explicit PendingEventRegistration(const MeshBuffer* buffer) : buffer_(buffer) {}
+        void release();
+
+        const MeshBuffer* buffer_ = nullptr;
+        friend class MeshBuffer;
+    };
+
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
         const DeviceLocalBufferConfig& device_local_config,
@@ -144,6 +167,27 @@ public:
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Pending Event Tracking for Multi-CQ Safety
+    //
+    // In multi-CQ scenarios, operations on one CQ may reference a buffer while another CQ
+    // deallocates and reallocates the same address. To prevent this race, we track the latest
+    // pending full-mesh event per supported CQ as a packed (quiesce_epoch, event_id) uint64_t.
+    // Deallocation rejects unsupported CQ IDs rather than silently skipping their events.
+    // The buffer's address cannot be safely reused until all pending events complete.
+
+    // Acquires an in-flight publisher before work using this buffer is dispatched.
+    // Deallocation blocks until every acquired registration publishes an event or
+    // is released. Returns nullopt once deallocation has started.
+    [[nodiscard]] std::optional<PendingEventRegistration> try_acquire_pending_event_registration() const;
+
+    // Waits for all pending events to complete. Called during deallocation to ensure
+    // no operations are still in-flight before releasing the buffer address.
+    void wait_for_pending_events();
+
+    // Returns true if there are pending events that must complete before deallocation.
+    bool has_pending_events() const;
+
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
@@ -195,6 +239,45 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    // Pending event tracking for multi-CQ safety.
+    // Stores the latest in-flight full-mesh event per supported CQ. 0 = no pending event.
+    // Each slot stores (quiesce_epoch << 32 | event_id) so that
+    // wait_for_pending_events() can detect stale events from a previous quiesce
+    // cycle without risking an infinite spin on reset counters.
+    // IDs are monotonically increasing within a cycle; CAS-updated so only the
+    // latest is kept.
+    // This currently supports the two-CQ FD configurations used by Wormhole/Blackhole;
+    // add_pending_event() fails fast if a runtime CQ id is outside this fixed array.
+    //
+    // Each slot is padded to a full cache line (64 bytes) to prevent false sharing:
+    // CQ0 and CQ1 are written by different dispatch threads; without padding they
+    // would share a cache line and cause unnecessary coherence traffic.
+    static constexpr size_t kMaxMeshCQs = 2;
+    struct alignas(64) CacheLinePaddedEventId {
+        std::atomic<uint64_t> value{};
+    };
+    mutable std::array<CacheLinePaddedEventId, kMaxMeshCQs> pending_event_ids_{};
+
+    // Pack/unpack helpers for the 64-bit (epoch, event_id) encoding.
+    static uint64_t pack_epoch_event(uint32_t epoch, uint32_t event_id) {
+        return (static_cast<uint64_t>(epoch) << 32) | event_id;
+    }
+    static uint32_t unpack_epoch(uint64_t packed) { return static_cast<uint32_t>(packed >> 32); }
+    static uint32_t unpack_event_id(uint64_t packed) { return static_cast<uint32_t>(packed); }
+
+    // Adds an event while a PendingEventRegistration is active. Publishing the
+    // event before releasing the registration makes it visible to deallocation
+    // before the pending-event drain can run.
+    void add_pending_event(const MeshEvent& event) const;
+    void release_pending_event_registration() const;
+    void wait_for_pending_event_registrations() const;
+
+    // Terminal close gate for device-memory lifetime. A publisher increments the
+    // count before dispatch and rechecks the gate. Deallocation closes the gate,
+    // waits for the count to reach zero, drains events, then releases the address.
+    std::atomic_flag deallocation_started_ = ATOMIC_FLAG_INIT;
+    mutable std::atomic<uint32_t> active_event_publishers_{0};
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,
