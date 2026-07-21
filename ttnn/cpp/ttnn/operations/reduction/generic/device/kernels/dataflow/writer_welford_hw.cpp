@@ -28,6 +28,84 @@
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 
+namespace {
+
+constexpr std::uint32_t welford_block_size = tt::constants::TILE_WIDTH;
+
+struct WelfordBlockStats {
+    float mean;
+    // sum(partial variances) + M2(partial means)
+    float variance_sum;
+};
+
+constexpr std::uint32_t tree_levels_for(std::uint32_t num_blocks) {
+    std::uint32_t levels = 1;
+    while (num_blocks > 1) {
+        num_blocks >>= 1;
+        ++levels;
+    }
+    return levels;
+}
+
+template <std::uint32_t COUNT>
+inline WelfordBlockStats finalize_block(
+    float base_mean, float mean_delta_sum, float mean_delta_sq_sum, float partial_var_sum) {
+    static_assert(COUNT > 0);
+    constexpr float inv_count = 1.0f / static_cast<float>(COUNT);
+    const float mean_delta = mean_delta_sum * inv_count;
+    const float raw_means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+    const float means_m2 = raw_means_m2 < 0.0f ? 0.0f : raw_means_m2;
+    return {.mean = base_mean + mean_delta, .variance_sum = partial_var_sum + means_m2};
+}
+
+inline WelfordBlockStats combine_known_counts(
+    const WelfordBlockStats& a, const WelfordBlockStats& b, float b_fraction, float cross_weight) {
+    const float delta = b.mean - a.mean;
+    return {
+        .mean = a.mean + delta * b_fraction,
+        .variance_sum = a.variance_sum + b.variance_sum + delta * delta * cross_weight};
+}
+
+inline void push_full_block(WelfordBlockStats* tree, WelfordBlockStats block, std::uint32_t completed_blocks) {
+    std::uint32_t level = 0;
+    float half_block_count = static_cast<float>(welford_block_size) * 0.5f;
+
+    // completed_blocks is a binary carry mask: an occupied bit means that level
+    // already contains a block of welford_block_size * 2^level partials.
+    while ((completed_blocks & 1U) != 0U) {
+        block = combine_known_counts(tree[level], block, 0.5f, half_block_count);
+        completed_blocks >>= 1;
+        ++level;
+        half_block_count *= 2.0f;
+    }
+    tree[level] = block;
+}
+
+template <std::uint32_t LEVEL, std::uint32_t NUM_TREE_LEVELS, std::uint32_t NUM_FULL_BLOCKS, std::uint32_t BLOCK_SIZE>
+inline void finalize_tree(const WelfordBlockStats* tree, WelfordBlockStats& result) {
+    if constexpr (LEVEL < NUM_TREE_LEVELS) {
+        constexpr std::uint32_t level_bit = 1U << LEVEL;
+        if constexpr ((NUM_FULL_BLOCKS & level_bit) != 0U) {
+            constexpr std::uint32_t prior_blocks = NUM_FULL_BLOCKS & (level_bit - 1U);
+            if constexpr (prior_blocks == 0) {
+                result = tree[LEVEL];
+            } else {
+                constexpr std::uint32_t a_count = prior_blocks * BLOCK_SIZE;
+                constexpr std::uint32_t b_count = level_bit * BLOCK_SIZE;
+                constexpr std::uint32_t total_count = a_count + b_count;
+                constexpr float inv_total_count = 1.0f / static_cast<float>(total_count);
+                constexpr float b_fraction = static_cast<float>(b_count) * inv_total_count;
+                constexpr float cross_weight =
+                    static_cast<float>(a_count) * static_cast<float>(b_count) * inv_total_count;
+                result = combine_known_counts(result, tree[LEVEL], b_fraction, cross_weight);
+            }
+        }
+        finalize_tree<LEVEL + 1, NUM_TREE_LEVELS, NUM_FULL_BLOCKS, BLOCK_SIZE>(tree, result);
+    }
+}
+
+}  // namespace
+
 void kernel_main() {
     const std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
     const std::uint32_t NC_per_core = get_arg_val<std::uint32_t>(1);
@@ -40,6 +118,13 @@ void kernel_main() {
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     constexpr std::uint32_t reduce_batch_size = get_compile_time_arg_val(5);
     constexpr bool combined_is_bf16 = get_compile_time_arg_val(6) != 0;
+    static_assert(tile_width == welford_block_size);
+
+    constexpr std::uint32_t num_partials = reduce_batch_size * W;
+    static_assert(num_partials > 0);
+    constexpr std::uint32_t num_full_blocks = num_partials / welford_block_size;
+    constexpr std::uint32_t tail_size = num_partials % welford_block_size;
+    constexpr std::uint32_t num_tree_levels = tree_levels_for(num_full_blocks);
 
     constexpr auto cb_partial = tt::CBIndex::c_21;
     // cb_combined: combined scalar tile written by this kernel, read back by
@@ -75,13 +160,17 @@ void kernel_main() {
 
     for (std::uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: W-combine all per-column partials into one scalar ---
-        float base_mean = 0.0f;
-        float mean_delta_sum = 0.0f;
-        float mean_delta_sq_sum = 0.0f;
-        float mean_delta_compensation = 0.0f;
-        float mean_delta_sq_compensation = 0.0f;
-        float partial_var_sum = 0.0f;
-        bool have_base_mean = false;
+        // Build stable 32-partial leaves, then merge equal-sized leaves through
+        // a binary carry tree. Every tree merge is division-free, and no raw
+        // second-moment subtraction spans more than one leaf.
+        WelfordBlockStats tree[num_tree_levels];
+        std::uint32_t completed_blocks = 0;
+
+        float block_base_mean = 0.0f;
+        float block_mean_delta_sum = 0.0f;
+        float block_mean_delta_sq_sum = 0.0f;
+        float block_partial_var_sum = 0.0f;
+        std::uint32_t block_count = 0;
 
         for (std::uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (std::uint32_t wt = 0; wt < Wt; ++wt) {
@@ -95,9 +184,6 @@ void kernel_main() {
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
                 std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
-                float tile_mean_delta_sum = 0.0f;
-                float tile_mean_delta_sq_sum = 0.0f;
-                float tile_var_sum = 0.0f;
                 for (std::uint32_t c = 0; c < num_cols; ++c) {
                     // In tile row format, columns 0-15 are in Face 0 and
                     // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
@@ -108,58 +194,62 @@ void kernel_main() {
                     // Every partial summarizes the same H samples. The total population
                     // variance is therefore the average partial variance plus the
                     // population variance of the partial means.
-                    if (!have_base_mean) {
-                        base_mean = partial_mean;
-                        have_base_mean = true;
+                    if (block_count == 0) {
+                        block_base_mean = partial_mean;
+                        block_mean_delta_sum = 0.0f;
+                        block_mean_delta_sq_sum = 0.0f;
+                        block_partial_var_sum = partial_var;
                     } else {
-                        const float delta = partial_mean - base_mean;
-                        tile_mean_delta_sum += delta;
-                        tile_mean_delta_sq_sum += delta * delta;
+                        const float delta = partial_mean - block_base_mean;
+                        block_mean_delta_sum += delta;
+                        block_mean_delta_sq_sum += delta * delta;
+                        block_partial_var_sum += partial_var;
                     }
-                    tile_var_sum += partial_var;
+                    ++block_count;
+
+                    if (block_count == welford_block_size) {
+                        auto block = finalize_block<welford_block_size>(
+                            block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
+                        push_full_block(tree, block, completed_blocks);
+                        ++completed_blocks;
+                        block_count = 0;
+                    }
                 }
-
-                // Compensate once per tile. Volatile intermediates preserve the
-                // rounding steps under the device compiler's floating-point
-                // reassociation without paying that cost for every column.
-                const float mean_delta_adjusted = tile_mean_delta_sum - mean_delta_compensation;
-                volatile float next_mean_delta_sum = mean_delta_sum + mean_delta_adjusted;
-                volatile float mean_delta_roundoff = next_mean_delta_sum - mean_delta_sum;
-                mean_delta_compensation = mean_delta_roundoff - mean_delta_adjusted;
-                mean_delta_sum = next_mean_delta_sum;
-
-                const float mean_delta_sq_adjusted = tile_mean_delta_sq_sum - mean_delta_sq_compensation;
-                volatile float next_mean_delta_sq_sum = mean_delta_sq_sum + mean_delta_sq_adjusted;
-                volatile float mean_delta_sq_roundoff = next_mean_delta_sq_sum - mean_delta_sq_sum;
-                mean_delta_sq_compensation = mean_delta_sq_roundoff - mean_delta_sq_adjusted;
-                mean_delta_sq_sum = next_mean_delta_sq_sum;
-                partial_var_sum += tile_var_sum;
 
                 cb_partial_obj.pop_front(2);
             }
         }
 
-        // Centering the partial means around the first value avoids cancellation
-        // from their absolute magnitude. All counts are compile-time constants,
-        // so this formulation requires no floating-point division at runtime:
-        // M2(means) = sum(delta^2) - sum(delta)^2 / num_partials.
-        constexpr std::uint32_t num_partials = reduce_batch_size * W;
+        WelfordBlockStats combined;
+        if constexpr (num_full_blocks > 0) {
+            finalize_tree<0, num_tree_levels, num_full_blocks, welford_block_size>(tree, combined);
+        }
+
+        if constexpr (tail_size > 0) {
+            const auto tail = finalize_block<tail_size>(
+                block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
+            if constexpr (num_full_blocks == 0) {
+                combined = tail;
+            } else {
+                constexpr std::uint32_t full_count = num_full_blocks * welford_block_size;
+                constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
+                constexpr float tail_fraction = static_cast<float>(tail_size) * inv_num_partials;
+                constexpr float cross_weight =
+                    static_cast<float>(full_count) * static_cast<float>(tail_size) * inv_num_partials;
+                combined = combine_known_counts(combined, tail, tail_fraction, cross_weight);
+            }
+        }
+
         constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
-        const float mean_delta = mean_delta_sum * inv_num_partials;
-        const float raw_means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
-        // M2 is non-negative over the reals. Guard against residual rounding
-        // error so std never takes the square root of a negative variance.
-        const float means_m2 = raw_means_m2 < 0.0f ? 0.0f : raw_means_m2;
-        const float var_sum = partial_var_sum + means_m2;
         float final_var;
         if constexpr (correction) {
             constexpr std::uint32_t sample_count = num_partials * H;
-            // var_sum / num_partials is the population variance. Folding the sample
+            // variance_sum / num_partials is the population variance. Folding the sample
             // count correction into it cancels num_partials from the divisor.
             constexpr float correction_scale = static_cast<float>(H) / static_cast<float>(sample_count - 1);
-            final_var = var_sum * correction_scale;
+            final_var = combined.variance_sum * correction_scale;
         } else {
-            final_var = var_sum * inv_num_partials;
+            final_var = combined.variance_sum * inv_num_partials;
         }
 
         // Write the combined scalar into a tile in cb_combined.  The compute
