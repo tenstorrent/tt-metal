@@ -347,6 +347,33 @@ pre-scale operands `A=(k⊙eg)@(k⊙eng)ᵀ`, `intra=(q⊙eg)@(k⊙eng)ᵀ`; `de
 `[BH,NC,C,1]→[BH,NC,C,K]`. **Keep the WY block-inverse untouched** (gate-independent). Validate PCC vs
 `naive_chunk_kda` (prototype's factored form = 0.9999993); C++ builds ~2-3 min each, iterative.
 
+### Phase 9 — C++ kernel Phase B: implementation approach (32-CB constraint solved)
+
+Target **C=32 (Ct=1)** — simplest WY path (`invert_block`), numerically safe for `exp(±decay)`. All 32
+CBs are in use, so: **delete the L_mask → free `cb_lmask` (c_12), repurpose as `k_keng`=k⊙exp(−decay)**
+(resize cc→ck). **Key reuse:** the factored operands already exist as outputs — `w=k_beta⊙eg` (`prep:547`)
+and `q_decay=q⊙eg` (`prep:559`) — so `A=w@k_kengᵀ`, `intra=q_decay@k_kengᵀ`; only `k_keng` is new
+(+ transient `eng` in scratch, scr=16 tiles holds ck=4). Reorder prep to compute `eng/k_keng/w/q_decay`
+before A. Gate CBs `g/decay/decay_exp/decayfac` Ct→ck; `cb_dl` 1→Kt (dl=exp(g_sum) per-K = last row of
+decay_exp, transposed [1,K]→[K,1]). Scan state decay `bcast_scalar_mul`→per-K `bcast_cols_mul`. KDA op
+forces phased mode (monolithic left scalar). Host g head-split →[BH,NC,C,K].
+
+### Phase 9 — C++ fused kernel: DONE + validated + measured
+
+**Correctness:** `ttnn.transformer.chunk_kda` vs torch `naive_chunk_kda` **PCC 0.9999906** (HV=4, K=V=128,
+C=32, T∈{32,64,128}). Correct essentially first-run — only a host reshape `[BH,NC,C,1]→[BH,NC,C,K]` and a
+test-unpack fix needed; the diagonal-gate tile math + reused WY inverse were right. Commit `1e9edbe`.
+
+**Perf (recurrence op alone, production dims, realtime profiler on (8,1)):**
+| T | C++ fused | composed ttnn | gain |
+|---|---|---|---|
+| 640 | **610 µs / 14 kernels** | 5133 µs / 333 kernels | **8.4× faster, 24× fewer kernels** |
+| 256 | 279 µs / 14 | 2089 µs / 159 | 7.5× |
+
+Kernel count 333→14 (near the ~6-program phased floor). The fusion goal is met: the recurrence is no
+longer launch-bound. Next: wire `chunk_kda` into the layer (prefill, C=32) and re-measure the full
+before/after — the layer's "other" term (6.5 ms, dominated by the composed chunk) should collapse.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
