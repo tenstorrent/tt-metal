@@ -1,6 +1,9 @@
 name: "(Tier 1) Models Device Perf Tests"
 
 on:
+  schedule:
+    # Once a day at 07:00 UTC — all models, all SKUs
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       model:
