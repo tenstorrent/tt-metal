@@ -6,11 +6,11 @@
 // per 128-element block.
 //
 // Per block = tile_h rows x 128 cols = 4 tiles for default 32-wide tiles:
-//   1. tilize cb_in -> cb_tile.
-//   2. compute per-row amax over the 128-element block, clamp(>=1e-4), multiply by 1/448
-//      -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
-//   3. divide (cb_tile * bcast_col(cb_inv_scale_tiles)) into DST, then pack_untilize_dest straight
-//      to cb_output_e4m3 (scaled, cast to e4m3) -- fused divide+untilize, no cb_out_tile round-trip.
+//   Phase 1: tilize cb_in -> cb_tile.
+//   Phase 2: compute per-row amax over the 128-element block, clamp(>=1e-4), multiply by 1/448
+//            -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
+//   Phase 3: divide (cb_tile * bcast_col(cb_inv_scale_tiles)) into DST, then pack_untilize_dest straight
+//            to cb_output_e4m3 (scaled, cast to e4m3) -- fused divide+untilize, no cb_out_tile round-trip.
 // The writer extracts column 0 of cb_scale_tiles into the scale output [..., M, H/128].
 //
 // fp32_dest_acc_en=True (required for e4m3 on Blackhole; also gives fp32 reduce/divide precision).
@@ -102,10 +102,10 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
-            // ----- 1. tilize input row-major -> tile -----
+            // ----- Phase 1: tilize input row-major -> tile -----
             compute_kernel_lib::tilize<tiles_per_block, cb_in_id, cb_tile_id>(block_ht);
 
-            // ----- 2. block amax -> scale (col 0) and 1/scale (col 0) -----
+            // ----- Phase 2: block amax -> scale (col 0) and 1/scale (col 0) -----
             cb_tile.wait_front(tiles_per_block);  // read by index; popped after the divide
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
                 // Abs the block row's tiles into cb_abs. Force the SrcA tile-dim/stride reconfig
@@ -172,7 +172,7 @@ void kernel_main() {
                 cb_abs.pop_front(block_wt);
             }
 
-            // ----- 3. divide (cb_tile * bcast_col(1/scale)) into DST, then pack_untilize straight
+            // ----- Phase 3: divide (cb_tile * bcast_col(1/scale)) into DST, then pack_untilize straight
             // to e4m3 -- fused divide+untilize, no cb_out_tile L1 round-trip and no separate untilize pass.
             // In 32-bit DST (fp32_dest_acc) the half-sync pack-untilize cap is 4 tiles = one block. -----
             reconfig_data_format(cb_tile_id, cb_inv_scale_tiles_id);
