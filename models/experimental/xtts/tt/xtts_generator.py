@@ -286,14 +286,17 @@ class TtXttsGenerator:
 
     def generate_ondevice_traced(self, prompt_len, max_new_tokens, temperature, top_k, top_p, repetition_penalty):
         """FULLY on-device, end-to-end traceable decode: one captured step — decode_static +
-        on-device PRNG sampling (``TtSampler.pick_dev``, no ``ttnn.rand``) + in-place token feedback
-        (``ttnn.copy``) + on-device latent/code accumulation (onehot writes) — replayed
-        ``max_new_tokens`` times with ONLY counter writes (NO per-step host readback / no host loop
-        control). Requires ``self.model._static_kv`` already seeded (by the setup trace/prefill).
-        Reads codes+latents ONCE at the end and trims at the first STOP. Returns ``(codes, latents)``.
+        on-device Gumbel-max sampling (``TtSampler.pick_dev`` over PRE-DRAWN host noise, no
+        ``ttnn.rand``) + in-place token feedback (``ttnn.copy``) + on-device latent/code accumulation
+        (onehot writes) — replayed ``max_new_tokens`` times with ONLY counter/noise-row writes (NO
+        per-step host readback / no host loop control). Requires ``self.model._static_kv`` already
+        seeded (by the setup trace/prefill). Reads codes+latents ONCE at the end and trims at the
+        first STOP. Returns ``(codes, latents)``.
 
-        Trades self-termination for a fixed step budget (STOP handled by the single post-loop trim);
-        the on-device PRNG is deterministic/seeded rather than truly random."""
+        This is the clean pre->device->post shape: noise is drawn on host up front (preprocessing),
+        the decode runs entirely on device, and STOP self-termination becomes a post-loop trim. The
+        sampling now matches the host path in distribution (true uniform Gumbel draw); the only
+        residual difference from host self-termination is the fixed step budget + trailing-drone trim."""
         m = self.model
         dev = m.device
         N = int(max_new_tokens)
@@ -306,7 +309,15 @@ class TtXttsGenerator:
         tok_buf = m._pos_ids(START_AUDIO_TOKEN)  # [1,1] uint32 (embedding input; fed back in place)
         mp_buf = m._pos_ids(0)  # [1,1] uint32 (mel position)
         cpos_buf = m.cache_pos(prompt_len)  # [1,1,1,max_seq] fp32 (absolute cache position)
-        step_buf = f32(torch.zeros(1, 1))  # [1,1] fp32 (PRNG step counter)
+        # Pre-draw ALL Gumbel noise on HOST with a proper RNG (torch), once, before the loop. The
+        # noise is independent of the logits, so drawing it up front is preprocessing (not an in-loop
+        # host fallback); each step's row is streamed into a persistent [1, V] buffer like the
+        # position counters. This is a true uniform draw -> exact multinomial (vs a poor in-trace hash).
+        sampled = bool(temperature and temperature > 0.0)
+        if sampled:
+            u = torch.rand(N, NUM_AUDIO_TOKENS).clamp_(1e-4, 1.0 - 1e-3)
+            gumbel_all = -torch.log(-torch.log(u))  # [N, V] Gumbel(0,1)
+        noise_buf = f32(torch.zeros(1, NUM_AUDIO_TOKENS)) if sampled else None  # [1, V] fp32, refreshed per step
         arange_row = f32(torch.arange(N, dtype=torch.float32).reshape(1, N, 1))  # latent-slot selector base
         slot_row = f32(torch.zeros(1, N, 1))
         arange_col = f32(torch.arange(N, dtype=torch.float32).reshape(1, N))  # code-slot selector base
@@ -316,7 +327,7 @@ class TtXttsGenerator:
 
         def step_ops():
             logits, latent = m.decode_static(tok_buf, mp_buf, cpos_buf, m._static_kv)  # kv updated in place
-            tok = sampler.pick_dev(logits, step_buf)  # [1,1] uint32 sampled on device
+            tok = sampler.pick_dev(logits, noise_buf)  # [1,1] uint32 sampled on device (pre-drawn noise)
             ttnn.copy(tok, tok_buf)  # on-device token feedback -> next step's embedding
             oh_r = ttnn.typecast(ttnn.eq(arange_row, slot_row), ttnn.bfloat16)  # [1,N,1] one-hot at step
             ttnn.multiply(latents_buf, ttnn.add(ttnn.multiply(oh_r, -1.0), 1.0), output_tensor=latents_buf)
@@ -350,7 +361,10 @@ class TtXttsGenerator:
         for i in range(N):
             ttnn.copy_host_to_device_tensor(hu32(i), mp_buf)
             ttnn.copy_host_to_device_tensor(h32((1, 1, 1, m.max_seq), prompt_len + i), cpos_buf)
-            ttnn.copy_host_to_device_tensor(h32((1, 1), i), step_buf)
+            if sampled:  # stream this step's pre-drawn Gumbel-noise row into the persistent buffer
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(gumbel_all[i : i + 1].contiguous(), dtype=ttnn.float32, layout=T32), noise_buf
+                )
             ttnn.copy_host_to_device_tensor(h32((1, N, 1), i), slot_row)
             ttnn.copy_host_to_device_tensor(h32((1, N), i), slot_col)
             ttnn.execute_trace(dev, tid, blocking=True)

@@ -136,3 +136,88 @@ def test_tt_full_trace(device, xtts_state_dict, pcc, reset_seeds):
     logger.info(f"wrote fully-traced device audio ({n} codes) -> {out_dir}/tt_full_trace_device.wav")
 
     assert spec_pass, f"fully-traced waveform diverged from eager reference: {spec_msg}"
+
+
+# Objective quality eval of the FULLY-TRACED (fully-on-device) pipeline — the same three backends
+# as test_tt_eval (Whisper-large-v3 / UTMOS22 / ECAPA2, downloaded on first use), but on the
+# inference_fully_traced output (setup+decode+vocoder all traced, sampling on device). Heavy, so
+# it needs well beyond the repo-wide 300s pytest timeout.
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 52428800}], indirect=True)
+def test_tt_eval_traced(device, xtts_state_dict, reset_seeds):
+    """CER / UTMOS / SECS on the FULLY-TRACED, fully-on-device generation of DEMO_TEXT.
+
+    Mirrors ``test_tt_eval`` but drives ``inference_fully_traced`` (every on-device stage inside a
+    trace; rep/temp/top-k/top-p sampling done ON DEVICE) instead of the eager host-sampling
+    ``tt.inference``. DEMO_TEXT is a single sentence that self-terminates within TRACE_MAX_TOKENS,
+    so the metric reflects a COMPLETE utterance (no cap-truncation inflating CER). Each metric is
+    best-effort: a missing/failing backend logs a skip rather than failing the test."""
+    import os
+
+    import soundfile as sf
+    from scipy.signal import resample_poly
+
+    sd = xtts_state_dict
+
+    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)  # [1, s] @ 22050
+    g = math.gcd(SPK_SR, MEL_SR)
+    spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
+    wrapped = wrap_text_ids(preprocess_text(DEMO_TEXT, lang="en"))
+    pad = (-wrapped.shape[1]) % TILE
+    if pad:
+        wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
+
+    tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
+    spk_wav_tt = ttnn.from_torch(
+        spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+    )
+
+    wav_dev, codes = tt.inference_fully_traced(
+        wrapped,
+        wav,  # raw reference wav; 80-mel computed on device inside the setup trace
+        spk_wav_tt,
+        TRACE_MAX_SEQ,
+        max_new_tokens=TRACE_MAX_TOKENS,
+        temperature=TRACE_TEMPERATURE,
+        top_k=TRACE_TOP_K,
+        top_p=TRACE_TOP_P,
+        repetition_penalty=TRACE_REP,
+    )
+    wav_eval = ttnn.to_torch(wav_dev).float().reshape(-1).numpy()
+
+    out_dir = "generated/xtts"
+    os.makedirs(out_dir, exist_ok=True)
+    sf.write(f"{out_dir}/tt_eval_traced_device.wav", wav_eval, OUTPUT_SAMPLE_RATE)
+    logger.info(
+        f"fully-traced eval generation: {codes.shape[1]} codes -> {wav_eval.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s "
+        f"audio at {out_dir}/tt_eval_traced_device.wav"
+    )
+
+    spk_np = spk_wav[0].numpy()  # 16 kHz reference-speaker audio (SECS target)
+    logger.info("========== XTTS objective eval metrics (FULLY TRACED) ==========")
+    try:
+        from models.experimental.xtts.eval.xtts_eval import compute_cer
+
+        cer, hyp = compute_cer(wav_eval, OUTPUT_SAMPLE_RATE, DEMO_TEXT)
+        logger.info(f"CER   (Whisper-large-v3, lower=better)        : {cer:.4f}")
+        logger.info(f"        whisper transcript: {hyp!r}")
+    except Exception as e:
+        logger.warning(f"CER   skipped ({type(e).__name__}: {e})")
+
+    try:
+        from models.experimental.xtts.eval.xtts_eval import compute_utmos
+
+        logger.info(
+            f"UTMOS (naturalness MOS 1-5, higher=better)    : {compute_utmos(wav_eval, OUTPUT_SAMPLE_RATE):.4f}"
+        )
+    except Exception as e:
+        logger.warning(f"UTMOS skipped ({type(e).__name__}: {e})")
+
+    try:
+        from models.experimental.xtts.eval.xtts_eval import compute_secs
+
+        secs = compute_secs(wav_eval, OUTPUT_SAMPLE_RATE, spk_np, SPK_SR)
+        logger.info(f"SECS  (ECAPA2 speaker cos-sim, higher=better)  : {secs:.4f}")
+    except Exception as e:
+        logger.warning(f"SECS  skipped ({type(e).__name__}: {e})")
+    logger.info("================================================================")
