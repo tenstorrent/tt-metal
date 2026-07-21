@@ -45,8 +45,6 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 SUPPORTED_FAST_MODE_OPS = [
-    MathOperation.Log1p,
-    MathOperation.Exp,
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
 ]
