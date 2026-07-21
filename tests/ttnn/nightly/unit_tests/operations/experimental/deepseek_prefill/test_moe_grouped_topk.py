@@ -38,6 +38,12 @@ ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv
 SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]
 
 
+# Input dtype for logits/bias. The op upcasts internally bf16 input to fp32.
+INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
+INPUT_DTYPE_IDS = ["in_fp32", "in_bf16"]
+
+
+@pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(
     "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale",
@@ -59,6 +65,7 @@ def test_moe_grouped_topk(
     route_scale,
     padded_percent,
     score_func,
+    input_dtype,
 ):
     """Verify moe_grouped_topk matches the PyTorch golden reference using recall and PCC.
 
@@ -74,8 +81,15 @@ def test_moe_grouped_topk(
 
     epsilon = 1e-20
 
-    scores = distinct_logits((num_batches, batch_size, seq_len, total_experts))
+    # For the bf16 input path, generate/quantize inputs to bf16 first so the fp32 golden reference
+    # sees the exact same values the device does (the op upcasts bf16 -> fp32 internally).
+    is_bf16 = input_dtype == ttnn.bfloat16
+    logits_gen_dtype = torch.bfloat16 if is_bf16 else torch.float32
+
+    scores = distinct_logits((num_batches, batch_size, seq_len, total_experts), dtype=logits_gen_dtype).float()
     bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.float32)
+    if is_bf16:
+        bias = bias.to(torch.bfloat16).float()
 
     ref_indices, ref_weights = grouped_gate_golden_act(
         scores,
@@ -95,8 +109,8 @@ def test_moe_grouped_topk(
     apply_padding = 0 < num_real < total_tokens
     padding_config = build_padding_config(device, num_real) if apply_padding else None
 
-    ttnn_scores_in = ttnn.from_torch(scores, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_bias_in = ttnn.from_torch(bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_scores_in = ttnn.from_torch(scores, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_bias_in = ttnn.from_torch(bias, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
         ttnn_scores_in,

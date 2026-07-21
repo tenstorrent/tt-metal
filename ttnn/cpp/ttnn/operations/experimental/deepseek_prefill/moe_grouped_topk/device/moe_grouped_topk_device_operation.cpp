@@ -19,9 +19,15 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
     TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
 
-    TT_FATAL(scores.dtype() == tt::tt_metal::DataType::FLOAT32, "Scores tensor must be FLOAT32");
+    // Inputs may be FLOAT32 or BFLOAT16: the op computes internally in fp32 for precision and the
+    // unpacker upcasts bf16 tiles for free.
+    TT_FATAL(
+        scores.dtype() == tt::tt_metal::DataType::FLOAT32 || scores.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Scores tensor must be FLOAT32 or BFLOAT16");
     TT_FATAL(scores.layout() == tt::tt_metal::Layout::TILE, "Scores tensor must be TILE layout");
-    TT_FATAL(bias.dtype() == tt::tt_metal::DataType::FLOAT32, "Bias tensor must be FLOAT32");
+    TT_FATAL(
+        bias.dtype() == tt::tt_metal::DataType::FLOAT32 || bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Bias tensor must be FLOAT32 or BFLOAT16");
     TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "Bias tensor must be TILE layout");
     TT_FATAL(scores.logical_shape() == bias.logical_shape(), "Scores and bias must have the same shape");
 
