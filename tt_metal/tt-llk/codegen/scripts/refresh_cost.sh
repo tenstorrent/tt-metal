@@ -11,34 +11,32 @@
 # not persist between Bash tool calls, which caused run.json to never get
 # patched on past runs.
 #
-# Required env vars (exported by the orchestrator):
-#   START_TIME  — ISO 8601 timestamp, only usage at/after this is counted
-#   LOG_DIR     — run directory containing run.json
-# Optional:
-#   MODEL       — opus | sonnet | haiku (default: derived per-message from jsonl)
-#
 # Env vars do NOT persist across separate Bash tool-call shells in Claude Code.
-# The orchestrator writes /tmp/codegen_run_state.sh in Step 0; this script
-# sources it as a fallback so refresh_cost calls after the first Bash block
-# still have the values they need.
+# LOG_DIR is recovered via state.py --worktree-dir (this script always runs
+# from $WORKTREE_DIR/tt_metal/tt-llk, written by Step 0); START_TIME, MODEL,
+# SESSION_ID, and PROJECT_CWD are then read from $LOG_DIR/state.json.
 #
 # Fail-silent by design: a transient read-during-append must never abort the
 # run; the next refresh catches up. Stderr is discarded for the same reason.
 set -u
 
-# Fall back to state file if env vars were lost across Bash tool-call shells.
-if [[ -z "${LOG_DIR:-}" || -z "${START_TIME:-}" ]]; then
-    source /tmp/codegen_run_state.sh 2>/dev/null || true
-fi
-
-: "${START_TIME:?START_TIME not exported and /tmp/codegen_run_state.sh not found}"
-: "${LOG_DIR:?LOG_DIR not exported and /tmp/codegen_run_state.sh not found}"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Pass the session ID explicitly when the orchestrator saved it at startup.
-# Without this, session_cost.py falls back to PID-based discovery, which picks
-# the wrong session after a few hours when other claude sessions have started.
+if [[ -z "${LOG_DIR:-}" ]]; then
+    _WORKTREE_DIR="$(cd ../.. && pwd)"
+    LOG_DIR=$(python "${SCRIPT_DIR}/state.py" --worktree-dir "${_WORKTREE_DIR}" get LOG_DIR 2>/dev/null || echo "")
+fi
+: "${LOG_DIR:?LOG_DIR not exported and not found via state.py --worktree-dir}"
+
+if [[ -z "${START_TIME:-}" ]]; then
+    START_TIME=$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get START_TIME 2>/dev/null || echo "")
+fi
+: "${START_TIME:?START_TIME not exported and not found in ${LOG_DIR}/state.json}"
+
+MODEL="${MODEL:-$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get MODEL 2>/dev/null || echo "")}"
+SESSION_ID="${SESSION_ID:-$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get SESSION_ID 2>/dev/null || echo "")}"
+PROJECT_CWD="${PROJECT_CWD:-$(python "${SCRIPT_DIR}/state.py" --log-dir "${LOG_DIR}" get PROJECT_CWD 2>/dev/null || echo "")}"
+
 _SESSION_ARGS=""
 if [[ -n "${SESSION_ID:-}" && -n "${PROJECT_CWD:-}" ]]; then
     _SESSION_ARGS="--session-id ${SESSION_ID} --project-cwd ${PROJECT_CWD}"

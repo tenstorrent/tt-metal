@@ -31,3 +31,4 @@ compile_flags.txt
 
 # Codegen run logs/artifacts (in-repo LOG_DIR when /proj_sw is absent)
 codegen/logs/
+.codegen_run_state.json

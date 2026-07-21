@@ -1,10 +1,29 @@
 # LLK CodeGen
 
-## Git Policy: Read-Only
+## Execution Policy:
 
-Read-only git commands are allowed (`git rev-parse`, `git log`, `git status`, `git diff`, `git show`). **NEVER push, commit, checkout, restore, reset, or otherwise modify** the repo via git.
+Run every step synchronously in the foreground. Never set `run_in_background` on a Bash or Agent call (worktree setup, the orchestrator, `run_test.sh`), and never end your turn while a step is still running — the tool's synchronous return is your wait. `run_test.sh` is a single blocking call that returns a terminal code (0/1/2/3/5); it has no resume loop. Pass the Bash-tool maximum `timeout: 600000` as a backstop — the run bounds itself via hang detection.
+
+## Git Policy:
+
+This router uses git READ-ONLY (`rev-parse`, `log`, `status`, `diff`, `show`) —
+**no push, commit, checkout, reset, etc.** The one exception is worktree
+lifecycle: Step 2 creates the worktree/branch and Step 4 removes it. The fix
+**commit** and `generated.patch` are produced by the orchestrator during its run
+(Step 3), not by this router — by Step 4 they already exist on `WORKTREE_BRANCH`.
+Push/PR is a separate, user-confirmed action (`CREATE_PR=yes`).
 
 ---
+
+## Orchestrators
+
+Three flows: kernel generation (arch-specific), single-arch issue solving, and multi-arch issue solving (one coordinated multi-arch run).
+
+| Flow | Orchestrator | Agents | Notes |
+|------|--------------|--------|-------|
+| Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today. Unaffected by multi-arch issue-solver work. |
+| Issue solver (single-arch) | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Used when `len(TARGET_ARCHES) == 1`. Parameterized by `TARGET_ARCH` — see `codegen/references/arch-profiles.md`. |
+| Issue solver (multi-arch) | `codegen/agents/issue-solver/orchestrator-multi.md` | same `codegen/agents/issue-solver/*.md` agents, run once with `TARGET_ARCHES` | Used when `len(TARGET_ARCHES) > 1`. One analyzer, one fixer, one tester, one dashboard run, one worktree, one branch, one optional PR. |
 
 ## Step 1: Classify the Request
 
@@ -16,8 +35,8 @@ When a user asks to **"generate {kernel} for {target_arch}"**:
 - `REQUEST_TYPE` = `generate`
 - `TARGET_ARCH` = the requested architecture (default: **quasar**)
 - `KERNEL_NAME` = the kernel to generate
-- `TASK_ID` = `generate-{KERNEL_NAME}-{TARGET_ARCH}` (e.g., `generate-gelu-quasar`)
-- `SFPI_MODE` = `true` if the user **explicitly** asked for an SFPI version (phrases like "as SFPI", "sfpi version", "in sfpi", "write it in sfpi"); otherwise `false`. This is an SFPU-only optimizer directive — the writer still mirrors the Blackhole reference's style (raw `TTI_` or SFPI); when `SFPI_MODE=true` the optimizer reimplements the working raw-`TTI_` kernel in SFPI and keeps it only if it generates no more instructions than the intrinsics. Pass `SFPI_MODE` to the orchestrator.
+- `TASK_ID` = `generated-{KERNEL_NAME}-{TARGET_ARCH}` (e.g., `generated-gelu-quasar`)
+- `SFPI_MODE` = `true` if the user **explicitly** asked for an SFPI version (phrases like "as SFPI", "sfpi version", "in sfpi", "write it in sfpi"); otherwise `false`
 
 ### Solve a GitHub Issue
 
@@ -70,7 +89,15 @@ Then set:
 
 ## Step 2: Create Branch and Worktree
 
-Set up an isolated worktree so all code changes happen on a dedicated branch based on `origin/main`. The codegen infrastructure (agents, scripts, references, config) is symlinked into the worktree from the current branch — that is why we can base the fix on a clean `origin/main` (clean PR diff) yet still read the codegen playbooks/skills that only live on the feature branch.
+For `REQUEST_TYPE=generate` on quasar, put the run in motion before creating the worktree:
+
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_begin_setup {kernel} {target_arch} /proj_sw/user_dev/llk_code_gen
+# Echoes LOG_DIR, RUN_ID, START_TIME — carry these to Step 3.
+```
+
+Set up an isolated worktree so all code changes happen on a dedicated branch based on `origin/main`.
 
 ```bash
 source codegen/scripts/setup_worktree.sh
@@ -78,29 +105,50 @@ setup_worktree {TASK_ID}
 # Exports: WORKTREE_DIR, WORKTREE_BRANCH
 ```
 
-After this step:
-- `WORKTREE_DIR` — absolute path to the worktree on **durable disk** (e.g., `$HOME/.codegen/worktrees/issue-123-v1`), removed after the run (Step 4). The directory carries the branch version, so concurrent runs never collide. Override the parent with `CODEGEN_WORKTREE_ROOT` (default `$HOME/.codegen/worktrees`). Durable rather than `/tmp` so a reboot or crash mid-run doesn't lose an in-flight checkout — finished work is preserved as the commit + patch, not the worktree.
-- `WORKTREE_BRANCH` — the branch name (e.g., `llk_code_gen/issue-123-v1`)
-- All agent playbooks are accessible via symlinks in the worktree
-- `codegen/artifacts/` is a real (non-symlinked) directory for per-task artifacts
+For `REQUEST_TYPE=generate` on quasar, mark setup finished (use the `LOG_DIR` from `execute_step_begin_setup`):
+
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_setup_ready {log_dir}
+```
+
+Exports two variables, passed to the orchestrator in Step 3:
+- `WORKTREE_DIR`
+- `WORKTREE_BRANCH`
 
 ---
 
 ## Step 3: Route to Orchestrator
 
-### Generate Kernel
+### Generate Kernel (`REQUEST_TYPE` = `generate`)
 
 | Architecture | Orchestrator |
 |-------------|-------------|
 | **quasar** | `codegen/agents/quasar/orchestrator.md` |
-| **blackhole** | Not yet supported — inform the user |
+| **wormhole/blackhole** | Not yet supported — inform the user |
 
-Pass to the orchestrator:
-- `KERNEL_NAME`, `TARGET_ARCH`
-- `SFPI_MODE` (`true`/`false` from Step 1)
-- `WORKTREE_DIR`, `WORKTREE_BRANCH`
+**Mandatory:** before invoking the orchestrator, write its startup parameters
+via `state.py --worktree-dir` — do not hand-construct the state file path
+(`--worktree-dir` resolves it the same way for every caller):
+```bash
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set KERNEL_NAME     "{kernel}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set TARGET_ARCH     "{target_arch}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set SFPI_MODE       "{SFPI_MODE}" --json
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/llk_code_gen"
+# From execute_step_begin_setup (Step 2) so the orchestrator reuses the same run identity:
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR    "{log_dir}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set RUN_ID     "{run_id}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set START_TIME "{start_time}"
+```
+Optional per-run override flags — set the same way (`state.py --worktree-dir … set <FLAG> true`) only when the request asks for them:
+- `SKIP_TESTER` — the writer validates against the existing tests; tester/refiner are skipped.
+- `HIDE_EXISTING_KERNEL` — the orchestrator's Step 2b git-removes-and-commits the target op's existing files on the worktree branch, so it regenerates blind. Never `rm` the files in the prompt; set this flag and let the orchestrator do it.
 
-### Solve Issue
+Then invoke the orchestrator, telling it only `WORKTREE_DIR={worktree_dir}` —
+it reads everything else back the same way, via `state.py --worktree-dir`.
+
+### Solve Issue (`REQUEST_TYPE` = `issue`)
 
 Route by task type and by `len(TARGET_ARCHES)`:
 
@@ -108,30 +156,33 @@ Route by task type and by `len(TARGET_ARCHES)`:
 |-----------------|-----------|--------------|------------|
 | single (any of blackhole / quasar / wormhole) | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `TARGET_ARCH` |
 | **multiple** (e.g. `blackhole + wormhole`) | issue fix | `codegen/agents/issue-solver/orchestrator-multi.md` | `TARGET_ARCHES` (JSON array) |
-| **quasar** | new kernel | `codegen/agents/quasar/orchestrator.md` | — |
-| **blackhole** | new kernel | Not yet supported — inform the user | — |
+| Any | Generate Kernel | NOT SUPPORTED | - |
 
-The single-arch path (`orchestrator.md`) is **unchanged** from before — today's callers keep working bit-for-bit. The multi-arch path (`orchestrator-multi.md`) creates **one dashboard run**, runs one shared analyzer, one shared fixer, and one tester that executes each selected architecture in sequence. This prevents each arch from inventing its own API shape for the same conceptual change.
-
-Pass **all** fetched issue context verbatim to the selected orchestrator: `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_LABELS`, `ISSUE_COMMENTS`. Never summarize or alter any of these fields — agents need the raw content to parse error messages, stack traces, and reproduction steps.
-
-Also pass:
-- `TARGET_ARCH` (single-arch path) **or** `TARGET_ARCHES` (multi-arch path) — never both.
-- `WORKTREE_DIR` — the absolute path to the worktree where agents must make all code changes. For multi-arch issues the worktree is shared and one fixer owns the combined change across every selected architecture.
-- `WORKTREE_BRANCH` — the branch name for commits and PRs.
+**Mandatory:** pass the selected orchestrator this exact JSON structure:
+```json
+{
+  "ISSUE_NUMBER": "{issue_number}",
+  "ISSUE_TITLE": "{issue_title}",
+  "ISSUE_BODY": "{issue_body}",
+  "ISSUE_LABELS": ["{label}", "..."],
+  "ISSUE_COMMENTS": ["{comment}", "..."],
+  "TARGET_ARCH": "{target_arch}",         // single-arch path ONLY — omit if TARGET_ARCHES is present
+  "TARGET_ARCHES": ["{arch}", "..."],     // multi-arch path ONLY — omit if TARGET_ARCH is present; never both
+  "WORKTREE_DIR": "{worktree_dir}",       // multi-arch: shared — one fixer owns the combined change across every selected architecture
+  "WORKTREE_BRANCH": "{worktree_branch}", // used for commits and PRs
+  "LOG_DIR_BASE": "/proj_sw/user_dev/llk_code_gen"  // fixed log root; orchestrator appends its own sub-path
+}
+```
 
 ---
 
 ## Step 4: Preserve & Cleanup
 
-By the time the orchestrator returns, the fix is already preserved **without the
-worktree** — its Step 6 **commits the fix locally to `WORKTREE_BRANCH`** (never
-pushes) and archives an apply-able `generated.patch` plus its `base_commit`
-beside `run.json` in the durable `LOG_DIR`.
+Wait for orchestrator to finish the work.
 
-So after the run, **remove the worktree to reclaim disk** (~400 MB/run). That is
-the default (`CODEGEN_KEEP_WORKTREE=false`); set it to `true` only when you want
-to keep the live checkout around for inspection.
+ONLY then run the following:
+
+The worktree is removed after the run; set `CODEGEN_KEEP_WORKTREE=true` if the user asks to keep it.
 
 ```bash
 source codegen/scripts/setup_worktree.sh
@@ -139,16 +190,17 @@ cleanup_worktree {TASK_ID}          # removes ONLY this run's worktree (safe und
 ./codegen/scripts/setup_worktree.sh prune 14   # GC worktrees left behind by crashed runs (>14d)
 ```
 
-What persists after cleanup (all tiny — none of it in the removed worktree):
-- `generated.patch` + `base_commit` in `LOG_DIR`. `LOG_DIR` is `${CODEGEN_LOGS_ROOT}/<arch>_issue_solver/<run_id>/`, where `CODEGEN_LOGS_ROOT` is the shared dashboard tree `/proj_sw/user_dev/llk_code_gen` **when it exists**, otherwise an **in-repo, gitignored** `codegen/logs/` in the main checkout. Set `CODEGEN_LOGS_ROOT` to force a location.
-- The local fix commit on `WORKTREE_BRANCH` (git objects live in the shared local `.git`, not the worktree).
+After the cleanup we are left with:
+- `LOG_DIR` is the path the orchestrator set during its run — take the concrete path from the orchestrator's report.
+- `generated.patch` + `base_commit` in `LOG_DIR` — always present, always sufficient on its own.
+- The local fix commit on `WORKTREE_BRANCH` — issue-solver only. Quasar kernel-gen never commits the generated kernel (writer/optimizer/prettifier leave it as an uncommitted working-tree diff, captured only by `generated.patch`); with `HIDE_EXISTING_KERNEL=true` the branch instead carries commits that *delete* the target op's prior files, so checking out that branch alone yields a regression, not a recovery.
 
 Recovering a run's work later:
-- `git checkout <base_commit> && git apply <LOG_DIR>/generated.patch` — from the log dir, independent of repo state.
-- `git worktree add <path> <WORKTREE_BRANCH>` — re-materialize the fix from the branch.
+- `git checkout <base_commit> && git apply <LOG_DIR>/generated.patch` — works for every flow, independent of repo state. Use this for kernel-gen.
+- `git worktree add <path> <WORKTREE_BRANCH>` — issue-solver only, re-materializes its fix commit. For quasar kernel-gen this recovers nothing (or, under `HIDE_EXISTING_KERNEL`, something actively worse than nothing).
 
 **Pushing / PR creation is a separate, explicit action** (still requires the
-user's go-ahead). When `CREATE_PR=yes`, push `WORKTREE_BRANCH` and open the PR
+user's go-ahead). Perform when `CREATE_PR=yes`, push `WORKTREE_BRANCH` and open the PR
 only after the user confirms.
 
 ## Running multiple issue-solvers concurrently
@@ -160,9 +212,10 @@ The mechanism is concurrency-safe — launch as many as the machine can handle:
   even two runs of the *same* issue never collide.
 - Fixes are committed to **separate branches**, so concurrent local commits
   never touch each other.
-- Simulator access is serialized per-arch by `.claude/scripts/run_test.sh` via
-  `/tmp/tt-llk-test-<arch>.lock`, so parallel runs compile in parallel and only
-  queue at the (single) simulator step.
+- Device access is serialized by `.claude/scripts/run_test.sh` via a single
+  global lock (`/tmp/tt-llk-test.lock`), so parallel runs compile in parallel
+  (lock-free) and queue only at the `simulate`/`run` step; whoever holds the lock
+  rebuilds under it if a peer's compile invalidated the shared build cache.
 
 Launch pattern (mirrors `batch_generate.sh` for kernels): run one
 `claude -p "solve issue #<N> ..."` per issue, passing every input the Startup
@@ -171,12 +224,4 @@ interactive question. Optionally cap parallelism with a job limiter.
 
 ---
 
-## Orchestrators
-
-Three flows: kernel generation (arch-specific), single-arch issue solving, and multi-arch issue solving (one coordinated multi-arch run).
-
-| Flow | Orchestrator | Agents | Notes |
-|------|--------------|--------|-------|
-| Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today. Unaffected by multi-arch issue-solver work. |
-| Issue solver (single-arch) | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Used when `len(TARGET_ARCHES) == 1`. Parameterized by `TARGET_ARCH` — see `codegen/references/arch-profiles.md`. |
-| Issue solver (multi-arch) | `codegen/agents/issue-solver/orchestrator-multi.md` | same `codegen/agents/issue-solver/*.md` agents, run once with `TARGET_ARCHES` | Used when `len(TARGET_ARCHES) > 1`. One analyzer, one fixer, one tester, one dashboard run, one worktree, one branch, one optional PR. |
+- If you are NOT EXPLICITLY INSTRUCTED TO ASK a QUESTION then DON'T.
