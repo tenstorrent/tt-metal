@@ -42,9 +42,11 @@ CCL benchmarks (LoudBox: ~11× faster wall-clock). Two semantic notes versus the
     per-step critical-path quantity.
 
 Each measured ``forward()`` is profiled as its own region (register callback → run one forward →
-drain), because a cached op re-dispatched across the cold loop reuses its ``runtime_id`` — so
-per-forward regions are what make the cold per-iteration sum correct (and replace the old MLA_START
-signpost split). The run total is the sum of per-forward criticals.
+drain). ``runtime_id`` is a globally monotonic per-execution id (assigned per enqueue, cache hit or
+miss — ttnn ``device_operation.hpp``), so every op execution — including the same op across cold
+iterations — gets a distinct id; the max-collapse only merges the per-chip records of one execution.
+Per-forward regions are what attribute ops to each cold iteration (the per-iteration breakdown) and
+replace the old MLA_START signpost split. The run total is the sum of per-forward criticals.
 
 Single test (was a two-test tracy driver+impl split):
   * test_mla_chunked_perf — parametrized over [deepseek_v32, glm_5_1] × [warm, cold, long] ×
@@ -574,13 +576,15 @@ def _by_op(frame: pd.DataFrame, dur_col: str) -> pd.DataFrame:
 def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, config_only):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
-    _require_rt_profiler()
 
     # Workload is variant-specific (head counts differ); the mesh/SP is shared. Resolve per parametrized
     # variant so labels + head counts match the variant under test (module-level VARIANT may differ).
     workload, skip_reason = _detect_perf_workload(variant.name)
     if skip_reason:
         pytest.skip(skip_reason)
+    # Assert profiler activation only after skip checks pass: an unsupported system should skip with the
+    # informative reason above, not hard-fail here.
+    _require_rt_profiler()
 
     scenario_cfg = SCENARIOS[scenario]
     is_cold = scenario_cfg["loop"]
