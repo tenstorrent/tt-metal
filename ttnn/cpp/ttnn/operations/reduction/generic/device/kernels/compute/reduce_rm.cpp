@@ -50,6 +50,10 @@ constexpr auto rm_reconfig_mode =
     compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
 #endif
 
+// Accurate fp32 mean: CT arg 6 routes Float32 SUM through the SFPU (full fp32) vs the FPU (tf32),
+// matching the tiled reduce.cpp. Only affects Float32 SUM; see ReduceFp32Mode in reduce_helpers_common.hpp.
+constexpr auto fp32_mode = get_compile_time_arg_val(6) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in cb_tile_in.
 // is_last_chunk == true packs the final result into cb_out (with optional post-mul); otherwise the
 // partial is left in cb_acc at index chunk_idx and accumulation continues on the next call.
@@ -63,7 +67,8 @@ FORCE_INLINE void reduce_block(
             cb_scaler,
             cb_out,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            rm_reconfig_mode>(
+            rm_reconfig_mode,
+            fp32_mode>(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
@@ -85,7 +90,8 @@ FORCE_INLINE void reduce_block(
             cb_scaler,
             cb_acc,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            rm_reconfig_mode>(
+            rm_reconfig_mode,
+            fp32_mode>(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
@@ -104,6 +110,7 @@ void kernel_main() {
     constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(4);
     constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(5);
     // arg(3) = post_mul_scaler_bits — captured inside reduce_block() under REDUCE_POST_MUL.
+    // arg(6) = fp32 accurate-mean flag — consumed by the namespace-scope fp32_mode above.
 
     compute_kernel_hw_startup(cb_rm, cb_tile_in);
 

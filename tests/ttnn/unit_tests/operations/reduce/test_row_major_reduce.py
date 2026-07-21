@@ -3,18 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
-# The dense ROW_MAJOR reduce fast path these tests exercise is gated off by default
-# (use_row_major_support=false in reduce_op.cpp) pending fixes to a perf regression and a
-# multi-H-tile hang. With it off, ttnn.mean/sum on ROW_MAJOR input falls back to tilize +
-# tile-reduce, which both changes output layout (TILE, not ROW_MAJOR) and re-introduces the
-# excessive padded-tilize allocation (#32546) for narrow-last-dim shapes like (512, 1024, 1, 2).
-# Skip the whole module until the fast path is re-enabled. See Issue #46110.
-# pytestmark = [
-#     pytest.mark.use_module_device,
-#     pytest.mark.skip(reason="dense ROW_MAJOR reduce path gated off (use_row_major_support=false)"),
-# ]
-
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
@@ -692,29 +680,14 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
     assert_numeric_metrics(ref2, out2, **metrics)
 
 
-# --- Tall-H reduces (H-axis split path, issue #46110) ---------------------------------------------
-# When H is tall and NC*Wt underfills the grid, the RM H-reduce splits the reduction axis into shards
+# --- Tall-H reduces (H-axis split path) -----------------------------------------------------------
+# When H is tall and NC*Wt underfills the grid, the RM H-reduce splits the reduction axis into slices
 # (stage-1 partials in FP32) and combines them (stage-2). These shapes exercise that path (Ht_rm >= 16
-# triggers the split heuristic in reduce_op.cpp). Reductions here accumulate over hundreds/thousands
-# of rows, so bf16 is accumulation-limited even with FP32 partials (input quantization + final bf16
-# pack) — PCC is the primary correctness signal and element-wise tolerances are loosened accordingly.
-# FP32 stays tight. Thresholds carry margin below empirically measured PCC (bf16 mean/sum bottomed at
-# ~0.95 on (1,1,12544,32); FP32 held ~0.9998).
-_TALL_MEAN_METRICS_BF16 = dict(pcc_threshold=0.94, check_allclose=False, check_frobenius=False, check_ulp=False)
-_TALL_SUM_METRICS_BF16 = dict(pcc_threshold=0.94, check_allclose=False, check_frobenius=False, check_ulp=False)
-_TALL_MEAN_METRICS_FP32 = dict(pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
-_TALL_SUM_METRICS_FP32 = dict(pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
-
-
-def _tall_metrics(dtype, op):
-    if op == "mean":
-        return _TALL_MEAN_METRICS_FP32 if dtype == ttnn.float32 else _TALL_MEAN_METRICS_BF16
-    return _TALL_SUM_METRICS_FP32 if dtype == ttnn.float32 else _TALL_SUM_METRICS_BF16
-
-
+# triggers the split heuristic in reduce_op.cpp)
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True])
 @pytest.mark.parametrize(
     "shape",
     [
@@ -726,11 +699,15 @@ def _tall_metrics(dtype, op):
         (2, 3, 512, 40),  # NC>1 with tall H (Ht_rm=16)
     ],
 )
-def test_rm_reduce_h_axis_split_tall(device, reduce_op, dtype, keepdim, shape):
+def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_approximate_mode, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
+    # fast_and_approximate_mode toggles the accurate SFPU (False) vs FPU (True) fp32 mean; only
+    # ttnn.mean accepts it and it only affects fp32, so the True variant is meaningful only there.
+    if fast_and_approximate_mode and not (reduce_op == "mean" and dtype == ttnn.float32):
+        pytest.skip("fast_and_approximate_mode only affects fp32 mean")
     if dtype == ttnn.bfloat16 and shape == (1, 1, 12544, 32):
         # H=12544 into 32 output columns is beyond bf16's usable accuracy for this path
-        # (PCC ~0.89, still far above the un-split path's ~0.60); the FP32 variant validates the
+        # (PCC ~0.89, (the un-split path's ~0.60); the FP32 variant validates the
         # split logic at this depth.
         pytest.skip("bf16 accumulation-limited at H=12544; covered by the FP32 variant")
     torch.manual_seed(0)
@@ -741,7 +718,23 @@ def test_rm_reduce_h_axis_split_tall(device, reduce_op, dtype, keepdim, shape):
     assert tt_input.layout == ttnn.ROW_MAJOR_LAYOUT
 
     ttnn_op = _OPS[reduce_op][1]
-    tt_output = ttnn_op(tt_input, dim=-2, keepdim=keepdim)
+    op_kwargs = {"dim": -2, "keepdim": keepdim}
+    if reduce_op == "mean":
+        op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    tt_output = ttnn_op(tt_input, **op_kwargs)
     output = ttnn.to_torch(tt_output)
 
-    assert_numeric_metrics(torch_ref, output, **_tall_metrics(dtype, reduce_op))
+    if dtype == ttnn.float32:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.002, 1e-3, 0.0015
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.97, 0.01, 0.02, 0.004
+    assert_numeric_metrics(
+        torch_ref,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+        check_ulp=False,
+        check_frobenius=False,
+    )

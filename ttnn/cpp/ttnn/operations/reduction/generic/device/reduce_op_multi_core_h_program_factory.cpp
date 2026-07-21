@@ -461,7 +461,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     if (rm_path) {
         // Per-slice tile count: the compute kernel reduces `slice_Ht` tiles per output (its H loop
         // bound). Equals plan.Ht_rm when num_h_slices == 1, so the non-split path is unchanged.
-        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, slice_Ht, post_mul_scaler_bits);
+        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, slice_Ht, post_mul_scaler_bits, fp32_sfpu_reduce);
     } else {
         compute_kernel_args_group_1 = {
             Ht,                          // Ht
@@ -592,7 +592,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         KernelDescriptor::CoreRuntimeArgs reader_rt_args = {
             num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size};
         KernelDescriptor::CoreRuntimeArgs writer_rt_args = {num_cols_per_core_group_1};
-        // Width-sharded path: iterate the actual slice core set (all_cores), not the
+        // Width-sharded path: iterate the actual shard core set (all_cores), not the
         // grid_to_cores sequence — sharded grids may not start at (0,0).
         for (const auto& range : all_cores.ranges()) {
             for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; ++y) {
