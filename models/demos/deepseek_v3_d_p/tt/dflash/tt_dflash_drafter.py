@@ -2,38 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""DFlash drafter *context-KV* prefill module (Kimi-K2.6-DFlash) — issue #49586, Phase 1.
+"""DFlash drafter prefill module (Kimi-K2.6-DFlash).
 
 Front-loads the DFlash drafter's *context* KV cache during the verifier (DeepSeek/Kimi MLA)
 prefill. Runs ONLY the drafter's KV-processing path — "MM, norm, ROPE, kv-update" — and skips
-q_proj / SDPA / o_proj / MLP (attention + feedforward), which are decode-only. Mirrors the
-verifier's own kv-only fast path (``ttMLA._forward_kv_only`` / ``_kv_stem``), swapping MLA's
-fused-latent geometry for the drafter's Qwen3 GQA:
-
-    per verifier target layer L in target_layer_ids:                       # streamed during the layer loop
-        reduced += fc_slice_L( h_L )                                       # row-parallel matmul, TP-reduced
-    target_hidden = hidden_norm(reduced)                                   # once, after the loop
-    per draft layer D in 0..num_hidden_layers-1:
-        k = rope( k_norm( k_proj_D(target_hidden) ) )  -> K_cache[D]        # k_norm + rope (Qwen3 half-split)
-        v =        v_proj_D(target_hidden)             -> V_cache[D]        # V: no norm, no rope
+q_proj / SDPA / o_proj / MLP (attention + feedforward), which are decode-only.
 
 The FC context projection is decomposed across target layers because
 ``Linear(concat[h_1..h_6]) == sum_i fc_slice_i @ h_i`` — so it accumulates as the verifier streams
-its layers, matching the tt-blaze decode-side ``FCMatmulForward`` accumulation.
+its layers.
 
 SHARDING (sequence-parallel):
   * hidden is TP-sharded on the verifier residual stream -> the FC tap is row-parallel + a TP reduce_scatter.
   * k_proj/v_proj are column-parallel: KV heads are split across the TP axis (kv_heads/tp per device) —
-    the natural drafter layout, matching the tt-blaze decode drafter (num_kv_heads=8, head_dim=128).
+    num_kv_heads=8, head_dim=128.
   * the sequence is SP-sharded — each SP chip builds + holds ONLY its cache_seq/sp tokens (separate GQA
     K/V caches, SP-sharded on seq + TP-sharded on kv-head); the caller feeds SP-sharded seq (NO SP-gather).
     The drafter KV-build is token-parallel (no cross-seq op), so only the RoPE table is SP-sharded
-    (absolute positions). Decode/migration-aligned, ~sp_factor× less work. A later phase switches
-    dtype/layout to the tt-blaze HEIGHT_SHARDED/bf8 format.
-
-Validated on Blackhole (8×4) via ``tests/speculative_decoding/dflash/test_dflash.py``: {sliced, concat}
-PCC ~= 0.9998 vs the real HF drafter. (The ``nlp_create_qkv_heads`` head-split is pending hw
-re-validation.) Program/memory configs are still ttnn defaults with `TODO(bring-up)` markers.
+    (absolute positions). Decode/migration-aligned, ~sp_factor× less work.
 """
 
 from __future__ import annotations
@@ -79,24 +65,15 @@ class TtDFlashDrafter:
         self.num_links = num_links
         self.topology = topology
         # FC context projection mode:
-        #   "sliced" — stream fc_slice_i @ h_i and accumulate at tap time (smallest memory; the
-        #              hardware-validated path used by test_dflash.py). Nothing raw is stored.
-        #   "concat" — store the raw tapped hiddens, then at write time concat them and do ONE fc matmul
-        #              (fc(concat) == Σ fc_slice_i @ h_i). Needs the full fc pre-permuted so a contiguous
-        #              TP shard aligns with the on-device grouped concat (see _load_weights).
+        #   "sliced" — stream fc_slice_i @ h_i and accumulate at tap time
+        #   "concat" — store the raw tapped hiddens, then at write time concat them and do one fc matmul
+        #              (fc(concat) == Σ fc_slice_i @ h_i).
         assert fc_mode in ("sliced", "concat"), f"fc_mode must be 'sliced' or 'concat', got {fc_mode!r}"
         self.fc_mode = fc_mode
         # Prefill builds drafter KV for the FULL chunk the verifier hands it (e.g. 5120 tokens), so the
-        # cache is sized to max_seq_len — NOT capped at 4k. The 4k (config.context_len) is the drafter's
-        # DECODE context window, applied at MIGRATION (send only the last 4k to decode), per #49586's
-        # "cache max_seq_len, migrate last 4k". Capping here would break integration with the verifier's
-        # 5k-token prefill chunks.
+        # cache is sized to max_seq_len — NOT capped at 4k.
         self.cache_seq = max_seq_len if max_seq_len is not None else config.context_len
-        # Sequence-parallel: SP-shard the cache/seq so each SP chip builds + holds ONLY its cache_seq/sp
-        # tokens. The drafter KV-build is token-parallel (no cross-seq op), so this needs NO seq reduction —
-        # only the RoPE table is SP-sharded (absolute positions). ~sp_factor× less work (hw-measured ~5×
-        # total device time, ~7× CCL); matches the decode/migration layout, so the caller MUST feed
-        # SP-sharded seq (NO SP-gather).
+
         assert (
             self.cache_seq % self.sp_factor == 0
         ), f"seq-parallel needs cache_seq {self.cache_seq} divisible by sp {self.sp_factor}"
@@ -122,9 +99,6 @@ class TtDFlashDrafter:
         )
 
         self._load_weights(state_dict)
-        # RoPE deepseek-yarn cos/sin: built ONCE here (kept OUT of the write_kv_cache hot path), covering
-        # the full [0, cache_seq) — SP-sharded on seq. cache_seq == the padded chunk
-        # length, so write_kv_cache consumes the table directly (no per-call build).
         self._rope_cos = self._rope_sin = None
         self._rope_end = 0
         self._ensure_rope(self.cache_seq)
@@ -135,7 +109,8 @@ class TtDFlashDrafter:
     # ------------------------------------------------------------------ setup
     def _mesh_mappers(self):
         """Row-parallel (shard tensor dim 0 on TP) and column-parallel (shard tensor dim 1 on TP)
-        2D-weight mappers, replicating on the SP axis. Mirrors ttMLA._convert_and_cache_weights."""
+        2D-weight mappers, replicating on the SP axis.
+        """
         row = [None, None]
         row[self.tp_axis] = 0  # shard the contraction (input) dim across TP
         col = [None, None]
@@ -158,7 +133,7 @@ class TtDFlashDrafter:
             return ttnn.as_tensor(
                 t,
                 device=self.mesh_device,
-                dtype=ttnn.bfloat16,  # TODO(bring-up): bfloat8_b for perf / to match decode caches.
+                dtype=ttnn.bfloat16,  # TODO: bfloat8_b for perf
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
@@ -266,8 +241,8 @@ class TtDFlashDrafter:
     def _alloc_caches(self):
         """Separate K and V drafter caches: host [num_layers, num_kv_heads, cache_seq, head_dim],
         TP-sharded on kv-head (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns cache_seq/sp
-        tokens (decode/migration layout, no redundant per-SP copies). A later phase switches dtype/layout
-        to the tt-blaze bf8 / HEIGHT_SHARDED format."""
+        tokens (decode/migration layout, no redundant per-SP copies).
+        """
         cfg = self.config
         shape = (cfg.num_hidden_layers, cfg.num_key_value_heads, self.cache_seq, cfg.head_dim)
         shard = [None, None]
@@ -292,7 +267,6 @@ class TtDFlashDrafter:
             mesh_mapper=mapper,
         )
 
-    # ----------------------------------------------------------------- runtime
     def reset(self):
         """Clear the FC accumulator (sliced) / stored taps (concat) — call at the start of each prefill
         sequence/chunk."""
@@ -321,7 +295,7 @@ class TtDFlashDrafter:
         if self.fc_mode == "concat":
             # The drafter TAKES OWNERSHIP of the tensor (deallocated in write_kv_cache()/reset()); the
             # caller must not free it. The integration hook hands over a fresh (SP-gathered) tensor, so no
-            # clone is needed. TODO(bring-up): if a caller passes a tensor it will mutate/reuse (e.g. the
+            # clone is needed. TODO: if a caller passes a tensor it will mutate/reuse (e.g. the
             # raw loop `h`), clone before storing.
             if self._taps[idx] is not None:
                 ttnn.deallocate(self._taps[idx])
@@ -332,7 +306,7 @@ class TtDFlashDrafter:
             self.fc_slices[idx],
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # TODO(bring-up): add a tuned program_config (see ttMLA._get_mm_kwargs).
+            # TODO: add a tuned program_config.
         )
         if self._reduced_accum is None:
             self._reduced_accum = partial
@@ -345,10 +319,9 @@ class TtDFlashDrafter:
     def _split_heads(self, proj: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, seq, kv_heads_local*head_dim] -> [1, kv_heads_local, seq, head_dim].
 
-        One fused TILE-native op instead of reshape+permute (which forced untilize/retilize + the
-        non-scaling Tilize seen in profiling). num_kv_heads=0 selects the single-tensor "Q-path" reshape
-        (take the first output); transpose_k_heads=False keeps [.., heads, seq, head_dim] (NOT the QKᵀ
-        transpose). head_dim + seq are inferred from the tensor width/shape.
+        num_kv_heads=0 selects the single-tensor "Q-path" reshape (take the first output);
+        transpose_k_heads=False keeps [.., heads, seq, head_dim] (NOT the QKᵀ transpose).
+        head_dim + seq are inferred from the tensor width/shape.
         """
         heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             proj,
@@ -422,9 +395,9 @@ class TtDFlashDrafter:
 
         # RoPE cos/sin: the __init__-built table is SP-sharded over the GLOBAL seq, so this chip already
         # holds its absolute-position window [r*cache_seq/sp, …); use it directly — no per-call build/slice.
-        # TODO(Phase 3): chunked prefill at arbitrary offsets (positions_start>0) needs an indexed rope op
+        # TODO: chunked prefill at arbitrary offsets (positions_start>0) needs an indexed rope op
         # that takes the offset on-device (like MLA's rotary_embedding_indexed).
-        assert positions_start == 0, "chunked offset (positions_start>0) is a Phase-3 TODO"
+        assert positions_start == 0, "chunked offset not yet supported"
         cos, sin = self._rope_cos, self._rope_sin
 
         for i in range(cfg.num_hidden_layers):
@@ -453,7 +426,7 @@ class TtDFlashDrafter:
             k = ttnn.experimental.rotary_embedding_hf(
                 k, cos, sin, is_decode_mode=False, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
-            # Write into cache slot `i` (layer as the fill "user" dim). TODO(bring-up/Phase2): the migration
+            # Write into cache slot `i` (layer as the fill "user" dim). TODO: the migration
             # writer + SP-sharded seq + bf8 cache replace this seq-replicated fill_cache_for_user_.
             ttnn.kv_cache.fill_cache_for_user_(self.k_cache, k, i)
             ttnn.kv_cache.fill_cache_for_user_(self.v_cache, v, i)
