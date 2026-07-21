@@ -330,36 +330,61 @@ class TtPrefillRuntime:
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
-        """Read one slot's KV cache from device to host: the `.kvpe` block as a single host tensor
-        ``[num_layers, 1, seq_cache, kvpe]`` (one TP replica), in the raw on-device (block-cyclic) layout —
-        not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
-        ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
-        read-back."""
+        """Read one slot's KV cache(s) from device to host as a list of host tensors
+        ``[num_layers, 1, seq_cache, head_dim]`` (one TP replica), in the raw on-device (block-cyclic)
+        layout — not un-rotated to natural token order. Returns ``[kvpe]`` for dense MLA, or
+        ``[kvpe, index]`` for sparse-DSA (v3.2 / GLM), so the pairwise migration validator PCCs BOTH the
+        primary KVPE cache and the lightning-indexer key cache. DRAM_MEMORY_CONFIG on the slice is REQUIRED
+        — the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM
+        core on host read-back."""
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
-        kvpe = kv_caches.kvpe
-        s = list(kvpe.shape)
-        sl = ttnn.slice(
-            kvpe,
-            [slot * num_layers, 0, 0, 0],
-            [(slot + 1) * num_layers, s[1], s[2], s[3]],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        block = ttnn.to_torch(
-            sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-        ).float()[
-            :, :1
-        ]  # [num_layers, 1, seq_cache, kvpe]
-        ttnn.deallocate(sl)
-        return [block]
+        # Both caches use the same user-major layout (num_users * cache_layers slots), but the index
+        # cache may stack FEWER layers than kvpe (GLM-5.2 stores only the full-indexer layers; GLM-5.1
+        # stores all). Derive num_users from kvpe (its stack IS num_layers) and slice each cache by ITS
+        # OWN per-slot layer count, so a shorter index stack reads correctly instead of mis-slicing.
+        num_users = kv_caches.kvpe.shape[0] // num_layers
+
+        def _read_one(cache):
+            s = list(cache.shape)
+            cache_layers = s[0] // num_users
+            sl = ttnn.slice(
+                cache,
+                [slot * cache_layers, 0, 0, 0],
+                [(slot + 1) * cache_layers, s[1], s[2], s[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            block = ttnn.to_torch(
+                sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+            ).float()[
+                :, :1
+            ]  # [cache_layers, 1, seq_cache, head_dim]
+            ttnn.deallocate(sl)
+            return block
+
+        blocks = [_read_one(kv_caches.kvpe)]
+        # sparse-DSA (GLM): also read the lightning-indexer key cache so the pairwise validator covers it.
+        if kv_caches.index is not None:
+            blocks.append(_read_one(kv_caches.index))
+        return blocks
 
     def kv_cache_pcc_check(
-        self, kv_caches: MlaKvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+        self,
+        kv_caches: MlaKvCaches,
+        *,
+        slot_id: int,
+        n_chunks: int,
+        trace_dir=None,
+        real_len: int | None = None,
+        pt_path_override: str | None = None,
+        first_layer_idx: int = 0,
     ) -> float:
         """Optional bring-up hook (not part of the core runtime contract; never called in production
         serving). PCC the populated engine-owned primary KV cache (`.kvpe`) for `slot_id` against the
         golden trace; returns the min per-layer PCC and asserts on failure (unless
-        PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module."""
+        PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module.
+        `real_len` bounds the PCC to the real (non-pad) tokens; `pt_path_override` selects a
+        save_reference_cache .pt golden instead of the trace dir (both used by the migration validators)."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
@@ -368,5 +393,7 @@ class TtPrefillRuntime:
             slot_id=slot_id,
             n_chunks=n_chunks,
             trace_dir=trace_dir,
+            real_len=real_len,
+            pt_path_override=pt_path_override,
             first_layer_idx=first_layer_idx,
         )

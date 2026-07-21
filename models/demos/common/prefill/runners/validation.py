@@ -65,6 +65,10 @@ def validate_migrations_pairwise(runtime, kv_cache, pairs):
     (a positional comma list of per-slot .pt paths, same order as the driver's --token-json)."""
     thr = float(os.environ.get("PREFILL_MIGRATE_PAIRWISE_PCC", "0.99"))
 
+    # read_slot_kv returns one tensor per engine-owned cache; name them so the log states EXACTLY which
+    # caches were validated (index 0 = primary kvpe, 1 = sparse-DSA index cache; fallback cache{ti}).
+    _cache_name = lambda ti: ("kvpe", "index")[ti] if ti < 2 else f"cache{ti}"
+
     failures = []
     for src, dst in pairs:
         src_blocks = runtime.read_slot_kv(kv_cache, src)
@@ -73,24 +77,32 @@ def validate_migrations_pairwise(runtime, kv_cache, pairs):
             f"[kv-migrate-validate] src_slot={src} dst_slot={dst}: cache tensor count mismatch "
             f"{len(src_blocks)} != {len(dst_blocks)}"
         )
-        min_pcc, worst = 1.0, None
+        # Per-cache min PCC so both kvpe AND the index cache are reported explicitly (not folded into one).
+        per_cache = []  # (name, min_pcc, worst)
         for ti, (sb, db) in enumerate(zip(src_blocks, dst_blocks)):
             assert sb.shape == db.shape, (
                 f"[kv-migrate-validate] src_slot={src} dst_slot={dst}: tensor {ti} shape mismatch "
                 f"{tuple(sb.shape)} != {tuple(db.shape)}"
             )
+            c_min, c_worst = 1.0, None
             for layer in range(sb.shape[0]):
                 for head in range(sb.shape[1]):
                     pcc = _pcc_safe(sb[layer, head], db[layer, head])
-                    if pcc < min_pcc:
-                        min_pcc, worst = pcc, f"t{ti}[L{layer},h{head}]"
+                    if pcc < c_min:
+                        c_min, c_worst = pcc, f"L{layer},h{head}"
+            per_cache.append((_cache_name(ti), c_min, c_worst))
         del src_blocks, dst_blocks
+        min_pcc = min((p for _, p, _ in per_cache), default=1.0)
         status = "PASS" if min_pcc >= thr else "FAIL"
-        logger.info(
-            f"[kv-migrate-validate] pairwise src_slot={src} dst_slot={dst} min_pcc={min_pcc:.6f} "
-            f"(worst {worst}) -> {status}"
+        detail = " | ".join(
+            f"{name} min_pcc={p:.6f}" + (f" (worst {w})" if w is not None else "") for name, p, w in per_cache
         )
-        print(f"[kv-migrate-validate] AFTER pairwise src={src} dst={dst} min_pcc={min_pcc:.6f}")
+        logger.info(
+            f"[kv-migrate-validate] pairwise src_slot={src} dst_slot={dst}: {detail} -> {status} "
+            f"({len(per_cache)} cache(s))"
+        )
+        for name, p, _ in per_cache:
+            print(f"[kv-migrate-validate] AFTER pairwise src={src} dst={dst} {name} min_pcc={p:.6f}")
         if min_pcc < thr:
             failures.append((src, dst, min_pcc))
 

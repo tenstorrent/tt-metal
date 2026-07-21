@@ -1,0 +1,79 @@
+# GLM-5.1 SINGLE-RANK (one 8x4 BH galaxy) end-to-end KV migration, SCHEDULER-driven.
+#
+# One rank owns the whole 78-layer model (is_first == is_last), so there is no D2D pipeline and no
+# per-rank slice: the single rank populates the ENTIRE KV cache, then the external scheduler driver
+# migrates the src->dst pairs over the migration layer and writes the DONE sentinel. With the 2-user
+# glm51_run.json the driver migrates 2 pairs: src slots 0,1 -> dst slots 2,3 (dst_i = num_users + i),
+# so the runner allocates 2*num_users = 4 slots. This yaml turns on BOTH post-prefill PCC gates the
+# runner supports for a single rank:
+#
+#   1. PREFILL_REQUEST_LOOP_PCC=1  -> after the request loop, PCC the populated KV cache vs the golden
+#      trace (prefill correctness).
+#   2. PREFILL_VALIDATE_MIGRATION=1 + PREFILL_MIGRATE_PAIRWISE=1 -> wait for the driver's DONE sentinel,
+#      then assert each migrated dst slot == its src slot (migration fidelity, threshold below).
+#
+# REQUIRES the migration_endpoint running on THIS host first (launch_migration_endpoints.sh, endpoint
+# id 1, /mig_ep1_* queues) and the migration client .so at PREFILL_MIGRATION_CLIENT_DIR.
+#
+# Three terminals (all on the single host $MASTER_HOST):
+#   A) endpoint:  ./disaggregation/migration/launch_migration_endpoints.sh \
+#                   --name_server_host $MASTER_HOST --prefill_hosts $MASTER_HOST --prefill_endpoint_id 1
+#   B) runner:    ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#                   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_glm51_1galaxy_scheduler_migration.yaml \
+#                   $MASTER_HOST:1
+#   C) driver (after rank 0 logs WORKER_READY / the h2d descriptor):
+#        MIGRATION_DONE_FILE=/tmp/migration_done.sentinel \
+#        PREFILL_MIGRATION_CMD_QUEUE=/mig_ep1_cmd PREFILL_MIGRATION_TABLE_QUEUE=/mig_ep1_table \
+#        PREFILL_MIGRATION_RESP_QUEUE=/mig_ep1_resp \
+#          ./build-full/prefill_scheduler_driver --manifest $ENGINE/glm51_run.json
+#
+# NOTE: MIGRATION_DONE_FILE here (runner, waits on it) MUST equal the driver's MIGRATION_DONE_FILE
+# (writes it). Both use /tmp/migration_done.sentinel below.
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+
+global_env:
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/glm51.json"
+
+  # Model geometry (MUST match the driver / glm51_run.json). Single rank => all 78 layers here.
+  PREFILL_NUM_LAYERS: "78"
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "56320"       # 5120 * 11 chunks
+  # Scheduler pairwise: N manifest users => src slots 0..N-1 migrate to dst slots N..2N-1, so the
+  # runner must allocate 2*N slots. glm51_run.json has 2 users => 4 slots (src 0,1 -> dst 2,3).
+  PREFILL_NUM_USERS: "4"
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_KV_ONLY_LAST_LAYER: "0"    # keep EVERY layer's KV (migration copies all layers)
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  # PREFILL_FABRIC_MODE auto-derives to 1d for SP<=8 (single galaxy has no D2D) -- leave unset.
+
+  # PCC gate 1: prefill KV cache vs golden trace, after the request loop.
+  PREFILL_REQUEST_LOOP_PCC: "1"
+  PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.8"   # min per-layer prefill PCC threshold
+
+  # Migration: attach to endpoint 1, publish the merged KV chunk table, block on WORKER_READY,
+  # then (post-loop) wait for the scheduler's DONE sentinel and validate the migrated pair(s).
+  PREFILL_ENABLE_MIGRATION: "1"
+  PREFILL_MIGRATION_ENDPOINT_ID: "1"
+  PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
+  PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
+  PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
+  # Migration client .so dir (this same absolute path must hold _migration_client*.so).
+  PREFILL_MIGRATION_CLIENT_DIR: "/data/yeongyun/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"
+  MIGRATION_DONE_FILE: "/data/yeongyun/disagg_run/migration_done.sentinel"
+
+  # Request-loop exit count. In migration mode the driver never sends the shutdown sentinel, so the
+  # runner exits its loop after this many H2D chunks, then runs validate_after_prefill. MUST equal the
+  # total chunks the driver pushes: N_users * chunks_per_user. glm51_run.json = 2 users * 11 chunks = 22.
+  PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"
+
+  # PCC gate 2: migration dst==src fidelity (scheduler-driven; NOT the internal loopback selftest).
+  PREFILL_VALIDATE_MIGRATION: "1"
+  PREFILL_MIGRATE_PAIRWISE: "1"     # 1 = exact dst==src byte check (BOTH kvpe+index); 0 = golden PCC (kvpe only)
+  PREFILL_MIGRATE_PAIRWISE_PCC: "0.99"   # byte-copy loopback migrate should be ~1.0
