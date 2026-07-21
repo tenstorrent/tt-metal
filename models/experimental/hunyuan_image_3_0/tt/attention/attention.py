@@ -39,6 +39,10 @@ from models.common.lightweightmodule import LightweightModule
 _SDPA_PREFILL_Q_CHUNK = int(os.environ.get("HY_SDPA_Q_CHUNK", "256"))
 _SDPA_PREFILL_K_CHUNK = int(os.environ.get("HY_SDPA_K_CHUNK", "256"))
 _SDPA_PREFILL_MIN_Q = 512  # below this local query length, keep the default config
+# Causal prefill (recaption, no mask) has no mask CB, so a larger q_chunk fits L1 and is
+# faster (512/256 ~23ms vs 256/256 ~25.5ms at S=22784). The masked path (denoise) keeps
+# 256/256 — 512/256 overflows L1 there (mask CB). PCC-neutral (chunking doesn't change math).
+_SDPA_CAUSAL_Q_CHUNK = int(os.environ.get("HY_SDPA_CAUSAL_Q_CHUNK", "512"))
 
 from ..cache import cache_file
 from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
@@ -449,9 +453,11 @@ class HunyuanTtAttention(LightweightModule):
         # query keeps the default (auto) config.
         sdpa_program_config = None
         if not decode_step and int(q_rot.shape[-2]) >= _SDPA_PREFILL_MIN_Q:
+            # Causal (no mask) fits a larger q_chunk in L1 → faster; masked keeps 256/256.
+            q_chunk = _SDPA_CAUSAL_Q_CHUNK if is_causal else _SDPA_PREFILL_Q_CHUNK
             sdpa_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                q_chunk_size=_SDPA_PREFILL_Q_CHUNK,
+                q_chunk_size=q_chunk,
                 k_chunk_size=_SDPA_PREFILL_K_CHUNK,
                 exp_approx_mode=False,
             )

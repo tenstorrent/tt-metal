@@ -24,7 +24,7 @@ from models.common.lightweightmodule import LightweightModule
 
 from .gate import HunyuanTtTopKGate
 from .mlp import HunyuanTtMLP
-from ..cache import cache_file
+from ..cache import cache_file, cache_file_exists, cached_tensor_path
 from ..parallel_utils import (
     decode_mm_program_config,
     moe_full_seq_mem_config,
@@ -90,47 +90,69 @@ class HunyuanTtMoEParallel(LightweightModule):
         # --- stacked expert weights, sharded along the expert dim ------------
         # gate_and_up: [E, H, 2I]  down: [E, I, H]  (transposed for ttnn.linear)
         verbose = os.environ.get("HY_VERBOSE", "1") != "0"
-        if verbose:
-            print(f"[backbone]   stacking {num_experts} expert weights on host ...", flush=True)
-        wgu = torch.stack(
-            [
-                state_dict[f"{prefix}.experts.{e}.gate_and_up_proj.weight"].transpose(0, 1).contiguous()
-                for e in range(num_experts)
-            ]
-        )
-        wdn = torch.stack(
-            [
-                state_dict[f"{prefix}.experts.{e}.down_proj.weight"].transpose(0, 1).contiguous()
-                for e in range(num_experts)
-            ]
-        )
-        self.inter2 = wgu.shape[-1]  # 2I
-        if verbose:
-            print(
-                f"[backbone]   uploading {num_experts} experts ({weight_dtype}) to mesh ...",
-                flush=True,
-            )
+        gate_up_key = f"{prefix}.experts.gate_and_up_stacked"
+        down_key = f"{prefix}.experts.down_stacked"
+        layout = ttnn.TILE_LAYOUT
+        expert_cached = cache_file_exists(
+            weight_cache_path, gate_up_key, dtype=weight_dtype, layout=layout
+        ) and cache_file_exists(weight_cache_path, down_key, dtype=weight_dtype, layout=layout)
         t_upload = time.time()
-        expert_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-        self.w_gate_up = ttnn.as_tensor(
-            wgu,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=expert_mapper,
-            cache_file_name=cache_file(weight_cache_path, f"{prefix}.experts.gate_and_up_stacked"),
-        )  # per-device [epd, H, 2I]
-        self.w_down = ttnn.as_tensor(
-            wdn,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=expert_mapper,
-            cache_file_name=cache_file(weight_cache_path, f"{prefix}.experts.down_stacked"),
-        )  # per-device [epd, I, H]
-        del wgu, wdn
+        if expert_cached:
+            if verbose:
+                print(
+                    f"[backbone]   loading cached {num_experts} experts ({weight_dtype}) from disk ...",
+                    flush=True,
+                )
+            self.w_gate_up = ttnn.load_tensor(
+                cached_tensor_path(weight_cache_path, gate_up_key, dtype=weight_dtype, layout=layout),
+                device=mesh_device,
+            )  # per-device [epd, H, 2I]
+            self.w_down = ttnn.load_tensor(
+                cached_tensor_path(weight_cache_path, down_key, dtype=weight_dtype, layout=layout),
+                device=mesh_device,
+            )  # per-device [epd, I, H]
+            self.inter2 = self.w_gate_up.shape[-1]  # 2I
+        else:
+            if verbose:
+                print(f"[backbone]   stacking {num_experts} expert weights on host ...", flush=True)
+            wgu = torch.stack(
+                [
+                    state_dict[f"{prefix}.experts.{e}.gate_and_up_proj.weight"].transpose(0, 1).contiguous()
+                    for e in range(num_experts)
+                ]
+            )
+            wdn = torch.stack(
+                [
+                    state_dict[f"{prefix}.experts.{e}.down_proj.weight"].transpose(0, 1).contiguous()
+                    for e in range(num_experts)
+                ]
+            )
+            self.inter2 = wgu.shape[-1]  # 2I
+            if verbose:
+                print(
+                    f"[backbone]   uploading {num_experts} experts ({weight_dtype}) to mesh ...",
+                    flush=True,
+                )
+            expert_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+            self.w_gate_up = ttnn.as_tensor(
+                wgu,
+                dtype=weight_dtype,
+                layout=layout,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=expert_mapper,
+                cache_file_name=cache_file(weight_cache_path, gate_up_key),
+            )  # per-device [epd, H, 2I]
+            self.w_down = ttnn.as_tensor(
+                wdn,
+                dtype=weight_dtype,
+                layout=layout,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=expert_mapper,
+                cache_file_name=cache_file(weight_cache_path, down_key),
+            )  # per-device [epd, I, H]
+            del wgu, wdn
         if verbose:
             print(f"[backbone]   expert upload done ({time.time() - t_upload:.1f}s)", flush=True)
 
