@@ -69,12 +69,10 @@ unit_tests_legacy:
   #   env:
   #     TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# 1x3 tests with special setup
-
   - filter: "*Bmm"
     config: 1x3
+    back2back: true
     env:
-      TT_METAL_LOGGER_LEVEL: warning
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 # 2x3 tests run back-to-back
