@@ -36,9 +36,9 @@
 using tt::tt_metal::DramSenderStateBlock;
 using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
-using ttnn::TensorPrefetcherEntry;
-using ttnn::TensorPrefetcherRequestHeader;
-using ttnn::TensorPrefetcherTensorLayout;
+using tt::tt_metal::TensorPrefetcherEntry;
+using tt::tt_metal::TensorPrefetcherRequestHeader;
+using tt::tt_metal::TensorPrefetcherTensorLayout;
 
 // Per-stage cycle profiling — gated on watcher ring-buffer being enabled so
 // production builds pay zero (the variables and timestamp reads don't exist).

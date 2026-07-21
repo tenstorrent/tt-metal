@@ -23,29 +23,32 @@
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
-namespace ttnn::tensor_ops {
-using tt::tt_metal::MeshTensor;
-
-using tt::tt_metal::enqueue_read_tensor;
-using tt::tt_metal::enqueue_write_tensor;
-using tt::tt_metal::is_uniform_write;
-using tt::tt_metal::PageConfig;
-using tt::tt_metal::raw_optional;
-using tt::tt_metal::Shape;
-using tt::tt_metal::TensorLayout;
-using tt::tt_metal::Tile;
-
 using tt::tt_metal::BufferRegion;
 using tt::tt_metal::DistributedHostBuffer;
+using tt::tt_metal::enqueue_read_tensor;
+using tt::tt_metal::enqueue_write_tensor;
 using tt::tt_metal::GraphTracker;
 using tt::tt_metal::HostBuffer;
 using tt::tt_metal::HostTensor;
+using tt::tt_metal::is_uniform_write;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::PageConfig;
 using tt::tt_metal::QueueId;
+using tt::tt_metal::raw_optional;
+using tt::tt_metal::Shape;
+using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
 using tt::tt_metal::TensorTopology;
+using tt::tt_metal::Tile;
 using ttnn::DeviceStorage;
+using ttnn::is_cpu_tensor;
+using ttnn::set_tensor_id;
+using ttnn::StorageType;
+using ttnn::Tensor;
+
+namespace ttnn {
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
@@ -108,6 +111,16 @@ Tensor create_device_tensor(
     return output;
 }
 
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+using ttnn::DeviceStorage;
+using ttnn::is_cpu_tensor;
+using ttnn::set_tensor_id;
+using ttnn::StorageType;
+using ttnn::Tensor;
+
 Tensor to_device(
     const Tensor& input_tensor,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
@@ -131,6 +144,20 @@ Tensor to_device(
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }
+
+Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
+    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_layout conversion");
+    HostTensor host_output = ::tt::tt_metal::to_layout(input_tensor.host_tensor(), target_layout);
+    Tensor output = Tensor(std::move(host_output));
+    output = ttnn::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
+}
+
+}  // namespace tt::tt_metal
+
+namespace ttnn {
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     GraphTracker::instance().track_function_start("ttnn::copy_to_device", host_tensor, device_tensor, cq_id);
@@ -201,16 +228,6 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
     return output;
 }
 
-Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
-    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
-    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_layout conversion");
-    HostTensor host_output = ::tt::tt_metal::to_layout(input_tensor.host_tensor(), target_layout);
-    Tensor output = Tensor(std::move(host_output));
-    output = ttnn::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
 Tensor pad(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& output_padded_shape,
@@ -275,10 +292,21 @@ Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& ou
     return output;
 }
 
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+using ttnn::DeviceStorage;
+using ttnn::is_cpu_tensor;
+using ttnn::set_tensor_id;
+using ttnn::StorageType;
+using ttnn::Tensor;
+
 // ======================================================================================
 //                                  .tensor_view()
 // ======================================================================================
 
+namespace {
 Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
     // Just edit shape if shape has a 0 dimension
     if (input_tensor.logical_volume() == 0) {
@@ -421,6 +449,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
     return Tensor(std::move(view_storage));
 }
 
+}  // namespace
+
 Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
@@ -438,8 +468,12 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
 }
 
 Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
-    return tensor_ops::view(input_tensor, new_shape, new_shape);
+    return tt::tt_metal::view(input_tensor, new_shape, new_shape);
 }
+
+}  // namespace tt::tt_metal
+
+namespace ttnn {
 
 Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_layout) {
     const auto& old_spec = input_tensor.tensor_spec();
@@ -466,6 +500,16 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
     return Tensor(std::move(reinterpreted_storage));
 }
 
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+using ttnn::DeviceStorage;
+using ttnn::is_cpu_tensor;
+using ttnn::set_tensor_id;
+using ttnn::StorageType;
+using ttnn::Tensor;
+
 // ======================================================================================
 //                                  .tensor_reshape()
 // ======================================================================================
@@ -473,18 +517,22 @@ Tensor reshape(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape) {
-    return tensor_ops::view(input_tensor, new_logical_shape, new_padded_shape);
+    return tt::tt_metal::view(input_tensor, new_logical_shape, new_padded_shape);
 }
 
 Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape) {
-    return tensor_ops::reshape(input_tensor, new_shape, new_shape);
+    return tt::tt_metal::reshape(input_tensor, new_shape, new_shape);
 }
 
-Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
-    GraphTracker::instance().track_function_start("ttnn::tensor_ops::to_dtype", input_tensor, dtype);
+}  // namespace tt::tt_metal
+
+namespace ttnn {
+
+Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype) {
+    GraphTracker::instance().track_function_start("ttnn::to_dtype", input_tensor, dtype);
     auto output_tensor = Tensor(::tt::tt_metal::to_dtype(input_tensor.host_tensor(), dtype));
     GraphTracker::instance().track_function_end(output_tensor);
     return output_tensor;
 }
 
-}  // namespace ttnn::tensor_ops
+}  // namespace ttnn

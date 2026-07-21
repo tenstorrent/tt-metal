@@ -4,11 +4,3 @@
 
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-
-namespace ttnn {
-
-Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype) {
-    return ttnn::tensor_ops::to_dtype(input_tensor, dtype);
-}
-
-}  // namespace ttnn

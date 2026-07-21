@@ -194,7 +194,7 @@ Tensor Tensor::from_vector(
     T pad_value) {
     auto host_tensor = HostTensor::from_vector(std::move(buffer), spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
-    res = ttnn::tensor_ops::to_dtype(res, spec.data_type());
+    res = ttnn::to_dtype(res, spec.data_type());
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
@@ -323,7 +323,7 @@ Tensor Tensor::to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config,
     std::optional<tt::tt_metal::QueueId> cq_id) const {
-    return ttnn::tensor_ops::to_device(*this, mesh_device, mem_config, cq_id);
+    return tt::tt_metal::to_device(*this, mesh_device, mem_config, cq_id);
 }
 
 Tensor Tensor::cpu(bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) const {
@@ -339,7 +339,7 @@ Tensor Tensor::extract_shard(const CoreCoord& core) const {
 
 Tensor Tensor::extract_shard(const uint32_t& core_id) const { return tensor_impl::extract_shard(*this, core_id); }
 
-Tensor Tensor::to_layout(Layout target_layout) const { return ttnn::tensor_ops::to_layout(*this, target_layout); }
+Tensor Tensor::to_layout(Layout target_layout) const { return tt::tt_metal::to_layout(*this, target_layout); }
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string(*this); }
 
@@ -378,11 +378,11 @@ uint32_t Tensor::element_size() const {
     }
 }
 
-Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const { return ttnn::tensor_ops::view(*this, new_shape); }
+Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const { return tt::tt_metal::view(*this, new_shape); }
 
 Tensor Tensor::reshape(
     const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const {
-    return ttnn::tensor_ops::view(*this, new_logical_shape, new_padded_shape);
+    return tt::tt_metal::view(*this, new_logical_shape, new_padded_shape);
 }
 
 void Tensor::update_tensor_topology(const TensorTopology& tensor_topology) {
