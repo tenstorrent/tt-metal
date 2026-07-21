@@ -928,13 +928,6 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     constexpr PackTileImpl() noexcept = default;
     constexpr explicit PackTileImpl(uint32_t base) noexcept : Base(base) {}
 
-    static ALWI void init() {
-        // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
-        // The chain emits the reconfig in `emit_pre_element_transitions()` before this
-        // element runs; init() here is a no-op for reconfig.
-        // Retained empty so trait-dispatch stays uniform.
-    }
-
     static ALWI void configure_relu() {
         if constexpr (Relu == PackRelu::Zero) {
             pack_relu_config(ReluConfig::zero());
@@ -2008,7 +2001,7 @@ ALWI void emit_pre_element_transitions() {
     }
 }
 
-// emit_per_stage_pack_reconfig<E, PrevPack, LastPackCb, PackHetero>()
+// emit_per_stage_pack_reconfig(curr, prev, last, heterogeneous)
 //
 // Per-stage pack reconfig used only when the chain has heterogeneous opt-in
 // pack CBs (boot can't program all of them). For every opt-in pack site,
@@ -2017,23 +2010,20 @@ ALWI void emit_pre_element_transitions() {
 // (so iter k+1's site 0 sees iter k's site N-1 as the previous descriptor
 // state). The LLK's compare-and-skip on matching formats keeps the cost to
 // a few cycles when adjacent stages happen to share a dtype.
-template <class E, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
-ALWI void emit_per_stage_pack_reconfig() {
-    if constexpr (!PackHetero) return;
-    constexpr uint32_t curr_p = dfb_for_side<Side::Pack, E>();
-    if constexpr (curr_p == NO_PREV_DFB) return;
-    constexpr uint32_t prev_chain = PrevPack;
+ALWI void emit_per_stage_pack_reconfig(
+    uint32_t curr_p, uint32_t prev_chain, uint32_t last_pack_cb, bool pack_hetero) {
+    if (!pack_hetero || curr_p == NO_PREV_DFB) return;
     // Wraparound: first opt-in pack site has no in-chain prev; on iter ≥ 1 the
     // packer ended the previous iter on `last_pack_cb`. The LLK 2-arg form does
     // the right thing on iter 0 too (cache check vs. boot-initialized state).
-    constexpr uint32_t prev_p =
-        (prev_chain != NO_PREV_DFB) ? prev_chain : LastPackCb;
-    if constexpr (prev_p != NO_PREV_DFB) {
+    const uint32_t prev_p =
+        (prev_chain != NO_PREV_DFB) ? prev_chain : last_pack_cb;
+    if (prev_p != NO_PREV_DFB) {
         pack_reconfig_data_format(prev_p, curr_p);
     }
 }
 
-// Pack-phase init (Pack* only). Pack is its own cohort (disjoint from math-MOP / SFPU),
+// Pack-phase setup (Pack* only). Pack is its own cohort (disjoint from math-MOP / SFPU),
 // excluded from the compute-init fold and always boot-hoisted by the pack-init fold.
 // Reconfig is fold-driven (see emit_pre_element_transitions): homogeneous chains program
 // the packer once at boot; heterogeneous chains defer later sites to per-stage emission so
@@ -2042,7 +2032,6 @@ template <uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero, class
 ALWI void elem_pack_init() {
     if constexpr (is_pack_tile_op_v<E>) {
         emit_pre_element_transitions<E, PrevA, PrevB, PrevP, PackHetero>();
-        E::init();
     }
 }
 
@@ -2222,7 +2211,8 @@ ALWI void elem_apply_pack(
     [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
-        emit_per_stage_pack_reconfig<ElemT, PrevPack, LastPackCb, PackHetero>();
+        emit_per_stage_pack_reconfig(
+            dfb_for_side<Side::Pack, ElemT>(), PrevPack, LastPackCb, PackHetero);
         if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerTile) {
             DataflowBuffer(ElemT::dfb).reserve_back(1);
         } else if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerChunk) {
