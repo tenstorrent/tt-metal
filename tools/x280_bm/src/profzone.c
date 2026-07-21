@@ -848,8 +848,16 @@ int main(uint64_t hartid) {
          * hugepage/sysmem channel (D2HSocket forces the hugepage path for L2CPU senders), reachable at
          * pcie_base|offset exactly like the raw ring. get_noc_addr gave a bare sysmem offset (hi=0). */
         uint64_t pbase = 0x1000000000000000ull;
-        sk_fifo[0] = pbase | (packed & 0xffffffffull);
-        sk_fifo[1] = pbase | ((packed >> 32) & 0xffffffffull);
+        /* ISOLATION: if host_base already carries bit60 it's a SINGLE full PCIe fifo addr passed exactly like
+         * the raw path's host_base (used directly) -- distinguishes a packing-value bug from a socket-mode
+         * param-read staleness. Otherwise it's the 2-socket lo32 pack. */
+        if ((packed >> 60) & 1ull) {
+            sk_fifo[0] = packed;
+            sk_fifo[1] = packed;
+        } else {
+            sk_fifo[0] = pbase | (packed & 0xffffffffull);
+            sk_fifo[1] = pbase | ((packed >> 32) & 0xffffffffull);
+        }
         for (uint64_t h = 0; h < nread && h < 2; h++) {
             sk_fbytes[h] = total;
             sk_bsent[h] = sk_fifo[h] + total; /* D2HSocket: bytes_sent buffer immediately follows the FIFO */

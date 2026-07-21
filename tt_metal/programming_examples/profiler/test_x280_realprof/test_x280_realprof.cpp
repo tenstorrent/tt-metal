@@ -498,7 +498,12 @@ int main(int argc, char** argv) {
                 cfg_sz);
         }
         // Pass the FIFO addrs to profzone via P_HOST_BASE (unused in socket mode) -- read FRESH as a param.
-        bcfg.host_base = (fifo_lo[0] & 0xffffffffull) | ((fifo_lo[1] & 0xffffffffull) << 32);
+        // ISOLATION: for a single socket, pass the FULL pcie_base|off addr (bit60 set) exactly like the raw
+        // path's host_base -> profzone uses it directly. Distinguishes a packing bug from param staleness.
+        // Pass the FULL pcie_base|offset FIFO addr (bit60 set) EXACTLY like the raw path's host_base -- the
+        // X280 reads that fresh, but a bare lo32 offset reads stale/wrong (a value-form-sensitive param quirk).
+        // Single socket via P_HOST_BASE; dualrelay (2 full addrs) needs a 2nd param slot -- TODO.
+        bcfg.host_base = pcie_base + (uint64_t)fifo_lo[0];
         printf(
             "[socket] created %llu D2HSocket(s), %llu B FIFO each, page 64 B; P_HOST_BASE packed=0x%llx\n",
             (unsigned long long)ndh,
@@ -1172,6 +1177,28 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[run] pipeline did not return to idle (unexpected)\n");
     }
     device_done.store(true);
+    if (socket_mode) {
+        // Reliable host-side check (bypasses the flaky device RES readback): read the socket FIFO + bytes_sent
+        // straight from the hugepage channel. FIFO nonzero => relay wrote marker data to the right addr;
+        // bytes_sent nonzero => relay published it. Isolates relay-write vs bytes_sent-publish vs host-read.
+        for (uint64_t h = 0; h < ndh; h++) {
+            uint32_t cfgw[16] = {0};
+            drv.read_block(cfgw, 64, 0x08019000ull + h * 0x100ull);
+            uint32_t foff = cfgw[4];  // dn_fifo_lo (channel offset)
+            uint32_t fw[8] = {0}, bs = 0;
+            cluster.read_sysmem(reinterpret_cast<uint8_t*>(fw), 32, foff, device_id, 0);
+            cluster.read_sysmem(reinterpret_cast<uint8_t*>(&bs), 4, foff + (uint32_t)hring_bytes, device_id, 0);
+            printf(
+                "[socket%llu POST-RUN] fifo_off=0x%x fifo[0..3]=%08x %08x %08x %08x  bytes_sent=%u\n",
+                (unsigned long long)h,
+                foff,
+                fw[0],
+                fw[1],
+                fw[2],
+                fw[3],
+                bs);
+        }
+    }
     if (mpmc > 0) {
         for (auto& t : flushers) {
             t.join();  // flushers finish draining first
