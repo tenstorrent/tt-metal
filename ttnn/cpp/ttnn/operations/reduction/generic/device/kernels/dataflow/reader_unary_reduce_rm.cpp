@@ -152,12 +152,13 @@ void reduce_rm_reader() {
             const uint32_t nc_base_page = nc * H_logical;
             const uint32_t slice_first_tile = h_slice_idx * slice_Ht;
 
-            for (uint32_t h_local = 0; h_local < slice_Ht; h_local += ht_tiles_per_chunk) {
-                const uint32_t ht_in_chunk =
-                    (h_local + ht_tiles_per_chunk < slice_Ht) ? ht_tiles_per_chunk : (slice_Ht - h_local);
+            for (uint32_t slice_tile_base = 0; slice_tile_base < slice_Ht; slice_tile_base += ht_tiles_per_chunk) {
+                const uint32_t ht_in_chunk = (slice_tile_base + ht_tiles_per_chunk < slice_Ht)
+                                                 ? ht_tiles_per_chunk
+                                                 : (slice_Ht - slice_tile_base);
 
                 for (uint32_t hti = 0; hti < ht_in_chunk; ++hti) {
-                    const uint32_t slab_base_row_in_nc = (slice_first_tile + h_local + hti) * rm_rows_per_tile;
+                    const uint32_t slab_base_row_in_nc = (slice_first_tile + slice_tile_base + hti) * rm_rows_per_tile;
                     const uint32_t slab_rows_avail =
                         (slab_base_row_in_nc < H_logical) ? (H_logical - slab_base_row_in_nc) : 0;
                     const uint32_t real_rows =

@@ -272,7 +272,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     // reduce.cpp / reduce_w_neg.cpp expect {Ht, Wt, NC, post_mul_bits}.
     std::vector<uint32_t> compute_kernel_args_group_1;
     if (rm_path) {
-        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, ht_per_core_group_1, post_mul_scaler_bits);
+        compute_kernel_args_group_1 =
+            build_rm_compute_ct_args(plan, ht_per_core_group_1, post_mul_scaler_bits, fp32_sfpu_reduce);
     } else {
         compute_kernel_args_group_1 = {
             ht_per_core_group_1,         // Ht
@@ -305,7 +306,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_kernel_args_group_2;
         if (rm_path) {
-            compute_kernel_args_group_2 = build_rm_compute_ct_args(plan, ht_per_core_group_2, post_mul_scaler_bits);
+            compute_kernel_args_group_2 =
+                build_rm_compute_ct_args(plan, ht_per_core_group_2, post_mul_scaler_bits, fp32_sfpu_reduce);
         } else {
             compute_kernel_args_group_2 = {
                 ht_per_core_group_2,         // Ht

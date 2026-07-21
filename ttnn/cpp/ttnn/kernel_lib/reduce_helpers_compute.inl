@@ -220,6 +220,10 @@ ALWI void reload_accumulator_if_needed(
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (is_sfpu) {
+                // SFPU+Accumulate (RM cross-chunk path): reload left copy_tile on the accumulator
+                // CB; point it back at the input before the next sfpu_copy_and_fold.
+                reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
+                copy_tile_to_dst_init_short(input_dfb_id);
                 detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(

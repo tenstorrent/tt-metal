@@ -147,8 +147,10 @@ std::vector<uint32_t> build_rm_writer_ct_args(
 
 // Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
 // `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
-// keeps NC pinned at 1.
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits);
+// keeps NC pinned at 1. `fp32_sfpu_reduce` (slot 6) routes Float32 SUM through the SFPU for
+// full-fp32 accumulation (accurate ttnn.mean) instead of the tf32 FPU path.
+std::vector<uint32_t> build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
@@ -173,12 +175,12 @@ bool h_reduce_negate_fits_in_l1(
 //   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding TensorSpec
 //     builder using the grid/orientation taken from `output_mem_config` if
 //     available, otherwise falling back to `input_mem_config`.
-//   - ND_SHARDED (TILE output only): copies the ND slice spec (from
+//   - ND_SHARDED (TILE output only): copies the ND shard spec (from
 //     `output_mem_config` or, as a fallback, `input_mem_config`) and sets the
-//     slice shape entries for the reduced dim(s) to 1.
+//     shard shape entries for the reduced dim(s) to 1.
 //
 // `input_mem_config` is the memory config of the reduction's input tensor and
-// is only consulted as a fallback when the output config omits a slice spec.
+// is only consulted as a fallback when the output config omits a shard spec.
 tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     const tt::tt_metal::Shape& output_shape,
     tt::tt_metal::DataType output_dtype,
@@ -190,7 +192,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
 // Enforces the documented contract that, for reduction-style ops, any sharded
 // participant (input or output) must live in L1.  Sharded layouts and DRAM
 // buffers use disjoint coordinate spaces (worker cores vs DRAM bank cores), so
-// silently borrowing a grid across buffer types — as the slice-spec fallback
+// silently borrowing a grid across buffer types — as the shard-spec fallback
 // in `build_reduce_output_tensor_spec` would otherwise allow — produces an
 // invalid spec.  Pass an `op_name` (e.g. "reduce", "Std/Var reduction") for a
 // readable error message.

@@ -141,7 +141,8 @@ std::vector<uint32_t> build_rm_writer_ct_args(
     return args;
 }
 
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits) {
+std::vector<uint32_t> build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
     return {
         Ht_arg,
         plan.Wt,
@@ -149,6 +150,7 @@ std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_a
         post_mul_scaler_bits,
         plan.wt_tiles_per_chunk,
         plan.ht_tiles_per_chunk,
+        fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
     };
 }
 
@@ -189,7 +191,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
         mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         // Grid and orientation are identical in both spec formats (nd_shard_spec and shard_spec)
         // when both are populated. Pick whichever is available from the output config,
-        // falling back to the input tensor's slice spec for backward compatibility.
+        // falling back to the input tensor's shard spec for backward compatibility.
         const auto& nd = output_mem_config.nd_shard_spec();
         const auto& legacy = output_mem_config.shard_spec();
         const auto& input_nd = input_mem_config.nd_shard_spec();
@@ -214,7 +216,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
         };
         const auto& [grid, orientation] = get_grid_and_orientation();
 
-        // For width/height/block sharding modes, the output slice shape is fully determined
+        // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
         // appropriate TensorSpec builder.
         if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -230,7 +232,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
         return tensor_spec.block_sharded(grid.bounding_box(), orientation);
     }
 
-    // ND sharding: adjust per-logical-dimension slice shape for reduced dims.
+    // ND sharding: adjust per-logical-dimension shard shape for reduced dims.
     // Fall back to the input tensor's nd_shard_spec when the output config omits it.
     if (mem_layout == TensorMemoryLayout::ND_SHARDED) {
         const auto& nd_shard_spec = output_mem_config.nd_shard_spec();

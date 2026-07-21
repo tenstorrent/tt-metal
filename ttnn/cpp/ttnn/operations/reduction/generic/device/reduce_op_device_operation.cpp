@@ -121,14 +121,14 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         const auto& input_shard_grid = in_shard.grid;
         TT_FATAL(
             program_grid.contains(input_shard_grid),
-            "Input slice grid {} must be contained in program core grid {}",
+            "Input shard grid {} must be contained in program core grid {}",
             input_shard_grid,
             program_grid);
         const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
         const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(
             in_shard.shape[0] > 0 && in_shard.shape[1] > 0,
-            "Sharded reduce input: slice face shape must be positive, got [{}, {}]",
+            "Sharded reduce input: shard face shape must be positive, got [{}, {}]",
             in_shard.shape[0],
             in_shard.shape[1]);
         TT_FATAL(
@@ -152,18 +152,18 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
 
         TT_FATAL(
             program_grid.contains(output_shard_grid),
-            "Output slice grid {} must be contained in program core grid {}",
+            "Output shard grid {} must be contained in program core grid {}",
             output_shard_grid,
             program_grid);
         TT_FATAL(
             device_grid.contains(output_shard_grid),
-            "Output slice grid {} must be contained in device grid {}",
+            "Output shard grid {} must be contained in device grid {}",
             output_shard_grid,
             device_grid);
         if (output_nd_shard_spec.shard_shape.rank() >= 2) {
             TT_FATAL(
                 output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,
-                "ND sharded output: last-2 slice dims must be positive, got [..., {}, {}] (height/width in "
+                "ND sharded output: last-2 shard dims must be positive, got [..., {}, {}] (height/width in "
                 "shard_shape)",
                 output_nd_shard_spec.shard_shape[-2],
                 output_nd_shard_spec.shard_shape[-1]);
