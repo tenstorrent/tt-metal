@@ -4,8 +4,9 @@
 """
 Pytest configuration for VibeVoice-1.5B reference tests.
 
-Prepends reference/ so vendored `vibevoice` imports resolve, and tt-metal root
-so `models.experimental.vibevoice` imports work when running from repo root.
+Prepends reference/ so the vendored reference model (`modular`, `processor`,
+`schedule`) imports resolve, and tt-metal root so `models.experimental.vibevoice`
+imports work when running from repo root.
 """
 
 import sys
