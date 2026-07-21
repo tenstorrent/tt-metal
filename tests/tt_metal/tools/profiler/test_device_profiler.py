@@ -323,9 +323,9 @@ def test_full_buffer():
 
 @pytest.mark.skip_post_commit
 def test_zone_id_budget():
-    # The binary asserts (a) a 120-zone-per-TU kernel compiles and profiles, and (b) a >128-zone-per-TU
-    # kernel fails to compile via the TT_ZONE_META static_assert. A zero exit code means both held.
-    # Then verify the structural zone-id invariants directly from the zone-locations log.
+    # The binary asserts (a) a 40-zone-per-TU kernel compiles and profiles, and (b) a 240-zone-per-TU
+    # kernel (over the default 64-zone budget) fails to compile via the TT_ZONE_META static_assert. A
+    # zero exit code means both held. Then verify the structural zone-id invariants from the log.
     run_device_profiler_test(testName="build/test/tt_metal/tools/profiler/test_zone_id_budget", noPostProcess=True)
 
     LOCAL_BITS = 6  # keep in sync with KERNEL_PROFILER_LOCAL_BITS in profiler_common.h
@@ -356,6 +356,44 @@ def test_zone_id_budget():
     # not just that the run did not crash.
     max_zones_in_one_tu = max(len(ids) for ids in ids_per_file.values())
     assert max_zones_in_one_tu >= 40, f"expected a TU with >=40 zones, got max {max_zones_in_one_tu}"
+
+
+@pytest.mark.skip_post_commit
+def test_zone_id_budget_more_zone_names():
+    # With TT_METAL_PROFILER_MORE_ZONE_NAMES set, KERNEL_PROFILER_LOCAL_BITS becomes 9 (512 zone names
+    # per TU instead of 64), trading the file-id budget (512 instead of 4096). The binary detects the env
+    # var and builds a single-TU kernel with 240 zones -- which fails to compile in the default 64-zone
+    # mode -- and asserts it now compiles and profiles. A zero exit code means it held.
+    os.environ["TT_METAL_PROFILER_MORE_ZONE_NAMES"] = "1"
+    try:
+        run_device_profiler_test(testName="build/test/tt_metal/tools/profiler/test_zone_id_budget", noPostProcess=True)
+    finally:
+        del os.environ["TT_METAL_PROFILER_MORE_ZONE_NAMES"]
+
+    LOCAL_BITS = 9  # more-zone-names mode; keep in sync with KERNEL_PROFILER_LOCAL_BITS_MORE_ZONES
+    zone_log = PROFILER_LOGS_DIR / "new_zone_src_locations.log"
+    assert zone_log.exists(), f"zone source-location log not found: {zone_log}"
+
+    id_to_strings = {}  # zone id -> set of distinct source strings
+    ids_per_file = {}  # file_id -> set of zone ids
+    with open(zone_log) as f:
+        for line in f:
+            if "\t" not in line:
+                continue
+            id_str, src = line.rstrip("\n").split("\t", 1)
+            zid = int(id_str)
+            id_to_strings.setdefault(zid, set()).add(src)
+            ids_per_file.setdefault(zid >> LOCAL_BITS, set()).add(zid)
+
+    collisions = {zid: s for zid, s in id_to_strings.items() if len(s) > 1}
+    assert not collisions, f"zone id collisions detected: {collisions}"
+
+    # The 240-zone kernel put well over 64 zones in one TU -- impossible in the default (64-zone) mode,
+    # which is the whole point of more-zone-names mode.
+    max_zones_in_one_tu = max(len(ids) for ids in ids_per_file.values())
+    assert (
+        max_zones_in_one_tu > 64
+    ), f"expected a TU with >64 zones in more-zone-names mode, got max {max_zones_in_one_tu}"
 
 
 def wildcard_match(pattern, words):

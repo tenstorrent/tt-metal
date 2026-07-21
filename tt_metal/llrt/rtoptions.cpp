@@ -133,6 +133,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
     TT_METAL_PROFILER_SUM,                         // Enable sum profiling
     TT_METAL_PROFILER_ACCUMULATE,                  // Accumulate multiple kernels in L1 before DRAM push
+    TT_METAL_PROFILER_MORE_ZONE_NAMES,             // More zone names per TU (512) at fewer file ids (512)
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
@@ -965,6 +966,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_accumulate = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_MORE_ZONE_NAMES
+        // Trade the zone-id file-id budget (4096 -> 512) for more zone names per translation unit
+        // (64 -> 512), by growing KERNEL_PROFILER_LOCAL_BITS from 6 to 9. For deep-diving a single
+        // heavily instrumented kernel; not for broad multi-model runs. Default: false
+        // Usage: export TT_METAL_PROFILER_MORE_ZONE_NAMES=1
+        case EnvVarID::TT_METAL_PROFILER_MORE_ZONE_NAMES: {
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_more_zone_names = true;
             }
             break;
         }

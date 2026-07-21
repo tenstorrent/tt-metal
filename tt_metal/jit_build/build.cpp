@@ -90,13 +90,28 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
-// Persistent, process-shared registry mapping a stable per-translation-unit key to a dense integer
-// "file id" used to build collision-free KERNEL_PROFILER structural zone ids. Stability matters: a
-// cached kernel keeps the id baked into its binary, so a freshly compiled TU must never be handed a
-// file id already in use elsewhere. The registry lives next to the JIT cache and is guarded by an OS
-// file lock for the whole read-modify-write, so parallel builds -- even across processes sharing the
-// cache -- assign disjoint ids. Best-effort: on any I/O failure it falls back to partition 0.
-uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const std::string& key) {
+// KERNEL_PROFILER_LOCAL_BITS for this run: more-zone-names mode (rtoptions, from
+// TT_METAL_PROFILER_MORE_ZONE_NAMES) trades file-id budget (4096 -> 512) for zone names per TU
+// (64 -> 512), for deep-diving a heavily instrumented kernel. Baked into the device -D and the JIT
+// build key (via defines_), so the two modes compile to separate cache roots -- no stale binary is
+// reused across a switch.
+uint32_t profiler_local_bits(const tt::llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.get_profiler_more_zone_names() ? KERNEL_PROFILER_LOCAL_BITS_MORE_ZONES
+                                                    : KERNEL_PROFILER_LOCAL_BITS_DEFAULT;
+}
+
+// Persistent, process-shared registry mapping a kernel's source identity to a dense integer "file id"
+// used to build collision-free KERNEL_PROFILER structural zone ids (zone id = file_id << LOCAL_BITS |
+// local). All compile variants of one source share a file id, so the id space is bounded by distinct
+// sources, not by build variants. Line format: <source_id> \t <file_id>. Ids are assigned monotonically
+// and stay stable for a source (a cached binary keeps the id baked in); they are not reclaimed within a
+// cache, so clear the profiler cache (or the registry file) to reset. max_file_id is the current split's
+// file budget (see KERNEL_PROFILER_LOCAL_BITS -- default 4096, more-zones mode 512). The registry is
+// guarded by an OS file lock for the whole read-modify-write, so parallel builds -- even across
+// processes sharing the cache -- assign disjoint ids. I/O/lock failure is a hard build error, never a
+// silent (colliding) id.
+uint32_t get_or_assign_profiler_file_id(
+    const std::string& registry_path, const std::string& source_id, uint32_t max_file_id) {
     static std::mutex mtx;
     std::lock_guard<std::mutex> lk(mtx);
 
@@ -119,13 +134,12 @@ uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const 
         }
     } registry_lock(registry_path);
 
-    // zone id = (file_id << KERNEL_PROFILER_LOCAL_BITS) | local, so file_id has this many values.
-    constexpr uint32_t max_file_id = KERNEL_PROFILER_FILE_ID_COUNT;
-    std::vector<bool> reserved(max_file_id, false);  // ids owned by a still-present translation unit
+    std::vector<bool> reserved(max_file_id, false);  // ids already assigned to some source
 
     std::ifstream in(registry_path);
     std::string line;
     while (std::getline(in, line)) {
+        // <source_id> \t <file_id>; source_id contains no tab.
         auto tab = line.rfind('\t');
         if (tab == std::string::npos) {
             continue;
@@ -138,18 +152,13 @@ uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const 
             continue;  // ignore malformed lines
         }
         if (entry_id >= max_file_id) {
-            continue;
+            continue;  // e.g. an id assigned under a wider split (different LOCAL_BITS mode)
         }
-        if (entry_key == key) {
-            // This TU already has a stable id and is being (re)built now, so reuse it.
+        if (entry_key == source_id) {
+            // This source already has a stable id; reuse it so cached binaries stay consistent.
             return entry_id;
         }
-        // Reserve the id only while the owning TU's build directory is still cached; once that dir is
-        // evicted the binary (and its baked id) is gone, so the id can be reclaimed without a live
-        // collision. This bounds the id space against stale build keys / kernels / failed builds.
-        if (std::filesystem::exists(std::filesystem::path(entry_key).parent_path())) {
-            reserved[entry_id] = true;
-        }
+        reserved[entry_id] = true;
     }
 
     uint32_t id = 0;
@@ -158,13 +167,14 @@ uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const 
     }
     TT_FATAL(
         id < max_file_id,
-        "Profiler file-id space ({} ids) is exhausted by still-present translation units; clear the "
-        "profiler cache to reclaim ids. Registry: {}",
+        "Profiler file-id space ({} ids) is exhausted; clear the profiler cache (or the registry file) "
+        "to reset. In more-zones mode the budget is only 512; use it for focused profiling, not broad "
+        "multi-model runs. Registry: {}",
         max_file_id,
         registry_path);
 
     std::ofstream out(registry_path, std::ios::app);
-    out << key << '\t' << id << '\n';
+    out << source_id << '\t' << id << '\n';
     out.flush();
     TT_FATAL(out.good(), "Failed to persist profiler file-id registry entry to '{}'", registry_path);
     return id;
@@ -272,6 +282,11 @@ void JitBuildEnv::init(
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
+
+        // Zone-id file/local split for this run (default 6, more-zones mode 9). In defines_, so it is
+        // folded into build_key_ below -- the two modes get distinct cache roots and never reuse each
+        // other's binaries.
+        this->defines_ += "-DKERNEL_PROFILER_LOCAL_BITS=" + std::to_string(profiler_local_bits(rtoptions)) + " ";
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -612,11 +627,17 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // variants (e.g. CI running many models). Firmware TUs (settings == null) fall back to the
     // config-stable output path, which is already built once per config.
     if (env_.get_rtoptions().get_profiler_enabled()) {
-        const std::string registry_path = env_.get_out_root_path() + ".profiler_zone_file_ids";
-        const std::string key = (settings != nullptr)
-                                    ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
-                                    : out_dir + this->objs_[src_index];
-        const uint32_t file_id = get_or_assign_profiler_file_id(registry_path, key);
+        const uint32_t local_bits = profiler_local_bits(env_.get_rtoptions());
+        const uint32_t max_file_id = 1u << (KERNEL_PROFILER_ZONE_ID_BITS - local_bits);
+        // Separate registry per split so the two modes' id spaces (4096 vs 512) never interfere.
+        const std::string registry_path = env_.get_out_root_path() + ".profiler_zone_file_ids" +
+                                          (local_bits == KERNEL_PROFILER_LOCAL_BITS_DEFAULT ? "" : ".mz");
+        // Identity = kernel source path + processor (arg-independent, so all compile variants share one
+        // id); firmware TUs (no settings) fall back to their own object path.
+        const std::string source_id = (settings != nullptr)
+                                          ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
+                                          : out_dir + this->objs_[src_index];
+        const uint32_t file_id = get_or_assign_profiler_file_id(registry_path, source_id, max_file_id);
         defines += fmt::format("-DKERNEL_PROFILER_FILE_ID={} ", file_id);
     }
 

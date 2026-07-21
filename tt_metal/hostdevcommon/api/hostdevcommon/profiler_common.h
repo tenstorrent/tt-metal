@@ -22,11 +22,24 @@
 //   zone id  = [ file id : (ZONE_ID_BITS - LOCAL_BITS) | local index : LOCAL_BITS ]
 //
 // Zone ids are structural, not hashed, so (file, local) pairs are unique by construction. The id is
-// 18 bits, widened from 16 by borrowing 2 bits from timestamp_hi (12 -> 10); with LOCAL_BITS=6 that
-// is 4096 file ids x 64 zones/TU. timestamp_hi is then 10 bits, so device timestamps wrap after
-// ~2^42 cycles (~54 min at 1.35 GHz / ~73 min at 1.0 GHz) -- ample for a profiling capture.
+// 18 bits, widened from 16 by borrowing 2 bits from timestamp_hi (12 -> 10); timestamp_hi is then 10
+// bits, so device timestamps wrap after ~2^42 cycles (~54 min at 1.35 GHz / ~73 min at 1.0 GHz) --
+// ample for a profiling capture.
+//
+// The 18-bit zone id is split file-id : local by KERNEL_PROFILER_LOCAL_BITS. Two modes, selected at
+// kernel-build time by the JIT (env var TT_METAL_PROFILER_MORE_ZONE_NAMES) which -D-overrides it:
+//   - default (LOCAL_BITS=6): 4096 file ids x 64 zones/TU  -- broad coverage (many kernels)
+//   - more-zone-names (LOCAL_BITS=9): 512 file ids x 512 zones/TU -- deep-dive on a heavily
+//     instrumented kernel; the 512 file-id budget suits focused profiling, clear the cache if exhausted.
+// The host decoder is split-agnostic (it keys on the whole 18-bit zone id), so only the device pack
+// and the file-id registry budget depend on this split. Switching modes changes the kernel compile
+// hash, so cached binaries rebuild rather than being reused with the wrong layout.
 #define KERNEL_PROFILER_ZONE_ID_BITS 18
-#define KERNEL_PROFILER_LOCAL_BITS 6
+#define KERNEL_PROFILER_LOCAL_BITS_DEFAULT 6
+#define KERNEL_PROFILER_LOCAL_BITS_MORE_ZONES 9
+#ifndef KERNEL_PROFILER_LOCAL_BITS
+#define KERNEL_PROFILER_LOCAL_BITS KERNEL_PROFILER_LOCAL_BITS_DEFAULT
+#endif
 #define KERNEL_PROFILER_PACKET_TYPE_BITS 3
 #define KERNEL_PROFILER_TIMER_ID_BITS (KERNEL_PROFILER_ZONE_ID_BITS + KERNEL_PROFILER_PACKET_TYPE_BITS)
 #define KERNEL_PROFILER_TIMESTAMP_HI_BITS (31 - KERNEL_PROFILER_TIMER_ID_BITS)

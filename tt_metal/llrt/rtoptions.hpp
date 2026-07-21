@@ -215,6 +215,7 @@ class RunTimeOptions {
     bool profiler_cpp_post_process = false;
     bool profiler_sum = false;
     bool profiler_accumulate = false;
+    bool profiler_more_zone_names = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
@@ -624,6 +625,8 @@ public:
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_sum() const { return profiler_sum; }
     bool get_profiler_accumulate() const { return profiler_accumulate; }
+    // Trade zone-id file-id budget (4096 -> 512) for zone names per translation unit (64 -> 512).
+    bool get_profiler_more_zone_names() const { return profiler_more_zone_names; }
     std::optional<uint32_t> get_profiler_program_support_count() const { return profiler_program_support_count; }
     void set_profiler_program_support_count(uint32_t profiler_program_support_count) {
         this->profiler_program_support_count = profiler_program_support_count;

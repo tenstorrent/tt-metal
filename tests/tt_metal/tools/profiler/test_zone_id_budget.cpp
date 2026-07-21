@@ -28,6 +28,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 
+#include "impl/context/metal_context.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -61,35 +63,49 @@ int main() {
     try {
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
-        // Case 1: 40 zones in one TU must compile and profile (and the whole run stays collision-free
-        // across all the firmware/kernel TUs, else ReadMeshDeviceProfilerResults would throw).
-        RunZoneBudgetKernel(mesh_device, /*over_budget=*/false);
-        ReadMeshDeviceProfilerResults(*mesh_device);
+        // The zone-budget kernel is built with -DZONE_OVER_BUDGET = 240 zones in one TU. Whether that is
+        // "over budget" depends on the split: default LOCAL_BITS=6 allows 64/TU, more-zone-names mode
+        // (rtoptions TT_METAL_PROFILER_MORE_ZONE_NAMES) LOCAL_BITS=9 allows 512/TU. The JIT reads the same
+        // rtoptions flag, so the modes stay consistent.
+        const bool more_zone_names = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_more_zone_names();
 
-        // Case 2: an over-budget kernel must fail to build via the TT_ZONE_META static_assert. The build
-        // errors logged next are EXPECTED -- the test verifies they happen and are the id-budget assert.
-        fmt::print(
-            "=== Building an over-budget kernel on purpose; the compiler/build errors that follow are "
-            "EXPECTED and are caught below. ===\n");
-        bool over_budget_threw = false;
-        std::string what;
-        try {
+        if (more_zone_names) {
+            // 512-zone/TU budget: the 240-zone kernel that overflows the default 64-zone budget must now
+            // COMPILE and profile. Reaching ReadMeshDeviceProfilerResults without throwing proves it.
             RunZoneBudgetKernel(mesh_device, /*over_budget=*/true);
-        } catch (const std::exception& e) {
-            over_budget_threw = true;
-            what = e.what();
+            ReadMeshDeviceProfilerResults(*mesh_device);
+            fmt::print("More-zone-names mode: 240-zone (>64) single-TU kernel compiled and profiled.\n");
+        } else {
+            // Case 1: 40 zones in one TU must compile and profile (and the whole run stays collision-free
+            // across all the firmware/kernel TUs, else ReadMeshDeviceProfilerResults would throw).
+            RunZoneBudgetKernel(mesh_device, /*over_budget=*/false);
+            ReadMeshDeviceProfilerResults(*mesh_device);
+
+            // Case 2: the 240-zone kernel must fail to build via the TT_ZONE_META static_assert. The
+            // build errors logged next are EXPECTED -- the test verifies they happen and are the assert.
+            fmt::print(
+                "=== Building an over-budget kernel on purpose; the compiler/build errors that follow are "
+                "EXPECTED and are caught below. ===\n");
+            bool over_budget_threw = false;
+            std::string what;
+            try {
+                RunZoneBudgetKernel(mesh_device, /*over_budget=*/true);
+            } catch (const std::exception& e) {
+                over_budget_threw = true;
+                what = e.what();
+            }
+            TT_FATAL(
+                over_budget_threw,
+                "Over-budget kernel (more zones than the per-TU budget) built successfully, but it must "
+                "have tripped the KERNEL_PROFILER_LOCAL_BITS static_assert and failed to compile");
+            // Confirm it failed for the RIGHT reason (the id-budget static_assert), not an unrelated error.
+            TT_FATAL(
+                what.find("too many KERNEL_PROFILER zones") != std::string::npos,
+                "Over-budget kernel failed to build, but not via the expected KERNEL_PROFILER_LOCAL_BITS "
+                "static_assert. Error was: {}",
+                what.substr(0, 500));
+            fmt::print("Over-budget kernel correctly failed to build via the id-budget static_assert.\n");
         }
-        TT_FATAL(
-            over_budget_threw,
-            "Over-budget kernel (more zones than the per-TU budget) built successfully, but it must have tripped the "
-            "KERNEL_PROFILER_LOCAL_BITS static_assert and failed to compile");
-        // Confirm it failed for the RIGHT reason (the id-budget static_assert), not some unrelated error.
-        TT_FATAL(
-            what.find("too many KERNEL_PROFILER zones") != std::string::npos,
-            "Over-budget kernel failed to build, but not via the expected KERNEL_PROFILER_LOCAL_BITS "
-            "static_assert. Error was: {}",
-            what.substr(0, 500));
-        fmt::print("Over-budget kernel correctly failed to build via the id-budget static_assert.\n");
 
         pass &= mesh_device->close();
 
