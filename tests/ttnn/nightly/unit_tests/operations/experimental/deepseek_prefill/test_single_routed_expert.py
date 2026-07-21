@@ -228,6 +228,7 @@ def test_single_routed_expert_models(
 # model with that model's (emb_dim, hidden_dim). The alloc/active pairs are model-independent.
 _FAKED_SWEEP = [
     (1024, 0, "1k-alloc-0k-active"),
+    (5120, 256, "5k-alloc-256-active"),
     (25600, 4096, "25k-alloc-4k-active"),
 ]
 

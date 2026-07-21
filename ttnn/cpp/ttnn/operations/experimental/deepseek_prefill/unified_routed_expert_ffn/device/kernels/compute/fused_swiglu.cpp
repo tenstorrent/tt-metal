@@ -263,6 +263,7 @@ FORCE_INLINE void matmul_phase(
 
         final_cb.reserve_back(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+            DeviceZoneScopedN("PACK-TILE");
             pack_tile(i, final_cb_id);
         }
         final_cb.push_back(out_subblock_num_tiles);
@@ -367,7 +368,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
         {
-            DeviceZoneScopedN("GATE-UP-MATMUL");
+            // DeviceZoneScopedN("GATE-UP-MATMUL");
             for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
