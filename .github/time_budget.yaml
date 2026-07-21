@@ -195,8 +195,8 @@ scaleout:
     wh_llmbox: 20
   e2e:
     wh_llmbox: 185
-    wh_galaxy: 100
-    bh_galaxy: 60
+    wh_galaxy: 120
+    bh_galaxy: 80
     bh_sc1: 20 # single galaxy
     bh_sc4: 90
     bh_sc4-blitz: 90 #blitz specific mgd sku
