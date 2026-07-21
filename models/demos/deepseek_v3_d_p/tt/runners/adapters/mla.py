@@ -57,6 +57,11 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    # Weight-cache dir prefix; defaults to `name`. A model whose weights were tilized under a
+    # different model's name overrides this to ride on that populated cache (e.g. Kimi-K2.7 reuses
+    # the K2.6 cache — same architecture, only the checkpoint differs).
+    weight_cache_name: Optional[str] = None
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------
@@ -82,7 +87,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
         sp, tp = mesh_shape
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+        cache_name = self.weight_cache_name or self.name
+        path = Path(env_cache) / f"{cache_name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
