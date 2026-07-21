@@ -579,6 +579,7 @@ models/experimental/gated_attention_gated_deltanet @sdawle-TT @dvartaniansTT @te
 
 # tracy
 tools/tracy/ @mo-tenstorrent @akerteszTT @tenstorrent/codeowner-bypass
+tt_metal/third_party/tracy @mo-tenstorrent @akerteszTT @tenstorrent/codeowner-bypass
 
 tools/scripts/ @mtairum @tenstorrent/codeowner-bypass
 
