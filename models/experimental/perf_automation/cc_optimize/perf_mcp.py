@@ -188,32 +188,31 @@ _KERNEL_LOG_PATH = Path(
 _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
 _TRACE_SAFE_HINT = (
-    "the kernel WEDGED trace capture — a TRACE-COMPATIBILITY defect in the kernel's LIFECYCLE, NOT a "
-    "math error (check_pcc validates math). A HANG or TIMEOUT under trace capture (no error text) is the "
-    "SIGNATURE of the op recompiling or re-allocating INSIDE capture — treat it as the lifecycle defect "
-    "below, never as 'unfixable'. Author the isolation test to PRINT the full exception/traceback on "
-    "failure so every attempt has a concrete error to act on. Fix the lifecycle: (1) build the generic_op "
-    "ProgramDescriptor / ttl op ONCE per shape and cache+reuse it — do NOT rebuild or call generic_op "
-    "fresh each call; (2) allocate the output buffer ONCE and reuse the same handle — never ttnn.zeros a "
-    "new output per call; (3) use override_runtime_args on the cached program instead of baking "
-    "buffer_address() into a freshly-built descriptor; (4) warm up the op once BEFORE begin_trace_capture "
-    "so compilation never lands in the traced region. KEEP FIXING IN ISOLATION until it traces clean — "
-    "there is no attempt limit; only a cleanly-MEASURED result advances the ladder. STRUCTURE the "
-    "single-op isolation test to turn a silent hang into a SIGNAL: (a) run the kernel EAGER first (no "
-    "trace) and assert PCC vs the stock op — an eager failure is a MATH bug with a real error; proceed "
-    "only past a clean eager run; (b) then trace it, PRINTING a stage marker (EAGER_OK / WARMUP / "
-    "BEGIN_CAPTURE / RUN_OP / END_CAPTURE / REPLAY / DONE) before each stage under a hard subprocess "
-    "timeout, so a hang localizes to the LAST printed stage; then wire it into the model and "
-    "measure_candidate ONCE"
+    "custom generic_op/ttl kernels ARE trace-capturable on this build — verified on device: a "
+    "cached-descriptor + persistent-buffer generic_op traces clean at PCC 1.0. A wedge or wrong-PCC-on-"
+    "replay means the PROVEN trace-safe RECIPE was not applied, NOT that it is impossible or a math error "
+    "(check_pcc validates math separately). Apply the recipe: (1) build the generic_op ProgramDescriptor "
+    "/ ttl op ONCE per shape and CACHE it — never rebuild or call generic_op fresh each call; (2) use a "
+    "PERSISTENT output buffer — allocate once, reuse the same handle, never ttnn.zeros a new output per "
+    "call; (3) use a PERSISTENT input buffer — copy the fresh input into the SAME fixed buffer each call, "
+    "since trace replay re-reads the captured address; (4) warm up once before begin_trace_capture. With "
+    "this recipe generic_op records and replays cleanly under trace; a hang or stale replay means one of "
+    "(1)-(3) is violated — fix the recipe application"
 )
 _ISOLATE_FIRST = (
-    " Before integrating, VALIDATE IN ISOLATION with a standalone single-op test structured to turn a "
-    "hang into a SIGNAL: (1) run the kernel EAGER first (no trace) + assert PCC vs the stock op — an eager "
-    "failure is a MATH/kernel bug with a real error to fix; proceed only past a clean eager run; (2) then "
-    "trace it, PRINTING a stage marker (EAGER_OK / WARMUP / BEGIN_CAPTURE / RUN_OP / END_CAPTURE / REPLAY "
-    "/ DONE) before each stage under a hard timeout, so a hang localizes to the LAST printed stage. Fix in "
-    "isolation until it traces clean; only then wire it into the model and measure_candidate ONCE."
+    " Optionally smoke-test the kernel in ISOLATION first — ONE eager+trace pass (build persistent inputs "
+    "once; eager run + PCC vs the stock op; then begin/end_trace_capture + execute_trace + PCC vs eager) — "
+    "to catch a wiring mistake in seconds before the full-pipeline run; then wire it into the model with a "
+    "PERSISTENT input buffer and measure_candidate."
 )
+_EAGER_NOTE = (
+    " TT_PERF_TRACE=0 (eager): no trace-safety recipe needed — the kernel runs op-by-op, so just author "
+    "it, record it, and measure_candidate returns the eager number directly."
+)
+
+
+def _trace_on():
+    return os.environ.get("TT_PERF_TRACE", "1") != "0"
 
 # kernel-authoring evidence markers, searched in the model source tree (grounds a recorded attempt)
 _KERNEL_MARKERS = ("generic_op", "ProgramDescriptor", "KernelDescriptor", "@ttl.", "ttl.operation", "import ttl")
@@ -542,7 +541,7 @@ def _rung_state(matches, kind):
 
 def _trace_compat_feedback(raw_reason: str) -> str:
     rung = (_load_target().get("rung") or "").lower()
-    if rung not in ("tt-lang", "cpp"):
+    if rung not in ("tt-lang", "cpp") or not _trace_on():
         return raw_reason
     return "%s\n%s" % (raw_reason, _TRACE_SAFE_HINT)
 
@@ -597,33 +596,43 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
         )
     if _is_kernel_able(op_code):
+        _tr = _trace_on()
+        _suffix = _ISOLATE_FIRST if _tr else _EAGER_NOTE
         _tl_clean, _tl_wedged = _rung_state(matches, "tt-lang")
         _cpp_clean, _cpp_wedged = _rung_state(matches, "cpp")
         if not _tl_clean and _ttl_available():
             if _tl_wedged:
-                return (
-                    False,
-                    "tt-lang",
-                    "HOLD the tt-lang rung (do NOT switch to cpp — it wedges identically); keep fixing it "
-                    "IN ISOLATION until it traces clean: %s (trace-fix attempt %d)" % (_TRACE_SAFE_HINT, _tl_wedged + 1),
-                )
+                if _tr:
+                    _r = "apply the PROVEN trace-safe recipe (do NOT switch to cpp — the same recipe applies): %s (attempt %d)" % (
+                        _TRACE_SAFE_HINT,
+                        _tl_wedged + 1,
+                    )
+                else:
+                    _r = "the tt-lang kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)" % (
+                        _tl_wedged + 1
+                    )
+                return (False, "tt-lang", _r)
             return (
                 False,
                 "tt-lang",
-                "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _ISOLATE_FIRST,
+                "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _suffix,
             )
         if (_tl_clean or not _ttl_available()) and not _cpp_clean:
             if _cpp_wedged:
-                return (
-                    False,
-                    "cpp",
-                    "HOLD the cpp rung (fix it IN ISOLATION until it traces clean, do NOT bounce rungs): "
-                    "%s (trace-fix attempt %d)" % (_TRACE_SAFE_HINT, _cpp_wedged + 1),
-                )
+                if _tr:
+                    _r = "apply the PROVEN trace-safe recipe (fix the recipe application, do NOT bounce rungs): %s (attempt %d)" % (
+                        _TRACE_SAFE_HINT,
+                        _cpp_wedged + 1,
+                    )
+                else:
+                    _r = "the C++ kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)" % (
+                        _cpp_wedged + 1
+                    )
+                return (False, "cpp", _r)
             return (
                 False,
                 "cpp",
-                "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it." + _ISOLATE_FIRST,
+                "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it." + _suffix,
             )
     if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
         return (
